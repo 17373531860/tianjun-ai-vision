@@ -337,171 +337,510 @@
     </div>
   </div>
 
-  <!-- ===== QUAD WORKSTATION MODE (4 channels) ===== -->
-  <div v-else-if="channelCount > 2" class="flex flex-col h-[calc(100vh-7.25rem)] p-2 gap-2 relative">
-    <!-- 2x2 video grid -->
-    <div class="flex-1 grid grid-cols-2 grid-rows-2 gap-2 min-h-0">
-      <ChannelVideoCard
-        v-for="ch in channelCount" :key="ch - 1"
-        class="cursor-pointer transition-all"
-        compact
-        :ch="ch - 1"
-        :ch-data="multiChannelData[ch - 1]"
-        :model-stats="channelModelStats[ch - 1]"
-        :selected="selectedChannel === (ch - 1)"
-        :register-video-canvas="el => { multiVideoCanvasRefs[ch - 1] = el }"
-        :register-overlay-canvas="el => { multiCanvasRefs[ch - 1] = el }"
-        @select="selectedChannel = ch - 1">
-        <!-- v3.1.3: 4 工位每个小卡片在视频上沿额外显示一行 工件号 / 未绑码 / 等待扫码 -->
-        <div v-if="shouldShowMesBarFor(ch - 1)"
-             class="absolute top-7 left-1 right-1 bg-slate-900/85 border border-cyan-800/50 rounded px-1.5 py-0.5 flex items-center gap-1.5 text-[0.625rem] z-10">
-          <template v-if="getDisplayWorkpieceFor(ch - 1)">
-            <span class="text-cyan-400 font-bold">工件</span>
-            <span class="font-mono text-white truncate min-w-0" :title="getDisplayWorkpieceFor(ch - 1).serial_no">{{ getDisplayWorkpieceFor(ch - 1).serial_no }}</span>
-            <span class="ml-auto px-1 rounded font-bold"
-                  :class="getDisplayWorkpieceFor(ch - 1).status === 'ok' ? 'bg-green-700 text-green-100' : getDisplayWorkpieceFor(ch - 1).status === 'ng' ? 'bg-red-700 text-red-100' : getDisplayWorkpieceFor(ch - 1).status === 'inspecting' ? 'bg-yellow-700 text-yellow-100' : 'bg-slate-700 text-gray-300'">
-              {{ { registered: '已登记', queued: '排队', inspecting: '检测中', ok: '合格', ng: '不良' }[getDisplayWorkpieceFor(ch - 1).status] || getDisplayWorkpieceFor(ch - 1).status }}
-            </span>
-          </template>
-          <template v-else-if="hasScannerFor(ch - 1) && getMesDataFor(ch - 1)?.warn_no_barcode">
-            <span class="warn-no-barcode-blink text-yellow-300 font-bold w-full text-center">⚠ 未绑码 请扫描</span>
-          </template>
-          <template v-else>
-            <span class="text-gray-400 w-full text-center">等待扫码...</span>
-          </template>
-        </div>
-        <template v-for="position in ['top-right', 'top-left', 'bottom-right', 'bottom-left', 'center']" :key="position">
-          <div class="absolute z-50 pointer-events-none flex flex-col gap-1" :class="getMultiPositionClass(position)">
-            <transition-group name="toast">
-              <div v-for="toast in (multiActiveToasts[ch - 1] || []).filter(t => t.position === position)" :key="toast.id"
-                class="px-3 py-2 rounded-lg shadow-2xl text-white font-bold pointer-events-auto text-center text-xs"
-                :style="{ backgroundColor: toast.color }">
-                <div class="flex items-center gap-1 justify-center">
-                  <el-icon :size="14"><component :is="toast.icon" /></el-icon>
-                  <span>{{ toast.title }}</span>
-                </div>
-              </div>
-            </transition-group>
+  <!-- ===== TRIPLE WORKSTATION MODE (3 channels): 三行横排, 左视频右数据 (v3.47) ===== -->
+  <div v-else-if="channelCount === 3" class="flex flex-col h-[calc(100vh-7.25rem)] p-2 gap-2 relative">
+    <div v-for="ch in 3" :key="ch - 1" class="flex-1 flex gap-2 min-h-0 relative">
+      <!-- 左: 视频流 (容器贴视频宽高比 16:9, 不再拉满半屏留黑边) -->
+      <div class="h-full flex-shrink-0 relative" style="aspect-ratio: 16/9;">
+        <ChannelVideoCard
+          class="w-full h-full"
+          :ch="ch - 1"
+          :ch-data="multiChannelData[ch - 1]"
+          :model-stats="channelModelStats[ch - 1]"
+          :selected="selectedChannel === (ch - 1)"
+          :register-video-canvas="el => { multiVideoCanvasRefs[ch - 1] = el }"
+          :register-overlay-canvas="el => { multiCanvasRefs[ch - 1] = el }"
+          @select="selectedChannel = ch - 1"
+        />
+      </div>
+      <!-- 中: 检测数据面板 -->
+      <div class="flex-1 flex flex-col gap-1.5 min-w-0 overflow-hidden">
+        <!-- 计数行 (跟随显示设置 defaultCounters) -->
+        <div class="flex gap-1.5 flex-shrink-0">
+          <div v-if="systemStore.display.monitor.defaultCounters?.showTotal !== false" class="flex-1 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-center min-w-0">
+            <div class="text-[0.625rem] text-gray-400">总产量</div>
+            <div class="text-xl font-bold font-mono text-white">{{ multiChannelData[ch - 1]?.total ?? 0 }}</div>
           </div>
-        </template>
-      </ChannelVideoCard>
-    </div>
-    <!-- Selected channel detail panel -->
-    <div class="h-64 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col flex-shrink-0">
-      <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex items-center gap-3 flex-wrap">
-        <span class="text-cyan-400 font-bold text-sm">工位 {{ selectedChannel + 1 }} 详情</span>
-        <span class="text-[0.625rem] bg-slate-700 px-2 py-0.5 rounded text-gray-300">CT: {{ getDisplayCT(multiChannelData[selectedChannel]) }}</span>
-        <!-- v3.1.3: 选中工位完整 MES 信息条 -->
-        <template v-if="shouldShowMesBarFor(selectedChannel)">
-          <span class="h-4 w-px bg-slate-600"></span>
-          <div v-if="!isScanDisabledFor(selectedChannel) && getDisplayWorkpieceFor(selectedChannel)" class="flex items-center gap-1 text-xs">
+          <div v-if="systemStore.display.monitor.defaultCounters?.showGood !== false" class="flex-1 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-center min-w-0">
+            <div class="text-[0.625rem] text-gray-400">合格</div>
+            <div class="text-xl font-bold font-mono text-green-400">{{ multiChannelData[ch - 1]?.ok ?? 0 }}</div>
+          </div>
+          <div v-if="systemStore.display.monitor.defaultCounters?.showBad !== false" class="flex-1 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-center min-w-0">
+            <div class="text-[0.625rem] text-gray-400">不良</div>
+            <div class="text-xl font-bold font-mono text-red-400">{{ multiChannelData[ch - 1]?.ng ?? 0 }}</div>
+          </div>
+          <div class="flex-1 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-center min-w-0">
+            <div class="text-[0.625rem] text-gray-400">CT</div>
+            <div class="text-xl font-bold font-mono text-cyan-400">{{ getDisplayCT(multiChannelData[ch - 1]) }}</div>
+          </div>
+        </div>
+        <!-- MES 信息条 (与双工位同构) -->
+        <div v-if="shouldShowMesBarFor(ch - 1)"
+             class="bg-slate-900 border border-cyan-800/50 rounded-lg px-2 py-1 flex items-center gap-2 text-xs flex-shrink-0 overflow-hidden">
+          <div v-if="!isScanDisabledFor(ch - 1) && getDisplayWorkpieceFor(ch - 1)" class="flex items-center gap-1.5 min-w-0">
             <span class="text-cyan-400 font-bold">工件:</span>
-            <span class="font-mono text-white">{{ getDisplayWorkpieceFor(selectedChannel).serial_no }}</span>
-            <el-tag :type="getDisplayWorkpieceFor(selectedChannel).status === 'ok' ? 'success' : getDisplayWorkpieceFor(selectedChannel).status === 'ng' ? 'danger' : getDisplayWorkpieceFor(selectedChannel).status === 'inspecting' ? 'warning' : 'info'" size="small">
-              {{ { registered: '已登记', queued: '排队', inspecting: '检测中', ok: '合格', ng: '不良' }[getDisplayWorkpieceFor(selectedChannel).status] || getDisplayWorkpieceFor(selectedChannel).status }}
+            <span class="font-mono text-white truncate" :title="getDisplayWorkpieceFor(ch - 1).serial_no">{{ getDisplayWorkpieceFor(ch - 1).serial_no }}</span>
+            <el-tag :type="getDisplayWorkpieceFor(ch - 1).status === 'ok' ? 'success' : getDisplayWorkpieceFor(ch - 1).status === 'ng' ? 'danger' : getDisplayWorkpieceFor(ch - 1).status === 'inspecting' ? 'warning' : 'info'" size="small">
+              {{ { registered: '已登记', queued: '排队', inspecting: '检测中', ok: '合格', ng: '不良' }[getDisplayWorkpieceFor(ch - 1).status] || getDisplayWorkpieceFor(ch - 1).status }}
             </el-tag>
           </div>
-          <div v-if="!isScanDisabledFor(selectedChannel) && hasScannerFor(selectedChannel) && getMesDataFor(selectedChannel)?.warn_no_barcode" class="warn-no-barcode-blink flex items-center gap-1 bg-yellow-600/30 border border-yellow-500 rounded px-2 py-0.5 text-xs">
+          <div v-if="!isScanDisabledFor(ch - 1) && hasScannerFor(ch - 1) && getMesDataFor(ch - 1)?.warn_no_barcode" class="warn-no-barcode-blink flex items-center gap-1 bg-yellow-600/30 border border-yellow-500 rounded px-2 py-0.5">
             <span class="text-yellow-300 font-bold">⚠ 未绑码</span>
+            <span class="text-yellow-200">请扫描工件条码</span>
           </div>
-          <div v-else-if="!isScanDisabledFor(selectedChannel) && hasScannerFor(selectedChannel) && !getDisplayWorkpieceFor(selectedChannel) && !getMesDataFor(selectedChannel)?.order" class="text-gray-500 text-xs">等待扫码...</div>
-          <div v-if="isScanDisabledFor(selectedChannel)" class="flex items-center gap-1 text-gray-400 italic text-xs">
+          <div v-else-if="!isScanDisabledFor(ch - 1) && !getDisplayWorkpieceFor(ch - 1) && !getMesDataFor(ch - 1)?.order" class="text-gray-500">等待扫码...</div>
+          <div v-if="isScanDisabledFor(ch - 1)" class="flex items-center gap-1 text-gray-400 italic">
             <span>⛔ 扫码已禁用 · 走项目原生结算</span>
           </div>
-          <el-button v-if="systemStore.display.monitor.showScanButtons !== false && !isScanDisabledFor(selectedChannel)" size="small" type="warning" plain @click="clearPendingScan(selectedChannel)">清除本次扫码</el-button>
-          <el-button
-            v-if="systemStore.display.monitor.showScanButtons !== false"
-            size="small"
-            :type="isScanDisabledFor(selectedChannel) ? 'success' : 'danger'"
-            plain
+          <div v-if="getMesDataFor(ch - 1)?.order && taskInfoDisplay.show_order_chip" class="flex items-center gap-1 text-[0.625rem] ml-auto pl-2 border-l border-cyan-800/40">
+            <span class="text-cyan-400">工单:</span>
+            <span class="text-white truncate max-w-[80px]" :title="getMesDataFor(ch - 1).order.order_no">{{ getMesDataFor(ch - 1).order.order_no }}</span>
+            <span class="text-gray-400">{{ getMesDataFor(ch - 1).order.completed_qty }}/{{ getMesDataFor(ch - 1).order.planned_qty }}</span>
+          </div>
+          <div v-if="getTaskInfoItemsFor(ch - 1).length" class="flex items-center gap-1 text-[0.625rem] pl-2 border-l border-cyan-800/40">
+            <template v-for="it in getTaskInfoItemsFor(ch - 1)" :key="it.label">
+              <span class="text-cyan-400">{{ it.label }}:</span>
+              <span class="text-white truncate max-w-[72px]" :title="it.value">{{ it.value }}</span>
+            </template>
+          </div>
+          <el-button v-if="systemStore.display.monitor.showScanButtons !== false && !isScanDisabledFor(ch - 1)"
+            :class="getMesDataFor(ch - 1)?.order ? '' : 'ml-auto'" size="small" type="warning" plain
+            @click.stop="clearPendingScan(ch - 1)">清除</el-button>
+          <el-button v-if="systemStore.display.monitor.showScanButtons !== false"
+            size="small" :type="isScanDisabledFor(ch - 1) ? 'success' : 'danger'" plain
             :loading="scannerDisableStore.toggling"
-            @click="toggleScanDisableFor(selectedChannel)"
-          >
-            {{ isScanDisabledFor(selectedChannel) ? '启用扫码' : '禁用扫码' }}
+            @click.stop="toggleScanDisableFor(ch - 1)">
+            {{ isScanDisabledFor(ch - 1) ? '启用扫码' : '禁用扫码' }}
           </el-button>
-        </template>
-        <div class="ml-auto flex gap-1.5">
-          <button @click="startDetectionForChannel(selectedChannel)" :disabled="(!multiChannelData[selectedChannel]?.project && !currentProject) || multiChannelData[selectedChannel]?.isDetecting"
-            class="bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-2.5 py-0.5 rounded text-[0.625rem] font-bold">开始</button>
-          <button @click="stopDetectionForChannel(selectedChannel)" :disabled="!multiChannelData[selectedChannel]?.isRunning"
-            class="bg-red-600 hover:bg-red-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-2.5 py-0.5 rounded text-[0.625rem] font-bold">停止</button>
-          <button @click="standbyForChannel(selectedChannel)" :disabled="!multiChannelData[selectedChannel]?.isDetecting"
-            class="bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-2.5 py-0.5 rounded text-[0.625rem] font-bold">待机</button>
-          <button @click="resetCountersForChannel(selectedChannel)" :disabled="multiChannelData[selectedChannel]?.isDetecting"
-            class="bg-cyan-500 hover:bg-cyan-400 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-2.5 py-0.5 rounded text-[0.625rem] font-bold">清零</button>
         </div>
-      </div>
-      <div class="flex-1 grid grid-cols-4 gap-2 p-2 min-h-0 overflow-hidden">
-        <!-- Col 1: SOP steps -->
-        <div class="flex flex-col gap-1 overflow-auto">
-          <div class="text-[0.625rem] text-cyan-400 font-bold mb-0.5">SOP 流程</div>
-          <div v-for="(step, idx) in (multiChannelData[selectedChannel]?.steps || [])" :key="idx"
-            class="px-1.5 py-0.5 rounded text-[0.625rem] font-bold border"
-            :class="step.status === 'completed' ? 'border-green-500 bg-green-900/30 text-green-300' : step.status === 'active' ? 'border-cyan-500 bg-cyan-900/30 text-cyan-300 animate-pulse' : 'border-slate-600 bg-slate-800 text-gray-500'">
-            {{ step.name }}
+        <!-- SOP 图卡 + 步骤状态表 -->
+        <div class="flex gap-1.5 min-h-0 flex-1">
+          <div class="w-[55%] bg-slate-900 border border-slate-700 rounded overflow-hidden flex flex-col min-w-0">
+            <div class="bg-slate-800 px-2 py-0.5 text-cyan-400 text-xs font-bold border-b border-slate-700 flex items-center justify-between flex-shrink-0">
+              <span>SOP</span>
+              <span class="text-[0.625rem] text-gray-400">CT: {{ getDisplayCT(multiChannelData[ch - 1]) }}</span>
+            </div>
+            <div class="flex-1 flex items-stretch gap-1.5 px-1.5 py-1 overflow-x-auto min-h-0">
+              <div v-for="(step, idx) in (multiChannelData[ch - 1]?.steps || [])" :key="idx"
+                class="flex-1 min-w-[5rem] max-w-[8.5rem] flex flex-col rounded border overflow-hidden"
+                :class="step.status === 'completed' ? 'border-green-500 bg-green-900/30' : step.status === 'active' ? 'border-cyan-500 bg-cyan-900/30' : 'border-slate-600 bg-slate-800'">
+                <div class="px-1 py-0.5 text-[0.625rem] font-bold truncate text-center flex-shrink-0"
+                  :class="step.status === 'completed' ? 'text-green-300 bg-green-900/50' : step.status === 'active' ? 'text-cyan-300 bg-cyan-900/50 animate-pulse' : 'text-gray-500 bg-slate-700/50'">
+                  {{ step.name }}
+                </div>
+                <div class="flex-1 flex items-center justify-center relative overflow-hidden bg-slate-950/50">
+                  <img v-if="step.screenshot" :src="step.screenshot" class="w-full h-full object-cover" />
+                  <el-icon v-else :size="18" class="text-slate-600"><Picture /></el-icon>
+                  <div v-if="step.status === 'active'" class="absolute inset-0 border-2 border-cyan-500 animate-pulse"></div>
+                </div>
+              </div>
+              <div v-if="!multiChannelData[ch - 1]?.steps?.length" class="text-gray-600 text-xs w-full text-center self-center">等待检测</div>
+            </div>
           </div>
-          <div v-if="!multiChannelData[selectedChannel]?.steps?.length" class="text-gray-600 text-[0.625rem] text-center mt-2">等待检测</div>
-        </div>
-        <!-- Col 2: Counters + step table -->
-        <div class="flex flex-col gap-1 min-h-0">
-          <div class="grid grid-cols-3 gap-1 flex-shrink-0">
-            <div class="bg-slate-800 rounded p-0.5 text-center"><div class="text-[0.5625rem] text-gray-400">总</div><div class="text-base font-bold font-mono text-white">{{ multiChannelData[selectedChannel]?.total ?? 0 }}</div></div>
-            <div class="bg-slate-800 rounded p-0.5 text-center"><div class="text-[0.5625rem] text-gray-400">OK</div><div class="text-base font-bold font-mono text-green-400">{{ multiChannelData[selectedChannel]?.ok ?? 0 }}</div></div>
-            <div class="bg-slate-800 rounded p-0.5 text-center"><div class="text-[0.5625rem] text-gray-400">NG</div><div class="text-base font-bold font-mono text-red-400">{{ multiChannelData[selectedChannel]?.ng ?? 0 }}</div></div>
-          </div>
-          <div class="flex-1 overflow-auto min-h-0">
+          <div class="w-[45%] bg-slate-900 border border-slate-700 rounded overflow-auto min-w-0">
             <table class="w-full text-[0.625rem]">
-              <thead class="bg-slate-800 text-gray-400 sticky top-0"><tr><th class="px-1 py-0.5">步骤</th><th class="px-1 py-0.5">状态</th></tr></thead>
+              <thead class="bg-slate-800 text-gray-400 sticky top-0"><tr>
+                <th v-if="systemStore.display.monitor.stepTableColumns?.showNo !== false" class="px-1.5 py-0.5 text-left">No</th>
+                <th v-if="systemStore.display.monitor.stepTableColumns?.showStep !== false" class="px-1.5 py-0.5 text-left">步骤</th>
+                <th v-if="systemStore.display.monitor.stepTableColumns?.showStatus !== false" class="px-1.5 py-0.5 text-left">状态</th>
+                <th v-if="systemStore.display.monitor.stepTableColumns?.showPt !== false" class="px-1.5 py-0.5 text-right">PT/s</th>
+              </tr></thead>
               <tbody class="text-gray-300 divide-y divide-slate-800">
-                <tr v-for="(row, i) in (multiChannelData[selectedChannel]?.tableData || [])" :key="i" :class="row.status === 'completed' ? 'bg-green-900/20' : ''">
-                  <td class="px-1 py-0.5 truncate max-w-[100px]">{{ row.step }}</td>
-                  <td class="px-1 py-0.5"><span :class="row.status === 'completed' ? 'text-green-400' : 'text-gray-500'">{{ row.status === 'completed' ? 'OK' : '--' }}</span></td>
+                <tr v-for="(row, i) in (multiChannelData[ch - 1]?.tableData || []).slice(0, 8)" :key="i" :class="row.status === 'completed' ? 'bg-green-900/20' : ''">
+                  <td v-if="systemStore.display.monitor.stepTableColumns?.showNo !== false" class="px-1.5 py-0.5 text-gray-500">{{ i + 1 }}</td>
+                  <td v-if="systemStore.display.monitor.stepTableColumns?.showStep !== false" class="px-1.5 py-0.5 truncate max-w-[100px]">{{ row.step }}</td>
+                  <td v-if="systemStore.display.monitor.stepTableColumns?.showStatus !== false" class="px-1.5 py-0.5"><span :class="row.status === 'completed' ? 'text-green-400' : 'text-gray-500'">{{ row.status === 'completed' ? 'OK' : '--' }}</span></td>
+                  <td v-if="systemStore.display.monitor.stepTableColumns?.showPt !== false" class="px-1.5 py-0.5 text-right font-mono text-gray-400">{{ getStepPT(multiChannelData[ch - 1], row.label) }}</td>
                 </tr>
               </tbody>
             </table>
           </div>
         </div>
-        <!-- Col 3: Yield rate -->
-        <div class="flex flex-col items-center justify-center bg-slate-800 rounded p-2">
-          <div class="text-[0.625rem] text-gray-400 mb-1">合格率</div>
-          <div class="text-3xl font-bold font-mono" :class="(multiChannelData[selectedChannel]?.yieldRate ?? 0) >= 90 ? 'text-green-400' : (multiChannelData[selectedChannel]?.yieldRate ?? 0) >= 70 ? 'text-yellow-400' : 'text-red-400'">
-            {{ multiChannelData[selectedChannel]?.yieldRate ?? 0 }}%
-          </div>
-          <div class="w-full bg-slate-700 rounded-full h-2 mt-2">
-            <div class="h-2 rounded-full transition-all" :class="(multiChannelData[selectedChannel]?.yieldRate ?? 0) >= 90 ? 'bg-green-500' : (multiChannelData[selectedChannel]?.yieldRate ?? 0) >= 70 ? 'bg-yellow-500' : 'bg-red-500'"
-              :style="{ width: (multiChannelData[selectedChannel]?.yieldRate ?? 0) + '%' }"></div>
-          </div>
-          <div class="mt-2 text-[0.625rem] text-gray-400">
-            <span class="text-green-400">{{ multiChannelData[selectedChannel]?.ok ?? 0 }}</span> / <span class="text-white">{{ multiChannelData[selectedChannel]?.total ?? 0 }}</span>
+        <!-- 控制按钮 -->
+        <div class="flex gap-1.5 flex-shrink-0">
+          <button @click="startDetectionForChannel(ch - 1)" :disabled="(!multiChannelData[ch - 1]?.project && !currentProject) || multiChannelData[ch - 1]?.isDetecting"
+            class="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-1 rounded text-xs font-bold">开始</button>
+          <button @click="stopDetectionForChannel(ch - 1)" :disabled="!multiChannelData[ch - 1]?.isRunning"
+            class="flex-1 bg-red-600 hover:bg-red-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-1 rounded text-xs font-bold">停止</button>
+          <button @click="standbyForChannel(ch - 1)" :disabled="!multiChannelData[ch - 1]?.isDetecting"
+            class="flex-1 bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-1 rounded text-xs font-bold">待机</button>
+          <button @click="resetCountersForChannel(ch - 1)" :disabled="multiChannelData[ch - 1]?.isDetecting"
+            class="flex-1 bg-cyan-500 hover:bg-cyan-400 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-1 rounded text-xs font-bold">清零</button>
+        </div>
+      </div>
+      <!-- 右: 合格率环 + NG TOP3 (跟随显示设置 capacityChart / ngTop3 开关) -->
+      <div v-if="systemStore.display.monitor.capacityChart !== false || systemStore.display.monitor.ngTop3 !== false"
+        class="w-44 flex-shrink-0 flex flex-col gap-1.5 min-h-0">
+        <div v-if="systemStore.display.monitor.capacityChart !== false"
+          class="flex-1 min-h-0 bg-slate-900 border border-slate-700 rounded p-1.5 flex flex-col items-center">
+          <div class="text-[0.625rem] text-cyan-400 font-bold self-start flex-shrink-0">合格率</div>
+          <div class="flex-1 min-h-0 w-full relative flex items-center justify-center">
+            <svg viewBox="0 0 36 36" class="h-full max-h-[6.5rem] -rotate-90">
+              <circle cx="18" cy="18" r="15.915" fill="none" stroke="#334155" stroke-width="3.6" />
+              <circle cx="18" cy="18" r="15.915" fill="none" stroke-linecap="round" stroke-width="3.6"
+                :stroke="(multiChannelData[ch - 1]?.yieldRate ?? 0) >= 90 ? '#10b981' : (multiChannelData[ch - 1]?.yieldRate ?? 0) >= 70 ? '#f59e0b' : '#ef4444'"
+                :stroke-dasharray="`${multiChannelData[ch - 1]?.yieldRate ?? 0} ${100 - (multiChannelData[ch - 1]?.yieldRate ?? 0)}`" />
+            </svg>
+            <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+              <span class="text-lg font-bold font-mono leading-none"
+                :class="(multiChannelData[ch - 1]?.yieldRate ?? 0) >= 90 ? 'text-green-400' : (multiChannelData[ch - 1]?.yieldRate ?? 0) >= 70 ? 'text-yellow-400' : 'text-red-400'">
+                {{ multiChannelData[ch - 1]?.yieldRate ?? 0 }}%
+              </span>
+              <span class="text-[0.5625rem] text-gray-500 font-mono">{{ multiChannelData[ch - 1]?.ok ?? 0 }}/{{ multiChannelData[ch - 1]?.total ?? 0 }}</span>
+            </div>
           </div>
         </div>
-        <!-- Col 4: NG ranking -->
-        <div v-if="systemStore.display.monitor.ngTop3 !== false" class="flex flex-col min-h-0">
-          <div class="flex items-center justify-between mb-1">
+        <div v-if="systemStore.display.monitor.ngTop3 !== false"
+          class="flex-1 min-h-0 bg-slate-900 border border-slate-700 rounded p-1.5 flex flex-col">
+          <div class="flex items-center justify-between mb-1 flex-shrink-0">
             <span class="text-[0.625rem] text-cyan-400 font-bold">NG 步骤 TOP3</span>
             <span class="text-[0.5625rem] text-gray-500 cursor-pointer hover:text-cyan-400 select-none" @click="toggleNgTopMode()">
               {{ systemStore.display.monitor.ngTopDisplayMode === 'percentage' ? '百分比' : '次数' }}
             </span>
           </div>
-          <div class="flex-1 overflow-auto space-y-1">
-            <div v-for="(item, idx) in (multiChannelData[selectedChannel]?.ngStepRanking || [])" :key="item.step"
-              class="flex items-center gap-1.5 bg-slate-800/50 px-1.5 py-1 rounded text-xs">
-              <span class="text-sm font-bold w-4 text-white text-center">{{ idx + 1 }}</span>
-              <span class="flex-1 text-gray-300 truncate">{{ item.step }}</span>
-              <span class="text-sm font-bold text-white">{{ systemStore.display.monitor.ngTopDisplayMode === 'count' ? item.count : item.rate.toFixed(0) + '%' }}</span>
+          <div class="flex-1 overflow-auto space-y-1 min-h-0">
+            <div v-for="(item, idx) in (multiChannelData[ch - 1]?.ngStepRanking || [])" :key="item.step"
+              class="flex items-center gap-1 bg-slate-800/50 px-1.5 py-0.5 rounded text-[0.625rem]">
+              <span class="font-bold w-3.5 text-white text-center flex-shrink-0">{{ idx + 1 }}</span>
+              <span class="flex-1 text-gray-300 truncate min-w-0">{{ item.step }}</span>
+              <span class="font-bold text-white flex-shrink-0">{{ systemStore.display.monitor.ngTopDisplayMode === 'count' ? item.count : item.rate.toFixed(0) + '%' }}</span>
             </div>
-            <div v-if="!multiChannelData[selectedChannel]?.ngStepRanking?.length" class="flex items-center justify-center h-full text-gray-600 text-xs">暂无数据</div>
+            <div v-if="!multiChannelData[ch - 1]?.ngStepRanking?.length" class="text-center text-gray-600 text-[0.625rem] py-1">暂无数据</div>
           </div>
         </div>
       </div>
-
-      <!-- 录像异常入口+详情面板（M-1 外置, 原同构块消重） -->
-      <RecordingFailureOverlay
-        v-model:visible="showRecordingFailurePanel"
-        :rows="recordingFailureRows"
-        :loading="recordingFailureLoading"
-        @clear="clearRecordingFailures" />
+      <!-- 行内 per-工位 Toast (定位上下文 = 本行) -->
+      <template v-for="position in ['top-right', 'top-left', 'bottom-right', 'bottom-left', 'center']" :key="position">
+        <div class="absolute z-50 pointer-events-none flex flex-col gap-2" :class="getMultiPositionClass(position)">
+          <transition-group name="toast">
+            <TjSlot
+              v-for="toast in (multiActiveToasts[ch - 1] || []).filter(t => t.position === position)"
+              :key="toast.id"
+              name="cycle-result.indicator"
+              :toast="toast"
+              :channel-id="ch - 1"
+            >
+              <div
+                class="px-4 py-3 rounded-xl shadow-2xl text-white font-bold pointer-events-auto transform transition-all duration-300 text-center"
+                :style="{ backgroundColor: toast.color, fontSize: (toast.fontSize / 16) + 'rem' }">
+                <div class="flex items-center gap-2 justify-center">
+                  <el-icon :size="20"><component :is="toast.icon" /></el-icon>
+                  <div><div class="font-bold">{{ toast.title }}</div><div v-if="toast.subtitle" class="text-sm opacity-80">{{ toast.subtitle }}</div></div>
+                </div>
+              </div>
+            </TjSlot>
+          </transition-group>
+        </div>
+      </template>
     </div>
+
+    <!-- 录像异常入口+详情面板 -->
+    <RecordingFailureOverlay
+      v-model:visible="showRecordingFailurePanel"
+      :rows="recordingFailureRows"
+      :loading="recordingFailureLoading"
+      @clear="clearRecordingFailures" />
+  </div>
+
+  <!-- ===== GRID WORKSTATION MODE (4+ channels): 总览网格(可选布局+分页) + 点击放大单路 (v3.47) ===== -->
+  <div v-else-if="channelCount > 3" class="flex flex-col h-[calc(100vh-7.25rem)] p-2 gap-2 relative">
+    <!-- —— 总览模式 —— -->
+    <template v-if="zoomedChannel === null">
+      <!-- 工具条: 布局选择 + 分页 -->
+      <div class="flex items-center gap-3 flex-shrink-0 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 flex-wrap">
+        <span class="text-cyan-400 font-bold text-sm">多工位总览</span>
+        <span class="text-xs text-gray-500">共 {{ channelCount }} 工位 · 点击卡片放大单路</span>
+        <div class="flex items-center gap-1 ml-auto">
+          <span class="text-xs text-gray-400 mr-1">布局:</span>
+          <button v-for="opt in [['auto', '自动'], ['2x2', '2×2'], ['3x3', '3×3'], ['4x4', '4×4']]" :key="opt[0]"
+            @click="setGridLayout(opt[0])"
+            class="px-2 py-0.5 rounded text-xs font-bold border transition-colors"
+            :class="gridLayout === opt[0] ? 'bg-cyan-600 border-cyan-500 text-white' : 'bg-slate-800 border-slate-600 text-gray-300 hover:border-slate-400'">
+            {{ opt[1] }}
+          </button>
+        </div>
+        <div v-if="gridPageCount > 1" class="flex items-center gap-1.5">
+          <button @click="gridPrevPage" :disabled="gridPage === 0"
+            class="px-2 py-0.5 rounded text-xs font-bold border bg-slate-800 border-slate-600 text-gray-300 hover:border-slate-400 disabled:opacity-40 disabled:cursor-not-allowed">‹ 上一页</button>
+          <span class="text-xs text-gray-300 font-mono">{{ gridPage + 1 }} / {{ gridPageCount }}</span>
+          <button @click="gridNextPage" :disabled="gridPage >= gridPageCount - 1"
+            class="px-2 py-0.5 rounded text-xs font-bold border bg-slate-800 border-slate-600 text-gray-300 hover:border-slate-400 disabled:opacity-40 disabled:cursor-not-allowed">下一页 ›</button>
+        </div>
+      </div>
+      <!-- 网格: 当前页工位卡片 (缩小视频流 + 简略数据) -->
+      <div class="flex-1 grid gap-2 min-h-0"
+        :style="{ gridTemplateColumns: `repeat(${gridDims.cols}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${gridDims.rows}, minmax(0, 1fr))` }">
+        <ChannelVideoCard
+          v-for="ch in gridPageChannels" :key="ch"
+          class="cursor-pointer transition-all"
+          compact
+          :ch="ch"
+          :ch-data="multiChannelData[ch]"
+          :model-stats="channelModelStats[ch]"
+          :selected="false"
+          :register-video-canvas="el => { multiVideoCanvasRefs[ch] = el }"
+          :register-overlay-canvas="el => { multiCanvasRefs[ch] = el }"
+          @select="zoomChannel(ch)">
+          <!-- MES 迷你条: 工件号 / 未绑码 / 等待扫码 -->
+          <div v-if="shouldShowMesBarFor(ch)"
+               class="absolute top-7 left-1 right-1 bg-slate-900/85 border border-cyan-800/50 rounded px-1.5 py-0.5 flex items-center gap-1.5 text-[0.625rem] z-10">
+            <template v-if="getDisplayWorkpieceFor(ch)">
+              <span class="text-cyan-400 font-bold">工件</span>
+              <span class="font-mono text-white truncate min-w-0" :title="getDisplayWorkpieceFor(ch).serial_no">{{ getDisplayWorkpieceFor(ch).serial_no }}</span>
+              <span class="ml-auto px-1 rounded font-bold"
+                    :class="getDisplayWorkpieceFor(ch).status === 'ok' ? 'bg-green-700 text-green-100' : getDisplayWorkpieceFor(ch).status === 'ng' ? 'bg-red-700 text-red-100' : getDisplayWorkpieceFor(ch).status === 'inspecting' ? 'bg-yellow-700 text-yellow-100' : 'bg-slate-700 text-gray-300'">
+                {{ { registered: '已登记', queued: '排队', inspecting: '检测中', ok: '合格', ng: '不良' }[getDisplayWorkpieceFor(ch).status] || getDisplayWorkpieceFor(ch).status }}
+              </span>
+            </template>
+            <template v-else-if="hasScannerFor(ch) && getMesDataFor(ch)?.warn_no_barcode">
+              <span class="warn-no-barcode-blink text-yellow-300 font-bold w-full text-center">⚠ 未绑码 请扫描</span>
+            </template>
+            <template v-else>
+              <span class="text-gray-400 w-full text-center">等待扫码...</span>
+            </template>
+          </div>
+          <template v-for="position in ['top-right', 'top-left', 'bottom-right', 'bottom-left', 'center']" :key="position">
+            <div class="absolute z-50 pointer-events-none flex flex-col gap-1" :class="getMultiPositionClass(position)">
+              <transition-group name="toast">
+                <div v-for="toast in (multiActiveToasts[ch] || []).filter(t => t.position === position)" :key="toast.id"
+                  class="px-3 py-2 rounded-lg shadow-2xl text-white font-bold pointer-events-auto text-center text-xs"
+                  :style="{ backgroundColor: toast.color }">
+                  <div class="flex items-center gap-1 justify-center">
+                    <el-icon :size="14"><component :is="toast.icon" /></el-icon>
+                    <span>{{ toast.title }}</span>
+                  </div>
+                </div>
+              </transition-group>
+            </div>
+          </template>
+        </ChannelVideoCard>
+        <!-- 末页补位: 保持网格轨道稳定 -->
+        <div v-for="i in gridEmptySlots" :key="'empty-' + i"
+          class="border-2 border-dashed border-slate-800 rounded-lg flex items-center justify-center text-slate-700 text-xs select-none">
+          — 空 —
+        </div>
+      </div>
+    </template>
+
+    <!-- —— 放大详情模式 (单路大视频 + 详细数据 + 上一路/下一路) —— -->
+    <template v-else>
+      <!-- 顶部: 返回 + 标题 + 控制 + 路切换 -->
+      <div class="flex items-center gap-2 flex-shrink-0 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 flex-wrap">
+        <button @click="exitZoom"
+          class="px-2.5 py-1 rounded text-xs font-bold border bg-slate-800 border-slate-600 text-gray-200 hover:border-cyan-500 hover:text-cyan-300">‹ 返回总览</button>
+        <span class="text-cyan-400 font-bold text-base">工位 {{ zoomedChannel + 1 }}</span>
+        <span v-if="multiChannelData[zoomedChannel]?.projectName" class="text-xs text-gray-400 truncate max-w-[10rem]">{{ multiChannelData[zoomedChannel].projectName }}</span>
+        <span class="text-[0.625rem] px-2 py-0.5 rounded font-bold"
+          :class="multiChannelData[zoomedChannel]?.isDetecting ? 'bg-green-600/90 text-white' : multiChannelData[zoomedChannel]?.isRunning ? 'bg-yellow-600/90 text-white' : 'bg-gray-600/90 text-white'">
+          {{ multiChannelData[zoomedChannel]?.isDetecting ? '检测中' : multiChannelData[zoomedChannel]?.isRunning ? '待机' : '停止' }}
+        </span>
+        <span class="text-[0.625rem] bg-slate-700 px-2 py-0.5 rounded text-gray-300">CT: {{ getDisplayCT(multiChannelData[zoomedChannel]) }}</span>
+        <div class="ml-auto flex items-center gap-1.5">
+          <button @click="startDetectionForChannel(zoomedChannel)" :disabled="(!multiChannelData[zoomedChannel]?.project && !currentProject) || multiChannelData[zoomedChannel]?.isDetecting"
+            class="bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-2.5 py-1 rounded text-xs font-bold">开始</button>
+          <button @click="stopDetectionForChannel(zoomedChannel)" :disabled="!multiChannelData[zoomedChannel]?.isRunning"
+            class="bg-red-600 hover:bg-red-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-2.5 py-1 rounded text-xs font-bold">停止</button>
+          <button @click="standbyForChannel(zoomedChannel)" :disabled="!multiChannelData[zoomedChannel]?.isDetecting"
+            class="bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-2.5 py-1 rounded text-xs font-bold">待机</button>
+          <button @click="resetCountersForChannel(zoomedChannel)" :disabled="multiChannelData[zoomedChannel]?.isDetecting"
+            class="bg-cyan-500 hover:bg-cyan-400 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-2.5 py-1 rounded text-xs font-bold">清零</button>
+          <span class="h-4 w-px bg-slate-600 mx-1"></span>
+          <button @click="zoomStep(-1)"
+            class="px-2.5 py-1 rounded text-xs font-bold border bg-slate-800 border-slate-600 text-gray-200 hover:border-cyan-500 hover:text-cyan-300">‹ 上一路</button>
+          <button @click="zoomStep(1)"
+            class="px-2.5 py-1 rounded text-xs font-bold border bg-slate-800 border-slate-600 text-gray-200 hover:border-cyan-500 hover:text-cyan-300">下一路 ›</button>
+        </div>
+      </div>
+      <!-- MES 完整信息条 -->
+      <div v-if="shouldShowMesBarFor(zoomedChannel)"
+           class="bg-slate-900 border border-cyan-800/50 rounded-lg px-3 py-1 flex items-center gap-3 text-xs flex-shrink-0 flex-wrap">
+        <div v-if="!isScanDisabledFor(zoomedChannel) && getDisplayWorkpieceFor(zoomedChannel)" class="flex items-center gap-1.5 min-w-0">
+          <span class="text-cyan-400 font-bold">工件:</span>
+          <span class="font-mono text-white truncate" :title="getDisplayWorkpieceFor(zoomedChannel).serial_no">{{ getDisplayWorkpieceFor(zoomedChannel).serial_no }}</span>
+          <el-tag :type="getDisplayWorkpieceFor(zoomedChannel).status === 'ok' ? 'success' : getDisplayWorkpieceFor(zoomedChannel).status === 'ng' ? 'danger' : getDisplayWorkpieceFor(zoomedChannel).status === 'inspecting' ? 'warning' : 'info'" size="small">
+            {{ { registered: '已登记', queued: '排队', inspecting: '检测中', ok: '合格', ng: '不良' }[getDisplayWorkpieceFor(zoomedChannel).status] || getDisplayWorkpieceFor(zoomedChannel).status }}
+          </el-tag>
+        </div>
+        <div v-if="!isScanDisabledFor(zoomedChannel) && hasScannerFor(zoomedChannel) && getMesDataFor(zoomedChannel)?.warn_no_barcode" class="warn-no-barcode-blink flex items-center gap-1 bg-yellow-600/30 border border-yellow-500 rounded px-2 py-0.5">
+          <span class="text-yellow-300 font-bold">⚠ 未绑码</span>
+          <span class="text-yellow-200">请扫描工件条码</span>
+        </div>
+        <div v-else-if="!isScanDisabledFor(zoomedChannel) && !getDisplayWorkpieceFor(zoomedChannel) && !getMesDataFor(zoomedChannel)?.order" class="text-gray-500">等待扫码...</div>
+        <div v-if="isScanDisabledFor(zoomedChannel)" class="flex items-center gap-1 text-gray-400 italic">
+          <span>⛔ 扫码已禁用 · 走项目原生结算</span>
+        </div>
+        <div v-if="getMesDataFor(zoomedChannel)?.order && taskInfoDisplay.show_order_chip" class="flex items-center gap-1 text-[0.625rem] ml-auto pl-2 border-l border-cyan-800/40">
+          <span class="text-cyan-400">工单:</span>
+          <span class="text-white truncate max-w-[80px]" :title="getMesDataFor(zoomedChannel).order.order_no">{{ getMesDataFor(zoomedChannel).order.order_no }}</span>
+          <span class="text-gray-400">{{ getMesDataFor(zoomedChannel).order.completed_qty }}/{{ getMesDataFor(zoomedChannel).order.planned_qty }}</span>
+        </div>
+        <div v-if="getTaskInfoItemsFor(zoomedChannel).length" class="flex items-center gap-1 text-[0.625rem] pl-2 border-l border-cyan-800/40">
+          <template v-for="it in getTaskInfoItemsFor(zoomedChannel)" :key="it.label">
+            <span class="text-cyan-400">{{ it.label }}:</span>
+            <span class="text-white truncate max-w-[72px]" :title="it.value">{{ it.value }}</span>
+          </template>
+        </div>
+        <el-button v-if="systemStore.display.monitor.showScanButtons !== false && !isScanDisabledFor(zoomedChannel)"
+          :class="getMesDataFor(zoomedChannel)?.order ? '' : 'ml-auto'" size="small" type="warning" plain
+          @click.stop="clearPendingScan(zoomedChannel)">清除本次扫码</el-button>
+        <el-button v-if="systemStore.display.monitor.showScanButtons !== false"
+          size="small" :type="isScanDisabledFor(zoomedChannel) ? 'success' : 'danger'" plain
+          :loading="scannerDisableStore.toggling"
+          @click.stop="toggleScanDisableFor(zoomedChannel)">
+          {{ isScanDisabledFor(zoomedChannel) ? '启用扫码' : '禁用扫码' }}
+        </el-button>
+      </div>
+      <!-- 主体: 左大视频 + 右详细数据 -->
+      <div class="flex-1 flex gap-2 min-h-0">
+        <div class="relative min-h-0 min-w-0" style="flex: 3 1 0%;">
+          <!-- :key 强制随路切换重建卡片, 让 canvas 注册回调重新按新工位号回注父级字典 -->
+          <ChannelVideoCard
+            :key="'zoom-' + zoomedChannel"
+            class="h-full"
+            :ch="zoomedChannel"
+            :ch-data="multiChannelData[zoomedChannel]"
+            :model-stats="channelModelStats[zoomedChannel]"
+            :selected="false"
+            :register-video-canvas="el => { multiVideoCanvasRefs[zoomedChannel] = el }"
+            :register-overlay-canvas="el => { multiCanvasRefs[zoomedChannel] = el }"
+            @select="() => {}"
+          />
+          <!-- 放大工位 Toast (定位上下文 = 视频区) -->
+          <template v-for="position in ['top-right', 'top-left', 'bottom-right', 'bottom-left', 'center']" :key="position">
+            <div class="absolute z-50 pointer-events-none flex flex-col gap-2" :class="getMultiPositionClass(position)">
+              <transition-group name="toast">
+                <TjSlot
+                  v-for="toast in (multiActiveToasts[zoomedChannel] || []).filter(t => t.position === position)"
+                  :key="toast.id"
+                  name="cycle-result.indicator"
+                  :toast="toast"
+                  :channel-id="zoomedChannel"
+                >
+                  <div
+                    class="px-4 py-3 rounded-xl shadow-2xl text-white font-bold pointer-events-auto transform transition-all duration-300 text-center"
+                    :style="{ backgroundColor: toast.color, fontSize: (toast.fontSize / 16) + 'rem' }">
+                    <div class="flex items-center gap-2 justify-center">
+                      <el-icon :size="20"><component :is="toast.icon" /></el-icon>
+                      <div><div class="font-bold">{{ toast.title }}</div><div v-if="toast.subtitle" class="text-sm opacity-80">{{ toast.subtitle }}</div></div>
+                    </div>
+                  </div>
+                </TjSlot>
+              </transition-group>
+            </div>
+          </template>
+        </div>
+        <!-- 右: 详细数据列 -->
+        <div class="flex flex-col gap-1.5 min-w-0 overflow-hidden" style="flex: 1 1 0%;">
+          <!-- 计数 2x2 -->
+          <div class="grid grid-cols-2 gap-1.5 flex-shrink-0">
+            <div class="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-center">
+              <div class="text-[0.625rem] text-gray-400">总产量</div>
+              <div class="text-2xl font-bold font-mono text-white">{{ multiChannelData[zoomedChannel]?.total ?? 0 }}</div>
+            </div>
+            <div class="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-center">
+              <div class="text-[0.625rem] text-gray-400">合格</div>
+              <div class="text-2xl font-bold font-mono text-green-400">{{ multiChannelData[zoomedChannel]?.ok ?? 0 }}</div>
+            </div>
+            <div class="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-center">
+              <div class="text-[0.625rem] text-gray-400">不良</div>
+              <div class="text-2xl font-bold font-mono text-red-400">{{ multiChannelData[zoomedChannel]?.ng ?? 0 }}</div>
+            </div>
+            <div class="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-center">
+              <div class="text-[0.625rem] text-gray-400">合格率</div>
+              <div class="text-2xl font-bold font-mono" :class="(multiChannelData[zoomedChannel]?.yieldRate ?? 0) >= 90 ? 'text-green-400' : (multiChannelData[zoomedChannel]?.yieldRate ?? 0) >= 70 ? 'text-yellow-400' : 'text-red-400'">
+                {{ multiChannelData[zoomedChannel]?.yieldRate ?? 0 }}%
+              </div>
+            </div>
+          </div>
+          <!-- 合格率进度 + 运行指标 -->
+          <div class="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 flex-shrink-0">
+            <div class="w-full bg-slate-700 rounded-full h-2">
+              <div class="h-2 rounded-full transition-all" :class="(multiChannelData[zoomedChannel]?.yieldRate ?? 0) >= 90 ? 'bg-green-500' : (multiChannelData[zoomedChannel]?.yieldRate ?? 0) >= 70 ? 'bg-yellow-500' : 'bg-red-500'"
+                :style="{ width: (multiChannelData[zoomedChannel]?.yieldRate ?? 0) + '%' }"></div>
+            </div>
+            <div class="flex items-center gap-3 mt-1 text-[0.625rem] text-gray-400">
+              <span v-if="systemStore.display.monitor.showFps !== false">FPS: <span class="text-cyan-400 font-mono">{{ multiChannelData[zoomedChannel]?.fps ?? 0 }}</span></span>
+              <span v-if="systemStore.display.monitor.showLatency !== false">延迟: <span class="text-cyan-400 font-mono">{{ multiChannelData[zoomedChannel]?.latency ?? 0 }}ms</span></span>
+              <span class="ml-auto"><span class="text-green-400">{{ multiChannelData[zoomedChannel]?.ok ?? 0 }}</span> / <span class="text-white">{{ multiChannelData[zoomedChannel]?.total ?? 0 }}</span></span>
+            </div>
+          </div>
+          <!-- CT 指标行 -->
+          <div class="grid grid-cols-3 gap-1.5 flex-shrink-0">
+            <div class="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-center">
+              <div class="text-[0.625rem] text-gray-400">平均 CT</div>
+              <div class="text-sm font-bold font-mono text-cyan-400">{{ (multiChannelData[zoomedChannel]?.avgCycleTime ?? 0) ? (multiChannelData[zoomedChannel].avgCycleTime.toFixed(1) + 's') : '--' }}</div>
+            </div>
+            <div class="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-center">
+              <div class="text-[0.625rem] text-gray-400">上次 CT</div>
+              <div class="text-sm font-bold font-mono text-white">{{ (multiChannelData[zoomedChannel]?.lastCycleTime ?? 0) ? (multiChannelData[zoomedChannel].lastCycleTime.toFixed(1) + 's') : '--' }}</div>
+            </div>
+            <div class="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-center">
+              <div class="text-[0.625rem] text-gray-400">当前周期</div>
+              <div class="text-sm font-bold font-mono text-yellow-400">{{ (multiChannelData[zoomedChannel]?.currentCycleTime ?? 0) ? (multiChannelData[zoomedChannel].currentCycleTime.toFixed(1) + 's') : '--' }}</div>
+            </div>
+          </div>
+          <!-- SOP 流程 (竖排自适应拉伸: 行数少也不留白; 含序号/大缩略图/单步 PT/状态) -->
+          <div class="flex-1 min-h-0 bg-slate-900 border border-slate-700 rounded overflow-hidden flex flex-col">
+            <div class="bg-slate-800 px-2 py-0.5 text-cyan-400 text-xs font-bold border-b border-slate-700 flex-shrink-0 flex items-center justify-between">
+              <span>SOP 流程</span>
+              <span class="text-[0.625rem] text-gray-400 font-normal">
+                {{ (multiChannelData[zoomedChannel]?.steps || []).filter(s => s.status === 'completed').length }} / {{ (multiChannelData[zoomedChannel]?.steps || []).length }} 步
+              </span>
+            </div>
+            <div class="flex-1 min-h-0 flex flex-col gap-1 p-1.5 overflow-auto">
+              <div v-for="(step, idx) in (multiChannelData[zoomedChannel]?.steps || [])" :key="idx"
+                class="flex-1 min-h-[2.75rem] flex items-center gap-2 px-2 rounded border"
+                :class="step.status === 'completed' ? 'border-green-500 bg-green-900/30' : step.status === 'active' ? 'border-cyan-500 bg-cyan-900/30' : 'border-slate-600 bg-slate-800'">
+                <span class="w-5 text-center text-sm font-bold flex-shrink-0"
+                  :class="step.status === 'completed' ? 'text-green-400' : step.status === 'active' ? 'text-cyan-400' : 'text-gray-600'">{{ idx + 1 }}</span>
+                <div class="w-16 h-[2.35rem] flex-shrink-0 rounded overflow-hidden bg-slate-950/50 flex items-center justify-center">
+                  <img v-if="step.screenshot" :src="step.screenshot" class="w-full h-full object-cover" />
+                  <el-icon v-else :size="14" class="text-slate-600"><Picture /></el-icon>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="text-xs font-bold truncate"
+                    :class="step.status === 'completed' ? 'text-green-300' : step.status === 'active' ? 'text-cyan-300 animate-pulse' : 'text-gray-500'">
+                    {{ step.name }}
+                  </div>
+                  <div v-if="systemStore.display.monitor.stepTableColumns?.showPt !== false" class="text-[0.625rem] text-gray-500 font-mono">
+                    PT: {{ getStepPT(multiChannelData[zoomedChannel], step.label) }}
+                  </div>
+                </div>
+                <span class="text-sm flex-shrink-0" :class="step.status === 'completed' ? 'text-green-400' : step.status === 'active' ? 'text-cyan-400' : 'text-gray-600'">
+                  {{ step.status === 'completed' ? '✓' : step.status === 'active' ? '···' : '—' }}
+                </span>
+              </div>
+              <div v-if="!multiChannelData[zoomedChannel]?.steps?.length" class="text-gray-600 text-xs text-center mt-2">等待检测</div>
+            </div>
+          </div>
+          <!-- NG TOP3 -->
+          <div v-if="systemStore.display.monitor.ngTop3 !== false" class="max-h-32 flex flex-col flex-shrink-0 bg-slate-900 border border-slate-700 rounded p-1.5">
+            <div class="flex items-center justify-between mb-1">
+              <span class="text-[0.625rem] text-cyan-400 font-bold">NG 步骤 TOP3</span>
+              <span class="text-[0.5625rem] text-gray-500 cursor-pointer hover:text-cyan-400 select-none" @click="toggleNgTopMode()">
+                {{ systemStore.display.monitor.ngTopDisplayMode === 'percentage' ? '百分比' : '次数' }}
+              </span>
+            </div>
+            <div class="flex-1 overflow-auto space-y-1">
+              <div v-for="(item, idx) in (multiChannelData[zoomedChannel]?.ngStepRanking || [])" :key="item.step"
+                class="flex items-center gap-1.5 bg-slate-800/50 px-1.5 py-0.5 rounded text-xs">
+                <span class="text-sm font-bold w-4 text-white text-center">{{ idx + 1 }}</span>
+                <span class="flex-1 text-gray-300 truncate">{{ item.step }}</span>
+                <span class="text-sm font-bold text-white">{{ systemStore.display.monitor.ngTopDisplayMode === 'count' ? item.count : item.rate.toFixed(0) + '%' }}</span>
+              </div>
+              <div v-if="!multiChannelData[zoomedChannel]?.ngStepRanking?.length" class="text-center text-gray-600 text-xs py-1">暂无数据</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <!-- 录像异常入口+详情面板 -->
+    <RecordingFailureOverlay
+      v-model:visible="showRecordingFailurePanel"
+      :rows="recordingFailureRows"
+      :loading="recordingFailureLoading"
+      @clear="clearRecordingFailures" />
   </div>
 
   <!-- ===== SINGLE-VIEW MODE (original layout) ===== -->
@@ -1923,9 +2262,69 @@ const multiDraggingProgress = ref({});
 const showRecordingFailurePanel = ref(false);
 const recordingFailureLoading = ref(false);
 
+// ==================== v3.47 多工位布局状态 (总览网格 + 分页 + 放大详情) ====================
+// 4+ 工位不再是"2x2 缺角", 而是: 可选网格布局 (自动/2x2/3x3/4x4) + 超出分页;
+// 点击卡片放大单路 (大视频 + 详细数据 + 上一路/下一路), 返回总览回到该工位所在页。
+const GRID_LAYOUT_KEY = 'monitor_grid_layout';
+const gridLayout = ref(localStorage.getItem(GRID_LAYOUT_KEY) || 'auto');  // 'auto' | '2x2' | '3x3' | '4x4'
+const gridPage = ref(0);
+const zoomedChannel = ref(null);  // null = 总览网格; 数字 = 放大的工位
+
+const gridDims = computed(() => {
+  let l = gridLayout.value;
+  if (!['2x2', '3x3', '4x4'].includes(l)) {
+    const n = channelCount.value || 1;
+    l = n <= 4 ? '2x2' : (n <= 9 ? '3x3' : '4x4');
+  }
+  const size = parseInt(l[0], 10);
+  return { cols: size, rows: size, pageSize: size * size };
+});
+const gridPageCount = computed(() => Math.max(1, Math.ceil((channelCount.value || 1) / gridDims.value.pageSize)));
+const gridPageChannels = computed(() => {
+  const { pageSize } = gridDims.value;
+  const start = gridPage.value * pageSize;
+  const remain = Math.max(0, (channelCount.value || 1) - start);
+  return Array.from({ length: Math.min(pageSize, remain) }, (_, i) => start + i);
+});
+const gridEmptySlots = computed(() => gridDims.value.pageSize - gridPageChannels.value.length);
+
+const setGridLayout = (l) => {
+  gridLayout.value = l;
+  try { localStorage.setItem(GRID_LAYOUT_KEY, l); } catch {}
+  gridPage.value = 0;
+};
+const gridPrevPage = () => { if (gridPage.value > 0) gridPage.value--; };
+const gridNextPage = () => { if (gridPage.value < gridPageCount.value - 1) gridPage.value++; };
+
+const zoomChannel = (ch) => {
+  zoomedChannel.value = ch;
+  selectedChannel.value = ch;  // 与插件 slot / 老 selectedChannel 语义保持同步
+};
+const exitZoom = () => {
+  const ch = zoomedChannel.value;
+  zoomedChannel.value = null;
+  if (ch !== null) gridPage.value = Math.floor(ch / gridDims.value.pageSize);  // 返回总览停在该工位所在页
+};
+const zoomStep = (delta) => {
+  const n = channelCount.value || 1;
+  if (zoomedChannel.value === null || n < 1) return;
+  zoomChannel((zoomedChannel.value + delta + n) % n);
+};
+
+// 翻页 / 换布局 / 进出放大 → 收放可见工位的 MJPEG 流 (等新卡片挂载注册 canvas 后再连)
+watch([gridPage, () => gridDims.value.pageSize, zoomedChannel], () => {
+  if ((channelCount.value || 1) > 3 && !layoutBodyOverride.value) {
+    nextTick(() => syncMultiStreams());
+  }
+});
+watch(gridPageCount, (n) => { if (gridPage.value >= n) gridPage.value = 0; });
+// ==================== End v3.47 多工位布局状态 ====================
+
 const resetMultiRuntimeState = (clearChannelData = false) => {
   multiPollingInProgress = false;
   selectedChannel.value = 0;
+  zoomedChannel.value = null;
+  gridPage.value = 0;
   showRecordingFailurePanel.value = false;
   multiActiveToasts.value = {};
   Object.keys(multiLastSeenSeq).forEach((k) => delete multiLastSeenSeq[k]);
@@ -2028,7 +2427,35 @@ const streamHost = () => getBackendHost();
 const BOUNDARY = '--frame';
 const HEADER_END = '\r\n\r\n';
 
-const startMultiStreams = (count) => {
+// v3.47 多工位重构: MJPEG 流按「可见工位」收放。
+// - 双/三工位: 全部常显, 照旧全拉
+// - 4+ 工位总览网格: 只拉当前页的工位
+// - 放大详情: 只拉放大的那一路
+// 数据轮询 (startMultiPolling) 始终覆盖全部工位 — 计数/Toast/语音/MES 不因翻页丢失,
+// 省的只是不可见通道的 MJPEG 带宽与 JPEG 解码开销。
+const visibleStreamChannels = () => {
+  const n = channelCount.value || 1;
+  if (n <= 1) return [];
+  if (n <= 3) return Array.from({ length: n }, (_, i) => i);
+  if (zoomedChannel.value !== null) return [zoomedChannel.value];
+  return gridPageChannels.value;
+};
+
+const syncMultiStreams = () => {
+  if (!multiStreamRunning) return;
+  const want = new Set(visibleStreamChannels());
+  Object.keys(multiStreamAborts).forEach((k) => {
+    if (!want.has(Number(k))) {
+      try { multiStreamAborts[k].abort(); } catch {}
+      delete multiStreamAborts[k];
+    }
+  });
+  want.forEach((ch) => {
+    if (!(ch in multiStreamAborts)) connectMjpegStream(ch);
+  });
+};
+
+const startMultiStreams = () => {
   // layout.body 插件独占 MJPEG: 任何误调都直接拒绝, 防竞态漏网
   if (layoutBodyOverride.value) {
     stopMultiStreams();
@@ -2036,9 +2463,7 @@ const startMultiStreams = (count) => {
   }
   stopMultiStreams();
   multiStreamRunning = true;
-  for (let ch = 0; ch < count; ch++) {
-    connectMjpegStream(ch);
-  }
+  syncMultiStreams();
 };
 
 const connectMjpegStream = async (ch) => {
@@ -2095,10 +2520,20 @@ const connectMjpegStream = async (ch) => {
         bufLen = keep;
       }
     }
+    // v3.47: 服务端正常关流 (done, 非异常) 也要重连 —— 例如后端重启/换源关旧流,
+    // 否则该工位画面从此定格; 与 catch 分支同样按"仍可见"守门
+    if (multiStreamRunning) {
+      setTimeout(() => {
+        if (multiStreamRunning && visibleStreamChannels().includes(ch)) connectMjpegStream(ch);
+      }, 1000);
+    }
   } catch (e) {
     if (e.name !== 'AbortError' && multiStreamRunning) {
       console.warn(`[MJPEGStream] ch${ch} disconnected, reconnecting...`);
-      setTimeout(() => connectMjpegStream(ch), 2000);
+      // v3.47: 重连前确认该工位仍可见 (翻页/退出放大后不再为隐藏通道续命)
+      setTimeout(() => {
+        if (multiStreamRunning && visibleStreamChannels().includes(ch)) connectMjpegStream(ch);
+      }, 2000);
     }
   }
 };
@@ -2117,7 +2552,7 @@ const findBytes = (buf, str, offset = 0) => {
 // 把一张解出的位图 (HTMLImageElement 或 ImageBitmap) 等比居中绘到工位画布
 const paintToCanvas = (ch, src, natW, natH) => {
   const canvas = multiVideoCanvasRefs[ch];
-  if (!canvas) return;
+  if (!canvas || !canvas.isConnected) return;  // v3.47: 脱离 DOM 的旧画布不画
   const parent = canvas.parentElement;
   if (parent) {
     canvas.width = parent.clientWidth;
@@ -2454,8 +2889,10 @@ const processChannelResult = (ch, d) => {
   const hasSplitOverlay = (Array.isArray(_pcOverlay.label_splits) && _pcOverlay.label_splits.length > 0)
     || !!(_pcOverlay.placement_guide && _pcOverlay.placement_guide.enabled);
 
+  // v3.47: 翻页/放大后隐藏工位的旧 canvas 已从 DOM 摘除但字典里还挂着
+  // (register 回调只写不清), isConnected 守门避免往脱离的画布上白画。
   const canvas = multiCanvasRefs[ch];
-  if (canvas) {
+  if (canvas && canvas.isConnected) {
     if (dets.length || hasSplitOverlay) {
       drawMultiDetections(ch, canvas, dets, hidden, pollCfg);
     } else {
@@ -3032,6 +3469,11 @@ const fetchChannelCount = async () => {
     if (selectedChannel.value >= count) {
       selectedChannel.value = 0;
     }
+    // v3.47: 工位数变化后放大工位可能越界 → 退回总览
+    if (zoomedChannel.value !== null && zoomedChannel.value >= count) {
+      zoomedChannel.value = null;
+      gridPage.value = 0;
+    }
     if (count > 1 || layoutBodyOverride.value) {
       // D2 启动竞态修复: 工位数是唯一真相源。进入多工位前必须显式停掉单工位那套
       // (单工位轮询 + 单工位 MJPEG 流), 否则 onMounted 里 getSourceStatus 若先于本函数
@@ -3052,7 +3494,7 @@ const fetchChannelCount = async () => {
       // 原生双缓冲取流会和插件 <img> 抢同一通道的 MJPEG 连接 (后端每通道只保留最新
       // 一条连接, 旧连接主动让位), 先连的被踢断 → 画面冻在第一帧、而检测框叠加层走
       // 独立轮询照常更新。覆盖生效时跳过原生取流, 仅保留轮询 (叠加层画框/计数都靠它)。
-      if (!layoutBodyOverride.value) startMultiStreams(count);
+      if (!layoutBodyOverride.value) startMultiStreams();
       startMultiPolling();
       loadPerChannelDetectionSettings(res.data.source_configs || {});
     } else {
@@ -3871,6 +4313,22 @@ const getDisplayCT = (chData) => {
     val = includeNg ? chData.avgCycleTimeWithNg : chData.avgCycleTime;
   }
   return val ? val.toFixed(1) + 's' : '--';
+};
+
+// v3.47 多工位放大详情/三工位步骤表: 单步 PT, 跟随显示设置 ptMode 三档口径
+//   current → 当前周期实时 (step_durations), last → 上次周期, avg → 历史平均; 逐级兜底
+const getStepPT = (chData, label) => {
+  if (!chData || !label) return '--';
+  const mode = systemStore.display?.monitor?.ptMode || 'current';
+  let v;
+  if (mode === 'avg') {
+    v = chData.avgStepDurations?.[label];
+  } else if (mode === 'last') {
+    v = chData.lastStepDurations?.[label] ?? chData.avgStepDurations?.[label];
+  } else {
+    v = chData.stepDurations?.[label] ?? chData.lastStepDurations?.[label] ?? chData.avgStepDurations?.[label];
+  }
+  return (v || v === 0) && v > 0 ? Number(v).toFixed(1) + 's' : '--';
 };
 
 const displayCT = computed(() => {
