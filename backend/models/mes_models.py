@@ -211,8 +211,9 @@ class DefectRecord(Base):
                           nullable=False, index=True)
     inspection_id = Column(Integer, ForeignKey("workpiece_inspections.id", ondelete="SET NULL"),
                            nullable=True)
+    # index=True 2026-08 补齐 (老库走 m0007 迁移): 启动孤儿扫描按 cycle_id 关联探查
     cycle_id = Column(Integer, ForeignKey("detection_cycles.id", ondelete="SET NULL"),
-                      nullable=True)
+                      nullable=True, index=True)
     step_record_id = Column(Integer, ForeignKey("step_records.id", ondelete="SET NULL"),
                             nullable=True)
 

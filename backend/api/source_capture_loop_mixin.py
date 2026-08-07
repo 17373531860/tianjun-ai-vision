@@ -292,7 +292,10 @@ class CaptureLoopMixin:
                                 if self.capture is not None:
                                     self.capture.release()
                                 time.sleep(2.0)
-                                self.capture = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
+                                # 与 start_rtsp 同理: 打开超时封顶, 防 NVR 掉线时重连把采集线程挂死几分钟
+                                self.capture = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG, [
+                                    cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10000,
+                                ])
                                 self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                                 if self.capture.isOpened():
                                     print("[RTSP] reconnect ok")
@@ -377,7 +380,10 @@ class CaptureLoopMixin:
                             if self.source_type == 'rtsp':
                                 print("[RTSP] attempting reconnect...")
                                 time.sleep(2.0)
-                                self.capture = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
+                                # 与 start_rtsp 同理: 打开超时封顶
+                                self.capture = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG, [
+                                    cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10000,
+                                ])
                                 self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                                 if self.capture.isOpened():
                                     print("[RTSP] reconnect ok")

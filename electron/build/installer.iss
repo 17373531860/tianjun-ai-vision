@@ -221,6 +221,40 @@ begin
   end;
 end;
 
+// v3.47: Windows Defender 排除项.
+// 后端是约 1.5GB 的 conda 环境 (上千个 DLL/pyd), 开机后首次进程启动时 Defender
+// 实时扫描会把 import torch/cv2 拖成分钟级 — 客户"开机首次启动等十分钟"的主要
+// 环境放大器. 安装收尾把安装目录 + 用户数据目录加入排除清单.
+// PrivilegesRequired=admin 已满足 Add-MpPreference 的权限要求; 无 Defender /
+// 组策略接管 / 第三方杀软的机器上命令静默失败, 不影响安装 (Log 留痕).
+procedure AddDefenderExclusions;
+var
+  ResultCode: Integer;
+  Cmd: String;
+begin
+  Cmd := '-NoProfile -NonInteractive -Command "try { Add-MpPreference -ExclusionPath '''
+       + ExpandConstant('{app}') + ''','''
+       + ExpandConstant('{userappdata}\tianjun-ai-vision')
+       + ''' -ErrorAction Stop; exit 0 } catch { exit 1 }"';
+  if Exec('powershell.exe', Cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    Log('Defender exclusion add attempted, exit=' + IntToStr(ResultCode))
+  else
+    Log('Defender exclusion: powershell.exe could not be executed');
+end;
+
+// 卸载时把排除项撤掉, 不在客户机上留安全面残留.
+procedure RemoveDefenderExclusions;
+var
+  ResultCode: Integer;
+  Cmd: String;
+begin
+  Cmd := '-NoProfile -NonInteractive -Command "Remove-MpPreference -ExclusionPath '''
+       + ExpandConstant('{app}') + ''','''
+       + ExpandConstant('{userappdata}\tianjun-ai-vision')
+       + ''' -ErrorAction SilentlyContinue"';
+  Exec('powershell.exe', Cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
 // v3.15.4: 覆盖安装前清掉旧的前端产物目录.
 // 前端 assets 用 content-hash 命名 (index-xxxx.js), 升级后新文件名不同, Inno 的
 // ignoreversion 只覆盖同名文件, 旧 hash 文件永远残留, 新旧 bundle 混叠 (现场出现
@@ -257,6 +291,7 @@ begin
     RestoreLicenseFiles;
     InstallCH341Driver;
     InstallPL2303Driver;
+    AddDefenderExclusions;
     // 搬家收尾: 新目录已装好、快捷方式/卸载注册表已指向新目录, 旧目录整体清除.
     // 用户数据在 userappdata, 不在安装目录, 删旧目录不碰数据.
     if OldInstallDirToRemove <> '' then
@@ -280,5 +315,7 @@ end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
-  { Keep AppData on uninstall - user data should be preserved }
+  // Keep AppData on uninstall - user data should be preserved
+  if CurUninstallStep = usPostUninstall then
+    RemoveDefenderExclusions;
 end;

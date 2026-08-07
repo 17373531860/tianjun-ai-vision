@@ -9,6 +9,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getMachineIdReport: () => ipcRenderer.invoke('get-machine-id-report'),
   importLicense: () => ipcRenderer.invoke('import-license'),
   onLicenseActivated: (callback) => ipcRenderer.on('license-activated', callback),
+  // 激活后后端后台启动失败 (超时/崩溃) 的通知 — 激活页据此停掉"启动中"状态并显示错误
+  onLicenseBackendStartFailed: (callback) =>
+    ipcRenderer.on('license-backend-start-failed', (_event, payload) => callback(payload || {})),
   // v3.23.x: 加深启动就绪门槛降级提示 (后端起了但数据库探测超时, 已降级放主窗进来)
   onDeepGateDowngraded: (callback) => ipcRenderer.on('startup:deep-gate-downgraded', callback),
   // v3.29.0 看门狗: 后端进程崩溃被自动拉起后, 提示操作员重新开始检测
