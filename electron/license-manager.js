@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execSync } = require('child_process');
+const { execSync, exec } = require('child_process');
 
 const PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA7pzkErjVtIpWJ3GWqRKi
@@ -58,25 +58,28 @@ function isUsable(value) {
 
 // v3.10.2: Windows 单一 PowerShell 调用一把取回所有需要的字段,
 // 比串行 5 次 wmic 快得多 + 不依赖 Win11 24H2+ 已废弃的 wmic 工具.
+const PS_PROBE_SCRIPT = [
+  "$ErrorActionPreference='SilentlyContinue';",
+  "$bb=Get-CimInstance Win32_BaseBoard;",
+  "$cs=Get-CimInstance Win32_ComputerSystemProduct;",
+  "$bios=Get-CimInstance Win32_BIOS;",
+  "$disk=Get-CimInstance Win32_DiskDrive | Where-Object {$_.MediaType -match 'Fixed' -or $_.InterfaceType -ne 'USB'} | Sort-Object Index | Select-Object -First 1;",
+  "$mac=(Get-NetAdapter -Physical | Where-Object Status -ne 'Disabled' | Sort-Object ifIndex | Select-Object -First 1 -ExpandProperty MacAddress);",
+  "@{",
+  "  bbSerial=$bb.SerialNumber;",
+  "  bbProduct=$bb.Product;",
+  "  uuid=$cs.UUID;",
+  "  biosSerial=$bios.SerialNumber;",
+  "  diskSerial=$disk.SerialNumber;",
+  "  mac=$mac",
+  "} | ConvertTo-Json -Compress"
+].join(' ');
+
+const PS_PROBE_CMD = `powershell -NoProfile -NonInteractive -Command "${PS_PROBE_SCRIPT.replace(/"/g, '\\"')}"`;
+
 function probeWindows() {
-  const ps = [
-    "$ErrorActionPreference='SilentlyContinue';",
-    "$bb=Get-CimInstance Win32_BaseBoard;",
-    "$cs=Get-CimInstance Win32_ComputerSystemProduct;",
-    "$bios=Get-CimInstance Win32_BIOS;",
-    "$disk=Get-CimInstance Win32_DiskDrive | Where-Object {$_.MediaType -match 'Fixed' -or $_.InterfaceType -ne 'USB'} | Sort-Object Index | Select-Object -First 1;",
-    "$mac=(Get-NetAdapter -Physical | Where-Object Status -ne 'Disabled' | Sort-Object ifIndex | Select-Object -First 1 -ExpandProperty MacAddress);",
-    "@{",
-    "  bbSerial=$bb.SerialNumber;",
-    "  bbProduct=$bb.Product;",
-    "  uuid=$cs.UUID;",
-    "  biosSerial=$bios.SerialNumber;",
-    "  diskSerial=$disk.SerialNumber;",
-    "  mac=$mac",
-    "} | ConvertTo-Json -Compress"
-  ].join(' ');
   try {
-    const raw = execSync(`powershell -NoProfile -NonInteractive -Command "${ps.replace(/"/g, '\\"')}"`, {
+    const raw = execSync(PS_PROBE_CMD, {
       timeout: 15000,
       encoding: 'utf-8',
     }).trim();
@@ -84,6 +87,17 @@ function probeWindows() {
   } catch (err) {
     return {};
   }
+}
+
+// v3.47: 异步版探测 — 缓存命中快路径的后台校验用, 不阻塞主进程事件循环.
+// (刚开机时 WMI 服务是冷的, 同步版曾让用户双击后几十秒无任何窗口)
+function probeWindowsAsync() {
+  return new Promise((resolve) => {
+    exec(PS_PROBE_CMD, { timeout: 20000, encoding: 'utf-8' }, (err, stdout) => {
+      if (err) return resolve({});
+      try { resolve(JSON.parse((stdout || '').trim())); } catch { resolve({}); }
+    });
+  });
 }
 
 // v3.10.2: 老 wmic 命令兜底 (Windows 10 / Win11 早期版本)
@@ -124,20 +138,8 @@ function probeLinux() {
   return probe;
 }
 
-// v3.10.2: 完整 fingerprint pipeline.
-// 返回 { fingerprint, parts, weakSources } —— 调用方可以判 weakSources 决定是否报警.
-function getStableFingerprint() {
-  const probe = process.platform === 'win32' ? probeWindows() : probeLinux();
-  // Windows: PowerShell 一把没拿到 → 兜底走老 wmic
-  if (process.platform === 'win32') {
-    const winCount = ['bbSerial', 'uuid', 'biosSerial', 'diskSerial', 'mac']
-      .filter(k => isUsable(probe[k])).length;
-    if (winCount === 0) {
-      const fb = probeWindowsWmicFallback();
-      Object.assign(probe, fb);
-    }
-  }
-
+// 由探测结果组装 fingerprint (同步/异步探测共用)
+function buildFingerprintFromProbe(probe) {
   const parts = [];
   const debug = {};
   for (const key of ['bbSerial', 'uuid', 'biosSerial', 'diskSerial', 'mac', 'bbProduct']) {
@@ -160,6 +162,22 @@ function getStableFingerprint() {
     strongCount: parts.filter(p => !p.startsWith('cpu:') && !p.startsWith('bbProduct:')).length,
     debug,
   };
+}
+
+// v3.10.2: 完整 fingerprint pipeline.
+// 返回 { fingerprint, parts, strongCount, debug } —— 调用方可判 strongCount 决定是否报警.
+function getStableFingerprint() {
+  const probe = process.platform === 'win32' ? probeWindows() : probeLinux();
+  // Windows: PowerShell 一把没拿到 → 兜底走老 wmic
+  if (process.platform === 'win32') {
+    const winCount = ['bbSerial', 'uuid', 'biosSerial', 'diskSerial', 'mac']
+      .filter(k => isUsable(probe[k])).length;
+    if (winCount === 0) {
+      const fb = probeWindowsWmicFallback();
+      Object.assign(probe, fb);
+    }
+  }
+  return buildFingerprintFromProbe(probe);
 }
 
 class LicenseManager {
@@ -196,6 +214,29 @@ class LicenseManager {
     const cacheFile = path.join(this.userDataPath, 'machine_id.txt');
     const verifyFile = path.join(this.userDataPath, 'hw_verify.txt');
 
+    // v3.47 快路径: 缓存 + 校验文件都在 → 直接信任缓存返回, 指纹核对放后台异步。
+    // 老逻辑每次启动都同步跑 PowerShell/WMI (刚开机 WMI 冷, 最坏 15s + wmic 兜底
+    // 5×8s), 且发生在任何窗口创建之前 — 用户双击后长时间黑屏的元凶之一。
+    // 防拷贝语义保留: 后台核对发现硬件不匹配 → 删两个缓存文件, 下一次启动
+    // 走同步全量重算 (老机器 ID 变 → license 校验失败), 只比老行为晚一次开机生效。
+    try {
+      if (fs.existsSync(cacheFile) && fs.existsSync(verifyFile)) {
+        const cached = fs.readFileSync(cacheFile, 'utf-8').trim();
+        if (cached && cached.startsWith('TJ-') && cached.length >= 10) {
+          this._machineId = cached;
+          this._machineIdQuality = 'cached';
+          console.log(`[License] Machine ID (cached, background verify scheduled): ${cached}`);
+          setTimeout(() => {
+            this._verifyCacheInBackground(cacheFile, verifyFile).catch((e) => {
+              console.warn('[License] Background hw verify error (ignored):', e && e.message);
+            });
+          }, 5000);
+          return cached;
+        }
+      }
+    } catch { /* 缓存读取失败 → 走同步全量路径 */ }
+
+    // 无缓存 / 缓存不完整: 同步全量计算 (首次运行, 或后台核对删过缓存)
     // v3.10.2: 调用方需要时可以读 _lastFingerprintReport (诊断用)
     const fp = getStableFingerprint();
     const stableFp = fp.fingerprint;
@@ -261,9 +302,37 @@ class LicenseManager {
     return this._machineId;
   }
 
+  // v3.47: 缓存快路径的后台硬件核对 (异步探测, 不阻塞事件循环)。
+  // - 探测不可靠 (强标识源=0, 如 WMI 临时抽风) → 不动缓存, 只留日志, 防误锁
+  // - 核对通过 → 静默
+  // - 核对不匹配 (硬件真变了 / userData 被拷到别的机器) → 删缓存, 下次启动强制重算
+  async _verifyCacheInBackground(cacheFile, verifyFile) {
+    const probe = process.platform === 'win32' ? await probeWindowsAsync() : probeLinux();
+    const fp = buildFingerprintFromProbe(probe);
+    if (!this._lastFingerprintReport) this._lastFingerprintReport = fp;
+    if (fp.strongCount === 0) {
+      console.warn('[License] Background hw verify skipped: no strong hardware identifier this run (probe flaky?)');
+      return;
+    }
+    const verifyHash = crypto.createHash('sha256').update(fp.fingerprint).digest('hex').substring(0, 16);
+    const stored = readFileSafe(verifyFile);
+    if (stored && stored !== verifyHash) {
+      console.error('[License] Background hw verify MISMATCH — cached machine ID does not match this hardware.');
+      console.error('[License] Removing machine_id cache; next startup will recompute and re-validate license.');
+      try { fs.unlinkSync(cacheFile); } catch { /* 忽略 */ }
+      try { fs.unlinkSync(verifyFile); } catch { /* 忽略 */ }
+    } else {
+      console.log('[License] Background hw verify OK');
+    }
+  }
+
   // v3.10.2: 暴露指纹诊断报告, 供 main.js / 前端 / 客户支持现场排错
   getMachineIdReport() {
     if (!this._machineId) this.getMachineId();
+    // 快路径下报告可能还没生成 (后台核对未跑完) — 诊断场景按需同步补算一次
+    if (!this._lastFingerprintReport) {
+      this._lastFingerprintReport = getStableFingerprint();
+    }
     return {
       machineId: this._machineId,
       quality: this._machineIdQuality || 'unknown',

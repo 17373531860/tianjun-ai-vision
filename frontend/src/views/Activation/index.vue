@@ -25,6 +25,7 @@
 
         <!-- Status Message -->
         <div v-if="statusMessage" class="mb-6 p-3 rounded-lg text-sm" :class="statusClass">
+          <el-icon v-if="starting" class="animate-spin mr-1 align-middle"><Loading /></el-icon>
           {{ statusMessage }}
         </div>
 
@@ -33,7 +34,8 @@
           type="primary"
           size="large"
           class="w-full"
-          :loading="importing"
+          :loading="importing || starting"
+          :disabled="starting"
           @click="importLicense"
         >
           <el-icon class="mr-2"><Upload /></el-icon>
@@ -57,7 +59,7 @@
 <script setup>
 import { ref, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
-import { Lock, CopyDocument, Upload } from '@element-plus/icons-vue';
+import { Lock, CopyDocument, Upload, Loading } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 
 const router = useRouter();
@@ -68,6 +70,9 @@ const statusMessage = ref('');
 const statusClass = ref('');
 const licenseError = ref('');
 const importing = ref(false);
+// 激活成功后, 后端在主进程后台冷启动 (首次可能要几分钟), 期间保持"启动中"状态;
+// license-activated 到达 → 跳主页; license-backend-start-failed 到达 → 显示错误
+const starting = ref(false);
 
 const isElectron = !!(window.electronAPI?.isElectron);
 
@@ -91,6 +96,14 @@ onMounted(async () => {
 
     window.electronAPI.onLicenseActivated(() => {
       router.replace('/');
+    });
+
+    // 老 preload 没有这个桥时跳过 (可选链), 不影响激活主流程
+    window.electronAPI.onLicenseBackendStartFailed?.((payload) => {
+      starting.value = false;
+      statusMessage.value = 'Activation succeeded, but backend failed to start. Please restart the application.';
+      statusClass.value = 'bg-red-900/50 border border-red-700 text-red-300';
+      licenseError.value = payload?.message || 'Backend startup failed';
     });
   } catch (err) {
     console.error('Failed to get license status:', err);
@@ -122,7 +135,9 @@ const importLicense = async () => {
     }
 
     if (result.valid) {
-      statusMessage.value = 'Activation successful! Starting...';
+      // 主进程已改为立即返回验签结果、后端后台启动 — 这里进入"启动中"等待态
+      starting.value = true;
+      statusMessage.value = 'Activation successful! System is starting, the first launch may take a few minutes...';
       statusClass.value = 'bg-green-900/50 border border-green-700 text-green-300';
     } else {
       licenseError.value = result.message || 'Activation failed';

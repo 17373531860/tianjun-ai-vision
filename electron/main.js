@@ -1066,12 +1066,25 @@ ipcMain.handle('import-license', async () => {
   if (verifyResult.valid) {
     isLicensed = true;
     console.log('[App] License activated, starting backend...');
-    try {
-      await startBackend();
-      mainWindow.webContents.send('license-activated');
-    } catch (err) {
-      console.error('[App] Failed to start backend after activation:', err.message);
-    }
+    // 后端启动放后台, 立即把验签结果还给激活页 — 冷启动可能要几分钟,
+    // 挂在 await 上会让激活按钮转圈转满整个后端启动 (客户现场实际投诉点)。
+    // 启动完成 → license-activated 跳主页; 启动失败 → 事件 + 错误框, 不再静默吞掉。
+    startBackend()
+      .then(() => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('license-activated');
+        }
+      })
+      .catch((err) => {
+        console.error('[App] Failed to start backend after activation:', err.message);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          try {
+            mainWindow.webContents.send('license-backend-start-failed', { message: err.message });
+          } catch (_e) { /* 忽略 */ }
+        }
+        dialog.showErrorBox('启动失败',
+          `授权已激活, 但后端服务启动失败:\n${err.message}\n\n请关闭软件后重新打开。`);
+      });
   }
   return verifyResult;
 });
