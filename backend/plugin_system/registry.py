@@ -12,8 +12,10 @@
 
 不在本期实现的能力（占位接口，先收集，运行时不真接到主程序）:
 - export_templates: 等 F7 一起做
-- export_fields:    等 F8 一起做
 - realtime_triggers: 等 F9 一起做
+
+已落地:
+- export_fields (F8, v3.46): 插件字段接入导出中央仓库, 见 ExportFieldsRegistry
 
 API 与 plugins-examples/tier3-fullstack/backend/__init__.py 对齐，避免 demo 跑不通。
 """
@@ -197,6 +199,83 @@ class TablesRegistry:
         return list(self._registered)
 
 
+# ----------------------- export fields (v3.46 F8 真实现) -----------------------
+
+
+class ExportFieldsRegistry:
+    """插件导出字段注册 — 接入自定义导出字段中央仓库 (F8, v3.46 落地)。
+
+    插件把自己的统计字段挂进导出字段树，客户在自定义导出模板里像用主程序字段
+    一样引用它们（前端字段树会出现「插件字段」分组）。
+
+    契约:
+      - 字段 path **必须**以 ``plugin.<customer_code_snake>.`` 开头（连字符转下划线），
+        例 customer_code="lg-worktime" → ``plugin.lg_worktime.cycle_va_seconds``
+      - provider 签名 ``provider(db, ctx) -> dict``，返回值挂到
+        Jinja 上下文 ``ctx["plugin"]["<cc_snake>"]``；ctx 里 cycle/session 等子树
+        已填完，provider 可按 ``ctx["cycle"]["id"]`` 反查自己的表
+      - provider 异常被中央仓库隔离（该插件字段渲染为空），不影响导出主流程
+      - 单 active 插件 + 重启生命周期：重复 register 视为整体替换
+
+    用法::
+
+        registry.export_fields.register(
+            fields=[
+                {"path": "plugin.lg_worktime.cycle_va_seconds",
+                 "label": "本周期VA时长(秒)", "type": "float",
+                 "example": "12.5", "notes": "..."},
+            ],
+            provider=my_provider,   # callable(db, ctx) -> dict
+        )
+    """
+
+    def __init__(self, customer_code: str) -> None:
+        self._customer_code = customer_code
+        self._registered_paths: List[str] = []
+
+    def register(
+        self,
+        fields: List[Dict[str, Any]],
+        provider: Optional[Callable[[Any, Dict[str, Any]], Dict[str, Any]]] = None,
+    ) -> None:
+        from backend.services import export_field_registry as efr
+
+        if not isinstance(fields, list) or not fields:
+            raise ValueError("ExportFieldsRegistry.register: fields 必须是非空 list")
+        if provider is not None and not callable(provider):
+            raise TypeError("ExportFieldsRegistry.register: provider 必须是 callable")
+
+        defs = []
+        for item in fields:
+            if not isinstance(item, dict) or not item.get("path") or not item.get("label"):
+                raise ValueError(
+                    f"ExportFieldsRegistry.register: 字段项必须是含 path/label 的 dict, 实际 {item!r}"
+                )
+            defs.append(efr.FieldDef(
+                path=str(item["path"]),
+                label=str(item["label"]),
+                type=str(item.get("type", efr.TYPE_STR)),
+                group=efr.GROUP_PLUGIN,
+                example=str(item.get("example", "")),
+                notes=str(item.get("notes", "")),
+                format_hint=str(item.get("format_hint", "")),
+                enum_values=list(item.get("enum_values", []) or []),
+                sources=list(item.get("sources", []) or ["cycle", "range"]),
+                available_in=list(item.get("available_in", []) or ["batch", "realtime"]),
+            ))
+
+        # path 前缀校验在中央仓库里做（ValueError 直接抛给插件作者, fail-fast）
+        efr.register_plugin_fields(self._customer_code, defs, provider)
+        self._registered_paths = [d.path for d in defs]
+        log.info(
+            "[Plugin][%s] export fields registered: %d 个 (provider=%s)",
+            self._customer_code, len(defs), "yes" if provider else "no",
+        )
+
+    def registered(self) -> List[str]:
+        return list(self._registered_paths)
+
+
 # ----------------------- export / realtime placeholders -----------------------
 
 
@@ -270,7 +349,7 @@ class PluginRegistry:
         self.hooks = HooksRegistry(customer_code=customer_code)
         self.tables = TablesRegistry(engine=engine, customer_code=customer_code)
         self.export_templates = _UnimplementedRegistry("export_templates", customer_code, "F7")
-        self.export_fields = _UnimplementedRegistry("export_fields", customer_code, "F8")
+        self.export_fields = ExportFieldsRegistry(customer_code=customer_code)  # F8 v3.46 真实现
         self.realtime_triggers = _UnimplementedRegistry("realtime_triggers", customer_code, "F9")
 
     def snapshot(self) -> Dict[str, Any]:
@@ -283,10 +362,10 @@ class PluginRegistry:
                 for h in self.hooks.list()
             ],
             "tables": self.tables.registered(),
-            # 三个 registry v3.13 起 fail-fast (调用即抛), 任何 manifest 显式声明
-            # 用了它们的插件都会在 register_plugin 阶段被拒绝, 不会抵达 snapshot.
+            # export_templates / realtime_triggers 仍 fail-fast (调用即抛), 任何 manifest
+            # 显式声明用了它们的插件都会在 register_plugin 阶段被拒绝, 不会抵达 snapshot.
             "export_templates_status": "not_implemented_F7",
-            "export_fields_status": "not_implemented_F8",
+            "export_fields": self.export_fields.registered(),  # F8 v3.46 真实现
             "realtime_triggers_status": "not_implemented_F9",
         }
 

@@ -68,13 +68,17 @@ router = APIRouter()
 def list_export_fields(flat: bool = Query(False, description="true 返回平铺列表，false 按 group 分组")) -> Dict[str, Any]:
     """字段元数据 — 前端"自定义导出"对话框左侧字段树拉取此端点"""
     if flat:
+        fields = efr.list_fields()
+        # total 必须数动态结果 (含插件字段), 不能用静态 ALL_FIELDS —
+        # 否则装了注册导出字段的插件后, 前端"共 N 个字段"与树内实际数量对不上
         return {
-            "total": len(efr.ALL_FIELDS),
-            "fields": efr.list_fields(),
+            "total": len(fields),
+            "fields": fields,
         }
+    groups = efr.list_groups()
     return {
-        "total": len(efr.ALL_FIELDS),
-        "groups": efr.list_groups(),
+        "total": sum(g["count"] for g in groups),
+        "groups": groups,
         "stats": efr.stats(),
     }
 

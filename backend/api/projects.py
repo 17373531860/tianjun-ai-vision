@@ -347,7 +347,14 @@ def _reload_model_for_active_project(db: Session, project: Project) -> None:
 
     all_ok = True
     for ch_id in remaining:
-        ok = channel_manager.load_model_for_channel(ch_id, model.file_path, "auto")
+        # 与 main.py::auto_load_active_project 对齐: 尊重通道已配置的 gpu_device,
+        # 不硬写 "auto" (否则用户钉了 cpu 的通道会被激活项目改回 mps/cuda)。
+        # 配置缺失时兜底到该通道现用设备 (新建通道无配置条目; 激活重载不该
+        # 偷偷换设备 — 换掉推理中的模型在 macOS MPS 上会触发 Metal 断言崩后端)
+        mgr_cur = channel_manager.channels.get(ch_id)
+        cur_device = getattr(mgr_cur, 'device', None) or "auto"
+        ch_device = (sources.get(str(ch_id)) or {}).get("gpu_device") or cur_device
+        ok = channel_manager.load_model_for_channel(ch_id, model.file_path, ch_device)
         all_ok = all_ok and ok
         print(f"[激活项目] ch{ch_id} 加载模型 '{model.name}': "
               f"{'成功' if ok else '失败'}")

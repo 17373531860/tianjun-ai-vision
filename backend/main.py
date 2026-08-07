@@ -503,8 +503,11 @@ def auto_load_active_project():
                 if proj.default_model_id:
                     model = db.query(Model).filter(Model.id == proj.default_model_id).first()
                     if model and model.file_path and os.path.exists(model.file_path):
-                        success = channel_manager.load_model_for_channel(ch_id, model.file_path,
-                                                                         ch_cfg.get("gpu_device", "auto"))
+                        # or 兜底: 配置条目存在但值为 None 时也回落 auto (dict.get
+                        # 的 default 只管键缺失, None 值曾漏成 device=None → mps)
+                        success = channel_manager.load_model_for_channel(
+                            ch_id, model.file_path,
+                            ch_cfg.get("gpu_device") or "auto")
                         if success:
                             print(f"[启动] ch{ch_id} 加载模型: {model.name}")
                         else:
@@ -522,7 +525,11 @@ def auto_load_active_project():
                     if model and model.file_path and os.path.exists(model.file_path):
                         all_ok = True
                         for ch_id in remaining:
-                            ok = channel_manager.load_model_for_channel(ch_id, model.file_path)
+                            # 兜底路径同样尊重该通道 gpu_device (与上面绑定项目路径一致);
+                            # 漏传曾让 mac 开发机 ch1 落到 MPS, 停检测触发 Metal 断言崩后端
+                            ok = channel_manager.load_model_for_channel(
+                                ch_id, model.file_path,
+                                (sources.get(str(ch_id)) or {}).get("gpu_device") or "auto")
                             all_ok = all_ok and ok
                             print(f"[启动] 兜底: ch{ch_id} 模型 '{model.name}' "
                                   f"{'加载成功' if ok else '加载失败'}")

@@ -1,0 +1,20 @@
+{#- LG LEAN_统计汇总 (xlsx 路线 A)
+    口径与 LG 原系统一致: 仅累计合格轮; 步骤间等待归 NVA
+    数据源: 插件字段 plugin.lg_worktime.session_* (单session或日期范围导出均可) -#}
+{%- set lg = plugin.lg_worktime %}
+项目,值
+导出时间,{{ now|dt }}
+统计范围,{{ aggregations.date_range or (session.start_time or '')|replace('T',' ') }}
+项目名称,{{ project.name or '' }}
+总轮次,{{ aggregations.total_cycles or session.total_cycles or 0 }}
+合格轮数(计入LEAN),{{ lg.session_good_rounds or 0 }}
+NG轮数,{{ aggregations.total_ng or session.ng_cycles or 0 }}
+良率(%),{{ aggregations.yield_rate or session.yield_rate or '' }}
+累计VA(秒),{{ lg.session_va_seconds or 0 }}
+累计BVA(秒),{{ lg.session_bva_seconds or 0 }}
+累计NVA(秒,含等待),{{ lg.session_nva_seconds or 0 }}
+其中等待(秒),{{ lg.session_wait_seconds or 0 }}
+VA占比(%),{{ lg.session_va_ratio or 0 }}
+BVA占比(%),{{ lg.session_bva_ratio or 0 }}
+NVA占比(%),{{ lg.session_nva_ratio or 0 }}
+LEAN总计(秒),{{ lg.session_lean_total_seconds or 0 }}

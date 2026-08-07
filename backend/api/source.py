@@ -1071,29 +1071,33 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             import gc
             
             print("[GPUReset] starting emergency GPU reset...")
-            
-            # 1. 同步 GPU (CUDA / MPS)
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
-            else:
-                from backend.core.torch_device import synchronize_mps
-                synchronize_mps()
-            
-            # 2. 清理缓存
-            gc.collect()
-            
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            else:
-                from backend.core.torch_device import empty_mps_cache
-                empty_mps_cache()
-                
-            # 3. 重置 CUDA 设备（谨慎使用）
-            if torch.cuda.is_available():
-                # 获取当前设备
-                current_device = torch.cuda.current_device()
-                # 重置设备
-                torch.cuda.reset_peak_memory_stats(current_device)
+
+            # mps_guard: 紧急重置的 sync/gc/empty 必须与其它通道推理编码串行
+            # (MPS 跨线程并发触碰 Metal 即弑进程); CUDA/CPU 机器为 no-op
+            from backend.core.torch_device import mps_guard
+            with mps_guard():
+                # 1. 同步 GPU (CUDA / MPS)
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                else:
+                    from backend.core.torch_device import synchronize_mps
+                    synchronize_mps()
+
+                # 2. 清理缓存
+                gc.collect()
+
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                else:
+                    from backend.core.torch_device import empty_mps_cache
+                    empty_mps_cache()
+
+                # 3. 重置 CUDA 设备（谨慎使用）
+                if torch.cuda.is_available():
+                    # 获取当前设备
+                    current_device = torch.cuda.current_device()
+                    # 重置设备
+                    torch.cuda.reset_peak_memory_stats(current_device)
                 
             print("[GPUReset] emergency GPU reset done")
 
@@ -1724,17 +1728,17 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         if len(self.events_log) > 500:
             self.events_log = self.events_log[-500:]
         
-        # 轻量级垃圾回收
-        gc.collect(generation=0)
-        
-        # 清理 GPU 缓存 (CUDA / MPS)
+        # 轻量级垃圾回收 + 清理 GPU 缓存 (CUDA / MPS)
+        # mps_guard: gc 释放 MPS 张量须与其它通道推理编码串行, CUDA/CPU 为 no-op
         try:
             import torch
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            else:
-                from backend.core.torch_device import empty_mps_cache
-                empty_mps_cache()
+            from backend.core.torch_device import empty_mps_cache, mps_guard
+            with mps_guard():
+                gc.collect(generation=0)
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                else:
+                    empty_mps_cache()
         except:
             pass
         

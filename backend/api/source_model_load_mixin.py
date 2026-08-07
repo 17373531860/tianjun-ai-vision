@@ -32,12 +32,14 @@
 from __future__ import annotations
 
 import traceback
+from contextlib import nullcontext
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
 from backend.core import debug_center
-from backend.core.torch_device import resolve_auto_device, empty_mps_cache, synchronize_mps
+from backend.core.torch_device import (resolve_auto_device, empty_mps_cache,
+                                        synchronize_mps, mps_guard)
 
 if TYPE_CHECKING:
     from backend.api.source_inference_router import ModelInstance
@@ -107,8 +109,10 @@ class ModelLoadMixin:
                 device = self.device
 
             # .to(device) 仅对原生 PyTorch 模型有效; 导出格式在 predict 时通过 device 参数指定
+            # mps_guard: 权重搬上 MPS 也编码 Metal 命令, 须与其它通道推理串行
             if is_native_pytorch:
-                self.model.to(device)
+                with (mps_guard() if device == 'mps' else nullcontext()):
+                    self.model.to(device)
 
             # 记录当前设备信息
             if device.startswith('cuda'):
@@ -157,7 +161,8 @@ class ModelLoadMixin:
                 self.model_task = getattr(self.model, 'task', 'detect')
                 is_native_pytorch = True
                 self._is_native_pytorch = True
-                self.model.to(device)
+                with (mps_guard() if device == 'mps' else nullcontext()):
+                    self.model.to(device)
                 self._model_imgsz = self._detect_model_imgsz(self.model, model_path, True)
                 print(f"[ModelLoad] after fallback imgsz={self._model_imgsz}")
                 if device.startswith('cuda') or device == 'mps':
@@ -202,25 +207,28 @@ class ModelLoadMixin:
             if self.model is not None:
                 print("[ModelRelease] releasing model resources...")
 
-                # 1. 等待 GPU 操作完成
-                if torch.cuda.is_available():
-                    torch.cuda.synchronize()
-                synchronize_mps()
+                # mps_guard: 整段释放 (sync→del→gc→empty_cache) 对 MPS 必须与
+                # 其它通道推理串行, 否则 Metal 断言弑进程; CUDA/CPU 机器为 no-op
+                with mps_guard():
+                    # 1. 等待 GPU 操作完成
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize()
+                    synchronize_mps()
 
-                del self.model
-                self.model = None
-                self.model_task = 'detect'
+                    del self.model
+                    self.model = None
+                    self.model_task = 'detect'
 
-                # 2. Python 垃圾回收
-                gc.collect()
+                    # 2. Python 垃圾回收
+                    gc.collect()
 
-                # 3. 清理 GPU 缓存
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                    allocated = torch.cuda.memory_allocated() / 1024**2
-                    cached = torch.cuda.memory_reserved() / 1024**2
-                    print(f"[ModelRelease] VRAM: allocated={allocated:.1f}MB, cached={cached:.1f}MB")
-                empty_mps_cache()
+                    # 3. 清理 GPU 缓存
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                        allocated = torch.cuda.memory_allocated() / 1024**2
+                        cached = torch.cuda.memory_reserved() / 1024**2
+                        print(f"[ModelRelease] VRAM: allocated={allocated:.1f}MB, cached={cached:.1f}MB")
+                    empty_mps_cache()
 
                 print("[ModelRelease] model resources released")
         except Exception as e:
@@ -311,23 +319,25 @@ class ModelLoadMixin:
                 return
             print(f"[ModelRelease] [{mi.name}] releasing model resources...")
 
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
-            synchronize_mps()
+            # mps_guard: 同 _release_model — MPS 释放必须与其它通道推理串行
+            with mps_guard():
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                synchronize_mps()
 
-            del mi.model
-            mi.model = None
-            mi.model_task = 'detect'
-            mi.current_device_info = None
+                del mi.model
+                mi.model = None
+                mi.model_task = 'detect'
+                mi.current_device_info = None
 
-            gc.collect()
+                gc.collect()
 
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                allocated = torch.cuda.memory_allocated() / 1024**2
-                cached = torch.cuda.memory_reserved() / 1024**2
-                print(f"[ModelRelease] [{mi.name}] VRAM: allocated={allocated:.1f}MB cached={cached:.1f}MB")
-            empty_mps_cache()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    allocated = torch.cuda.memory_allocated() / 1024**2
+                    cached = torch.cuda.memory_reserved() / 1024**2
+                    print(f"[ModelRelease] [{mi.name}] VRAM: allocated={allocated:.1f}MB cached={cached:.1f}MB")
+                empty_mps_cache()
 
             print(f"[ModelRelease] [{mi.name}] model resources released")
 
@@ -440,8 +450,10 @@ class ModelLoadMixin:
             else:
                 resolved_device = device
 
+            # mps_guard: 同 load_model — 权重搬上 MPS 须与其它通道推理串行
             if mi._is_native_pytorch:
-                mi.model.to(resolved_device)
+                with (mps_guard() if resolved_device == 'mps' else nullcontext()):
+                    mi.model.to(resolved_device)
 
             if resolved_device.startswith('cuda'):
                 gpu_idx = int(resolved_device.split(':')[1]) if ':' in resolved_device else 0
@@ -594,10 +606,13 @@ class ModelLoadMixin:
             # 半精度只在 CUDA 上启用, MPS 走 FP32 (与 detect runners 的守门口径一致)
             _half = use_half if (is_native_pytorch and device.startswith('cuda')) else False
             print(f"[ModelWarmup] {log_tag} {device} warm-up (half={_half}, imgsz={_imgsz})...")
-            model.predict(
-                np.zeros((_imgsz, _imgsz, 3), dtype=np.uint8),
-                conf=0.5, imgsz=_imgsz, verbose=False, device=device, half=_half
-            )
+            # MPS 预热 predict 也要与其它通道推理串行 (mps_guard 对 CUDA/CPU 为 no-op;
+            # warmup_lock 只是每通道实例锁, 拦不住跨通道并发)
+            with (mps_guard() if device.startswith('mps') else nullcontext()):
+                model.predict(
+                    np.zeros((_imgsz, _imgsz, 3), dtype=np.uint8),
+                    conf=0.5, imgsz=_imgsz, verbose=False, device=device, half=_half
+                )
 
         try:
             if warmup_lock is not None:

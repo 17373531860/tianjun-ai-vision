@@ -350,8 +350,8 @@ def test_单通道场景_全局锁_仍生效(fresh_cm):
 # 边界 / 兼容
 # ============================================================
 def test_load_model_for_channel_设备解析_auto_to_real(fresh_cm):
-    """auto 应解析成 cpu / cuda:0 (依赖 torch 是否可见 cuda)"""
+    """auto 应解析成真实设备 (依 torch 环境: cuda:0 / mps / cpu)"""
     mgr = fresh_cm.channels[0]
     mgr.load_model = MagicMock(return_value=True)
     fresh_cm.load_model_for_channel(0, '/tmp/m.pt', device='auto')
-    assert mgr.device in ('cpu', 'cuda:0')
+    assert mgr.device in ('cpu', 'cuda:0', 'mps')

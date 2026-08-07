@@ -5,9 +5,11 @@
        让 layout.body 插件能完整重排控制按钮 (项目/模型解析等复杂前置都在 Monitor 内做了). -->
   <!-- RFC12: 整页覆盖不再限制工位数. 任意工位数都挂载插件, 插件据 channel-count 自适应单/多工位布局.
        全局 Toast / 人工确认 / 录像异常仍由宿主渲染, 避免插件漏功能. -->
+  <!-- 插件整页覆盖时吃掉 Layout section 的 px-4/pt-4, 左右顶满给画面更多宽度 -->
+  <!-- tj-layout-body-override: 稳定类名, 供插件 theme.css 选做全屏化 (盖掉宿主导航栏, 与插件其它整页覆盖页视觉连续) -->
   <div
     v-if="layoutBodyOverride"
-    class="relative h-[calc(100vh-7.25rem)] min-h-0 overflow-hidden"
+    class="tj-layout-body-override relative -mx-4 -mt-4 h-[calc(100vh-6.25rem)] min-h-0 w-[calc(100%+2rem)] overflow-hidden"
   >
     <component
       :is="layoutBodyOverride"
@@ -21,10 +23,16 @@
       @update:selected-channel="selectedChannel = $event"
     />
 
-    <!-- 双工位列级 OK/NG Toast (与原生双工位同结构, 保留 cycle-result.indicator slot).
-         RFC12: 仅双工位时宿主渲染列级 Toast; 其它工位数由插件自行用 cycle-result.indicator slot 摆位. -->
-    <div v-if="channelCount === 2" class="pointer-events-none absolute inset-0 z-[45] grid grid-cols-2 gap-2 p-2">
-      <div v-for="ch in 2" :key="'plugin-toast-' + ch" class="relative min-h-0">
+    <!-- 列级 OK/NG Toast (与原生双工位同结构, 保留 cycle-result.indicator slot).
+         RFC12 原限定仅双工位; 2026-08 放开到任意工位数 — layout.body 下单工位/三工位
+         的周期 OK/NG 提示同样由宿主渲染 (multiActiveToasts 按工位分列), 插件零负担.
+         列网格与插件面板不一定逐列对齐, 但工位归属方向一致, 提示可见性优先. -->
+    <div
+      v-if="channelCount >= 1"
+      class="pointer-events-none absolute inset-0 z-[45] grid gap-2 p-2"
+      :style="{ gridTemplateColumns: `repeat(${channelCount}, minmax(0, 1fr))` }"
+    >
+      <div v-for="ch in channelCount" :key="'plugin-toast-' + ch" class="relative min-h-0">
         <template v-for="position in ['top-right', 'top-left', 'bottom-right', 'bottom-left', 'center']" :key="position">
           <div class="absolute z-50 pointer-events-none flex flex-col gap-2" :class="getMultiPositionClass(position)">
             <transition-group name="toast">
@@ -1578,7 +1586,7 @@ const layoutBodyActions = computed(() => ({
 // 给 layout.body 插件构造每通道 MJPEG 流 URL 的 helper.
 // 主程序内部用 startMultiStreams 拉 multipart MJPEG 到 canvas (双缓冲), 插件用简化版 <img :src=url> 直接吃就够了.
 // 端点是 main.py 的 `/video_feed?channel=N` (不在 /api/v1/source 前缀下, 是顶层端点).
-const buildMultiStreamUrl = (ch) => `${STREAM_HOST}/video_feed?channel=${ch}&t=${Date.now()}`;
+const buildMultiStreamUrl = (ch) => `${getBackendHost()}/video_feed?channel=${ch}&t=${Date.now()}`;
 
 // v3.4.2 "禁用扫码"按工位开关 helper
 const isScanDisabledFor = (ch) => scannerDisableStore.isChannelDisabled(ch);
@@ -2015,11 +2023,17 @@ const multiVideoCanvasRefs = {};
 let multiStreamRunning = false;
 const multiStreamAborts = {};
 
-const STREAM_HOST = 'http://localhost:8001';
+// 与单工位 buildStreamUrl 同源: 走 getBackendHost() (开发 .env → 8004 等; 桌面壳默认主机; 浏览器空 host 走 Vite 代理)
+const streamHost = () => getBackendHost();
 const BOUNDARY = '--frame';
 const HEADER_END = '\r\n\r\n';
 
 const startMultiStreams = (count) => {
+  // layout.body 插件独占 MJPEG: 任何误调都直接拒绝, 防竞态漏网
+  if (layoutBodyOverride.value) {
+    stopMultiStreams();
+    return;
+  }
   stopMultiStreams();
   multiStreamRunning = true;
   for (let ch = 0; ch < count; ch++) {
@@ -2032,7 +2046,7 @@ const connectMjpegStream = async (ch) => {
   const abort = new AbortController();
   multiStreamAborts[ch] = abort;
   try {
-    const res = await fetch(`${STREAM_HOST}/video_feed?channel=${ch}`, { signal: abort.signal });
+    const res = await fetch(`${streamHost()}/video_feed?channel=${ch}`, { signal: abort.signal });
     const reader = res.body.getReader();
     const INIT_BUF_SIZE = 512 * 1024;
     let buf = new Uint8Array(INIT_BUF_SIZE);
@@ -3018,13 +3032,21 @@ const fetchChannelCount = async () => {
     if (selectedChannel.value >= count) {
       selectedChannel.value = 0;
     }
-    if (count > 1) {
+    if (count > 1 || layoutBodyOverride.value) {
       // D2 启动竞态修复: 工位数是唯一真相源。进入多工位前必须显式停掉单工位那套
       // (单工位轮询 + 单工位 MJPEG 流), 否则 onMounted 里 getSourceStatus 若先于本函数
       // 解析、彼时 channelCount 仍是默认 1 → 误起单工位流, 随后本函数又起多工位流,
       // 两套并存抢同一通道 MJPEG → 画面冻结 / 双重轮询。"起新套前先停旧套"。
+      //
+      // layout.body 单工位同样走这条: 插件 <img> 独占 MJPEG; 宿主只保留 multi 轮询
+      // 写 multiChannelData + 画 plugin canvas.fjjl-det-overlay。若仍起单工位流,
+      // 会出现「画面冻住、下方检测进度还在跑、全程无检测框」。
       stopPolling();
       disconnectStream();
+      // ⚠ 必须先停宿主多路取流: 插件异步就绪前 override=null 时已 startMultiStreams,
+      // 插件到位后本函数重跑若不停掉, 宿主 fetch(/video_feed) 与插件 <img> 互踢,
+      // 症状正是「进度条/检测框还在动、画面冻帧」(2026-08 用户截图像)。
+      stopMultiStreams();
       initMultiChannelData(count);
       // 整页覆盖插件 (monitor.layout.body) 自己用 <img> 吃 /video_feed?channel=N,
       // 原生双缓冲取流会和插件 <img> 抢同一通道的 MJPEG 连接 (后端每通道只保留最新
@@ -3045,6 +3067,18 @@ const fetchChannelCount = async () => {
     resetMultiRuntimeState(true);
   }
 };
+
+// layout.body 插件 ESM 是异步加载的: onMounted 跑 fetchChannelCount 时 override
+// 往往还是 null, 单工位机器按"无插件"走了单工位轮询+单工位流。插件就绪的瞬间
+// 重跑一次, 让单工位也切到 multi 轮询 (看板徽章/检测框/计数都吃它) 并停掉宿主
+// 取流 (插件 <img> 独占 MJPEG)。插件被停用时同样重跑恢复原生路径。
+watch(layoutBodyOverride, (nv, ov) => {
+  if (!!nv === !!ov || !monitorMounted) return;
+  // 插件刚挂上: 立刻掐断宿主多路流, 再走 fetchChannelCount 正规路径
+  // (仅靠 fetch 内判断会漏掉「override 到位前已 startMultiStreams」的窗口)
+  if (nv) stopMultiStreams();
+  fetchChannelCount();
+});
 
 const loadPerChannelDetectionSettings = async (sourceConfigs) => {
   for (const [chStr, cfg] of Object.entries(sourceConfigs)) {
@@ -3121,6 +3155,11 @@ const armStreamWatchdog = (timeoutMs) => {
 };
 
 const connectStream = () => {
+  // layout.body 插件自己用 <img> 吃 /video_feed; 宿主再连会踢断插件流 → 画面冻帧。
+  if (layoutBodyOverride.value) {
+    disconnectStream();
+    return;
+  }
   // 先清两个 img 的 src + 重建 DOM, 让浏览器关掉潜在旧 socket;
   // nextTick 后再设新 url, 配合 watchdog 形成完整的"破 socket 复用"信号。
   dbg('monitor.video', '连接视频流', `channel=${selectedChannel.value || 0}`);
@@ -3132,6 +3171,7 @@ const connectStream = () => {
   streamKey.value++;
   nextTick(() => {
     if (!monitorMounted) return;
+    if (layoutBodyOverride.value) return;
     streamSrc0.value = buildStreamUrl();
     activeStream.value = 0;
     armStreamWatchdog(STREAM_FIRST_FRAME_TIMEOUT_MS);
@@ -6158,7 +6198,8 @@ onMounted(async () => {
     }
 
     if (res.data.is_running) {
-      if (channelCount.value <= 1) {
+      // layout.body: 取流/轮询由 fetchChannelCount 的 multi 路径负责, 禁止再起单工位流
+      if (channelCount.value <= 1 && !layoutBodyOverride.value) {
         startPolling();
         forceReconnectStream();
       }
@@ -6169,14 +6210,15 @@ onMounted(async () => {
       isPaused.value = true;
       // D3: 多工位时不拉单工位预览流(多工位由 startMultiStreams 负责),
       //     否则双工位仍会叠一路单工位流, 白占带宽/解码。
-      if (channelCount.value <= 1) forceReconnectStream();
+      if (channelCount.value <= 1 && !layoutBodyOverride.value) forceReconnectStream();
     }
     
     if (!res.data.source_type) {
       await autoRestoreSource();
       if (!monitorMounted) return;
     } else if (res.data.source_type && !res.data.is_running) {
-      if (channelCount.value <= 1) forceReconnectStream();  // D3: 同上, 多工位不拉单工位流
+      // D3: 同上; layout.body 插件独占 MJPEG
+      if (channelCount.value <= 1 && !layoutBodyOverride.value) forceReconnectStream();
     }
   }).catch(() => {
   });

@@ -62,11 +62,17 @@
 - 目标：插件能注册导出模板
 - 验收：模板出现在自定义导出候选列表，卸载插件后隐藏但保留历史记录
 
-### F8 导出字段 resolver registry
+### F8 导出字段 resolver registry ✅ 已落地 (2026-08-04, lg-worktime 插件配套)
 
 - 标签：`plugin-v3.7`, `plugin-backend`
 - 目标：插件能补充导出字段
 - 验收：字段 key 必须 `plugin.{customer_code}.*` 前缀
+- 实现：`registry.export_fields.register(fields, provider)` →
+  `backend/services/export_field_registry.py` 中央仓库「插件字段」分组；
+  provider(db, ctx) 在 `export_context._fill_plugin_sections` 里执行，
+  值挂 `ctx["plugin"]["<cc_snake>"]`，异常隔离、缺字段静默空值；
+  卸载/重注册整体替换。首个消费方：`plugins-examples/lg-worktime`（18 个 Lean 字段）。
+  测试：`tests/plugin_system/test_export_fields_registry_F8.py`
 
 ### F9 实时导出触发器 registry
 

@@ -117,11 +117,18 @@ def _passes_box_size_limit(host, class_name: str, nw: float, nh: float) -> bool:
     return True
 
 
-def _gpu_lock_ctx(host):
-    """返回一个上下文管理器: 多模型场景下用 router.gpu_lock 串行 GPU 调用.
+def _gpu_lock_ctx(host, device: str = ''):
+    """返回一个上下文管理器: 串行 GPU 调用.
 
-    单模型场景下 (router 不存在 / lock 不存在) 返回一个 no-op 上下文.
+    - device=mps: 返回**进程级** MPS_LOCK。router.gpu_lock 是每通道实例锁,
+      只能串行单通道内多模型; 双通道各自推理线程并发打 MPS 会撞 Metal 命令
+      缓冲断言直接弑进程 (2026-08-07 三工位稳定性长跑实测)。CUDA 线程安全
+      不受影响。
+    - 其它设备: 维持原状 — 多模型场景用 router.gpu_lock, 无 router 时 no-op.
     """
+    if device.startswith('mps'):
+        from backend.core.torch_device import MPS_LOCK
+        return MPS_LOCK
     router = getattr(host, '_router', None)
     if router is None:
         return _NoopContext()
@@ -131,6 +138,29 @@ def _gpu_lock_ctx(host):
 class _NoopContext:
     def __enter__(self): return None
     def __exit__(self, *a): return False
+
+
+def _results_off_gpu(results, device: str):
+    """MPS 设备: 在锁内把 Results 张量整体搬回 CPU 再交给状态机.
+
+    predict 出锁后, 调用方对 Results 的任何取值 (.boxes / .conf / .cpu())
+    仍会编码 Metal blit 命令 —— 与其它通道锁内的 predict 编码竞态, 照样撞
+    Metal 断言弑进程 (2026-08-07 二次复现: 锁只包 predict 不包取值不够).
+    在锁内一次性 .cpu() 后, 锁外全是 CPU 张量, MPS 触点彻底归零.
+    CUDA / CPU 设备原样返回 (CUDA 线程安全, 不需要额外搬运开销).
+    """
+    if not device.startswith('mps'):
+        return results
+    out = []
+    for r in results:
+        try:
+            out.append(r.cpu())
+        except Exception:
+            out.append(r)  # 极端兜底: 单帧搬运失败不至于丢检测
+    # 把在飞的 blit 命令全部冲干净再出锁, 不给锁外留任何未提交的 Metal 工作
+    from backend.core.torch_device import synchronize_mps
+    synchronize_mps()
+    return out
 
 
 class DetectRunnersMixin:
@@ -182,7 +212,7 @@ class DetectRunnersMixin:
 
             def run_inference():
                 t_predict_start = time.time()
-                with _gpu_lock_ctx(self):
+                with _gpu_lock_ctx(self, device):
                     result = list(params['model'].predict(
                         _frame,
                         conf=params['conf'],
@@ -193,6 +223,7 @@ class DetectRunnersMixin:
                         stream=True,
                         half=_half,
                     ))
+                    result = _results_off_gpu(result, device)
                 t_predict_end = time.time()
                 predict_time = (t_predict_end - t_predict_start) * 1000
                 if predict_time > 150:
@@ -342,8 +373,8 @@ class DetectRunnersMixin:
         _frame = frame if frame.flags['C_CONTIGUOUS'] else np.ascontiguousarray(frame)
 
         def run_inference():
-            with _gpu_lock_ctx(self):
-                return list(params['model'].predict(
+            with _gpu_lock_ctx(self, device):
+                return _results_off_gpu(list(params['model'].predict(
                     _frame,
                     conf=params['conf'],
                     iou=params['iou'],
@@ -352,7 +383,7 @@ class DetectRunnersMixin:
                     device=device,
                     stream=True,
                     half=_half,
-                ))
+                )), device)
 
         executor = self._get_inference_executor()
         future = executor.submit(run_inference)
@@ -416,13 +447,13 @@ class DetectRunnersMixin:
             _frame = roi_frame if roi_frame.flags['C_CONTIGUOUS'] else np.ascontiguousarray(roi_frame)
 
             def run_tracking():
-                with _gpu_lock_ctx(self):
-                    return list(params['model'].track(
+                with _gpu_lock_ctx(self, device):
+                    return _results_off_gpu(list(params['model'].track(
                         _frame, conf=params['conf'], iou=params['iou'],
                         imgsz=params['imgsz'], verbose=False, device=device,
                         stream=True, persist=True, tracker=_tracker_cfg,
                         half=_half,
-                    ))
+                    )), device)
 
             executor = self._get_inference_executor()
             future = executor.submit(run_tracking)
@@ -529,12 +560,12 @@ class DetectRunnersMixin:
             _frame = roi_frame if roi_frame.flags['C_CONTIGUOUS'] else np.ascontiguousarray(roi_frame)
 
             def run_inference():
-                with _gpu_lock_ctx(self):
-                    return list(params['model'].predict(
+                with _gpu_lock_ctx(self, device):
+                    return _results_off_gpu(list(params['model'].predict(
                         _frame, conf=params['conf'], iou=params['iou'],
                         imgsz=params['imgsz'], verbose=False, device=device, stream=True,
                         half=_half,
-                    ))
+                    )), device)
 
             executor = self._get_inference_executor()
             future = executor.submit(run_inference)
