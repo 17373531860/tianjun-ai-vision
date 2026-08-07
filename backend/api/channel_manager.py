@@ -16,7 +16,10 @@ from backend.core.config import DATA_DIR
 
 router = APIRouter(prefix="/workstations", tags=["workstations"])
 
-MAX_CHANNELS = 4
+# v3.47: 工位数不再限制在 4。MAX_CHANNELS 仅作为防呆安全上界
+# (脏配置文件 / 误传超大值时避免瞬间创建成百上千个 VSM 线程组), 不是产品限制。
+# 前端总览网格 (2x2/3x3/4x4) + 分页可承载任意工位数。
+MAX_CHANNELS = 64
 _CONFIG_FILE = os.path.join(DATA_DIR, 'workstation_config.json')
 
 
@@ -32,7 +35,7 @@ class WorkstationConfig(BaseModel):
 
 
 class WorkstationModeRequest(BaseModel):
-    channel_count: int = 1             # 1, 2, or 4
+    channel_count: int = 1             # 1..MAX_CHANNELS (v3.47 起不限于 1/2/4)
     channels: List[WorkstationConfig] = Field(default_factory=list)
 
 
@@ -97,7 +100,7 @@ class ChannelManager:
     # ------------------------------------------------------------------
 
     def set_channel_count(self, count: int):
-        """Resize the number of active channels (1, 2 or 4)."""
+        """Resize the number of active channels (1..MAX_CHANNELS)."""
         from backend.api.source import VideoSourceManager
 
         if count < 1 or count > MAX_CHANNELS:

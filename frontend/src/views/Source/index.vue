@@ -11,13 +11,21 @@
           <span class="font-bold text-white">工位模式</span>
         </div>
       </template>
-      <div class="flex items-center gap-4">
+      <div class="flex items-center gap-4 flex-wrap">
         <el-radio-group v-model="workstationMode" @change="handleWorkstationModeChange" size="large">
           <el-radio-button :value="1">单工位</el-radio-button>
           <el-radio-button :value="2" :disabled="!systemStore.developerMode">双工位</el-radio-button>
           <el-radio-button :value="3" :disabled="!systemStore.developerMode">三工位</el-radio-button>
           <el-radio-button :value="4" :disabled="!systemStore.developerMode">四工位</el-radio-button>
         </el-radio-group>
+        <!-- v3.47: 工位数不再限于 4, 任意数量走自定义输入 (总览网格+分页承载) -->
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-gray-400">自定义工位数:</span>
+          <el-input-number v-model="customChannelCount" :min="1" :max="64" :precision="0" :step="1"
+            :disabled="!systemStore.developerMode" class="!w-24" />
+          <el-button :disabled="!systemStore.developerMode || customChannelCount === workstationMode"
+            @click="applyCustomChannelCount">应用</el-button>
+        </div>
         <span v-if="!systemStore.developerMode" class="text-xs text-yellow-500">多工位需在设置中开启开发者模式</span>
         <span class="text-xs text-gray-400">{{ workstationMode > 1 ? `同时运行 ${workstationMode} 个独立检测通道` : '单摄像头标准模式' }}</span>
       </div>
@@ -650,6 +658,11 @@ const wsConfigured = (idx) => {
 const wsConfigs = reactive([makeDefaultWsConfig(), makeDefaultWsConfig(), makeDefaultWsConfig(), makeDefaultWsConfig()]);
 const wsUploadRefs = { video: {}, image: {} };
 
+// v3.47: 工位数放开限制后 wsConfigs 按需扩容 (只增不减, 降工位保留配置便于回切)
+const ensureWsConfigs = (count) => {
+  while (wsConfigs.length < count) wsConfigs.push(makeDefaultWsConfig());
+};
+
 const bindWsUploadRef = (idx, kind, el) => {
   if (el) wsUploadRefs[kind][idx] = el;
   else delete wsUploadRefs[kind][idx];
@@ -712,14 +725,25 @@ const fetchProjectList = async () => {
 const handleWorkstationModeChange = async (count) => {
   dbg('source.workstation', '切换工位数', `count=${count ?? ''}`);
   try {
+    ensureWsConfigs(count);
     await setWorkstationMode(count);
+    customChannelCount.value = count;
     const modeNames = { 1: '单工位', 2: '双工位', 3: '三工位', 4: '四工位' };
-    ElMessage.success(`已切换到 ${modeNames[count] || count + '工位'} 模式`);
+    ElMessage.success(`已切换到 ${modeNames[count] || count + ' 工位'} 模式`);
   } catch (e) {
     dbgErr('source.workstation', '切换工位数', e);
     ElMessage.error('切换模式失败: ' + (e.message || ''));
     workstationMode.value = 1;
   }
+};
+
+// v3.47: 自定义任意工位数 (1..64), 与快捷档共用同一条切换链路
+const customChannelCount = ref(1);
+const applyCustomChannelCount = async () => {
+  const count = Math.max(1, Math.min(64, Math.round(customChannelCount.value || 1)));
+  customChannelCount.value = count;
+  workstationMode.value = count;
+  await handleWorkstationModeChange(count);
 };
 
 const saveAndStartMulti = async () => {
@@ -859,6 +883,8 @@ const loadWorkstationMode = async () => {
     const res = await getWorkstations();
     let mode = res.data.channel_count || 1;
     workstationMode.value = mode;
+    customChannelCount.value = mode;
+    ensureWsConfigs(mode);
     if (workstationMode.value > 1 && res.data.channels) {
       res.data.channels.forEach(ch => {
         if (wsConfigs[ch.channel_id]) {
@@ -869,7 +895,8 @@ const loadWorkstationMode = async () => {
     const saved = res.data.source_configs || {};
     for (const [chStr, cfg] of Object.entries(saved)) {
       const idx = parseInt(chStr);
-      if (idx >= 0 && idx < wsConfigs.length && cfg) {
+      if (idx >= 0 && idx < 64 && cfg) {
+        ensureWsConfigs(idx + 1);
         if (cfg.source_type) wsConfigs[idx].sourceType = cfg.source_type;
         if (cfg.device_index != null) wsConfigs[idx].cameraId = cfg.device_index;
         if (cfg.url) wsConfigs[idx].rtspUrl = cfg.url;
