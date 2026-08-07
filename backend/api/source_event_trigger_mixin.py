@@ -211,6 +211,12 @@ class EventTriggerMixin:
             event_name=event.get('name', ''),
             reason=reason
         )
+
+        # v3.47 训练平台互连: NG 事件现场帧采样标志。推理循环的采样器在下一帧
+        # 消费 (backend/services/interconnect/sampler.py); 互连或 ng_event 采样
+        # 未开启时, 采样器会把标志原样清掉 — 对存量行为零副作用。
+        if not is_good:
+            self._interconnect_ng_sample_pending = True
         
         # 重置周期开始时间（无论是合格还是NG，都重置）
         self.cycle_start_time = None

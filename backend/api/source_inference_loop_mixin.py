@@ -415,6 +415,16 @@ class InferenceLoopMixin:
                     except Exception as _e:
                         debug_log(f"!!! detection_frame hook 触发异常 (已隔离): {_e}", "INFERENCE")
 
+                # v3.47 训练平台互连帧采样: 按置信度带/未检出/NG 事件把现场帧回传
+                # 训练平台做数据集增量。配置关闭时 O(1) 早退 (一个模块级 bool);
+                # 命中才做 JPEG 编码且受最小间隔+每小时上限双限流; 任何异常隔离,
+                # 绝不影响检测主链路。
+                try:
+                    from backend.services.interconnect.sampler import maybe_sample_frame
+                    maybe_sample_frame(self, original_frame, detections)
+                except Exception as _e:
+                    debug_log(f"!!! interconnect 采样异常 (已隔离): {_e}", "INFERENCE")
+
                 # 推理节流: 每帧至少 5ms, 防止推理线程吃满 CPU
                 loop_elapsed = time.time() - loop_start
                 min_inference_interval = 0.005
