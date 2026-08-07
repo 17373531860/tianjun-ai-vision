@@ -31,6 +31,7 @@ _MIGRATION_MODULES = [
     "m0005_pkg_sync_work_orders",
     "m0006_sms_report_content_template",
     "m0007_defect_cycle_index",
+    "m0008_model_interconnect_meta",
 ]
 
 # m0000 不看记账、每次启动都幂等跑（老库任意版本起跳的安全网）

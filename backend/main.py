@@ -1219,6 +1219,26 @@ def _start_sms_report():
 _start_sms_report()
 
 
+# v3.47 训练平台互连 — 配置启用时拉起帧回传 worker (默认关 = 零开销零差异)。
+def _start_interconnect_uploader():
+    if os.environ.get("BACKEND_SKIP_INIT"):
+        return
+    try:
+        from backend.services.interconnect import config as _icfg
+        _cfg = _icfg.get_config()
+        if _cfg.get("enabled"):
+            from backend.services.interconnect.uploader import ensure_worker
+            ensure_worker()
+            if (_cfg.get("model_pull") or {}).get("enabled"):
+                from backend.services.interconnect.puller import ensure_puller
+                ensure_puller()
+    except Exception as e:
+        print(f"[Interconnect] 帧回传 worker 启动失败 (已隔离, 主程序继续): {e}")
+
+
+_start_interconnect_uploader()
+
+
 # 出站 MES 连接主动健康探测调度器 (A2): 后台周期探活, 配置驱动 (默认全关零开销)。
 def _start_mes_health_probe():
     if os.environ.get("BACKEND_SKIP_INIT"):

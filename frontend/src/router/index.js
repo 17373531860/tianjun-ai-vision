@@ -59,6 +59,12 @@ const routes = [
         name: 'MES',
         component: () => import('@/views/MES/index.vue'),
       },
+      {
+        // v3.47 训练平台互连 (YoloVision)
+        path: 'interconnect',
+        name: 'Interconnect',
+        component: () => import('@/views/Interconnect/index.vue'),
+      },
     ]
   }
 ];
@@ -75,7 +81,7 @@ let authInitialized = false;
 const LAST_ROUTE_KEY = 'tianjun:lastRoute';
 // 允许被记忆的路由 (Activation / Login 不在内, 不能恢复到这两个页)
 const REMEMBERABLE_NAMES = new Set([
-  'Monitor', 'Project', 'Model', 'Data', 'Source', 'Settings', 'Alarm', 'MES'
+  'Monitor', 'Project', 'Model', 'Data', 'Source', 'Settings', 'Alarm', 'MES', 'Interconnect'
 ]);
 
 /**

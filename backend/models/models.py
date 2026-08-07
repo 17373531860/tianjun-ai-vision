@@ -42,6 +42,11 @@ class Model(Base):
     description = Column(Text, nullable=True)
     version = Column(String(50), nullable=True)
     status = Column(String(20), default="idle")  # idle, active
+    # v3.47 训练平台互连: 模型来源 (local=本地上传 / yolovision=训练平台推送)
+    source = Column(String(50), default="local")
+    # v3.47 训练平台互连: 扩展元数据 JSON (训练分析 x-analysis / 包 provenance /
+    # 项目对齐信息等), 本地上传的模型为 NULL
+    meta = Column(JSON, nullable=True)
     upload_time = Column(DateTime(timezone=True), server_default=func.now())
 
     project = relationship("Project", back_populates="project_models", foreign_keys=[project_id])
