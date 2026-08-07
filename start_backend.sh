@@ -2,8 +2,21 @@
 # 启动后端服务脚本
 
 # 激活与客户现场/发版一致的后端运行环境
-source ~/anaconda3/etc/profile.d/conda.sh
-conda activate tianjun-runtime
+# 自动探测 conda 安装位置（anaconda3 / miniconda3，用户目录或 /opt）
+for _conda_sh in ~/anaconda3/etc/profile.d/conda.sh \
+                 ~/miniconda3/etc/profile.d/conda.sh \
+                 /opt/anaconda3/etc/profile.d/conda.sh \
+                 /opt/miniconda3/etc/profile.d/conda.sh; do
+    if [[ -f "$_conda_sh" ]]; then
+        source "$_conda_sh"
+        break
+    fi
+done
+# 环境名回退：优先 tianjun-runtime，没有则用 tianjun
+conda activate tianjun-runtime 2>/dev/null || conda activate tianjun || {
+    echo "错误: 未找到 tianjun-runtime / tianjun conda 环境" >&2
+    exit 1
+}
 
 # 切换到后端目录
 cd "$(dirname "$0")"
@@ -33,8 +46,8 @@ cleanup() {
     echo ""
     echo "正在停止服务..."
     pkill -f "uvicorn backend.main:app" 2>/dev/null
-    # 额外检查端口占用并杀死
-    lsof -ti:8001 | xargs -r kill -9 2>/dev/null
+    # 额外检查端口占用并杀死（不用 xargs -r：macOS BSD xargs 不支持该选项）
+    for _pid in $(lsof -ti:8001); do kill -9 "$_pid" 2>/dev/null; done
     echo "服务已停止"
 }
 
@@ -44,7 +57,7 @@ trap cleanup EXIT INT TERM
 # 启动前先清理可能存在的旧进程
 echo "检查并清理旧进程..."
 pkill -f "uvicorn backend.main:app" 2>/dev/null
-lsof -ti:8001 | xargs -r kill -9 2>/dev/null
+for _pid in $(lsof -ti:8001); do kill -9 "$_pid" 2>/dev/null; done
 sleep 1
 
 # 启动 FastAPI 服务
