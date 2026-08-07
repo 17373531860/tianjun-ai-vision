@@ -2,6 +2,16 @@
 
 > 阅读范围：2026-07-05 分段通读 `backend/main.py`、`backend/core/config.py`、`backend/api/source*.py` 全族（含 23 个 mixin + 14 个 has-a 组件）、`router_manifest.py`、`channel_manager.py`、`alarm.py`、`debug.py`、`system_display.py`、`services/weighing_engine.py`。**共 47 个文件**。
 >
+> **v3.47 补账（2026-08-07，多分支汇合发版）**：
+> - `main.py`：①`migrate_database` 后新增 **startup-heavy-init 后台线程**——逐通道模型加载 + 视频源恢复移出启动主线（置于 MES 初始化后，顺带修检测恢复先于 mes_hook 注入的隐患），uvicorn 秒级绑端口；②模块尾新增 `_start_interconnect_uploader()`（互连配置开着才拉起 uploader worker + puller，默认关零线程）
+> - `channel_manager.py`：`MAX_CHANNELS` 4→64（:22，仅防呆上界），`channel_count` 不再限 1/2/4 枚举；模型加载幂等改按**实际设备**比对（激活/启动尊重通道 `gpu_device`）；`/workstations/mode` 接受任意 1..64
+> - `source_custom_mix.py`：`_ContainerAccumulator` 构造新增五开关 `dedup_items/dedup_trays/purge_empty_primary/yield_primary/unified_book_source`（默认=v3.45 线上行为零差异）；step-1 滑块去重段受 `dedup_items` 守门；新增 step-0.5 托盘同帧 IoU>0.45 去重段（治影子身份）；`_tid_cur` 各在位身份当帧计数（结账同源展示用）
+> - `source_inference_loop_mixin.py`（:423）：推理循环挂互连采样 `maybe_sample_frame(self, original_frame, detections)`，try/except 错误隔离（采样炸不影响检测）
+> - `source_event_trigger_mixin.py`（:216）：NG 事件置 `_interconnect_ng_sample_pending` 标记，推理循环消费
+> - `source_camera_start_mixin.py` / `source_capture_loop_mixin.py`：RTSP 打开加 `CAP_PROP_OPEN_TIMEOUT_MSEC=10s`（启动+两处重连），并补回被 RTSP env 覆盖丢掉的 `threads;1` 保护
+> - `source_model_load_mixin.py` / `source_detect_runners_mixin.py` / `source_lifecycle_mixin.py`：MPS 触点全部走 `backend/core/torch_device.py` 的 `mps_guard()`（全局 `MPS_LOCK` RLock 串行，治 macOS 多通道并发 Metal 断言弑进程；CUDA 路径零影响）
+> - 新增 `backend/api/interconnect.py`（175 行，8 端点，见 05 册互连家族节）
+>
 > **v3.41 增量复核（2026-07-17）**：source/检测核心域按 `git diff a23a8d2..HEAD` 补账 v3.33~v3.41 九个版本变更。各条目内新增「v3.3x 变更」行；1.4 / 1.5 表下补增量清单；新建 `source_persist_worker.py`（v3.38）完整条目并补录 `source_region_events.py` / `source_region_events_mixin.py`（v3.32 落地时漏收）。受影响文件的行数标注与漂移行号已按当前代码刷新。
 >
 > **v3.44 补账（2026-07-22）**：NG 处置整改批次，source 族 10 文件——
@@ -46,13 +56,13 @@
 | **上下游** | 被 main.py、database、所有需要 DATA_DIR 的模块引用 |
 | **注释坑** | L56-59 历史文档误称 ml_models；L154 `_migrate_old_data()` import 即跑，测试需设 `TIANJUN_DATA_DIR` 隔离 |
 
-#### `backend/core/torch_device.py`（55 行，v3.46 新增）
+#### `backend/core/torch_device.py`（~85 行，v3.46 新增，v3.47 扩）
 
 | 维度 | 内容 |
 |---|---|
-| **职责** | 推理设备 auto 档统一出口：`resolve_auto_device()` 按 cuda > mps > cpu 解析；MPS 缓存清理/同步封装 |
-| **核心函数** | `resolve_auto_device()`；`empty_mps_cache()`；`synchronize_mps()`（均容错，torch 缺失/无 MPS 返回安全值） |
-| **线程锁** | 无 |
+| **职责** | 推理设备 auto 档统一出口：`resolve_auto_device()` 按 cuda > mps > cpu 解析；MPS 缓存清理/同步封装；**v3.47 加 MPS 全局串行锁** |
+| **核心函数** | `resolve_auto_device()`；`empty_mps_cache()`；`synchronize_mps()`（均容错，torch 缺失/无 MPS 返回安全值）；v3.47 `mps_guard()`（MPS 可用返回 `MPS_LOCK`，否则 nullcontext） |
+| **线程锁** | v3.47 `MPS_LOCK = threading.RLock()`——所有 MPS 触点（predict/warmup/release/empty_cache）必须持锁串行，另一通道推理中调 empty_cache 会撞 Metal 断言弑进程；CUDA 路径零影响 |
 | **上下游** | 被 `channel_manager._resolve_device`、`source.py` GPU reset/同步点、`source_lifecycle_mixin`、`source_model_load_mixin`（主+slot 加载）、`source_mediapipe`（二段检测）调用 |
 | **注释坑** | MPS 上强制 FP32——`half` 仍仅 CUDA；Apple Silicon 实测 yolov8n@640 MPS 168 FPS vs CPU 26 FPS |
 

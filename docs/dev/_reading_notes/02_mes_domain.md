@@ -19,6 +19,8 @@
 > - `api/packaging_flows.py`：Pydantic 面加组⑧ 10 字段 + `sync_work_orders`。
 > - `database_adapter.py`：`_dm_bind_safe` 达梦 32 位整型溢出降级字符串绑定 + 连接端口守门（BUG-009）。
 > - PackagingFlowConfig 新 11 列与迁移 m0004/m0005 见 `03_data_plugin.md`。
+>
+> **v3.47 补账（2026-08-07）**：MES 域本轮仅一处触碰——`mes_models.py` `DefectRecord.cycle_id` 补索引（`index=True`，老库走迁移 `m0007_defect_cycle_index`），为开机首启的孤儿缺陷扫描按 cycle_id 关联探查提速（feat/system-optimize 六项之一）。services/api 层零变更。
 
 ## 一、逐文件档案
 

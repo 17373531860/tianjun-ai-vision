@@ -3,6 +3,14 @@
 > 阅读范围（2026-07-05）：`backend/models/` 全部 · `backend/api/sessions*.py` · `projects.py` · `export_*` 全套 · `auth/users/roles/api_keys` · `backend/plugin_system/` 全部 · `plugins.py` · `database.py`  
 > 行号锚定当前 `tianjun-main` 工作区源码，后续改动以代码为准。
 > 2026-07-17 v3.41 复核：补账 v3.33~v3.41 变更（数据/导出/项目域），受影响小节的行数与行号已刷新；插件系统（`backend/plugin_system/`）自基线零变更，第六、七节原样有效。
+>
+> **v3.47 补账（2026-08-07）**：
+> - `models/models.py` `Model` 表：加 `source`（'local'/'yolovision'，NULL 视同 local）+ `meta` JSON（训练分析 x-analysis / 包 provenance），迁移 `m0008_model_interconnect_meta`（PG 走 JSONB 分道）；`schemas/model.py` 同步透出
+> - `plugin_system/registry.py`：**F8 插件导出字段 registry 落地**（代码注释标 v3.46，实际随 v3.47 发版）——`registry.export_fields.register(fields, provider)`，字段 path 强制 `plugin.<customer_code_snake>.` 前缀（连字符转下划线），provider 签名 `(db, ctx) -> dict`，重复 register 整体替换
+> - `services/export_field_registry.py`：中央仓库新增「插件字段」分组（首个消费方 lg-worktime 18 个 Lean 字段）
+> - `services/export_context.py`：`_fill_plugin_sections` 执行 provider(db, ctx)，值挂 `ctx["plugin"]["<cc_snake>"]`，异常隔离、缺字段静默空值
+> - `api/export_custom.py`：范围导出未收尾会话回落实数（不再等收尾快照）
+> - 测试锚点：`tests/plugin_system/test_export_fields_registry_F8.py`
 
 ---
 

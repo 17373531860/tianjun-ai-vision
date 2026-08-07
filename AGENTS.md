@@ -17,7 +17,7 @@
 | 性质 | **商业项目，客户已在用** — 工厂工控机部署 |
 | 客户场景 | 装配线视觉检测 / 包装线 / MES 数据回传 / 多工位集群 |
 | 部署模式 | Windows 工控机本地安装（Inno Setup 一键包，约 1.5 GB），Electron 桌面壳套 FastAPI 后端 + Vue3 前端 |
-| 当前线上版本 | **v3.46.0**（2026-08-05）— 主程序原生短信/微信通知栈：NG 12h 汇总通知 + 每日短信日报（数据中心配置，cron 定点发当日 KPI），统一系统级五通道（at_modem/generic_http/wxpusher/aliyun/tencent，共享 `sms_config.json`，默认全关 = 存量零差异，迁移 m0006）+ 推理设备 auto 档支持 Apple MPS（cuda > mps > cpu）+ 独立 AT 短信猫调试工具 `tools/sms_4g`。**逐版变更详见 `docs/changelog/`，本文件不再记版本流水账** |
+| 当前线上版本 | **v3.47.0**（2026-08-07）— 多分支汇合发版：多工位监控布局重构（三工位横排 + 4+ 网格分页总览 + 放大详情，MAX_CHANNELS 4→64）+ YoloVision 训练平台互连（模型双向分发 + 现场帧采样回流，`/api/v1/interconnect/*`，默认关，迁移 m0008）+ 开机首启提速/授权激活治本六项（迁移 m0007）+ LG 工时看板插件 v1.5.2/插件平台 F8 导出字段 + custom_mix 记账五开关 + NG 汇总数字口径可选。**逐版变更详见 `docs/changelog/`，本文件不再记版本流水账** |
 | 主仓库 | `17373531860/tianjun-ai-vision`（**PRIVATE**） |
 | 中转仓库 | `xu-yanzhi32/tianjun-releases` + `tianjun-releases-2`（Gitee 公开 release，给客户下载用） |
 | 母语 | **中文**（用户和注释主语言；技术术语保留英文） |
@@ -145,6 +145,7 @@
 | 排查视频采集 / 推流 / 录像问题 | `debug-video` |
 | 排查报警不响应 | `debug-alarm` |
 | 排查短信通知（12h 汇总不发 / AT 失败 / 云 HTTP 失败 / 与灯塔串口冲突）| `debug-sms` |
+| 排查训练平台互连（模型包不入库 / 采样不回传 / 队列堆积 / 拉取游标不动）| `debug-interconnect` |
 | 排查 MES 异常（工单 / 工件 / 缺陷 / 扫码器 / Hook / Gateway / 外设）| `debug-mes` |
 | 排查集群主从（box 不齐 / 副机心跳 / box_complete 不推 MES）| `debug-cluster` |
 | 排查 Session/Cycle/Step 数据问题 | `debug-session` |
@@ -236,6 +237,7 @@
 | `/packaging-flows/*` | `packaging_flows.py` | v3.21+ 包装箱结算（上银包装线） |
 | `/mes/inbound/*` | `mes_inbound.py` | v3.26+ 外部生产管控系统入站 REST（开工/完工/报警） |
 | `/plugins/*` | `plugins.py` | 插件安装/激活/清单/client-log |
+| `/interconnect/*` | `interconnect.py` | v3.47 YoloVision 训练平台互连（模型分发 + 帧采样回流，默认关） |
 | `/debug/*` | `debug.py` | 通道诊断 + 调试日志中心 |
 
 > **常见误解**：路径前缀是 **`/api/v1/`** 不是 `/api/`；旧手册写的 `/api/detection/*` 已删，等价端点在 `/api/v1/source/detection/*`。
@@ -322,6 +324,7 @@
 
 | 版本 | 日期 | 一句话 |
 |---|---|---|
+| v3.47.0 | 2026-08-07 | 多分支汇合发版：多工位监控布局重构（三工位横排+网格分页总览+放大详情，工位上限 4→64）+ YoloVision 训练平台互连（模型双向分发+现场帧采样回流自学习闭环，默认关，m0008）+ 开机首启提速/授权激活治本六项（Defender 排除+startup-heavy-init 后台化+machineId 快路径，m0007）+ LG 工时看板插件 v1.5.2（F8 插件导出字段落地）+ custom_mix 记账五开关 + NG 汇总数字口径可选 + macOS MPS 并发串行锁 |
 | v3.46.0 | 2026-08-05 | 主程序原生短信/微信通知栈（NG 12h 汇总 + 每日短信日报，五通道统一 sms_providers 工厂共享 sms_config，默认关，迁移 m0006，插件 hook daily_report_before_send）+ 推理设备 auto 档支持 Apple MPS（torch_device 统一出口，MPS 强制 FP32）+ tools/sms_4g 独立 AT 调试工具 + debug-sms skill |
 | v3.45.0 | 2026-07-29 | 上银 SY 包装线热补丁收编（0a~0e 滑块记账体系重做：在位身份各自累计峰值+结算挂账等真账+动作前稳定计数快照，双真实视频回归零误判）+ 箱标签扫码授权（组⑧逐箱扫码定数量）+ 包装工单同步进工单管理（默认开）+ 萍乡称重整改（清秤 Z/T 智能选择+过程提醒档+网关推送异步化+达梦溢出）+ 海康 SDK 帧率可配 + dev-qing 逐件修复合入 |
 | v3.44.0 | 2026-07-22 | 上银 SY3 NG 处置整改（箱账挂起等处置+工单收尾快照保留+收尾防呆数量门/缺步挂起，真实录像 UAT 验收）+ NG 处置配置统一模型（ng_handling 收敛五代开关，逻辑设置 6卡→2卡+事件页双向联动明示）+ 放托盘动作不应期（治闪断双结算）+ 电子秤串口延迟治本（萍乡） |
@@ -365,6 +368,6 @@
 
 ---
 
-**本文件最后更新**：2026-08-05（发版 v3.46.0：主程序原生短信/微信通知栈（NG 12h 汇总 + 每日短信日报，五通道统一，默认关）+ Apple MPS 推理支持 + tools/sms_4g；第一节版本号 + 第十一节里程碑同步）
+**本文件最后更新**：2026-08-07（发版 v3.47.0：多分支汇合——多工位布局重构 + 训练平台互连 + 首启提速六项 + LG 工时插件 + custom_mix 五开关；第一节版本号 + 第五节路由表 `/interconnect` + 第四节触发表 `debug-interconnect` + 第十一节里程碑同步）
 **维护者**：项目主作者 + AI agents
 **维护铁律**：本文件只放"地图 + 守则 + 不变量"。模块细节进 skill，版本变更进 `docs/changelog/`，扩展点/技术债进 `docs/plugin-system/inventory/`。**发版时务必同步更新本文件第一节版本号 + 文件尾日期**（详见 `update-release` skill）。
