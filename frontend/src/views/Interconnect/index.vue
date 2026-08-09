@@ -270,7 +270,14 @@ const loadConfig = async () => {
 const saveConfig = async () => {
   saving.value = true;
   try {
-    await saveInterconnectConfig(form.value);
+    const payload = {
+      ...form.value,
+      sampling: { ...form.value.sampling },
+      model_pull: { ...form.value.model_pull },
+    };
+    if (!payload.token?.trim()) delete payload.token;
+    delete payload.token_configured;
+    await saveInterconnectConfig(payload);
     dbg('interconnect', '保存互连配置', `enabled=${form.value.enabled} sampling=${form.value.sampling.enabled}`);
     ElMessage.success('互连配置已保存');
     refreshStatus();

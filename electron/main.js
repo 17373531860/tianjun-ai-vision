@@ -281,6 +281,8 @@ function initBackendManager() {
     resourcesPath: CONFIG.isDev ? path.join(__dirname, '..') : process.resourcesPath,
     appPath: path.join(__dirname, '..'),
     userDataPath: app.getPath('userData'),
+    licensePath: licenseManager?.licensePath || '',
+    machineId: licenseManager?.getMachineId() || '',
     deepReadyGate,  // v3.23.x: 加深就绪门槛 (默认关), 决定就绪探针用浅探还是深探
   });
   
