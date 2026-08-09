@@ -12,10 +12,9 @@ import hmac
 import os
 import shutil
 import tempfile
-import datetime as dt
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -109,73 +108,14 @@ class InterconnectConfigBody(BaseModel):
     model_pull: Optional[Dict[str, Any]] = None
 
 
-class LicenseLeaseRequest(BaseModel):
-    contract: str = CONTRACT_VERSION
-    nonce: str
-    requested_at: dt.datetime
-
-
-@router.post(
-    "/license/lease",
-    summary="本机天军授权共享租约",
-    dependencies=[Depends(_require_token)],
-)
-def create_license_lease(
-    body: LicenseLeaseRequest,
-    request: Request,
-):
-    from backend.services.interconnect.license_lease import (
-        LeaseError,
-        read_verified_envelope,
-        require_loopback,
-        validate_and_consume_nonce,
-    )
-    try:
-        if body.contract != CONTRACT_VERSION:
-            raise LeaseError("unsupported interconnect contract")
-        require_loopback(request.client.host if request.client else None)
-        validate_and_consume_nonce(body.nonce, body.requested_at)
-        envelope, payload = read_verified_envelope()
-    except LeaseError as exc:
-        status = 403 if "loopback" in str(exc) else 400
-        if "already used" in str(exc):
-            status = 409
-        raise HTTPException(status_code=status, detail=str(exc)) from exc
-    return {
-        "contract": CONTRACT_VERSION,
-        "nonce": body.nonce,
-        "issued_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "machine_id": payload.get("machineId"),
-        "expires_at": payload.get("expiresAt"),
-        "license_envelope": envelope,
-    }
-
-
 @router.get("/config", summary="读取互连配置")
-def get_interconnect_config(request: Request):
-    from backend.services.interconnect.license_lease import LeaseError, require_loopback
-    try:
-        require_loopback(request.client.host if request.client else None)
-    except LeaseError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    config = icfg.get_config()
-    return {
-        **config,
-        "token": "",
-        "token_configured": bool((config.get("token") or "").strip()),
-    }
+def get_interconnect_config():
+    return icfg.get_config()
 
 
 @router.put("/config", summary="保存互连配置")
-def save_interconnect_config(body: InterconnectConfigBody, request: Request):
-    from backend.services.interconnect.license_lease import LeaseError, require_loopback
-    try:
-        require_loopback(request.client.host if request.client else None)
-    except LeaseError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+def save_interconnect_config(body: InterconnectConfigBody):
     data = body.model_dump(exclude_unset=True, exclude_none=True)
-    if "token" not in data:
-        data["token"] = icfg.get_config().get("token", "")
     sampling = data.get("sampling") or {}
     if sampling:
         try:
@@ -191,12 +131,7 @@ def save_interconnect_config(body: InterconnectConfigBody, request: Request):
     if url and not url.startswith(("http://", "https://")):
         raise HTTPException(
             status_code=400, detail="平台地址必须以 http:// 或 https:// 开头")
-    saved = icfg.save_config(data)
-    return {
-        **saved,
-        "token": "",
-        "token_configured": bool((saved.get("token") or "").strip()),
-    }
+    return icfg.save_config(data)
 
 
 @router.get("/status", summary="互连运行状态 (队列/上传/采样/拉取/设备身份)")

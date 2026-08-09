@@ -173,10 +173,7 @@ def app():
 def client(app):
     """共享的 TestClient — 所有 HTTP scenarios 都走它"""
     from fastapi.testclient import TestClient  # 惰性: 仅请求该 fixture 的 HTTP 测试才需要 fastapi
-    return TestClient(
-        app,
-        client=("127.0.0.1", 50000),
-    )
+    return TestClient(app)
 
 
 # ============================================================

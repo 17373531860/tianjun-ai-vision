@@ -20,8 +20,6 @@ import json
 import time
 import uuid
 import zipfile
-import base64
-import datetime as dt
 from types import SimpleNamespace
 
 import pytest
@@ -100,116 +98,6 @@ def test_health_contract(client):
     assert body["product"] == "tianjun-ai-vision"
     assert body["contract"] == "1.1"
     assert body["device_id"].startswith("tj-")
-
-
-def test_license_lease_helpers_verify_raw_envelope_and_replay(
-    tmp_path,
-    monkeypatch,
-):
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import padding, rsa
-    from backend.services.interconnect import license_lease
-
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    license_lease.PUBLIC_KEY = key.public_key().public_bytes(
-        serialization.Encoding.PEM,
-        serialization.PublicFormat.SubjectPublicKeyInfo,
-    )
-    machine_id = "TJ-TEST12345678"
-    data = json.dumps(
-        {
-            "machineId": machine_id,
-            "customerName": "Test Factory",
-            "expiresAt": "2099-01-01T00:00:00Z",
-        },
-        separators=(",", ":"),
-    )
-    signature = key.sign(
-        data.encode("utf-8"),
-        padding.PKCS1v15(),
-        hashes.SHA256(),
-    )
-    path = tmp_path / "license.lic"
-    path.write_text(
-        json.dumps(
-            {
-                "data": data,
-                "signature": base64.b64encode(signature).decode("ascii"),
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("TIANJUN_LICENSE_PATH", str(path))
-    monkeypatch.setenv("TIANJUN_MACHINE_ID", machine_id)
-    raw, payload = license_lease.read_verified_envelope()
-    assert json.loads(raw)["data"] == data
-    assert payload["machineId"] == machine_id
-
-    license_lease.reset_nonce_cache_for_tests()
-    nonce = base64.urlsafe_b64encode(b"x" * 24).decode("ascii").rstrip("=")
-    now = dt.datetime.now(dt.timezone.utc)
-    license_lease.validate_and_consume_nonce(nonce, now, now)
-    with license_lease._nonce_lock:
-        license_lease._seen_nonces.clear()
-    with pytest.raises(license_lease.LeaseError, match="already used"):
-        license_lease.validate_and_consume_nonce(nonce, now, now)
-    with pytest.raises(license_lease.LeaseError, match="loopback"):
-        license_lease.require_loopback("192.168.1.9")
-    license_lease.require_loopback("127.0.0.1")
-    license_lease.require_loopback("::1")
-
-
-def test_license_lease_endpoint_rejects_non_loopback_test_client(
-    app,
-    interconnect_enabled,
-):
-    from fastapi.testclient import TestClient
-    client = TestClient(
-        app,
-        client=("192.168.1.9", 50000),
-    )
-    nonce = base64.urlsafe_b64encode(b"n" * 24).decode("ascii").rstrip("=")
-    response = client.post(
-        f"{API}/license/lease",
-        headers={"X-Interconnect-Token": interconnect_enabled},
-        json={
-            "contract": "1.1",
-            "nonce": nonce,
-            "requested_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-        },
-    )
-    assert response.status_code == 403
-
-
-def test_interconnect_config_is_loopback_only_and_masks_token(
-    app,
-    client,
-    interconnect_enabled,
-):
-    local = client.get(f"{API}/config")
-    assert local.status_code == 200
-    assert local.json()["token"] == ""
-    assert local.json()["token_configured"] is True
-    saved = client.put(
-        f"{API}/config",
-        json={"enabled": True},
-    )
-    assert saved.status_code == 200
-    assert saved.json()["token"] == ""
-    assert saved.json()["token_configured"] is True
-    from backend.services.interconnect import config as icfg
-    assert icfg.get_config()["token"] == interconnect_enabled
-
-    from fastapi.testclient import TestClient
-    remote = TestClient(
-        app,
-        client=("10.20.30.40", 50000),
-    )
-    assert remote.get(f"{API}/config").status_code == 403
-    assert remote.put(
-        f"{API}/config",
-        json={"enabled": False},
-    ).status_code == 403
 
 
 def test_push_rejected_when_disabled(client, tmp_path):

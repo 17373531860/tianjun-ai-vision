@@ -165,12 +165,6 @@ class BackendManager extends EventEmitter {
     if (!this.options.isDev && this.options.userDataPath) {
       env.TIANJUN_DATA_DIR = this.options.userDataPath;
     }
-    if (this.options.licensePath) {
-      env.TIANJUN_LICENSE_PATH = this.options.licensePath;
-    }
-    if (this.options.machineId) {
-      env.TIANJUN_MACHINE_ID = this.options.machineId;
-    }
     
     // 强制 Python 使用 UTF-8 编码（解决 Windows 中文乱码）
     env.PYTHONIOENCODING = 'utf-8';
