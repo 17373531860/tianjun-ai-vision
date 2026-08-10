@@ -1,0 +1,60 @@
+{
+  "steps": [
+    {
+      "name": "进入触发中心面板",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "模板载入 + 保存并启用",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "T5 落库核对 (type/enabled/rules)",
+      "ok": true,
+      "detail": "rules=1"
+    },
+    {
+      "name": "卡片运行中 + 实时状态面板",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "注入脉冲触发规则",
+      "ok": true,
+      "detail": "counters={'signals': 0, 'pulses': 1, 'fires': 1, 'suppressed': 0}"
+    },
+    {
+      "name": "UI 触发历史出记录",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "UI 日志出「触发」行",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "试触发按钮执行动作",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "电平注入进信号计数",
+      "ok": true,
+      "detail": "signals=2"
+    },
+    {
+      "name": "停用开关生效",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "浏览器 console 零错误",
+      "ok": true,
+      "detail": "[]"
+    }
+  ],
+  "pass": true
+}

@@ -1727,6 +1727,13 @@
         </div>
       </el-tab-pane>
 
+      <!-- 触发中心 (RFC 14) -->
+      <el-tab-pane label="触发中心" lazy>
+        <div class="p-4">
+          <TriggerPanel />
+        </div>
+      </el-tab-pane>
+
       <!-- Plugin Management Tab -->
       <el-tab-pane label="插件管理">
         <div class="space-y-6 p-4">
@@ -1882,6 +1889,7 @@ import WorkpieceFlowPanel from './WorkpieceFlowPanel.vue';
 import ChannelGroupPanel from './ChannelGroupPanel.vue';
 import PackagingFlowPanel from './PackagingFlowPanel.vue';
 import DebugPanel from './DebugPanel.vue';
+import TriggerPanel from './TriggerPanel.vue';
 import { dbg, dbgErr } from '@/utils/debug';
 import { usePollingStore } from '@/store/usePollingStore';
 
@@ -1901,6 +1909,10 @@ const pollingItems = [
   { key: 'scanner_status', label: '扫码器-状态' },
   { key: 'external_device', label: '外设-状态' },
   { key: 'wmax_status', label: 'WMax-状态' },
+  { key: 'plc_status', label: 'PLC-连接状态' },
+  { key: 'plc_live', label: 'PLC-点位实时值' },
+  { key: 'trigger_status', label: '触发中心-列表' },
+  { key: 'trigger_live', label: '触发中心-实时状态' },
 ];
 const pollingDefaults = pollingStore.defaults();
 const pollingForm = reactive({ ...pollingDefaults });
@@ -1931,6 +1943,8 @@ const logLimitItems = [
   { key: 'inbound', label: '入站工单-日志' },
   { key: 'gateway', label: '网关-日志(分页)' },
   { key: 'cluster', label: '集群-汇总(分页)' },
+  { key: 'plc', label: 'PLC-IO 日志' },
+  { key: 'trigger', label: '触发中心-日志' },
 ];
 const logLimitDefaults = pollingStore.logDefaults();
 const logLimitForm = reactive({ ...logLimitDefaults });
