@@ -92,6 +92,12 @@ class CommandRequest(BaseModel):
     command: str
 
 
+class PulseRequest(BaseModel):
+    device_id: int
+    # False = 只排队立即返回（脚本/压测用）；True = 等真写完再返回，界面按钮用
+    wait: bool = True
+
+
 class SimulateData(BaseModel):
     raw_data: str
     device_id: Optional[int] = None
@@ -211,6 +217,18 @@ def send_command(body: CommandRequest):
     """向「串口指令应答」称重器下发控制指令（去皮 T / 置零 Z / 读数 R 等）。"""
     svc = get_external_device_service()
     return svc.send_command(body.device_id, body.command)
+
+
+@router.post("/pulse",
+              dependencies=[Depends(require_perm("mes.external.edit"))])
+def send_pulse(body: PulseRequest):
+    """向「Modbus 完成脉冲」设备手动下发一次脉冲（外部设备页「试发脉冲」按钮）。
+
+    等价于逐件覆盖完成时自动发的那一下，用来现场确认 PLC 侧气阀真动了。
+    手动试发不受 cooldown_ms 限制，方便连点调试。
+    """
+    svc = get_external_device_service()
+    return svc.pulse_device(body.device_id, source="manual", wait=body.wait)
 
 
 @router.post("/simulate",

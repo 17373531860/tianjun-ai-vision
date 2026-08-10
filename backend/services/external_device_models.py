@@ -49,6 +49,15 @@ class DeviceConnection:
     # 由设备线程在下一轮轮询时取出发送，避免多线程并发写同一串口。
     _command_queue: deque = field(default_factory=deque, repr=False)
 
+    # modbus_pulse「完成脉冲」运行时状态。推理线程只往 _pulse_queue append +
+    # set(_pulse_wakeup)，真正的 Modbus 写由设备线程执行 —— 热路径零 I/O。
+    _pulse_queue: deque = field(default_factory=deque, repr=False)
+    _pulse_wakeup: threading.Event = field(default_factory=threading.Event, repr=False)
+    _last_pulse_enqueued_at: float = 0.0     # 冷却(cooldown_ms)基准, 入队即刷新
+    pulse_count: int = 0
+    last_pulse_result: Optional[str] = None
+    last_pulse_at_wall: float = 0.0
+
     # v2.7.5 稳定判定运行时状态
     _stable_samples: list = field(default_factory=list, repr=False)
     _stable_state: str = "idle"
