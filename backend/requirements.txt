@@ -68,3 +68,15 @@ bcrypt>=4.0.0
 # ⚠️ 缺 cryptography 时插件验签会 import 失败, 被 try/except 吞成 "签名校验失败" 假象 (v3.15.x 现场事故)
 cryptography>=42.0.0
 jsonschema>=4.0.0
+
+# RFC 13 通用 PLC 连接器 - 协议驱动 (全部惰性 import, 缺库只影响对应驱动)
+# 打包必须齐装: "下次零代码接新客户 PLC" 的前提是驱动库全在客户机上
+python-snap7>=1.3        # 西门子 S7 全系 (ISO-on-TCP; wheel 自带 snap7 动态库)
+pymcprotocol>=0.3.0      # 三菱 MC 协议 3E 帧 (FX5U/Q/L/iQ-R)
+pycomm3>=1.2.14          # AB/罗克韦尔 EtherNet-IP tag 访问 (欧姆龙 NJ/NX 亦可)
+asyncua>=1.0.0           # OPC UA 兜底 (杂牌 PLC 走 UA 网关的行业标准出路)
+# 欧姆龙 FINS/UDP 为内置实现, 无第三方依赖; Modbus 复用既有 pymodbus
+
+# RFC 14 统一触发中心 - 触发源依赖 (惰性 import, 缺库只影响对应类型)
+pynput>=1.7.6            # hid_key 触发源: 脚踏板/USB 按钮盒全局按键钩子
+# pixel_region/timer/http/mock 纯内置; serial_pattern 复用既有 pyserial

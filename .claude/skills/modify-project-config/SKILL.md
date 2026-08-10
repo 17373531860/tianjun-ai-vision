@@ -189,6 +189,38 @@ class Project(Base):
   // 前端开关在 LogicConfigTab「实时NG」卡片。last_first 模式保存时被强制置 false。
   "instant_ng_on_violation": false,
 
+  // ★ v3.48：计数组合判定表（检测模式专用纯视觉判型，RFC 14 第六节）。结算时按
+  // labels 各标签在周期内出现次数向量查 rows：命中行按 verdict 判 + tag 进事件
+  // reason（随导出/MES）+ combo_verdict.last_tag 透出；未命中一律 NG（防呆）。
+  // 判型标签三处让位（重复=合法累计）：accept_once 去重 / 重复超次实时NG /
+  // 检测模式首步重现结算；缺步/重复结算判定亦让位查表。解析 _parse_combo_table
+  // （source_project_config_apply.py），消费 _apply_combo_verdict（settlement_mixin）。
+  // 前端编辑卡在 LogicConfigTab（仅 detection 模式露出）。缺省 None=零差异。
+  "combo_table": {
+    "enabled": false,
+    "labels": ["区域A", "区域B", "区域C"],       // 参与判型的步骤标签（虚拟步骤典型）
+    "rows": [
+      { "counts": [5, 5, 4], "verdict": "OK", "tag": "4缸-含挺柱" },
+      { "counts": [6, 6, 4], "verdict": "OK", "tag": "6缸" }
+    ],
+    // ★ v3.48.x：计数口径。缺省 "steps"=按步骤时间分次（出现→消失=1次，零差异）；
+    // "positional"=位置去重（IoU 追踪：同位置返工/补装不重计，动作发生在几个不同
+    // 位置就计几，复刻外部对标工具算法3）。引擎 source_combo_positional.py，
+    // 喂帧挂检测出口（inference_loop_mixin._feed_combo_positional，与 label_splits
+    // 同层），结算读数+清池在 settlement_mixin。实时计数经 /detection/results 的
+    // combo_verdict.positional_counts 透出。⚠️ 前端 LogicConfigTab 尚无此开关入口
+    // （2026-08-10 待补），目前仅 API/JSON 可配。
+    "count_mode": "steps",
+    "tracking": {                 // 仅 positional 生效，全部可省（括号内默认）
+      "iou": 0.4,                 // 同一位置判定 IoU 阈值 (0.05~0.95)
+      "ema_alpha": 0.6,           // ROI 坐标 EMA 平滑步长 (0~1)
+      "min_consecutive": 3,       // 新位置连续确认推理帧数 (1=首帧即计)
+      "pending_ttl": 10,          // 候选未匹配保留 tick 数
+      "perish_ticks": 0,          // 单 ROI 消失超时 (0=常驻，周期结算才清)
+      "idle_reset_ticks": 0       // 整类无检测重置 (0=不重置)
+    }
+  },
+
   // ★ v3.32 新增：区域事件模式（logic_mode='region_events' 专用，TP 工位流程监测）
   // apply 在 source_project_config_apply → source_region_events.parse_region_events；
   // 引擎 RegionEventEngine 挂帧循环（source_region_events_mixin），步骤=动作规则名。

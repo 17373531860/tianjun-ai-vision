@@ -55,6 +55,11 @@
         <ExternalDevicePanel />
       </template>
 
+      <!-- PLC 对接 (RFC 13) -->
+      <template v-if="activeTab === 'plc'">
+        <PlcPanel />
+      </template>
+
       <!-- 集群汇总 -->
       <template v-if="activeTab === 'cluster'">
         <ClusterPanel />
@@ -75,6 +80,7 @@ import GatewayPanel from './GatewayPanel.vue'
 import OrderPullPanel from './OrderPullPanel.vue'
 import OrderInboundPanel from './OrderInboundPanel.vue'
 import ExternalDevicePanel from './ExternalDevicePanel.vue'
+import PlcPanel from './PlcPanel.vue'
 import ClusterPanel from './ClusterPanel.vue'
 
 const activeTab = ref('orders')
@@ -87,6 +93,7 @@ const tabs = [
   { key: 'order-pull', label: '工单拉取' },
   { key: 'order-inbound', label: '工单接收' },
   { key: 'external', label: '外部设备' },
+  { key: 'plc', label: 'PLC 对接' },
   { key: 'cluster', label: '集群汇总' },
 ]
 </script>

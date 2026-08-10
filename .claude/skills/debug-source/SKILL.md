@@ -1097,3 +1097,20 @@ if (self.project_config or {}).get('logic_mode') == 'per_item':
 **事件"过程提醒"档（`source_event_trigger_mixin.py: fire_external_event_response(remind_only=True)`）**：只借灯/蜂鸣/语音/Toast，**跳过计数器联动、跳过人工确认定格**。给称重投料中缺料/超量周期催料用（秤读数 ±3g 微抖 30 秒把 NG 计数刷 +16 的教训）；默认 False 零差异。排查"提醒响但计数没动" → 先确认是不是提醒档，那是特性不是 bug。
 
 **已结算 NG 确认后清运行态**：结算挂起超时落 NG 打标 `_ack_clear_runtime_after`，确认释放时无条件清周期运行态（否则两箱账目合并）；周期中途的"确认后保留周期"行为零差异。
+
+## v3.48 补充：计数组合判定表（检测模式纯视觉判型，RFC 14 第六节）
+
+`pipeline_config.combo_table`（schema 见 modify-project-config skill）——检测模式结算时按判型标签出现次数向量查表改判，未命中一律 NG。排查速查：
+
+| 症状 | 根因 / 看哪 |
+|---|---|
+| 配了表全 NG「计数组合未匹配」且计数总差 1 | 判型标签第二次出现没进周期。三处让位任一失效：① accept_once 去重豁免（`_process_single_step` 两处 `_combo_labels_gate`/`_combo_lbls`）② 首步重现结算豁免 ③ 实时NG 重复超次豁免。**前端在检测模式自动给全部步骤 accept_once=true**，让位靠后端豁免不是靠改配置 |
+| 表配了不生效（照旧缺步/重复 NG） | `_parse_combo_table` 归一化失败整表禁用——看启动日志有无「计数组合判定表: labels=...」；坏行（counts 长度与 labels 不符/非整数）打「[ComboTable] 第 N 行 ... 丢弃」 |
+| 周期边界乱（一件被拆成多周期） | 判型标签被用作首步/结算步骤。判型标签重现≠新周期信号（已豁免首步重现结算），必须用**非判型标签**（工件到位/收尾）界定周期，或用空闲超时 |
+| tag 没进 MES/导出 | tag 走事件 reason 链路（`机型判定[tag]: ...`），查 `_trigger_event` 的 reason；运行态看 `/detection/results` 的 `combo_verdict.last_tag` |
+| synthetic 联调两次出现被并成一次 | 剧本空档太短被推理采样跳过 + 浏览器 MJPEG 拉流会让 synthetic 帧泵提速（测试伪影，真实相机无此事）——空档给足 5s 标称，见 `tests/manual_uat/combo_table_uat.py` 注释 |
+| 返工/补装动作被重复计数（时间分次口径不符） | 换 `count_mode: "positional"`（v3.48.x 位置去重，IoU 追踪同位置不重计，复刻外部对标工具算法3）。引擎 `source_combo_positional.py`；计数不动先查启动日志「count_mode=positional, tracking=...」有没有打出来，再看 `/detection/results` 的 `combo_verdict.positional_counts` 实时值；检测框格式兼容扁平 `x/y/w/h`（真实 runner）与 `bbox` 数组（synthetic）两种，曾因只认 bbox 全程计 0 |
+| positional 计数偏少（相邻位置被并掉） | `tracking.iou` 太松（相邻框 IoU > 阈值被认成同一位置）→ 调小；反之抖动多计调大。EMA `ema_alpha` 越大跟随检测框越快 |
+
+测试入口：`pytest tests/test_combo_table.py`（16 用例：归一化/查表语义/positional 引擎/命中 OK/未命中 NG/accept_once 豁免/零差异守门）。
+实战对照档案（与外部工具逐周期对齐的完整实验，含参数）：`/tmp/cs_tool/对照报告.md`（2026-08-10，装配线缸体判型）。

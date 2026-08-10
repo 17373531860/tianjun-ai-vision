@@ -1,0 +1,55 @@
+{
+  "steps": [
+    {
+      "name": "A1 计数口径入口可见",
+      "ok": true,
+      "detail": "计数组合判定表（纯视觉判型）\n\n结算时按「参与判型步骤」在本周期的出现次数组合查表：命中行 → 按该行判定并打上机型标记（进事件原因/导出/MES）； 未命中任何行一律 NG（防呆）。适合同一画面多机型、数量组合决定型号的场景（如 5,5,4=4缸 / 6,6,4=6缸）。\n\n参与判型的步骤标签\n装"
+    },
+    {
+      "name": "A2 positional 六参数展开",
+      "ok": true,
+      "detail": "✕\nOK\n✕\nOK\n✕\nOK\n✕\n+ 添加机型行\n计数口径\n按出现分次（默认）\n按位置去重\n\n按出现分次：动作出现→消失记 1 次，同一位置返工会重复计数。 按位置去重：用 IoU 追踪记住每个已计位置，同位置返工/补装不重计——装配了几个不同位置就计几（推荐多位置装配判型场景）。\n\n同位置判定 IoU\n\n新检测框与已计位置重叠超过此值＝同一位置（默认 0.4；相邻位置被并掉→调小，抖动多计→调大）\n\n位置平滑步长\n\n已计位置坐标跟随新检测框的速度（默认 0.6，越大跟随越快）\n\n新位置确认帧数\n\n同一位置连续检出 N 个推理帧才计数（默认 3；1＝首帧即计）\n\n候选保留节拍\n\n未确认候选断检"
+    },
+    {
+      "name": "A3 count_mode 落库",
+      "ok": true,
+      "detail": "{'enabled': True, 'labels': ['装轴承座瓦', '装轴承盖瓦', '放置挺柱'], 'rows': [{'counts': [5, 5, 0], 'verdict': 'OK', 'tag': '4缸-无挺柱'}, {'counts': [5, 5, 4], 'verdict': 'OK', 'tag': '4缸-含挺柱'}, {'counts': [7, 7, 0], 'verdict': 'OK', 'tag': '6缸-无挺柱'}, {'counts': [7, 7, 6], 'verdict': 'OK', 'tag': '6缸-含挺柱'}], 'count"
+    },
+    {
+      "name": "A4 tracking 落库",
+      "ok": true,
+      "detail": "{'iou': 0.45, 'ema_alpha': 0.6, 'min_consecutive': 2, 'pending_ttl': 10, 'perish_ticks': 0, 'idle_reset_ticks': 0}"
+    },
+    {
+      "name": "A5 重进回显",
+      "ok": true,
+      "detail": "radio=1 iou=0.45"
+    },
+    {
+      "name": "B1 pixel_region 新参数可见",
+      "ok": true,
+      "detail": "添加触发源\n名称\n触发源类型\n虚拟按钮(画面)\n触发源参数\n工位\n比较模式\nref_diff\n\nref_diff=与参考帧差分(手遮按钮) / brightness=亮度过阈(指示灯) / color_match=颜色命中\n\n阈值\n\nref_diff/color_match: 0~441 色距; brightness: 0~255\n\n采样(ms)\n\n默认 150, 最小 50\n\n参考帧缓漂\n\n开=参考帧缓慢跟随光照渐变(默认开, 仅未触发时更新)\n\n缓漂步长\n\n默认 0.02; 越大跟光照越快, 太大慢速手遮会被漂掉\n\n反相触发\n\n开=低于阈值算触发\n\n区域坐标可先随意保存，然后用卡片上的「标"
+    },
+    {
+      "name": "B2 ref_drift_alpha 落库",
+      "ok": true,
+      "detail": "{'channel': 0, 'region': [40, 40, 160, 160], 'mode': 'ref_diff', 'threshold': 40, 'sample_ms': 150, 'ref_drift': True, 'invert': False, 'ref_drift_alpha': 0.05}"
+    },
+    {
+      "name": "B3 serial_pattern 新参数可见",
+      "ok": true,
+      "detail": "添加触发源\n名称\n触发源类型\n串口报文\n触发源参数\n串口\n波特率\n\n默认 9600\n\n正则\n\n命中即触发; 命名捕获组 (?P<var>...) 提为变量\n\n数据位\nSelect\n校验位\nSelect\n停止位\nSelect\n行分隔符\nSelect\n编码\n\n默认 ascii, 解码错误忽略\n\n触发规则（JSON，模板已含常用范式；动作与 PLC 规则同一套）\n可用动作: ack_alarm / alarm / bind_sn / clear_reset / manual_settle / set_var / start_detection / stop_detection / switch_pr"
+    },
+    {
+      "name": "B4 timer 每日定点可见",
+      "ok": true,
+      "detail": "添加触发源\n名称\n触发源类型\n定时\n触发源参数\n间隔(秒)\n\n每 N 秒一发, 启动即计时\n\n每日定点\n\nHH:MM 逗号分隔可多个, 与间隔可并用\n\n触发规则（JSON，模板已含常用范式；动作与 PLC 规则同一套）\n可用动作: ack_alarm / alarm / bind_sn / clear_reset / manual_settle / set_var / start_detectio"
+    },
+    {
+      "name": "B5 http 白名单/提取可见",
+      "ok": true,
+      "detail": "添加触发源\n名称\n触发源类型\nHTTP 触发\n触发源参数\n触发键\n共享密钥\n\n配了则请求须带 X-Trigger-Secret 头或 ?secret=\n\nIP 白名单\n\n逗号分隔的 IP 前缀, 空=不限\n\n变量提取\n\n请求 body 点路径 → 动作模板变量, 空=不提取\n\n外部系统调用: POST /api/v1/triggers/fire/{key}（配了密钥则带 X-Trigger-Sec"
+    }
+  ],
+  "pass": true
+}

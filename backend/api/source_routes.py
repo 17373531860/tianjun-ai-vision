@@ -1722,6 +1722,14 @@ def get_detection_results(
         or {'enabled': False, 'allow_step': True, 'allow_count': True},
         # v3.23 缺步骤延迟落账挂起明细 (None=无挂起; 前端 ack 窗据此展示缺项 + "补步骤"按钮)
         "pending_remediation": getattr(mgr, '_pending_remediation', None),
+        # v3.48 计数组合判定表 (纯视觉判型): enabled=项目配了表, last_tag=最近命中机型;
+        # count_mode='positional' 时另透出本周期位置去重实时计数 (未结算也可读)
+        "combo_verdict": {
+            "enabled": bool(getattr(mgr, '_combo_table', None)),
+            "last_tag": getattr(mgr, '_combo_last_tag', None),
+            **({"positional_counts": mgr._combo_positional.counts()}
+               if getattr(mgr, '_combo_positional', None) is not None else {}),
+        },
     }
 
     result['model_task'] = getattr(mgr, 'model_task', 'detect')

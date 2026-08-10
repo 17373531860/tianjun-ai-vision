@@ -145,6 +145,12 @@ class ChannelManager:
                     _get_wfc_coord().on_channel_removed(cid)
                 except Exception as e:
                     print(f"[ChannelManager] Error cleaning WorkpieceFlowCoordinator for ch{cid}: {e}")
+                # v3.48 RFC 14: 停掉绑定该工位的触发源实例, 避免像素源对着裁撤工位空采样
+                try:
+                    from backend.services.triggers.manager import get_trigger_manager
+                    get_trigger_manager().on_channel_removed(cid)
+                except Exception as e:
+                    print(f"[ChannelManager] Error cleaning TriggerHub for ch{cid}: {e}")
 
             # Create missing channels
             for cid in range(count):

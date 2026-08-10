@@ -1,0 +1,60 @@
+{
+  "steps": [
+    {
+      "name": "进入 PLC 对接面板",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "模板载入 + 保存并启用",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "T5 落库核对 (driver/enabled/points)",
+      "ok": true,
+      "detail": "points=5"
+    },
+    {
+      "name": "卡片已连接 + 实时监视出点位",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "read_done 上升沿触发规则",
+      "ok": true,
+      "detail": "counters={'polls': 81, 'read_errors': 0, 'writes': 2, 'write_errors': 0, 'rule_fires': 1, 'reconnects': 1}"
+    },
+    {
+      "name": "UI 显示产品号实时值",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "IO 日志出现「触发」行",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "回执 data_received 写入+自动复位",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "手动写 result_code=9 引擎真写出",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "停用开关生效",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "浏览器 console 零错误",
+      "ok": true,
+      "detail": "[]"
+    }
+  ],
+  "pass": true
+}

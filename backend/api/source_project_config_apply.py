@@ -342,6 +342,65 @@ def _apply_models_config(h, pipeline_config):
         print(f"[多模型] pipeline_config.models 配置已应用: {sorted(new_names)}")
 
 
+def _parse_combo_table(raw):
+    """v3.48 计数组合判定表归一化: 非法/未启用/空表返回 None (= 功能关)。
+
+    输入 schema (pipeline_config.combo_table):
+      {enabled: bool, labels: [str], rows: [{counts: [int], verdict: "OK"|"NG", tag: str}],
+       count_mode: "steps"(默认) | "positional",
+       tracking: {iou, ema_alpha, min_consecutive, pending_ttl, perish_ticks, idle_reset_ticks}}
+    校验规则: labels 非空去重; 行 counts 长度必须与 labels 等长 (错行丢弃并打日志),
+    counts 逐项转非负 int; verdict 只认 NG (其余按 OK); 全部行非法时整表禁用。
+    count_mode='positional' 时结算计数改用位置去重引擎 (IoU 追踪, 同位置返工
+    不重计, 复刻外部工具算法3, 见 source_combo_positional.py); 缺省 'steps' 零差异。
+    """
+    if not isinstance(raw, dict) or not raw.get('enabled'):
+        return None
+    labels = [str(l).strip() for l in (raw.get('labels') or []) if str(l).strip()]
+    labels = list(dict.fromkeys(labels))
+    if not labels:
+        return None
+    rows = []
+    for i, row in enumerate(raw.get('rows') or []):
+        if not isinstance(row, dict):
+            continue
+        counts = row.get('counts')
+        if not isinstance(counts, (list, tuple)) or len(counts) != len(labels):
+            print(f"[ComboTable] 第 {i + 1} 行 counts 长度与 labels 不符, 丢弃: {counts}")
+            continue
+        try:
+            counts = [max(0, int(c)) for c in counts]
+        except (TypeError, ValueError):
+            print(f"[ComboTable] 第 {i + 1} 行 counts 含非整数, 丢弃: {counts}")
+            continue
+        rows.append({
+            'counts': counts,
+            'verdict': 'NG' if str(row.get('verdict', 'OK')).upper() == 'NG' else 'OK',
+            'tag': str(row.get('tag') or '').strip(),
+        })
+    if not rows:
+        print("[ComboTable] 启用但无有效行, 整表禁用")
+        return None
+    mode = 'positional' if str(raw.get('count_mode') or '').lower() == 'positional' else 'steps'
+    tracking = {}
+    if mode == 'positional':
+        tr = raw.get('tracking') if isinstance(raw.get('tracking'), dict) else {}
+        def _f(key, default, lo, hi):
+            try:
+                return min(hi, max(lo, float(tr.get(key, default))))
+            except (TypeError, ValueError):
+                return default
+        tracking = {
+            'iou': _f('iou', 0.4, 0.05, 0.95),
+            'ema_alpha': _f('ema_alpha', 0.6, 0.0, 1.0),
+            'min_consecutive': int(_f('min_consecutive', 3, 1, 60)),
+            'pending_ttl': int(_f('pending_ttl', 10, 1, 600)),
+            'perish_ticks': int(_f('perish_ticks', 0, 0, 100000)),
+            'idle_reset_ticks': int(_f('idle_reset_ticks', 0, 0, 100000)),
+        }
+    return {'labels': labels, 'rows': rows, 'count_mode': mode, 'tracking': tracking}
+
+
 def _apply_pipeline_config(h, config, pipeline_config):
     """同时出现组 + 结算模式 + 空闲/周期超时"""
     h._simultaneous_groups = pipeline_config.get('simultaneous_groups', [])
@@ -352,6 +411,22 @@ def _apply_pipeline_config(h, config, pipeline_config):
     h.settlement_mode = pipeline_config.get('settlement_mode', 'first_step')
     h.idle_timeout_seconds = pipeline_config.get('idle_timeout_seconds', 0)
     h.cycle_max_duration = pipeline_config.get('cycle_max_duration', 0)
+
+    # ============ v3.48 计数组合判定表 (RFC 14 配套项, 纯视觉判型) ============
+    # 检测模式专用: 结算时按参与标签的出现次数向量查表 → 命中行 verdict+tag,
+    # 未命中一律 NG (防呆)。参与标签的缺步/重复判定让位查表 (期望数量因机型而异)。
+    # 默认无配置 = None = 行为零差异。消费点: _settle_detection_cycle /
+    # _maybe_instant_ng_detection_duplicate (combo 标签重复合法, 实时NG让位)。
+    h._combo_table = _parse_combo_table(pipeline_config.get('combo_table'))
+    h._combo_last_tag = None
+    from backend.api.source_combo_positional import build_combo_positional
+    h._combo_positional = build_combo_positional(h._combo_table)
+    if h._combo_table:
+        print(f"计数组合判定表: labels={h._combo_table['labels']} "
+              f"{len(h._combo_table['rows'])} 行 (未命中一律 NG), "
+              f"count_mode={h._combo_table['count_mode']}"
+              + (f", tracking={h._combo_table['tracking']}"
+                 if h._combo_positional else ""))
 
     # ==================== NG 判定与处置 (v3.44 统一模型) ====================
     # 单一块 ng_handling (新配置) 或 legacy 键合成 (老项目零差异), 展开到既有

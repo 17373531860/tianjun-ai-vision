@@ -1788,6 +1788,24 @@ const initProjectDefaults = (project) => {
       gate_event_id: cg.event_id || null,
     };
   }
+  // v3.48 计数组合判定表 (检测模式纯视觉判型) 兜底: 缺块建默认关闭的空表
+  if (!project.pipeline_config.combo_table
+      || typeof project.pipeline_config.combo_table !== 'object') {
+    project.pipeline_config.combo_table = { enabled: false, labels: [], rows: [] };
+  }
+  const cmb = project.pipeline_config.combo_table;
+  if (typeof cmb.enabled !== 'boolean') cmb.enabled = false;
+  if (!Array.isArray(cmb.labels)) cmb.labels = [];
+  if (!Array.isArray(cmb.rows)) cmb.rows = [];
+  // v3.48.x 计数口径 + positional 追踪参数兜底 (默认值与后端 _parse_combo_table 一致)
+  if (cmb.count_mode !== 'positional') cmb.count_mode = 'steps';
+  if (!cmb.tracking || typeof cmb.tracking !== 'object') cmb.tracking = {};
+  const trkDefaults = { iou: 0.4, ema_alpha: 0.6, min_consecutive: 3,
+                        pending_ttl: 10, perish_ticks: 0, idle_reset_ticks: 0 };
+  for (const [k, dv] of Object.entries(trkDefaults)) {
+    if (!Number.isFinite(Number(cmb.tracking[k]))) cmb.tracking[k] = dv;
+  }
+
   const nghCfg = project.pipeline_config.ng_handling;
   if (!['none', 'hint', 'instant_ng'].includes(nghCfg.violation)) nghCfg.violation = 'none';
   if (!['ng', 'ack', 'hold'].includes(nghCfg.missing_step)) nghCfg.missing_step = 'ng';
@@ -2215,6 +2233,39 @@ const handleSaveProject = async () => {
             gate_escalate_steps: (Array.isArray(src.gate_escalate_steps) ? src.gate_escalate_steps : [])
               .map(s => String(s || '').trim())
               .filter(s => s && (Array.isArray(src.gate_steps) ? src.gate_steps : []).includes(s)),
+          };
+        })(),
+        // v3.48 计数组合判定表 (检测模式纯视觉判型; 序列化时净化: 行 counts
+        // 与 labels 等长且为非负整数, 后端 _parse_combo_table 二次校验)
+        combo_table: (() => {
+          const src = activeProject.value.pipeline_config?.combo_table;
+          if (!src || typeof src !== 'object') return { enabled: false, labels: [], rows: [] };
+          const labels = (Array.isArray(src.labels) ? src.labels : [])
+            .map(l => String(l || '').trim()).filter(Boolean);
+          const rows = (Array.isArray(src.rows) ? src.rows : [])
+            .map(r => ({
+              counts: labels.map((_, i) => {
+                const v = Number((Array.isArray(r?.counts) ? r.counts : [])[i]);
+                return Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0;
+              }),
+              verdict: String(r?.verdict).toUpperCase() === 'NG' ? 'NG' : 'OK',
+              tag: String(r?.tag || '').trim(),
+            }));
+          // v3.48.x 计数口径 + 追踪参数随保存透传 (clamp 与后端 _parse_combo_table 一致)
+          const num = (v, d) => { const n = Number(v); return Number.isFinite(n) ? n : d; };
+          const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+          const t = (src.tracking && typeof src.tracking === 'object') ? src.tracking : {};
+          return {
+            enabled: src.enabled === true && labels.length > 0, labels, rows,
+            count_mode: src.count_mode === 'positional' ? 'positional' : 'steps',
+            tracking: {
+              iou: clamp(num(t.iou, 0.4), 0.05, 0.95),
+              ema_alpha: clamp(num(t.ema_alpha, 0.6), 0, 1),
+              min_consecutive: clamp(Math.floor(num(t.min_consecutive, 3)), 1, 60),
+              pending_ttl: clamp(Math.floor(num(t.pending_ttl, 10)), 1, 600),
+              perish_ticks: clamp(Math.floor(num(t.perish_ticks, 0)), 0, 100000),
+              idle_reset_ticks: clamp(Math.floor(num(t.idle_reset_ticks, 0)), 0, 100000),
+            },
           };
         })(),
         // 原生称重投料模式配置 (weighing 模式 / v3.35 融合步骤门控模式写入, 其他不污染)

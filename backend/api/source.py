@@ -1814,6 +1814,8 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         # Settlement / cycle-regression tracking
         self._last_step_added_time = None
         self._cycle_regression = False
+        # v3.48 计数组合判定表: 清最近判型 tag (配置 _combo_table 保留, 属项目配置)
+        self._combo_last_tag = None
         self._step_raw_start = {}
         self._last_ng_time = 0
         self._last_event_time = 0.0  # v3.10.x 防重复结算时间窗口锚

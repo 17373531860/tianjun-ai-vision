@@ -220,6 +220,94 @@
         </div>
       </el-card>
 
+      <!-- v3.48 计数组合判定表 (检测模式专用, 纯视觉判型) -->
+      <el-card v-if="project.logic_mode === 'detection' && comboCfg" shadow="never" class="bg-slate-800 border-slate-700">
+        <template #header>
+          <div class="flex items-center justify-between">
+            <span class="font-bold text-white">计数组合判定表（纯视觉判型）</span>
+            <el-switch v-model="comboCfg.enabled" />
+          </div>
+        </template>
+        <div class="space-y-3 text-sm text-gray-300">
+          <p class="text-xs text-gray-400">
+            结算时按「参与判型步骤」在本周期的出现次数组合查表：命中行 → 按该行判定并打上机型标记（进事件原因/导出/MES）；
+            <b class="text-amber-400">未命中任何行一律 NG（防呆）</b>。适合同一画面多机型、数量组合决定型号的场景（如 5,5,4=4缸 / 6,6,4=6缸）。
+          </p>
+          <template v-if="comboCfg.enabled">
+            <el-form-item label="参与判型的步骤标签">
+              <el-select v-model="comboCfg.labels" multiple class="w-full"
+                placeholder="选择按数量判型的步骤（如 区域A/区域B/区域C）" @change="syncComboRows">
+                <el-option v-for="l in availableLabels" :key="l" :label="l" :value="l" />
+              </el-select>
+              <p class="text-xs text-gray-500 mt-1">
+                这些标签的「缺步/重复」判定让位查表（期望数量因机型而异，重复出现合法累计）。
+                建议用<b>非判型标签</b>（如工件到位/收尾动作）作为周期的首步与结算步骤。
+              </p>
+            </el-form-item>
+            <div v-if="comboCfg.labels.length" class="bg-slate-900 rounded p-3 space-y-2">
+              <div class="flex items-center gap-2 text-xs text-gray-400 font-bold">
+                <span v-for="l in comboCfg.labels" :key="l" class="w-20 text-center">{{ l }}</span>
+                <span class="w-20 text-center">判定</span>
+                <span class="flex-1">机型标记 (tag)</span>
+                <span class="w-8"></span>
+              </div>
+              <div v-for="(row, ri) in comboCfg.rows" :key="ri" class="flex items-center gap-2">
+                <el-input-number v-for="(l, ci) in comboCfg.labels" :key="l"
+                  v-model="row.counts[ci]" :min="0" :max="999" :controls="false"
+                  size="small" class="!w-20" />
+                <el-select v-model="row.verdict" size="small" class="!w-20">
+                  <el-option label="OK" value="OK" />
+                  <el-option label="NG" value="NG" />
+                </el-select>
+                <el-input v-model="row.tag" size="small" class="flex-1"
+                  placeholder="如 4缸-含挺柱（进事件原因/导出/MES）" />
+                <el-button type="danger" size="small" text @click="comboCfg.rows.splice(ri, 1)">✕</el-button>
+              </div>
+              <el-button type="primary" size="small" plain @click="addComboRow">+ 添加机型行</el-button>
+            </div>
+
+            <!-- v3.48.x 计数口径: 时间分次 vs 位置去重 -->
+            <el-form-item label="计数口径">
+              <el-radio-group v-model="comboCfg.count_mode">
+                <el-radio-button value="steps">按出现分次（默认）</el-radio-button>
+                <el-radio-button value="positional">按位置去重</el-radio-button>
+              </el-radio-group>
+              <p class="text-xs text-gray-500 mt-1">
+                <b>按出现分次</b>：动作出现→消失记 1 次，同一位置返工会重复计数。
+                <b>按位置去重</b>：用 IoU 追踪记住每个已计位置，同位置返工/补装不重计——装配了几个不同位置就计几（推荐多位置装配判型场景）。
+              </p>
+            </el-form-item>
+            <div v-if="comboCfg.count_mode === 'positional' && comboCfg.tracking"
+                 class="bg-slate-900 rounded p-3 grid grid-cols-3 gap-x-4 gap-y-2 combo-tracking">
+              <el-form-item label="同位置判定 IoU">
+                <el-input-number v-model="comboCfg.tracking.iou" :min="0.05" :max="0.95" :step="0.05" size="small" class="w-full" />
+                <p class="text-xs text-gray-500">新检测框与已计位置重叠超过此值＝同一位置（默认 0.4；相邻位置被并掉→调小，抖动多计→调大）</p>
+              </el-form-item>
+              <el-form-item label="位置平滑步长">
+                <el-input-number v-model="comboCfg.tracking.ema_alpha" :min="0" :max="1" :step="0.1" size="small" class="w-full" />
+                <p class="text-xs text-gray-500">已计位置坐标跟随新检测框的速度（默认 0.6，越大跟随越快）</p>
+              </el-form-item>
+              <el-form-item label="新位置确认帧数">
+                <el-input-number v-model="comboCfg.tracking.min_consecutive" :min="1" :max="60" size="small" class="w-full" />
+                <p class="text-xs text-gray-500">同一位置连续检出 N 个推理帧才计数（默认 3；1＝首帧即计）</p>
+              </el-form-item>
+              <el-form-item label="候选保留节拍">
+                <el-input-number v-model="comboCfg.tracking.pending_ttl" :min="1" :max="600" size="small" class="w-full" />
+                <p class="text-xs text-gray-500">未确认候选断检后保留多少个推理帧（默认 10）</p>
+              </el-form-item>
+              <el-form-item label="单位置消失超时">
+                <el-input-number v-model="comboCfg.tracking.perish_ticks" :min="0" :max="100000" size="small" class="w-full" />
+                <p class="text-xs text-gray-500">已计位置断检 N 帧后作废重新等确认（默认 0＝常驻到周期结算）</p>
+              </el-form-item>
+              <el-form-item label="整类空闲重置">
+                <el-input-number v-model="comboCfg.tracking.idle_reset_ticks" :min="0" :max="100000" size="small" class="w-full" />
+                <p class="text-xs text-gray-500">该类标签全部消失 N 帧后清空全部已计位置（默认 0＝不重置）</p>
+              </el-form-item>
+            </div>
+          </template>
+        </div>
+      </el-card>
+
       <!-- Custom Mode Config -->
       <el-card v-if="project.logic_mode === 'custom'" shadow="never" class="bg-slate-800 border-slate-700">
         <template #header><span class="font-bold text-white">自定义模式 - 条件配置</span></template>
@@ -1956,6 +2044,29 @@ const regionEventsCfg = computed(() => {
   if (props.project?.logic_mode !== 'region_events') return null;
   return props.project?.pipeline_config?.region_events || null;
 });
+
+// ==================== v3.48 计数组合判定表 (检测模式, 纯视觉判型) ====================
+// 存在性由父级 index.vue initProjectDefaults 兜底; 这里原位编辑。
+// 行 counts 长度必须与 labels 等长 (后端 _parse_combo_table 会丢弃错行)。
+const comboCfg = computed(() => props.project?.pipeline_config?.combo_table || null);
+
+const syncComboRows = () => {
+  const cfg = comboCfg.value;
+  if (!cfg) return;
+  const n = (cfg.labels || []).length;
+  (cfg.rows || []).forEach(row => {
+    if (!Array.isArray(row.counts)) row.counts = [];
+    while (row.counts.length < n) row.counts.push(0);
+    row.counts.length = n;
+  });
+};
+
+const addComboRow = () => {
+  const cfg = comboCfg.value;
+  if (!cfg) return;
+  if (!Array.isArray(cfg.rows)) cfg.rows = [];
+  cfg.rows.push({ counts: (cfg.labels || []).map(() => 0), verdict: 'OK', tag: '' });
+};
 
 // ==================== v3.44 NG 判定与处置 (统一卡) ====================
 const ngh = computed(() => props.project?.pipeline_config?.ng_handling || null);
