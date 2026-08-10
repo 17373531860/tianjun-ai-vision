@@ -14,6 +14,7 @@
                 <el-dropdown-item command="weighing_continuous">称重器 - 连续接收</el-dropdown-item>
                 <el-dropdown-item command="weighing_anheng">称重器 - 安衡指令应答</el-dropdown-item>
                 <el-dropdown-item command="tcp_sensor">TCP 传感器</el-dropdown-item>
+                <el-dropdown-item command="plc_pulse_delta">台达 PLC - 完成脉冲 (气阀)</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -47,7 +48,10 @@
             <div v-if="dev.ip">地址: {{ dev.ip }}:{{ dev.port }}</div>
             <div v-if="dev.serial_port">串口: {{ dev.serial_port }} @ {{ dev.serial_baud }}</div>
             <div>{{ channelLabel(dev.channel_id) }}<span v-if="dev.station_id" class="text-yellow-400 ml-2">(集群标识: {{ dev.station_id }})</span><span v-if="dev.pairing_group" class="text-purple-300 ml-2">(分组: {{ dev.pairing_group }})</span></div>
-            <div>解析: {{ dev.parse_mode }} | 目标: {{ targetLabel(dev.data_target) }}</div>
+            <div v-if="dev.protocol === 'modbus_pulse'">
+              完成脉冲: {{ pulseSummary(dev) }}
+            </div>
+            <div v-else>解析: {{ dev.parse_mode }} | 目标: {{ targetLabel(dev.data_target) }}</div>
             <div v-if="getLastData(dev.id)" class="text-cyan-300 truncate">
               最近: {{ getLastData(dev.id) }}
             </div>
@@ -62,6 +66,8 @@
               <el-button size="small" type="warning" plain @click="sendCmd(dev, 'T')">去皮</el-button>
               <el-button size="small" type="warning" plain @click="sendCmd(dev, 'Z')">置零</el-button>
             </template>
+            <el-button v-if="dev.protocol === 'modbus_pulse'" size="small" type="warning" plain
+                       :loading="pulsingDeviceId === dev.id" @click="sendPulse(dev)">试发脉冲</el-button>
             <el-button size="small" type="primary" @click="editDev(dev)">编辑</el-button>
             <el-button size="small" type="danger" @click="handleDelete(dev)">删除</el-button>
           </div>
@@ -123,12 +129,13 @@
               <el-option label="串口指令应答 (发R读数/T去皮)" value="serial_command" />
               <el-option label="HTTP 轮询" value="http_poll" />
               <el-option label="模拟称重 (无硬件测试)" value="mock_weight" />
+              <el-option label="Modbus 完成脉冲 (PLC 控气阀)" value="modbus_pulse" />
             </el-select>
           </el-form-item>
         </div>
 
         <!-- TCP / Modbus 地址 -->
-        <div v-if="form.protocol === 'tcp' || form.protocol === 'modbus_tcp'" class="grid grid-cols-2 gap-4">
+        <div v-if="form.protocol === 'tcp' || form.protocol === 'modbus_tcp' || isPulseTcp" class="grid grid-cols-2 gap-4">
           <el-form-item label="IP 地址">
             <el-input v-model="form.ip" placeholder="192.168.0.200" />
           </el-form-item>
@@ -294,6 +301,98 @@
           </div>
         </div>
 
+        <!-- Modbus 完成脉冲（PLC 控气阀） -->
+        <div v-if="isPulseProtocol" class="bg-slate-900/50 rounded p-3 mb-3">
+          <div class="text-xs text-gray-400 mb-2">
+            完成脉冲（本工位判定完成时，给 PLC 的一个点位写 ON → 等一会 → 写 OFF，PLC 收到上升沿去控气阀）
+          </div>
+          <div class="grid grid-cols-3 gap-2 mb-2">
+            <div>
+              <div class="text-xs text-gray-500 mb-1">连接方式</div>
+              <el-select v-model="pulseTransport" size="small" class="w-full">
+                <el-option label="Modbus TCP (网线)" value="tcp" />
+                <el-option label="Modbus RTU (485 串口)" value="rtu" />
+              </el-select>
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 mb-1">从站号 (PLC 站号)</div>
+              <el-input-number v-model="pulseSlaveId" :min="0" :max="247" :precision="0" size="small" class="!w-full" controls-position="right" />
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 mb-1">写入类型</div>
+              <el-select v-model="pulseTarget" size="small" class="w-full">
+                <el-option label="线圈 M/Y (推荐)" value="coil" />
+                <el-option label="保持寄存器 D" value="register" />
+              </el-select>
+            </div>
+          </div>
+          <div class="grid grid-cols-3 gap-2 mb-2">
+            <div>
+              <div class="text-xs text-gray-500 mb-1">地址填写方式</div>
+              <el-select v-model="pulseAddressMode" size="small" class="w-full">
+                <el-option label="台达 M 编号 (填 100 = M100)" value="delta_m" />
+                <el-option label="Modbus 原始地址 (0 基)" value="raw" />
+                <el-option label="文档编号 (1 基, 如 00001/40001)" value="doc1" />
+              </el-select>
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 mb-1">地址</div>
+              <el-input-number v-model="pulseAddress" :min="0" :precision="0" size="small" class="!w-full" controls-position="right" />
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 mb-1">脉冲宽度 (毫秒)</div>
+              <el-input-number v-model="pulseMs" :min="0" :max="60000" :step="50" :precision="0" size="small" class="!w-full" controls-position="right" />
+            </div>
+          </div>
+          <div class="grid grid-cols-3 gap-2">
+            <div>
+              <div class="text-xs text-gray-500 mb-1">有效值 (ON)</div>
+              <el-input-number v-model="pulseOnValue" :min="0" :precision="0" size="small" class="!w-full" controls-position="right" />
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 mb-1">复位值 (OFF)</div>
+              <el-input-number v-model="pulseOffValue" :min="0" :precision="0" size="small" class="!w-full" controls-position="right" />
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 mb-1">通讯超时 (秒)</div>
+              <el-input-number v-model="pulseTimeout" :min="1" :max="30" :precision="0" size="small" class="!w-full" controls-position="right" />
+            </div>
+          </div>
+          <div class="text-xs text-gray-500 mt-2">
+            当前将写 <b class="text-cyan-300">{{ pulsePreview }}</b>；脉冲宽度填 0 表示只写 ON 不复位（由 PLC 程序自己清）。
+          </div>
+
+          <el-divider class="!my-3" />
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs text-gray-400">逐件覆盖（打螺丝）完成时自动发脉冲</span>
+            <el-switch v-model="pulseTriggerEnabled" size="small" />
+          </div>
+          <div v-if="pulseTriggerEnabled" class="grid grid-cols-2 gap-2">
+            <div>
+              <div class="text-xs text-gray-500 mb-1">触发时机</div>
+              <el-select v-model="pulseTriggerMode" size="small" class="w-full">
+                <el-option label="周期判合格时 (推荐, 更稳)" value="cycle_ok" />
+                <el-option label="全部覆盖完成时 (更快, 不等结算)" value="all_covered" />
+              </el-select>
+            </div>
+            <div>
+              <div class="text-xs text-gray-500 mb-1">最短触发间隔 (毫秒)</div>
+              <el-input-number v-model="pulseCooldownMs" :min="0" :max="60000" :step="100" :precision="0" size="small" class="!w-full" controls-position="right" />
+            </div>
+          </div>
+          <div v-if="pulseTriggerEnabled" class="text-xs text-gray-500 mt-2 leading-relaxed">
+            <div v-if="pulseTriggerMode === 'cycle_ok'">
+              只有本周期判 <b>合格</b> 并落账才发脉冲；NG、超时强制结算都不发。
+            </div>
+            <div v-else>
+              本周期所有工序<b>首次全部覆盖</b>那一刻就发，不等收尾/结算。同一周期只发一次。
+            </div>
+            <div class="text-amber-300 mt-1">
+              必须在下面「绑定工位」选中对应工位，未绑定工位的设备不会被自动触发。
+            </div>
+          </div>
+        </div>
+
         <!-- HTTP -->
         <el-form-item v-if="form.protocol === 'http_poll'" label="URL">
           <el-input v-model="httpUrl" placeholder="http://192.168.0.200/api/weight" />
@@ -301,7 +400,7 @@
 
         <el-divider class="!my-2" />
 
-        <div class="grid grid-cols-2 gap-4">
+        <div v-if="!isPulseProtocol" class="grid grid-cols-2 gap-4">
           <el-form-item label="解析模式">
             <el-select v-model="form.parse_mode" class="w-full">
               <el-option label="直接取值" value="direct" />
@@ -319,7 +418,7 @@
           </el-form-item>
         </div>
 
-        <div class="grid grid-cols-2 gap-4">
+        <div v-if="!isPulseProtocol" class="grid grid-cols-2 gap-4">
           <el-form-item label="工位标识">
             <el-input v-model="form.station_id" placeholder="如 C（用于集群汇总）" />
           </el-form-item>
@@ -330,7 +429,13 @@
           </el-form-item>
         </div>
 
-        <el-form-item label="设备分组号">
+        <el-form-item v-if="isPulseProtocol" label="绑定工位" required>
+          <el-select v-model="form.channel_id" placeholder="选择工位" class="!w-full">
+            <el-option v-for="opt in channelOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item v-if="!isPulseProtocol" label="设备分组号">
           <el-input v-model="form.pairing_group" placeholder="如 scale-c；留空则按绑定工位自动配对" clearable>
             <template #append>
               <el-tooltip placement="top" :show-after="300">
@@ -496,7 +601,7 @@ import {
   getExternalDevices, createExternalDevice, updateExternalDevice,
   deleteExternalDevice, getExternalDeviceStatus, testExternalDevice,
   getExternalDeviceLogs, clearExternalDeviceLogs, simulateExternalDeviceData,
-  sendExternalDeviceCommand
+  sendExternalDeviceCommand, pulseExternalDevice
 } from '@/api/external_device'
 import { getWorkstations } from '@/api/detection'
 import { useSystemStore } from '@/store/useSystemStore'
@@ -585,14 +690,64 @@ const mockInterval = ref(0.5)
 const mockDecimals = ref(3)
 const mockLoop = ref(true)
 
+// Modbus 完成脉冲参数（PLC 控气阀）
+const PULSE_DEFAULTS = {
+  transport: 'tcp', slave_id: 1, target: 'coil',
+  address_mode: 'delta_m', address: 100,
+  on_value: 1, off_value: 0, pulse_ms: 300, timeout: 3,
+  trigger_enabled: true, trigger_mode: 'cycle_ok', cooldown_ms: 1000,
+}
+const pulseTransport = ref(PULSE_DEFAULTS.transport)
+const pulseSlaveId = ref(PULSE_DEFAULTS.slave_id)
+const pulseTarget = ref(PULSE_DEFAULTS.target)
+const pulseAddressMode = ref(PULSE_DEFAULTS.address_mode)
+const pulseAddress = ref(PULSE_DEFAULTS.address)
+const pulseOnValue = ref(PULSE_DEFAULTS.on_value)
+const pulseOffValue = ref(PULSE_DEFAULTS.off_value)
+const pulseMs = ref(PULSE_DEFAULTS.pulse_ms)
+const pulseTimeout = ref(PULSE_DEFAULTS.timeout)
+const pulseTriggerEnabled = ref(PULSE_DEFAULTS.trigger_enabled)
+const pulseTriggerMode = ref(PULSE_DEFAULTS.trigger_mode)
+const pulseCooldownMs = ref(PULSE_DEFAULTS.cooldown_ms)
+const pulsingDeviceId = ref(null)
+
 // 串口通用参数（所有 serial_* 协议共用）
 const serialBytesize = ref(8)
 const serialParity = ref('N')
 const serialStopbits = ref(1)
 
+const isPulseProtocol = computed(() => form.value.protocol === 'modbus_pulse')
+const isPulseTcp = computed(() => isPulseProtocol.value && pulseTransport.value === 'tcp')
+
 const isSerialProtocol = computed(() =>
   ['serial', 'serial_modbus_ascii', 'serial_continuous', 'serial_command'].includes(form.value.protocol)
+  || (isPulseProtocol.value && pulseTransport.value === 'rtu')
 )
+
+// 台达 DVP/ES3: M0 → Modbus 0 基地址 2048，即 M100 → 2148（现场以台达手册为准）
+const DELTA_M_COIL_BASE = 2048
+const resolvedPulseAddress = computed(() => {
+  const a = Number(pulseAddress.value) || 0
+  if (pulseAddressMode.value === 'delta_m') return DELTA_M_COIL_BASE + a
+  if (pulseAddressMode.value === 'doc1') {
+    if (a >= 40001 && a <= 49999) return a - 40001
+    if (a >= 30001 && a <= 39999) return a - 30001
+    return a >= 1 ? a - 1 : 0
+  }
+  return a
+})
+const pulsePreview = computed(() => {
+  const kind = pulseTarget.value === 'register' ? '寄存器' : '线圈'
+  const src = pulseAddressMode.value === 'delta_m' ? `M${pulseAddress.value}` : `#${pulseAddress.value}`
+  return `${kind} ${src} → Modbus 地址 ${resolvedPulseAddress.value}，${pulseOnValue.value} 保持 ${pulseMs.value}ms 后回 ${pulseOffValue.value}`
+})
+const pulseSummary = (dev) => {
+  const c = dev.protocol_config || {}
+  const mode = c.trigger_mode === 'all_covered' ? '全部覆盖时' : '判合格时'
+  const on = c.trigger_enabled === false ? '仅手动' : mode
+  const addr = c.address_mode === 'delta_m' ? `M${c.address ?? 0}` : `#${c.address ?? 0}`
+  return `${addr} · ${c.pulse_ms ?? 300}ms · ${on}`
+}
 
 const onProtocolChange = (val) => {
   if (val === 'serial_modbus_ascii') {
@@ -607,6 +762,11 @@ const onProtocolChange = (val) => {
   } else if (val === 'mock_weight') {
     form.value.parse_mode = 'direct'
     form.value.device_role = 'weight'
+  } else if (val === 'modbus_pulse') {
+    // 只写不读：解析/数据流向对它没意义，角色固定 PLC，端口给 Modbus TCP 默认 502
+    form.value.parse_mode = 'direct'
+    form.value.device_role = 'plc'
+    if (!form.value.port) form.value.port = 502
   }
 }
 
@@ -684,6 +844,23 @@ const buildFormData = () => {
       loop: mockLoop.value,
     }
   }
+  if (data.protocol === 'modbus_pulse') {
+    data.protocol_config = {
+      ...data.protocol_config,
+      transport: pulseTransport.value,
+      slave_id: pulseSlaveId.value,
+      target: pulseTarget.value,
+      address_mode: pulseAddressMode.value,
+      address: pulseAddress.value,
+      on_value: pulseOnValue.value,
+      off_value: pulseOffValue.value,
+      pulse_ms: pulseMs.value,
+      timeout: pulseTimeout.value,
+      trigger_enabled: pulseTriggerEnabled.value,
+      trigger_mode: pulseTriggerMode.value,
+      cooldown_ms: pulseCooldownMs.value,
+    }
+  }
   // 所有串口协议统一注入 bytesize/parity/stopbits
   if (isSerialProtocol.value) {
     data.protocol_config = {
@@ -730,6 +907,18 @@ const openAdd = () => {
   mockInterval.value = 0.5
   mockDecimals.value = 3
   mockLoop.value = true
+  pulseTransport.value = PULSE_DEFAULTS.transport
+  pulseSlaveId.value = PULSE_DEFAULTS.slave_id
+  pulseTarget.value = PULSE_DEFAULTS.target
+  pulseAddressMode.value = PULSE_DEFAULTS.address_mode
+  pulseAddress.value = PULSE_DEFAULTS.address
+  pulseOnValue.value = PULSE_DEFAULTS.on_value
+  pulseOffValue.value = PULSE_DEFAULTS.off_value
+  pulseMs.value = PULSE_DEFAULTS.pulse_ms
+  pulseTimeout.value = PULSE_DEFAULTS.timeout
+  pulseTriggerEnabled.value = PULSE_DEFAULTS.trigger_enabled
+  pulseTriggerMode.value = PULSE_DEFAULTS.trigger_mode
+  pulseCooldownMs.value = PULSE_DEFAULTS.cooldown_ms
   showDialog.value = true
 }
 
@@ -773,6 +962,20 @@ const editDev = (dev) => {
     mockInterval.value = pcfg.poll_interval ?? 0.5
     mockDecimals.value = pcfg.decimals ?? 3
     mockLoop.value = pcfg.loop ?? true
+  }
+  if (dev.protocol === 'modbus_pulse') {
+    pulseTransport.value = pcfg.transport ?? PULSE_DEFAULTS.transport
+    pulseSlaveId.value = pcfg.slave_id ?? PULSE_DEFAULTS.slave_id
+    pulseTarget.value = pcfg.target ?? PULSE_DEFAULTS.target
+    pulseAddressMode.value = pcfg.address_mode ?? PULSE_DEFAULTS.address_mode
+    pulseAddress.value = pcfg.address ?? PULSE_DEFAULTS.address
+    pulseOnValue.value = pcfg.on_value ?? PULSE_DEFAULTS.on_value
+    pulseOffValue.value = pcfg.off_value ?? PULSE_DEFAULTS.off_value
+    pulseMs.value = pcfg.pulse_ms ?? PULSE_DEFAULTS.pulse_ms
+    pulseTimeout.value = pcfg.timeout ?? PULSE_DEFAULTS.timeout
+    pulseTriggerEnabled.value = pcfg.trigger_enabled ?? PULSE_DEFAULTS.trigger_enabled
+    pulseTriggerMode.value = pcfg.trigger_mode ?? PULSE_DEFAULTS.trigger_mode
+    pulseCooldownMs.value = pcfg.cooldown_ms ?? PULSE_DEFAULTS.cooldown_ms
   }
   // 串口通用参数回填（所有 serial_* 协议）
   if (['serial', 'serial_modbus_ascii', 'serial_continuous', 'serial_command'].includes(dev.protocol)) {
@@ -828,6 +1031,26 @@ const applyPreset = (preset) => {
     form.value.device_role = 'sensor'
     form.value.protocol = 'tcp'
     form.value.parse_mode = 'direct'
+  } else if (preset === 'plc_pulse_delta') {
+    // 台达 DVP32ES3 默认联调参数: Modbus TCP / 502 / 从站 1 / 写线圈 M100 / 300ms
+    form.value.name = 'PLC 完成脉冲'
+    form.value.device_role = 'plc'
+    form.value.protocol = 'modbus_pulse'
+    form.value.parse_mode = 'direct'
+    form.value.ip = ''
+    form.value.port = 502
+    pulseTransport.value = 'tcp'
+    pulseSlaveId.value = 1
+    pulseTarget.value = 'coil'
+    pulseAddressMode.value = 'delta_m'
+    pulseAddress.value = 100
+    pulseOnValue.value = 1
+    pulseOffValue.value = 0
+    pulseMs.value = 300
+    pulseTimeout.value = 3
+    pulseTriggerEnabled.value = true
+    pulseTriggerMode.value = 'cycle_ok'
+    pulseCooldownMs.value = 1000
   }
 }
 
@@ -913,6 +1136,22 @@ const sendCmd = async (dev, command) => {
   } catch (e) {
     dbgErr('mes.external', '下发控制指令', e)
     ElMessage.error('指令下发失败: ' + (e.response?.data?.detail || e.message || '网络错误'))
+  }
+}
+
+const sendPulse = async (dev) => {
+  dbg('mes.external', '点击「试发脉冲」', `id=${dev?.id} name=${dev?.name || ''}`)
+  pulsingDeviceId.value = dev.id
+  try {
+    const { data } = await pulseExternalDevice(dev.id)
+    if (data.success) ElMessage.success(data.message || '脉冲已下发')
+    else ElMessage.error(data.message || '脉冲下发失败')
+    await Promise.all([refreshStatus(), loadLogs()])
+  } catch (e) {
+    dbgErr('mes.external', '试发脉冲', e)
+    ElMessage.error('脉冲下发失败: ' + (e.response?.data?.detail || e.message || '网络错误'))
+  } finally {
+    pulsingDeviceId.value = null
   }
 }
 

@@ -59,6 +59,8 @@ DEFAULT_SUMMARY_TEMPLATE = (
 DEFAULT_ALARM_TEMPLATE = DEFAULT_SUMMARY_TEMPLATE
 DEFAULT_TEST_MESSAGE = "【天军AI视觉】短信通道测试，收到此短信说明当前配置可发送。"
 SMS_OFFLINE_QUEUE_FILENAME = "sms_offline_queue.db"
+WORKSTATION_CONFIG_FILENAME = "workstation_config.json"
+MERGED_SUMMARY_STATE_SENTINEL = -1
 
 
 def validate_alarm_template(template: str) -> None:
@@ -155,6 +157,10 @@ class SmsServiceConfig:
     send_night_window: bool = False
     # 到点发送的数字口径：panel=监控面板当前会话（默认）；window=调度时间窗落库合计
     summary_count_source: Literal["panel", "window"] = "panel"
+    # 汇总组包：merged_detail=一条内分列全部参与工位；per_channel=旧版逐工位多条。
+    summary_send_mode: Literal["per_channel", "merged_detail"] = "merged_detail"
+    # 空元组表示全部启用工位；非空时只汇总指定的 0-based channel id。
+    summary_channel_ids: tuple[int, ...] = ()
 
     def validated_recipients(
         self, override: Sequence[str] | str | None = None
@@ -163,6 +169,152 @@ class SmsServiceConfig:
             override if override is not None else self.recipients
         )
         return parse_recipients(source)
+
+
+def _integer_rate(numerator: int, denominator: int) -> str:
+    """用整数百分比返回模板安全字符串；分母 0 固定为 ``"0"``。"""
+
+    if denominator <= 0:
+        return "0"
+    return str(int((max(0, numerator) * 100 / denominator) + 0.5))
+
+
+@dataclass(frozen=True)
+class SummaryChannelMetrics:
+    """统一汇总载荷中的单工位指标。"""
+
+    channel_id: int
+    ok_count: int = 0
+    ng_count: int = 0
+
+    @property
+    def total(self) -> int:
+        return max(0, int(self.ok_count)) + max(0, int(self.ng_count))
+
+    @property
+    def ok_rate(self) -> str:
+        return _integer_rate(int(self.ok_count), self.total)
+
+    @property
+    def ng_rate(self) -> str:
+        return _integer_rate(int(self.ng_count), self.total)
+
+    def to_context(self) -> dict[str, object]:
+        return {
+            "channel_id": int(self.channel_id),
+            "device_name": f"工位{int(self.channel_id) + 1}",
+            "ok_count": max(0, int(self.ok_count)),
+            "ng_count": max(0, int(self.ng_count)),
+            "total": self.total,
+            "ok_rate": self.ok_rate,
+            "ng_rate": self.ng_rate,
+        }
+
+
+@dataclass(frozen=True)
+class SummaryPayload:
+    """Provider 无关的多工位汇总载荷、正文与命名变量。"""
+
+    window_start: datetime
+    window_end: datetime
+    channels: tuple[SummaryChannelMetrics, ...]
+    is_test_snapshot: bool = False
+
+    @property
+    def total_ok(self) -> int:
+        return sum(max(0, int(item.ok_count)) for item in self.channels)
+
+    @property
+    def total_ng(self) -> int:
+        return sum(max(0, int(item.ng_count)) for item in self.channels)
+
+    @property
+    def total(self) -> int:
+        return self.total_ok + self.total_ng
+
+    @property
+    def ok_rate(self) -> str:
+        return _integer_rate(self.total_ok, self.total)
+
+    @property
+    def ng_rate(self) -> str:
+        return _integer_rate(self.total_ng, self.total)
+
+    @property
+    def time_range(self) -> str:
+        return (
+            f"{self.window_start.strftime('%Y-%m-%d %H:%M')}~"
+            f"{self.window_end.strftime('%Y-%m-%d %H:%M')}"
+        )
+
+    @property
+    def device_name(self) -> str:
+        return "+".join(f"工位{item.channel_id + 1}" for item in self.channels)
+
+    def template_params(self) -> dict[str, str]:
+        params: dict[str, str] = {
+            "time_range": self.time_range,
+            "device_name": self.device_name,
+        }
+        for item in self.channels:
+            prefix = f"ch{int(item.channel_id) + 1}"
+            params.update(
+                {
+                    f"{prefix}_ok": str(max(0, int(item.ok_count))),
+                    f"{prefix}_ng": str(max(0, int(item.ng_count))),
+                    f"{prefix}_total": str(item.total),
+                    f"{prefix}_ok_rate": item.ok_rate,
+                    f"{prefix}_ng_rate": item.ng_rate,
+                }
+            )
+        params.update(
+            {
+                "total_ok": str(self.total_ok),
+                "total_ng": str(self.total_ng),
+                "total": str(self.total),
+                "ok_rate": self.ok_rate,
+                "ng_rate": self.ng_rate,
+            }
+        )
+        return params
+
+    def to_context(self, *, include_template_params: bool = True) -> dict[str, object]:
+        context: dict[str, object] = {
+            "device_name": self.device_name,
+            "time_range": self.time_range,
+            "channels": [item.to_context() for item in self.channels],
+            "total_ok": self.total_ok,
+            "total_ng": self.total_ng,
+            "total": self.total,
+            "ok_rate": self.ok_rate,
+            "ng_rate": self.ng_rate,
+            # 兼容 WxPusher 摘要和 Generic HTTP 既有总数字段。
+            "ok_count": self.total_ok,
+            "ng_count": self.total_ng,
+            "window_id": summary_window_id(self.window_start, self.window_end),
+            "event_time": self.window_end.strftime("%Y-%m-%d %H:%M:%S"),
+            "is_test_snapshot": self.is_test_snapshot,
+        }
+        if len(self.channels) == 1:
+            context["channel_id"] = self.channels[0].channel_id
+        if include_template_params:
+            context["template_params"] = self.template_params()
+        return context
+
+    def render_message(self) -> str:
+        details = "；".join(
+            f"工位{item.channel_id + 1} OK{max(0, int(item.ok_count))} "
+            f"NG{max(0, int(item.ng_count))} 合格{item.ok_rate}% NG率{item.ng_rate}%"
+            for item in self.channels
+        )
+        total = (
+            f"；合计 OK{self.total_ok} NG{self.total_ng} "
+            f"合格{self.ok_rate}% NG率{self.ng_rate}%"
+            if len(self.channels) > 1
+            else ""
+        )
+        prefix = "【非完整窗口】" if self.is_test_snapshot else "【天军AI视觉】"
+        return f"{prefix}{self.time_range} {details}{total}".strip()
 
 
 @dataclass(frozen=True)
@@ -232,6 +384,7 @@ class SmsService:
             [datetime, datetime], dict[int, SmsSummaryCounts]
         ] = load_completed_cycle_counts,
         summary_poll_seconds: float = 60.0,
+        workstation_config_path: str | Path | None = None,
     ) -> None:
         self.config = config
         self._logger = logger or (lambda _message: None)
@@ -241,6 +394,11 @@ class SmsService:
         self._wall_clock = wall_clock
         self._summary_reader = summary_reader
         self._summary_poll_seconds = max(0.1, float(summary_poll_seconds))
+        self._workstation_config_path = (
+            Path(workstation_config_path)
+            if workstation_config_path
+            else Path(DATA_DIR) / WORKSTATION_CONFIG_FILENAME
+        )
         self._offline_queue_path = (
             Path(offline_queue_path)
             if offline_queue_path
@@ -384,8 +542,19 @@ class SmsService:
                  ``put_nowait``，Provider I/O 留在发送 worker。
         """
 
-        device_name = f"工位{int(channel_id) + 1}"
-        time_range = self._format_time_range(window_start, window_end)
+        payload = SummaryPayload(
+            window_start=window_start,
+            window_end=window_end,
+            channels=(
+                SummaryChannelMetrics(
+                    channel_id=int(channel_id),
+                    ok_count=int(ok_count),
+                    ng_count=int(ng_count),
+                ),
+            ),
+        )
+        device_name = payload.device_name
+        time_range = payload.time_range
         message = (
             f"{device_name}在{time_range}内合格{int(ok_count)}次，"
             f"不合格{int(ng_count)}次，请关注生产状况。"
@@ -395,18 +564,27 @@ class SmsService:
             event_name="12小时生产汇总",
             message=message,
             recipients=None,
-            context={
-                "channel_id": int(channel_id),
-                "device_name": device_name,
-                "time_range": time_range,
-                "ok_count": int(ok_count),
-                "ng_count": int(ng_count),
-                "window_id": summary_window_id(window_start, window_end),
-                "event_time": window_end.strftime("%Y-%m-%d %H:%M:%S"),
-            },
+            # 旧 per_channel 的阿里云三变量 fallback 保持不变。
+            context=payload.to_context(include_template_params=False),
             callback=callback,
             bypass_enabled=False,
             # 每个窗口只会由持久化 window_id 入队一次，不再叠加即时告警冷却。
+            bypass_cooldown=True,
+        )
+
+    def queue_merged_summary(self, payload: SummaryPayload) -> AlarmQueueReceipt:
+        """把 Provider 无关的多工位载荷作为单个任务入队。"""
+
+        context = payload.to_context()
+        context["use_rendered_summary_message"] = True
+        return self._queue_message(
+            event_id="summary_12h",
+            event_name="12小时生产汇总",
+            message=payload.render_message(),
+            recipients=None,
+            context=context,
+            callback=None,
+            bypass_enabled=False,
             bypass_cooldown=True,
         )
 
@@ -679,14 +857,12 @@ class SmsService:
                         snap.range_end,
                     )
                     for channel_id, snap in snapshots.items()
-                    if snap.counts.total > 0
                 }
             else:
                 counts_by_channel = self._summary_reader(window_start, window_end)
                 channel_payloads = {
                     int(channel_id): (counts, window_start, window_end)
                     for channel_id, counts in counts_by_channel.items()
-                    if counts.total > 0
                 }
         except Exception as exc:
             self._logger(
@@ -698,32 +874,71 @@ class SmsService:
         queued = (
             set(state.queued_channels) if state.queued_window_id == window_id else set()
         )
-        for channel_id in sorted(channel_payloads):
-            if channel_id in queued:
-                continue
-            counts, msg_start, msg_end = channel_payloads[channel_id]
-            receipt = self.queue_summary_sms(
-                channel_id=channel_id,
-                window_start=msg_start,
-                window_end=msg_end,
-                ok_count=counts.ok_count,
-                ng_count=counts.ng_count,
+        effective_mode = self.config.summary_send_mode
+        if queued:
+            # 热切换配置时继续完成已经开始的旧模式，避免同窗混发或重发。
+            effective_mode = (
+                "merged_detail"
+                if MERGED_SUMMARY_STATE_SENTINEL in queued
+                else "per_channel"
             )
-            if not receipt.queued:
-                self._logger(
-                    f"短信汇总窗口 {window_id} 工位{channel_id + 1} 未入队："
-                    f"{receipt.error_code or receipt.status}；稍后重试"
+
+        if effective_mode == "merged_detail":
+            payload = self._build_summary_payload(
+                channel_payloads,
+                default_start=window_start,
+                default_end=window_end,
+            )
+            if payload.total > 0 and MERGED_SUMMARY_STATE_SENTINEL not in queued:
+                receipt = self.queue_merged_summary(payload)
+                if not receipt.queued:
+                    self._logger(
+                        f"短信汇总窗口 {window_id} 合并消息未入队："
+                        f"{receipt.error_code or receipt.status}；稍后重试"
+                    )
+                    return False
+                queued = {MERGED_SUMMARY_STATE_SENTINEL}
+                partial = replace(
+                    state,
+                    queued_window_id=window_id,
+                    queued_channels=(MERGED_SUMMARY_STATE_SENTINEL,),
                 )
-                return False
-            queued.add(channel_id)
-            partial = replace(
-                state,
-                queued_window_id=window_id,
-                queued_channels=tuple(sorted(queued)),
-            )
-            self._summary_store.save(partial)
-            self._summary_state = partial
-            state = partial
+                self._summary_store.save(partial)
+                self._summary_state = partial
+                state = partial
+        else:
+            channel_payloads = {
+                channel_id: item
+                for channel_id, item in channel_payloads.items()
+                if item[0].total > 0
+                and channel_id in self._resolve_summary_channel_ids(channel_payloads)
+            }
+            for channel_id in sorted(channel_payloads):
+                if channel_id in queued:
+                    continue
+                counts, msg_start, msg_end = channel_payloads[channel_id]
+                receipt = self.queue_summary_sms(
+                    channel_id=channel_id,
+                    window_start=msg_start,
+                    window_end=msg_end,
+                    ok_count=counts.ok_count,
+                    ng_count=counts.ng_count,
+                )
+                if not receipt.queued:
+                    self._logger(
+                        f"短信汇总窗口 {window_id} 工位{channel_id + 1} 未入队："
+                        f"{receipt.error_code or receipt.status}；稍后重试"
+                    )
+                    return False
+                queued.add(channel_id)
+                partial = replace(
+                    state,
+                    queued_window_id=window_id,
+                    queued_channels=tuple(sorted(queued)),
+                )
+                self._summary_store.save(partial)
+                self._summary_state = partial
+                state = partial
 
         finalized = SmsSummaryState(
             window_start=next_window_start or window_end,
@@ -731,13 +946,18 @@ class SmsService:
         )
         self._summary_store.save(finalized)
         self._summary_state = finalized
-        if channel_payloads:
+        sent_count = (
+            1
+            if effective_mode == "merged_detail" and payload.total > 0
+            else len(channel_payloads)
+        )
+        if sent_count:
             source_label = (
                 "面板会话" if self.config.summary_count_source == "panel" else "时间窗"
             )
             self._logger(
                 f"短信汇总窗口 {window_id} 已完成（{source_label}），"
-                f"{len(channel_payloads)} 个工位进入后台队列"
+                f"{sent_count} 条消息进入后台队列（{effective_mode}）"
             )
         else:
             self._logger(f"短信汇总窗口 {window_id} 无已结算周期，不发送")
@@ -751,21 +971,11 @@ class SmsService:
             base_start = self._ensure_summary_state_locked().window_start
         if self.config.summary_count_source == "panel":
             snapshots = load_panel_session_snapshots(as_of=now)
-            non_empty = sorted(
-                (
-                    (int(channel_id), snap)
-                    for channel_id, snap in snapshots.items()
-                    if snap.counts.total > 0
-                ),
-                key=lambda item: item[0],
-            )
-            if non_empty:
-                channel_id, snap = non_empty[0]
-                counts = snap.counts
-                range_start, range_end = snap.range_start, snap.range_end
-            else:
-                channel_id, counts = 0, SmsSummaryCounts()
-                range_start, range_end = now, now
+            channel_payloads = {
+                int(channel_id): (snap.counts, snap.range_start, snap.range_end)
+                for channel_id, snap in snapshots.items()
+            }
+            default_start, default_end = now, now
         else:
             if self.config.summary_schedule_mode == "daily_shift":
                 window_start = base_start
@@ -776,31 +986,90 @@ class SmsService:
                     seconds=elapsed_windows * SUMMARY_WINDOW_SECONDS
                 )
             counts_by_channel = self._summary_reader(window_start, now)
-            non_empty = sorted(
-                (
-                    (int(channel_id), counts)
-                    for channel_id, counts in counts_by_channel.items()
-                    if counts.total > 0
-                ),
-                key=lambda item: item[0],
-            )
-            channel_id, counts = non_empty[0] if non_empty else (0, SmsSummaryCounts())
-            range_start, range_end = window_start, now
-        device_name = f"工位{channel_id + 1}"
-        time_range = self._format_time_range(range_start, range_end)
-        message = (
-            f"【非完整窗口】{device_name} {time_range} "
-            f"OK{counts.ok_count} NG{counts.ng_count}"
+            channel_payloads = {
+                int(channel_id): (counts, window_start, now)
+                for channel_id, counts in counts_by_channel.items()
+            }
+            default_start, default_end = window_start, now
+        payload = self._build_summary_payload(
+            channel_payloads,
+            default_start=default_start,
+            default_end=default_end,
+            is_test_snapshot=True,
         )
-        return message, {
-            "channel_id": channel_id,
-            "device_name": device_name,
-            "time_range": time_range,
-            "ok_count": counts.ok_count,
-            "ng_count": counts.ng_count,
-            "event_time": now.strftime("%Y-%m-%d %H:%M:%S"),
-            "is_test_snapshot": True,
-        }
+        if self.config.summary_send_mode == "merged_detail":
+            context = payload.to_context()
+            context["use_rendered_summary_message"] = True
+            return payload.render_message(), context
+
+        non_empty = [item for item in payload.channels if item.total > 0]
+        channel = non_empty[0] if non_empty else payload.channels[0]
+        source = channel_payloads.get(channel.channel_id)
+        start, end = (source[1], source[2]) if source else (default_start, default_end)
+        single = SummaryPayload(
+            window_start=start,
+            window_end=end,
+            channels=(channel,),
+            is_test_snapshot=True,
+        )
+        return single.render_message(), single.to_context(include_template_params=False)
+
+    def _build_summary_payload(
+        self,
+        channel_payloads: Mapping[int, tuple[SmsSummaryCounts, datetime, datetime]],
+        *,
+        default_start: datetime,
+        default_end: datetime,
+        is_test_snapshot: bool = False,
+    ) -> SummaryPayload:
+        channel_ids = self._resolve_summary_channel_ids(channel_payloads)
+        metrics = tuple(
+            SummaryChannelMetrics(
+                channel_id=channel_id,
+                ok_count=(channel_payloads.get(channel_id) or (SmsSummaryCounts(),))[
+                    0
+                ].ok_count,
+                ng_count=(channel_payloads.get(channel_id) or (SmsSummaryCounts(),))[
+                    0
+                ].ng_count,
+            )
+            for channel_id in channel_ids
+        )
+        starts = [
+            channel_payloads[channel_id][1]
+            for channel_id in channel_ids
+            if channel_id in channel_payloads
+        ]
+        ends = [
+            channel_payloads[channel_id][2]
+            for channel_id in channel_ids
+            if channel_id in channel_payloads
+        ]
+        return SummaryPayload(
+            window_start=min(starts) if starts else default_start,
+            window_end=max(ends) if ends else default_end,
+            channels=metrics,
+            is_test_snapshot=is_test_snapshot,
+        )
+
+    def _resolve_summary_channel_ids(
+        self, channel_payloads: Mapping[int, object]
+    ) -> tuple[int, ...]:
+        if self.config.summary_channel_ids:
+            return tuple(
+                sorted(set(int(value) for value in self.config.summary_channel_ids))
+            )
+
+        try:
+            raw = json.loads(self._workstation_config_path.read_text(encoding="utf-8"))
+            count = int(raw.get("channel_count", 0)) if isinstance(raw, dict) else 0
+            if 0 < count <= 64:
+                return tuple(range(count))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            # 工位配置缺失/损坏不能拖垮短信调度；回退到实际统计 key。
+            pass
+        channel_ids = {int(value) for value in channel_payloads}
+        return tuple(sorted(channel_ids or {0}))
 
     def _ensure_summary_state_locked(self) -> SmsSummaryState:
         """在持有 ``_summary_lock`` 时惰性加载或创建滚动窗口水位。"""
@@ -1222,6 +1491,9 @@ class SmsService:
         if safe_context.get("is_test_snapshot") is True:
             # 测试快照必须明确标注“非完整窗口”，且避免旧告警模板重复包裹超长。
             template = "{message}"
+        elif safe_context.get("use_rendered_summary_message") is True:
+            # merged_detail 的正文由统一 SummaryPayload 渲染，内容式 Provider 共用。
+            template = "{message}"
         elif str(event_id) == "summary_12h" and template == LEGACY_ALARM_TEMPLATE:
             # 旧 sms_config.json 仍可读；运行时自动改用可在 AT 单条 UCS2 内发送的模板。
             template = DEFAULT_SUMMARY_TEMPLATE
@@ -1298,5 +1570,7 @@ __all__ = [
     "SmsBatchResult",
     "SmsService",
     "SmsServiceConfig",
+    "SummaryChannelMetrics",
+    "SummaryPayload",
     "validate_alarm_template",
 ]

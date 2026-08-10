@@ -23,6 +23,7 @@ from backend.services.sms_providers.wxpusher_provider import (
 )
 from backend.services.sms_service import SmsServiceConfig, validate_alarm_template
 from backend.services.sms_summary import ALLOWED_SUMMARY_COUNT_SOURCES, ALLOWED_SUMMARY_SCHEDULE_MODES
+from backend.services.sms_summary import ALLOWED_SUMMARY_SEND_MODES
 from backend.services.sms_utils import choose_encoding, parse_recipients
 
 
@@ -101,6 +102,8 @@ def config_to_dict(config: SmsServiceConfig) -> dict[str, Any]:
         "shift_end_hour": config.shift_end_hour,
         "send_night_window": config.send_night_window,
         "summary_count_source": config.summary_count_source,
+        "summary_send_mode": config.summary_send_mode,
+        "summary_channel_ids": list(config.summary_channel_ids),
     }
 
 
@@ -215,6 +218,9 @@ def config_from_dict(data: dict[str, Any]) -> SmsServiceConfig:
     ).strip() or "ap-guangzhou"
 
     raw_backoff = data.get("retry_backoff_seconds")
+    summary_channel_ids = _parse_summary_channel_ids(
+        data.get("summary_channel_ids", [])
+    )
     retry_count = data.get("retry_count", data.get("retries", 3))
     default_retry_delay = (
         raw_backoff[0]
@@ -286,6 +292,10 @@ def config_from_dict(data: dict[str, Any]) -> SmsServiceConfig:
             summary_count_source=str(
                 data.get("summary_count_source", "panel")
             ).strip(),
+            summary_send_mode=str(
+                data.get("summary_send_mode", "merged_detail")
+            ).strip(),
+            summary_channel_ids=summary_channel_ids,
         )
     except (TypeError, ValueError) as exc:
         raise SmsConfigError("短信配置包含非法数值") from exc
@@ -408,6 +418,12 @@ def _validate_config(config: SmsServiceConfig) -> None:
         raise SmsConfigError(
             "汇总数字口径仅支持 panel（监控面板）或 window（时间窗落库）"
         )
+    if config.summary_send_mode not in ALLOWED_SUMMARY_SEND_MODES:
+        raise SmsConfigError("汇总发送模式仅支持 per_channel 或 merged_detail")
+    if len(config.summary_channel_ids) > 64 or any(
+        channel_id < 0 or channel_id >= 64 for channel_id in config.summary_channel_ids
+    ):
+        raise SmsConfigError("汇总工位 ID 必须是 0~63，最多 64 个")
     if not 0 <= config.shift_start_hour <= 23:
         raise SmsConfigError("班次开始小时必须在 0~23")
     if not 0 <= config.shift_end_hour <= 23:
@@ -511,6 +527,25 @@ def _parse_wxpusher_topic_ids(value: object) -> tuple[int, ...]:
             topic_ids.append(topic_id)
             seen.add(topic_id)
     return tuple(topic_ids)
+
+
+def _parse_summary_channel_ids(value: object) -> tuple[int, ...]:
+    if value in (None, "", []):
+        return ()
+    if not isinstance(value, (list, tuple)):
+        raise SmsConfigError("summary_channel_ids 必须是整数数组")
+    normalized: set[int] = set()
+    for item in value:
+        if isinstance(item, bool):
+            raise SmsConfigError("汇总工位 ID 必须是整数")
+        try:
+            channel_id = int(item)
+        except (TypeError, ValueError) as exc:
+            raise SmsConfigError("汇总工位 ID 必须是整数") from exc
+        if str(item).strip() != str(channel_id):
+            raise SmsConfigError("汇总工位 ID 必须是整数")
+        normalized.add(channel_id)
+    return tuple(sorted(normalized))
 
 
 class SmsConfigStore:

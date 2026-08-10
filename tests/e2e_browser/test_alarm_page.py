@@ -75,6 +75,21 @@ def _sms_default_config() -> dict:
             "timeout_seconds": 10,
             "verify_ssl": True,
         },
+        "aliyun": {
+            "access_key_id": "",
+            "access_key_secret": "",
+            "sign_name": "",
+            "template_code": "",
+            "region": "cn-hangzhou",
+        },
+        "tencent": {
+            "secret_id": "",
+            "secret_key": "",
+            "sdk_app_id": "",
+            "sign_name": "",
+            "template_id": "",
+            "region": "ap-guangzhou",
+        },
         "phone_numbers": [],
         "retry_count": 3,
         "retry_backoff_seconds": [1, 3, 5],
@@ -87,6 +102,9 @@ def _sms_default_config() -> dict:
         "shift_start_hour": 8,
         "shift_end_hour": 20,
         "send_night_window": False,
+        "summary_count_source": "panel",
+        "summary_send_mode": "merged_detail",
+        "summary_channel_ids": [],
     }
 
 
@@ -149,6 +167,17 @@ def _mock_sms_test_receipts(page) -> None:
         )
 
     page.route("**/api/v1/sms/test", handler)
+
+
+def _mock_workstations(page, channel_count: int = 2) -> None:
+    def handler(route):
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({"channel_count": channel_count}),
+        )
+
+    page.route("**/api/v1/workstations/", handler)
 
 
 def _alarm_config_path() -> Path:
@@ -225,6 +254,7 @@ def test_sms_at_save_refresh_roundtrip_and_tower_isolation(page, base_url, api_h
     reset = api_helper.put("/api/v1/sms/config", json=legacy_compatible)
     reset.raise_for_status()
     _mock_sms_port(page)
+    _mock_workstations(page, channel_count=2)
 
     try:
         alarm_page = AlarmPage(page, base_url).goto()
@@ -237,6 +267,8 @@ def test_sms_at_save_refresh_roundtrip_and_tower_isolation(page, base_url, api_h
         alarm_page.refresh_sms_ports()
         assert alarm_page.wait_message("检测到 1 个短信模块候选串口")
         alarm_page.select_sms_port("COM_E2E")
+        alarm_page.select_sms_summary_send_mode("merged_detail")
+        alarm_page.select_sms_summary_channels([0, 1])
         alarm_page.fill_sms_recipients("138 0013 8000；+86-139-0013-9000\n13800138000")
         alarm_page.fill_sms_template(
             "【天军AI视觉】{device_name} {time_range} 合格{ok_count} NG{ng_count}"
@@ -259,6 +291,8 @@ def test_sms_at_save_refresh_roundtrip_and_tower_isolation(page, base_url, api_h
         assert saved["cooldown_seconds"] == 321, "隐藏的旧冷却字段应原样回传兼容"
         assert saved["retry_count"] == 2
         assert saved["retry_backoff_seconds"] == [2.0, 4.0]
+        assert saved["summary_send_mode"] == "merged_detail"
+        assert saved["summary_channel_ids"] == [0, 1]
 
         screenshot = os.environ.get("E2E_SMS_SCREENSHOT")
         if screenshot:
@@ -272,6 +306,9 @@ def test_sms_at_save_refresh_roundtrip_and_tower_isolation(page, base_url, api_h
         assert "COM_E2E" in alarm_page.sms_port_text()
         assert alarm_page.sms_recipients_value() == "13800138000\n+8613900139000"
         assert alarm_page.sms_template_value() == saved["template"]
+        assert alarm_page.sms_summary_send_mode() == "merged_detail"
+        assert alarm_page.sms_summary_channel_selected(0)
+        assert alarm_page.sms_summary_channel_selected(1)
         alarm_page.open_sms_advanced()
         assert alarm_page.legacy_instant_controls_hidden()
         assert alarm_page.sms_retries_value() == "2"
@@ -422,6 +459,72 @@ def test_sms_wxpusher_save_refresh_roundtrip_without_phone_numbers(
         assert alarm_page.sms_wx_fields_visible()
         assert alarm_page.sms_wx_uids_value() == "UID_e2e_1\nUID_e2e_2"
         assert _file_sha256(alarm_path) == alarm_sha_before
+    finally:
+        restore = api_helper.put("/api/v1/sms/config", json=original.json())
+        restore.raise_for_status()
+
+
+def test_sms_aliyun_merged_detail_save_get_reload_roundtrip(
+    page, base_url, api_helper
+):
+    page.set_viewport_size({"width": 1600, "height": 1400})
+    original = api_helper.get("/api/v1/sms/config")
+    original.raise_for_status()
+    reset = api_helper.put("/api/v1/sms/config", json=_sms_default_config())
+    reset.raise_for_status()
+    _mock_workstations(page, channel_count=2)
+
+    try:
+        alarm_page = AlarmPage(page, base_url).goto()
+        assert alarm_page.wait_sms_panel()
+        alarm_page.select_sms_provider("aliyun")
+        assert alarm_page.sms_provider() == "aliyun"
+        assert alarm_page.sms_aliyun_fields_visible()
+        assert alarm_page.has_sms_aliyun_merged_template_guidance()
+
+        alarm_page.select_sms_summary_send_mode("merged_detail")
+        alarm_page.select_sms_summary_channels([0, 1])
+        alarm_page.fill_sms_aliyun_credentials(
+            "LTAI_E2E_FAKE_AK",
+            "E2E_FAKE_SECRET",
+            "天军视觉",
+            "SMS_E2E_MERGED_001",
+        )
+        alarm_page.fill_sms_recipients("13800138000")
+        alarm_page.set_sms_enabled(True).save_sms_config()
+        assert alarm_page.wait_message("短信配置已保存并回读确认", timeout_ms=8000)
+
+        persisted = api_helper.get("/api/v1/sms/config")
+        persisted.raise_for_status()
+        saved = persisted.json()
+        assert saved["enabled"] is True
+        assert saved["provider"] == "aliyun"
+        assert saved["summary_send_mode"] == "merged_detail"
+        assert saved["summary_channel_ids"] == [0, 1]
+        assert saved["phone_numbers"] == ["13800138000"]
+        assert saved["aliyun"] == {
+            "access_key_id": "LTAI_E2E_FAKE_AK",
+            "access_key_secret": "E2E_FAKE_SECRET",
+            "sign_name": "天军视觉",
+            "template_code": "SMS_E2E_MERGED_001",
+            "region": "cn-hangzhou",
+        }
+
+        page.reload(wait_until="domcontentloaded")
+        assert alarm_page.wait_sms_panel()
+        assert alarm_page.wait_sms_enabled(True)
+        assert alarm_page.sms_provider() == "aliyun"
+        assert alarm_page.sms_aliyun_fields_visible()
+        assert alarm_page.sms_summary_send_mode() == "merged_detail"
+        assert alarm_page.sms_summary_channel_selected(0)
+        assert alarm_page.sms_summary_channel_selected(1)
+        assert alarm_page.sms_aliyun_values() == {
+            "access_key_id": "LTAI_E2E_FAKE_AK",
+            "access_key_secret": "E2E_FAKE_SECRET",
+            "sign_name": "天军视觉",
+            "template_code": "SMS_E2E_MERGED_001",
+        }
+        assert alarm_page.has_sms_aliyun_merged_template_guidance()
     finally:
         restore = api_helper.put("/api/v1/sms/config", json=original.json())
         restore.raise_for_status()

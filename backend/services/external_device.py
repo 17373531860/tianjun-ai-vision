@@ -9,6 +9,7 @@
 - serial_continuous: 串口连续接收模式（设备主动推送数据，被动接收）
 - serial_command: 串口指令应答模式（发 ASCII 指令 R 读数 / T 去皮 / Z 置零，适配安衡等台秤）
 - http_poll: HTTP 轮询外部 API
+- modbus_pulse: Modbus 写线圈/寄存器「完成脉冲」（唯一只写不读的协议，给 PLC 控气阀用）
 
 数据流向:
 1. 设备发数据 → 协议驱动收到原始数据
@@ -30,6 +31,7 @@ from backend.models.mes_models import ExternalDevice, ExternalDeviceLog
 from backend.services.external_device_models import DeviceConnection
 from backend.services.external_device_protocols import ExternalDeviceProtocolsMixin
 from backend.services.external_device_pipeline import ExternalDevicePipelineMixin
+from backend.services.external_device_pulse import ExternalDevicePulseMixin
 from backend.services.external_device_test import ExternalDeviceTestMixin
 
 logger = logging.getLogger(__name__)
@@ -38,6 +40,7 @@ logger = logging.getLogger(__name__)
 class ExternalDeviceService(
     ExternalDeviceProtocolsMixin,
     ExternalDevicePipelineMixin,
+    ExternalDevicePulseMixin,
     ExternalDeviceTestMixin,
 ):
     """外设服务核心 (设备管理/启停/状态查询)。
@@ -149,6 +152,9 @@ class ExternalDeviceService(
                                   if conn.last_data_time else None,
                 "last_parsed": conn.last_parsed,
                 "last_error": conn.last_error,
+                # modbus_pulse 专属: 累计发了几次脉冲 + 最近一次结果(界面卡片展示)
+                "pulse_count": conn.pulse_count,
+                "last_pulse_result": conn.last_pulse_result,
             })
         return results
 
@@ -281,6 +287,9 @@ class ExternalDeviceService(
                                              protocol_config or {}, timeout)
         elif protocol == "http_poll":
             return self._test_http(protocol_config or {}, timeout)
+        elif protocol == "modbus_pulse":
+            return self._test_modbus_pulse(ip, port, serial_port, serial_baud,
+                                           protocol_config or {}, timeout)
         return {"success": False, "message": f"未知协议: {protocol}"}
 
     def simulate_raw_data(self, raw: str, device_id: int = None, barcode: str = None,

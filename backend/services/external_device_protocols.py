@@ -49,6 +49,9 @@ class ExternalDeviceProtocolsMixin:
                     self._http_poll_loop(conn)
                 elif conn.protocol == "mock_weight":
                     self._mock_weight_loop(conn)
+                elif conn.protocol == "modbus_pulse":
+                    # 只写不读: 常驻等「完成脉冲」请求, 实现见 external_device_pulse.py
+                    self._modbus_pulse_loop(conn)
                 else:
                     logger.error("[ExtDev] %s 未知协议: %s", conn.name, conn.protocol)
                     break

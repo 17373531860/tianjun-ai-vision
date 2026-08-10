@@ -555,6 +555,7 @@ class _PerItemSession:
         'judged_ok',                    # 判定层暂存的合格结果 (True=绿灯待取走, False=红灯待补)
         'judge_done_first_at',          # all_done 判定: 首次全完成时刻 (确认保持秒数用)
         'judge_label_consec',           # label 判定: 判定标签连续出现帧数
+        'plc_pulse_fired',              # 本周期是否已发过 PLC 完成脉冲 (all_covered 边沿锁)
     )
 
     def __init__(self):
@@ -578,6 +579,7 @@ class _PerItemSession:
         self.judged_ok = False
         self.judge_done_first_at: Optional[float] = None
         self.judge_label_consec = 0
+        self.plc_pulse_fired = False
 
     def reset_after_cycle(self):
         self.cycle_active = False
@@ -599,6 +601,7 @@ class _PerItemSession:
         self.judged_ok = False
         self.judge_done_first_at = None
         self.judge_label_consec = 0
+        self.plc_pulse_fired = False
 
 
 # ==================== 主 Mixin ====================
@@ -1001,6 +1004,15 @@ class PerItemMixin:
         # 否则工人放工件不操作时永远 idle=0, 触发不了 idle_timeout 兜底.
         if any_action_this_frame:
             sess.last_activity_time = current_time
+
+        # ──── 3.5 PLC 完成脉冲 (触发模式 A: all_covered) ────
+        # 本周期所有 per_item 步骤"首次全部 completed"的那一帧发一次, 不等结算 —— 给
+        # 需要"打完立刻吹气"的现场用。同周期边沿锁, 冷却由外设 cooldown_ms 再兜一道。
+        # 只对配了 trigger_mode='all_covered' 的外设生效; 没配就是纯 no-op。
+        if (not sess.plc_pulse_fired and self._per_item_steps
+                and all(s.completed for s in self._per_item_steps)):
+            sess.plc_pulse_fired = True
+            self._per_item_notify_plc_pulse('all_covered')
 
         # v3.10.2+ 手动结算模式: 所有自动结算路径全部禁用, 只能靠 manual_settle API 结算
         disable_auto_settle = cfg.get('disable_auto_settle', False)
@@ -1473,6 +1485,30 @@ class PerItemMixin:
         reason = '; '.join(ng_reasons) or '逐件覆盖未完成'
         return ok, reason, ng_details
 
+    # ──── PLC 完成脉冲 (外部设备 modbus_pulse) ────
+    def _per_item_notify_plc_pulse(self, trigger_mode: str):
+        """给绑定本工位的「Modbus 完成脉冲」外设排一次脉冲 (PLC 控气阀)。
+
+        本方法跑在推理线程上, 所以只允许"入队"这一个动作: 外设服务把请求塞进设备
+        线程的队列就返回, 真正的 Modbus 写在外设线程执行。PLC 断线/网络不通只落到
+        该设备的 last_error, 不拖帧、不抛穿热路径 (整体再包一层 try 兜底)。
+
+        trigger_mode: 'cycle_ok' (周期判 OK 落账) / 'all_covered' (首次全覆盖).
+        只有外设自己配了同名 trigger_mode 才会响应, 没配外设时是纯 no-op。
+        """
+        try:
+            from backend.services.external_device import get_external_device_service
+            fired = get_external_device_service().notify_per_item_complete(
+                self.channel_id, trigger_mode)
+            if fired:
+                print(f"[per_item] PLC 完成脉冲已排队 (模式={trigger_mode}, 设备数={fired})")
+                if debug_center.is_on("backend.per_item"):
+                    debug_center.dbg(
+                        "backend.per_item", "PLC 完成脉冲",
+                        f"channel={self.channel_id} 触发模式={trigger_mode} 排队设备数={fired}")
+        except Exception as e:
+            print(f"[per_item] PLC 完成脉冲下发失败 (模式={trigger_mode}): {e}")
+
     def _per_item_settle_cycle(self, current_time: float):
         """收尾标签稳定出现 → 检查所有 per_item 步骤完成情况 → OK/NG"""
         sess = self._per_item_session
@@ -1490,6 +1526,9 @@ class PerItemMixin:
                 self._trigger_event(1, '逐件覆盖全部完成')
             except Exception as _e:
                 print(f"[per_item] _trigger_event(1) 失败: {_e}")
+            # PLC 完成脉冲 (触发模式 B: cycle_ok) —— 只有判 OK 落账才发,
+            # NG / 超时强制结算一律不发。所有 OK 结算路径都汇到这里, 一处挂接即全覆盖。
+            self._per_item_notify_plc_pulse('cycle_ok')
             # OK 时清掉上次 NG 详情, 避免前端误以为还在 NG 状态
             self._per_item_last_ng_detail = None
         else:

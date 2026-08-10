@@ -49,6 +49,8 @@ def test_legacy_at_config_loads_and_is_canonical_after_next_save(tmp_path) -> No
     assert canonical["retry_count"] == 1
     assert canonical["retry_backoff_seconds"] == [2.0]
     assert canonical["ng_threshold"] == 5
+    assert canonical["summary_send_mode"] == "merged_detail"
+    assert canonical["summary_channel_ids"] == []
     assert "port" not in canonical
     assert "recipients" not in canonical
 
@@ -74,6 +76,32 @@ def test_ng_threshold_roundtrips(tmp_path) -> None:
 
     assert store.load().ng_threshold == 7
     assert json.loads(path.read_text(encoding="utf-8"))["ng_threshold"] == 7
+
+
+def test_summary_send_mode_and_channel_ids_roundtrip(tmp_path) -> None:
+    path = tmp_path / "sms_config.json"
+    store = SmsConfigStore(path)
+
+    config = config_from_dict(
+        {
+            "summary_send_mode": "per_channel",
+            "summary_channel_ids": [1, 0, 1],
+        }
+    )
+    store.save(config)
+
+    loaded = store.load()
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert loaded.summary_send_mode == "per_channel"
+    assert loaded.summary_channel_ids == (0, 1)
+    assert saved["summary_send_mode"] == "per_channel"
+    assert saved["summary_channel_ids"] == [0, 1]
+
+
+@pytest.mark.parametrize("mode", ["", "by_channel", "merged"])
+def test_invalid_summary_send_mode_is_rejected(mode: str) -> None:
+    with pytest.raises(SmsConfigError, match="per_channel 或 merged_detail"):
+        config_from_dict({"summary_send_mode": mode})
 
 
 @pytest.mark.parametrize("ng_threshold", [0, 101])

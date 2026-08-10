@@ -82,6 +82,65 @@
                 默认推各工位监控面板上的 OK/NG（与金龙等插件面板同源）；可选改为调度时间窗内全部已结算周期合计。
               </div>
             </div>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-3">
+              <div>
+                <div class="text-gray-300 mb-2">发送形态</div>
+                <el-radio-group
+                  v-model="smsConfig.summary_send_mode"
+                  data-testid="sms-summary-send-mode-group"
+                >
+                  <el-radio-button
+                    value="merged_detail"
+                    data-testid="sms-summary-send-merged"
+                  >
+                    一条分列多工位
+                  </el-radio-button>
+                  <el-radio-button
+                    value="per_channel"
+                    data-testid="sms-summary-send-per-channel"
+                  >
+                    每工位一条（兼容旧版）
+                  </el-radio-button>
+                </el-radio-group>
+                <div class="text-xs text-gray-500 mt-1 leading-5">
+                  默认合并发送：同一调度窗口、同一接收方只收到一条，正文包含各工位 OK、NG、合格率、NG率及合计。
+                </div>
+              </div>
+              <div>
+                <div class="text-gray-300 mb-2">参与工位</div>
+                <el-select
+                  v-model="smsConfig.summary_channel_ids"
+                  data-testid="sms-summary-channel-select"
+                  multiple
+                  clearable
+                  collapse-tags
+                  collapse-tags-tooltip
+                  placeholder="全部启用工位"
+                  class="w-full"
+                >
+                  <el-option
+                    v-for="channel in channelCount"
+                    :key="channel - 1"
+                    :label="`工位 ${channel}`"
+                    :value="channel - 1"
+                    :data-testid="`sms-summary-channel-option-${channel - 1}`"
+                  />
+                </el-select>
+                <div class="text-xs text-gray-500 mt-1 leading-5">
+                  留空表示全部启用工位；选中但本窗口无数据的工位仍以 0 展示。
+                </div>
+              </div>
+            </div>
+            <el-alert
+              v-if="smsChannelTemplateWarning"
+              data-testid="sms-summary-channel-warning"
+              class="mt-3"
+              type="warning"
+              :closable="false"
+              show-icon
+            >
+              <div class="text-xs leading-5">{{ smsChannelTemplateWarning }}</div>
+            </el-alert>
             <div
               v-if="smsConfig.summary_schedule_mode === 'daily_shift'"
               data-testid="sms-shift-fields"
@@ -477,9 +536,13 @@
               />
             </div>
             <div class="lg:col-span-2 text-xs text-amber-400" data-testid="sms-aliyun-hint">
-              官方云短信为「审核签名 + 审核模板 + 变量」模式：NG 汇总模板需含
-              ${time_range}、${ok_count}、${ng_count} 变量；
-              短信日报的变量名在日报规则的「变量映射」里定义，可用规则级模板 Code 覆盖此默认值。
+              阿里云需新建并审核「多工位汇总」模板，旧「单工位即时 NG」模板不可复用。
+              两工位完整变量：${time_range}、${device_name}、
+              ${ch1_ok}、${ch1_ng}、${ch1_total}、${ch1_ok_rate}、${ch1_ng_rate}、
+              ${ch2_ok}、${ch2_ng}、${ch2_total}、${ch2_ok_rate}、${ch2_ng_rate}、
+              ${total_ok}、${total_ng}、${total}、${ok_rate}、${ng_rate}。
+              超过两工位继续使用 ${chN_ok}/${chN_ng}/${chN_total}/${chN_ok_rate}/${chN_ng_rate}，
+              申请模板时同时核对阿里云变量及正文长度限制。短信日报仍使用日报规则自己的变量映射与模板 Code。
             </div>
           </div>
 
@@ -1239,6 +1302,8 @@ const createSmsDefaultConfig = () => ({
   shift_end_hour: 20,
   send_night_window: false,
   summary_count_source: 'panel',
+  summary_send_mode: 'merged_detail',
+  summary_channel_ids: [],
 });
 const smsConfig = reactive(createSmsDefaultConfig());
 const smsRecipientsText = ref('');
@@ -1257,13 +1322,27 @@ const smsSummaryNoticeTitle = computed(() => (
     ? `班次汇总：每天 ${smsConfig.shift_start_hour}:00～${smsConfig.shift_end_hour}:00`
     : '仅发送滚动 12 小时生产汇总'
 ));
-const smsSummaryNoticeBody = computed(() => (
-  smsConfig.summary_schedule_mode === 'daily_shift'
-    ? `按配置班次到点发送；数字口径：${smsConfig.summary_count_source === 'window' ? '时间窗落库合计' : '监控面板当前会话'}；默认到 ${smsConfig.shift_end_hour}:00 发送白天窗${smsConfig.send_night_window ? '，并额外发送夜班窗' : '（夜班窗默认不发）'}。`
-    : smsConfig.summary_count_source === 'window'
-      ? '每次软件（后端）启动后以本次服务启动时间为起点重新开窗，每滚动 12 小时按工位汇总时间窗内已结算周期并发送；'
-      : '每次软件（后端）启动后以本次服务启动时间为起点重新开窗，每滚动 12 小时按工位推送监控面板当前会话 OK/NG；'
-));
+const smsSummaryNoticeBody = computed(() => {
+  const sendShape = smsConfig.summary_send_mode === 'per_channel'
+    ? '每工位一条'
+    : '一条内分列多工位';
+  if (smsConfig.summary_schedule_mode === 'daily_shift') {
+    return `按配置班次到点以${sendShape}发送；数字口径：${smsConfig.summary_count_source === 'window' ? '时间窗落库合计' : '监控面板当前会话'}；默认到 ${smsConfig.shift_end_hour}:00 发送白天窗${smsConfig.send_night_window ? '，并额外发送夜班窗' : '（夜班窗默认不发）'}。`;
+  }
+  return smsConfig.summary_count_source === 'window'
+    ? `每次软件（后端）启动后以本次服务启动时间为起点重新开窗，每滚动 12 小时以${sendShape}汇总时间窗内已结算周期并发送；`
+    : `每次软件（后端）启动后以本次服务启动时间为起点重新开窗，每滚动 12 小时以${sendShape}推送监控面板当前会话 OK/NG；`;
+});
+const smsChannelTemplateWarning = computed(() => {
+  const selectedCount = Array.isArray(smsConfig.summary_channel_ids)
+    ? smsConfig.summary_channel_ids.length
+    : 0;
+  const participatingCount = selectedCount || channelCount.value;
+  if (smsConfig.summary_send_mode !== 'merged_detail' || participatingCount <= 2) {
+    return '';
+  }
+  return `当前将合并 ${participatingCount} 个工位。阿里云模板需继续申请 chN_* 命名变量，并确认模板变量数量与短信正文长度。`;
+});
 const smsPortOptions = computed(() => {
   const options = Array.isArray(smsPorts.value) ? [...smsPorts.value] : [];
   const current = smsConfig.at_modem.port?.trim();
@@ -1348,6 +1427,14 @@ const applySmsConfig = (data = {}) => {
     shift_end_hour: data.shift_end_hour ?? defaults.shift_end_hour,
     send_night_window: data.send_night_window ?? defaults.send_night_window,
     summary_count_source: data.summary_count_source === 'window' ? 'window' : 'panel',
+    summary_send_mode: data.summary_send_mode === 'per_channel'
+      ? 'per_channel'
+      : 'merged_detail',
+    summary_channel_ids: Array.isArray(data.summary_channel_ids)
+      ? [...new Set(data.summary_channel_ids.map(Number))]
+        .filter((channelId) => Number.isInteger(channelId) && channelId >= 0)
+        .sort((left, right) => left - right)
+      : [],
   });
   smsRecipientsText.value = phoneNumbers.join('\n');
   smsWxUidsText.value = wxpusher.uids.join('\n');
@@ -1595,7 +1682,7 @@ const smsConfigsMatch = (saved, readback) => {
     'retry_count', 'retry_backoff_seconds', 'ng_threshold', 'cooldown_seconds', 'queue_size',
     'offline_queue_max', 'offline_ttl_seconds',
     'summary_schedule_mode', 'shift_start_hour', 'shift_end_hour', 'send_night_window',
-    'summary_count_source',
+    'summary_count_source', 'summary_send_mode', 'summary_channel_ids',
   ];
   return fields.every((field) => JSON.stringify(saved?.[field]) === JSON.stringify(readback?.[field]));
 };
@@ -1663,6 +1750,8 @@ const buildSmsPayload = () => ({
   shift_end_hour: smsConfig.shift_end_hour,
   send_night_window: smsConfig.send_night_window,
   summary_count_source: smsConfig.summary_count_source,
+  summary_send_mode: smsConfig.summary_send_mode,
+  summary_channel_ids: [...smsConfig.summary_channel_ids],
 });
 
 const saveSmsConfig = async () => {

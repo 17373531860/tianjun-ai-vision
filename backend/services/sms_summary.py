@@ -16,6 +16,7 @@ SUMMARY_WINDOW_SECONDS = 12 * 60 * 60
 SMS_SUMMARY_STATE_FILENAME = "sms_summary_state.json"
 ALLOWED_SUMMARY_SCHEDULE_MODES = frozenset({"rolling_12h", "daily_shift"})
 ALLOWED_SUMMARY_COUNT_SOURCES = frozenset({"panel", "window"})
+ALLOWED_SUMMARY_SEND_MODES = frozenset({"per_channel", "merged_detail"})
 
 
 def shift_window_end(
@@ -371,6 +372,7 @@ def _normalize_datetime(value: datetime) -> datetime:
 __all__ = [
     "ALLOWED_SUMMARY_COUNT_SOURCES",
     "ALLOWED_SUMMARY_SCHEDULE_MODES",
+    "ALLOWED_SUMMARY_SEND_MODES",
     "SMS_SUMMARY_STATE_FILENAME",
     "SUMMARY_WINDOW_SECONDS",
     "SmsChannelSnapshot",
