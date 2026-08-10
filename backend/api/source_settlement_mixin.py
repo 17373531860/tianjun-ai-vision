@@ -312,15 +312,22 @@ class SettlementMixin:
         expected_counter = Counter(detection_labels)
         step_counts = Counter(self.current_cycle_steps)
 
+        # v3.48 计数组合判定表: 参与判型标签的期望数量因机型而异 (5,5,4 vs 6,6,4),
+        # 其缺步/重复判定让位查表 (结算判定完全由表行决定, 未命中 NG 防呆)。
+        combo = getattr(self, '_combo_table', None) or {}
+        combo_labels = set(combo.get('labels') or [])
+
         # v3.7.0: 若 detection_labels 里配置同一 label 多次 (不常见但合法),
         # 按 expected_counter 判 missing/duplicated, 避免合法重复被误判 NG.
         missing = []
         for lbl, exp_cnt in expected_counter.items():
+            if lbl in combo_labels:
+                continue
             act_cnt = step_counts.get(lbl, 0)
             if act_cnt < exp_cnt:
                 missing.extend([lbl] * (exp_cnt - act_cnt))
         duplicated = [s for s, cnt in step_counts.items()
-                      if cnt > expected_counter.get(s, 1)]
+                      if s not in combo_labels and cnt > expected_counter.get(s, 1)]
 
         ng_reasons = []
         if missing:
@@ -333,13 +340,21 @@ class SettlementMixin:
             debug_center.dbg("backend.settlement", "检测模式结算", f"channel={self.channel_id} is_good={not ng_reasons} missing={missing} duplicated={duplicated}")
         
         if not ng_reasons:
-            print("  -> all detected, no duplicates -> OK")
-            self._trigger_event(1, '检测完成')
+            event_id, reason = self._apply_combo_verdict(step_counts)
+            print(f"  -> {'OK' if event_id == 1 else 'NG'}: {reason}")
+            self._trigger_event(event_id, reason)
         else:
+            # 流程标签本身缺/重 = 真 NG, 不查表 (表只裁决数量组合)
             reason = '；'.join(ng_reasons)
             print(f"  → {reason} → NG")
             self._trigger_event(2, reason)
-        
+
+        # positional 计数引擎随周期清池 (对齐原型工具"清除步骤"语义);
+        # 放在两个判定分支之后, 缺/重 NG 的周期同样要清
+        _combo_pos = getattr(self, '_combo_positional', None)
+        if _combo_pos is not None:
+            _combo_pos.reset()
+
         self.current_cycle_steps = []
         self.backup_steps_seen_in_cycle = set()
         self.last_added_step = None
@@ -352,6 +367,47 @@ class SettlementMixin:
             self._step_raw_start.clear()
         self.last_step_completed_time = None
     
+    def _apply_combo_verdict(self, step_counts):
+        """v3.48 计数组合判定表 (纯视觉判型, RFC 14 配套项)。
+
+        原型场景: 三区打螺丝计数 (5,5,4)→判"4缸-含挺柱"OK / (6,6,4)→判"6缸"OK,
+        无外部机型信号的客户由此获得纯视觉判型 (有 PLC/扫码信号走 switch_project 正向方案)。
+
+        入参 step_counts = Counter(current_cycle_steps)。返回 (event_id, reason):
+        - 未配表 → 维持原判定 (1, '检测完成')
+        - 命中行 → 行 verdict (OK=1/NG=2) + reason 带 tag 与计数明细
+          (tag 经 reason 进事件记录/NG原因/导出/MES 推送, 另存 _combo_last_tag 供透出)
+        - 未命中 → NG (防呆: 未知组合一律不放行, 对齐原型工具设计)
+        """
+        combo = getattr(self, '_combo_table', None)
+        if not combo:
+            return 1, '检测完成'
+        labels = combo['labels']
+        # count_mode='positional': 用位置去重引擎的计数 (同位置返工不重计,
+        # 复刻外部工具算法3); 缺省 'steps' 用周期步骤出现次数 (零差异)
+        _pos = getattr(self, '_combo_positional', None)
+        if _pos is not None:
+            pos_counts = _pos.counts()
+            vec = [pos_counts.get(l, 0) for l in labels]
+        else:
+            vec = [step_counts.get(l, 0) for l in labels]
+        detail = ', '.join(f'{l}×{c}' for l, c in zip(labels, vec))
+        for row in combo['rows']:
+            if row['counts'] == vec:
+                tag = row['tag'] or '未命名机型'
+                self._combo_last_tag = tag
+                if debug_center.is_on("backend.settlement"):
+                    debug_center.dbg("backend.settlement", "计数组合判定命中",
+                                     f"channel={self.channel_id} tag={tag} verdict={row['verdict']} counts={vec}")
+                if row['verdict'] == 'NG':
+                    return 2, f'机型判定[{tag}]: {detail} (判定表指定 NG)'
+                return 1, f'机型判定[{tag}]: {detail}'
+        self._combo_last_tag = None
+        if debug_center.is_on("backend.settlement"):
+            debug_center.dbg("backend.settlement", "计数组合判定未命中",
+                             f"channel={self.channel_id} counts={vec} → NG")
+        return 2, f'计数组合未匹配任何机型: {detail}'
+
     def _settle_sequential_cycle(self):
         """结算纯顺序模式的当前周期（在新周期开始前调用）
         
@@ -1161,6 +1217,11 @@ class SettlementMixin:
         """
         if not getattr(self, 'instant_ng_on_violation', False):
             return
+        # v3.48 计数组合判定表: 参与判型标签的重复合法 (期望数量因机型而异,
+        # 结算查表裁决), "必报重复NG"前提不成立 → 实时NG让位
+        combo = getattr(self, '_combo_table', None)
+        if combo and label in combo['labels']:
+            return
         tc = self.step_time_config.get(label, {}) or {}
         if tc.get('min_duration') is not None or tc.get('max_duration') is not None:
             return
@@ -1667,7 +1728,13 @@ class SettlementMixin:
         # 但当 sequence_order 含重复元素 (如 "检查外观" × 2), accept_once 把模型
         # 第 2 次识别拦下, 客户感知"框冒蓝色但不变绿". 现按 sequence_order 期望次数
         # 放行: 已入 cycle 次数 < 期望次数时不拦截.
-        if self.step_accept_once.get(label) and label in self.current_cycle_steps:
+        # v3.48 计数组合判定表: 参与判型标签的重复出现是合法累计 (期望数量因
+        # 机型而异, 结算查表裁决), accept_once 去重守门让位 —— 前端在检测模式
+        # 会给全部步骤自动置 accept_once=true, 不让位则第二次出现被静默拦截,
+        # 计数永远到不了 2 (与实时NG/首步重现让位同一体系)。
+        _combo_labels_gate = (getattr(self, '_combo_table', None) or {}).get('labels') or []
+        if (self.step_accept_once.get(label) and label in self.current_cycle_steps
+                and label not in _combo_labels_gate):
             expected_count = 0
             if is_seq_like:
                 expected_seq = self._get_expected_sequence_labels()
@@ -1736,7 +1803,12 @@ class SettlementMixin:
                             self._step_raw_start.pop(label, None)
         
         # ── 检测模式：第一步重现结算 ──
-        if logic_mode == 'detection' and len(self.current_cycle_steps) > 1:
+        # v3.48 计数组合判定表: 参与判型标签的重现是合法累计 (数量因机型而异,
+        # 结算查表裁决), 不是"新周期开始"信号 → 首步重现结算让位。配 combo 的
+        # 项目应使用非判型标签作首步/收尾步骤 (或空闲超时) 界定周期。
+        _combo_lbls = (getattr(self, '_combo_table', None) or {}).get('labels') or []
+        if logic_mode == 'detection' and len(self.current_cycle_steps) > 1 \
+                and label not in _combo_lbls:
             first_det_label = self._get_first_detection_step_label()
             if first_det_label and label == first_det_label and label in self.current_cycle_steps:
                 first_start = self.step_start_time.get(label) or getattr(self, '_step_raw_start', {}).get(label)
@@ -1879,7 +1951,10 @@ class SettlementMixin:
                         self.last_added_step = label
                         self._last_step_added_time = current_time
                 else:
-                    if not self.step_accept_once.get(label) or label not in self.current_cycle_steps:
+                    # v3.48: combo 判型标签豁免 accept_once 周期内去重 (重复合法累计)
+                    if (not self.step_accept_once.get(label)
+                            or label in _combo_lbls
+                            or label not in self.current_cycle_steps):
                         self.current_cycle_steps.append(label)
                         self.last_added_step = label
                         self._last_step_added_time = current_time

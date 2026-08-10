@@ -1,0 +1,30 @@
+{
+  "steps": [
+    {
+      "name": "检测模式露出「计数组合判定表」卡",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "开启 + 选标签 + 机型行编辑 + 保存",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "T5 落库核对 combo_table",
+      "ok": true,
+      "detail": "{\"enabled\": true, \"labels\": [\"区A\", \"区B\"], \"rows\": [{\"counts\": [2, 1], \"verdict\": \"OK\", \"tag\": \"机型X\"}]}"
+    },
+    {
+      "name": "重进回显 (开关/标签/行)",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "synthetic 实跑命中机型X 判 OK",
+      "ok": true,
+      "detail": "counters={'合格总数': 1, '不良总数': 3, '总产量': 4, 'NG步骤': 0} combo_verdict={'enabled': True, 'last_tag': '机型X'}"
+    }
+  ],
+  "pass": true
+}

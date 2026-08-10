@@ -138,6 +138,10 @@ def _init_step_state(h):
     h._settle_hold_event_id = None
     h._settle_hold = None  # 挂起态: {'missing':[], 'expected':[], 'since':ts[, 'need_total','ng_reason']}
     h._short_count_hold = False  # v3.44.1 少装挂起 (数量不足不判NG, 断点重做收尾步骤)
+    # v3.48 计数组合判定表 (纯视觉判型, 检测模式专用; None=关)
+    h._combo_table = None
+    h._combo_last_tag = None  # 最近一次命中行的机型 tag (进检测结果透出)
+    h._combo_positional = None  # count_mode='positional' 的位置去重计数引擎
     h.step_conf_thresholds = {}
     # v3.10+ 步骤级 box 尺寸过滤: {label: (max_w, max_h)} 归一化比例
     # 0 / 缺省 = 关闭过滤; 用途见 source_detect_runners_mixin._passes_box_size_limit

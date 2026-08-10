@@ -197,6 +197,108 @@ def test_NG判定与处置卡_可见可配_保存落库(page, base_url, api_url)
     assert card.locator(".el-switch.is-checked").count() >= 1, "数量门开关应回显开"
 
 
+def test_计数组合判定表_可见可配_保存落库回显(page, base_url, api_url):
+    """v3.48 计数组合判定表 (检测模式纯视觉判型): detection 项目露出卡片 →
+    开启 → 选两个判型标签 → 添加机型行填数量/tag → 保存 →
+    pipeline_config.combo_table 落库 → 重进回显。"""
+    pid, name = _mk_project(api_url, "detection", steps=[
+        {"id": 1, "label": "区A", "name": "区域A", "enabled": True},
+        {"id": 2, "label": "区B", "name": "区域B", "enabled": True},
+        {"id": 3, "label": "收尾", "name": "收尾", "enabled": True},
+    ])
+    body = _open_logic_tab(page, base_url, name)
+    assert "计数组合判定表" in body, "detection 模式应渲染「计数组合判定表」卡"
+    card = page.locator(".el-card:has-text('计数组合判定表')").first
+    # 开启开关 → 展开配置区
+    card.locator(".el-switch").first.click()
+    time.sleep(0.5)
+    # 选参与判型标签 区A/区B
+    card.locator(".el-form-item:has-text('参与判型的步骤标签') .el-select").first.click()
+    time.sleep(0.5)
+    page.locator(".el-select-dropdown__item:visible", has_text="区A").first.click()
+    page.locator(".el-select-dropdown__item:visible", has_text="区B").first.click()
+    page.keyboard.press("Escape")
+    time.sleep(0.3)
+    # 添加机型行: counts (5, 4), verdict 默认 OK, tag
+    card.locator("button:has-text('添加机型行')").click()
+    time.sleep(0.5)
+    row = card.locator("div.flex.items-center.gap-2").last
+    for i, v in enumerate((5, 4)):
+        inp = row.locator(".el-input-number input").nth(i)
+        inp.click()
+        inp.press("ControlOrMeta+a")
+        inp.type(str(v), delay=20)
+        inp.press("Tab")
+        time.sleep(0.2)
+    row.locator("input[placeholder*='4缸']").fill("4缸-含挺柱")
+    page.locator("button:has-text('保存配置')").click()
+    time.sleep(2.0)
+    pc = (requests.get(f"{api_url}/api/v1/projects/{pid}", timeout=5).json()
+          .get("pipeline_config") or {})
+    cmb = pc.get("combo_table") or {}
+    assert cmb.get("enabled") is True, f"combo_table 应落库开, 实际 {cmb}"
+    assert cmb.get("labels") == ["区A", "区B"], f"labels 应落库, 实际 {cmb}"
+    assert cmb.get("rows") == [{"counts": [5, 4], "verdict": "OK", "tag": "4缸-含挺柱"}], \
+        f"行应落库, 实际 {cmb}"
+    # 重进回显
+    _open_logic_tab(page, base_url, name)
+    card = page.locator(".el-card:has-text('计数组合判定表')").first
+    assert card.locator(".el-switch.is-checked").count() >= 1, "开关应回显开"
+    assert "区A" in card.inner_text(), "参与判型标签应回显"
+    assert card.locator("input[placeholder*='4缸']").first.input_value() == "4缸-含挺柱", \
+        "机型 tag 应回显"
+    row = card.locator("div.flex.items-center.gap-2").last
+    assert row.locator(".el-input-number input").nth(0).input_value() == "5"
+    assert row.locator(".el-input-number input").nth(1).input_value() == "4"
+
+
+def test_计数口径positional_可切可配_保存落库回显(page, base_url, api_url):
+    """v3.48.x 计数口径: detection 项目 combo 卡露出「计数口径」radio →
+    切「按位置去重」→ 追踪参数网格展开 → 改 IoU → 保存 →
+    combo_table.count_mode/tracking 落库 → 重进回显。"""
+    pid, name = _mk_project(api_url, "detection", steps=[
+        {"id": 1, "label": "区A", "name": "区域A", "enabled": True},
+        {"id": 2, "label": "收尾", "name": "收尾", "enabled": True},
+    ])
+    requests.put(f"{api_url}/api/v1/projects/{pid}", json={
+        "pipeline_config": {"combo_table": {
+            "enabled": True, "labels": ["区A"],
+            "rows": [{"counts": [5], "verdict": "OK", "tag": "T"}],
+        }},
+    }, timeout=5).raise_for_status()
+    _open_logic_tab(page, base_url, name)
+    card = page.locator(".el-card:has-text('计数组合判定表')").first
+    card.scroll_into_view_if_needed()
+    assert "计数口径" in card.inner_text(), "combo 卡应露出「计数口径」"
+    card.locator(".el-radio-button:has-text('按位置去重')").click()
+    time.sleep(0.5)
+    body = card.inner_text()
+    for k in ("同位置判定 IoU", "新位置确认帧数", "候选保留节拍"):
+        assert k in body, f"positional 追踪参数「{k}」应展开"
+    trk = card.locator(".combo-tracking").first
+    inp = trk.locator(".el-form-item:has-text('同位置判定 IoU') .el-input-number input").first
+    inp.click()
+    inp.press("ControlOrMeta+a")
+    inp.type("0.5", delay=20)
+    inp.press("Tab")
+    time.sleep(0.3)
+    page.locator("button:has-text('保存配置')").click()
+    time.sleep(2.0)
+    cmb = ((requests.get(f"{api_url}/api/v1/projects/{pid}", timeout=5).json()
+            .get("pipeline_config") or {}).get("combo_table") or {})
+    assert cmb.get("count_mode") == "positional", f"count_mode 应落库, 实际 {cmb}"
+    assert (cmb.get("tracking") or {}).get("iou") == 0.5, f"tracking.iou 应落库, 实际 {cmb}"
+    # 重进回显
+    _open_logic_tab(page, base_url, name)
+    card = page.locator(".el-card:has-text('计数组合判定表')").first
+    card.scroll_into_view_if_needed()
+    assert card.locator(".el-radio-button.is-active:has-text('按位置去重')").count() >= 1, \
+        "计数口径应回显 positional"
+    got = card.locator(
+        ".el-form-item:has-text('同位置判定 IoU') .el-input-number input").first.input_value()
+    assert got == "0.5", f"IoU 应回显 0.5, 实际 {got}"
+
+
 def test_legacy收尾防呆键_迁移为ng_handling回显(page, base_url, api_url):
     """v3.44 老键 (closing_guard/ng_remediation) 项目 → 前端加载合成 ng_handling,
     统一卡回显等价档位; 保存后新块落库。"""

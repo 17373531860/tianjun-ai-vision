@@ -77,6 +77,7 @@ class InferenceLoopMixin:
             # 剧本注入固定走非跟踪 / 非分割路径（与 _update_step_stats 对齐）
             # v3.32: synthetic 也过标签区域拆分层 → 全链路可用剧本回归
             detections = self._apply_label_splits(detections)
+            self._feed_combo_positional(detections)
             return (detections, False, False, t_start)
 
         # 主模型的 task_type / logic_mode (对副模型不适用)
@@ -108,8 +109,23 @@ class InferenceLoopMixin:
         # v3.32: 同标签区域拆分（虚拟步骤）——在显示坐标系上按区域改写标签,
         # 下游状态机/画框/MES 全部见到的是虚拟步骤标签
         detections = self._apply_label_splits(detections)
+        self._feed_combo_positional(detections)
 
         return (detections, is_tracking, is_seg, t_start)
+
+    def _feed_combo_positional(self, detections):
+        """combo 判型表 count_mode='positional' 的逐 tick 喂帧.
+
+        引擎由 apply_project_config 按 combo_table.count_mode 构建;
+        未启用时为 None → 一次 getattr 早退零开销。
+        """
+        eng = getattr(self, '_combo_positional', None)
+        if eng is None:
+            return
+        try:
+            eng.feed(detections)
+        except Exception as e:
+            debug_log(f"!!! combo_positional 喂帧失败: {e}", "INFERENCE")
 
     def _apply_label_splits(self, detections):
         """v3.32 检测出口标签改写层: 同标签区域拆分 + 工件就位状态刷新.
