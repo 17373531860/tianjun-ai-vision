@@ -208,8 +208,8 @@ class Project(Base):
     // 位置就计几，复刻外部对标工具算法3）。引擎 source_combo_positional.py，
     // 喂帧挂检测出口（inference_loop_mixin._feed_combo_positional，与 label_splits
     // 同层），结算读数+清池在 settlement_mixin。实时计数经 /detection/results 的
-    // combo_verdict.positional_counts 透出。⚠️ 前端 LogicConfigTab 尚无此开关入口
-    // （2026-08-10 待补），目前仅 API/JSON 可配。
+    // combo_verdict.positional_counts 透出。前端开关入口在 LogicConfigTab
+    // 「计数口径」radio（按步骤分次/按位置去重, e2e: test_logic_config_tab.py）。
     "count_mode": "steps",
     "tracking": {                 // 仅 positional 生效，全部可省（括号内默认）
       "iou": 0.4,                 // 同一位置判定 IoU 阈值 (0.05~0.95)

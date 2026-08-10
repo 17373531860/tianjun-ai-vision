@@ -1,11 +1,11 @@
 # 数据库表参考
 
 > **类型**：reference（生成物勿手改）
-> **生成命令**：`python scripts/docgen/gen_db_schema.py`（生成日 2026-08-07）
+> **生成命令**：`python scripts/docgen/gen_db_schema.py`（生成日 2026-08-10）
 > **单一事实源**：SQLAlchemy ORM（Base.metadata）。字段含义看模型源文件行内注释；
 > 迁移历史看 backend/db/migrations/ 与 backend/main.py 的 migrate_database。
 
-共 **50** 张表。
+共 **52** 张表。
 
 ## 表索引
 
@@ -38,6 +38,7 @@
 | [`models`](#models) | `Model` | `backend/models/models.py` |
 | [`packaging_flow_configs`](#packaging_flow_configs) | `PackagingFlowConfig` | `backend/models/mes_models.py` |
 | [`packaging_flow_runs`](#packaging_flow_runs) | `PackagingFlowRun` | `backend/models/mes_models.py` |
+| [`plc_connections`](#plc_connections) | `PLCConnection` | `backend/models/plc_models.py` |
 | [`plugin_audit_log`](#plugin_audit_log) | `PluginAuditLog` | `backend/models/plugin_models.py` |
 | [`plugin_config_versions`](#plugin_config_versions) | `PluginConfigVersion` | `backend/models/plugin_models.py` |
 | [`plugin_state`](#plugin_state) | `PluginState` | `backend/models/plugin_models.py` |
@@ -52,6 +53,7 @@
 | [`step_records`](#step_records) | `StepRecord` | `backend/models/models.py` |
 | [`system_configs`](#system_configs) | `SystemConfig` | `backend/models/models.py` |
 | [`tasks`](#tasks) | `Task` | `backend/models/models.py` |
+| [`trigger_channels`](#trigger_channels) | `TriggerChannel` | `backend/models/trigger_models.py` |
 | [`user_roles`](#user_roles) | `UserRole` | `backend/models/auth_models.py` |
 | [`users`](#users) | `User` | `backend/models/auth_models.py` |
 | [`video_clips`](#video_clips) | `VideoClip` | `backend/models/models.py` |
@@ -717,6 +719,24 @@ ORM 类 `PackagingFlowRun`，定义于 `backend/models/mes_models.py`。
 | `started_at` | DATETIME |  | server |
 | `completed_at` | DATETIME |  |  |
 
+## plc_connections
+
+ORM 类 `PLCConnection`，定义于 `backend/models/plc_models.py`。
+
+| 字段 | 类型 | 约束 | 默认 |
+|---|---|---|---|
+| `id` | INTEGER | PK INDEX |  |
+| `name` | VARCHAR(64) | NOT NULL |  |
+| `driver` | VARCHAR(32) | NOT NULL | 's7' |
+| `enabled` | BOOLEAN | NOT NULL | False |
+| `conn_params` | JSON |  |  |
+| `points` | JSON |  |  |
+| `read_rules` | JSON |  |  |
+| `write_rules` | JSON |  |  |
+| `options` | JSON |  |  |
+| `created_at` | DATETIME |  | server |
+| `updated_at` | DATETIME |  | server |
+
 ## plugin_audit_log
 
 ORM 类 `PluginAuditLog`，定义于 `backend/models/plugin_models.py`。
@@ -996,6 +1016,22 @@ ORM 类 `Task`，定义于 `backend/models/models.py`。
 | `step_name` | VARCHAR(100) |  |  |
 | `timestamp` | DATETIME |  | server |
 | `error_msg` | TEXT |  |  |
+
+## trigger_channels
+
+ORM 类 `TriggerChannel`，定义于 `backend/models/trigger_models.py`。
+
+| 字段 | 类型 | 约束 | 默认 |
+|---|---|---|---|
+| `id` | INTEGER | PK INDEX |  |
+| `name` | VARCHAR(64) | NOT NULL |  |
+| `type` | VARCHAR(32) | NOT NULL | 'pixel_region' |
+| `enabled` | BOOLEAN | NOT NULL | False |
+| `params` | JSON |  |  |
+| `rules` | JSON |  |  |
+| `options` | JSON |  |  |
+| `created_at` | DATETIME |  | server |
+| `updated_at` | DATETIME |  | server |
 
 ## user_roles
 

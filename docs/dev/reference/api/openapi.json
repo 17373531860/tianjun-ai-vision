@@ -1134,6 +1134,7 @@
      "channel_station_map": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -1291,6 +1292,7 @@
      "custom_commands": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -1307,6 +1309,7 @@
      "event_priority_map": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -1318,6 +1321,7 @@
      "idle_light": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -1367,6 +1371,7 @@
      "triggers": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -1439,6 +1444,7 @@
      "config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -1456,6 +1462,7 @@
       "anyOf": [
        {
         "items": {
+         "additionalProperties": true,
          "type": "object"
         },
         "type": "array"
@@ -1541,6 +1548,7 @@
      "config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -1564,6 +1572,7 @@
       "anyOf": [
        {
         "items": {
+         "additionalProperties": true,
          "type": "object"
         },
         "type": "array"
@@ -2435,6 +2444,7 @@
      "parse_config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -2467,6 +2477,7 @@
      "protocol_config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -2548,6 +2559,7 @@
      "validation_rules": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -2710,6 +2722,7 @@
      "parse_config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -2754,6 +2767,7 @@
      "protocol_config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -2831,6 +2845,7 @@
      "validation_rules": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -3342,6 +3357,7 @@
      "extra_data": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -3472,6 +3488,7 @@
       "type": "integer"
      },
      "fields": {
+      "additionalProperties": true,
       "title": "Fields",
       "type": "object"
      }
@@ -3627,6 +3644,7 @@
      "code_params": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -3638,6 +3656,7 @@
      "common_params": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -3649,6 +3668,7 @@
      "data_output_format_params": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -3660,6 +3680,7 @@
      "indicator_params": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -3671,6 +3692,7 @@
      "input_params": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -3686,6 +3708,7 @@
      "light_params": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -3697,6 +3720,7 @@
      "output_params": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -3713,6 +3737,7 @@
      "reading_params": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -3724,6 +3749,7 @@
      "sensor_params": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -3878,6 +3904,7 @@
      "detections": {
       "description": "检测框列表, 与 /detection/results 同构: 归一化坐标 x/y/w/h + label/confidence/class_id",
       "items": {
+       "additionalProperties": true,
        "type": "object"
       },
       "title": "Detections",
@@ -4434,6 +4461,7 @@
      "schedule": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -4567,6 +4595,7 @@
      "extra_data": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -4734,6 +4763,7 @@
      "extra_data": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -4906,6 +4936,204 @@
      "ip"
     ],
     "title": "OutputConfigRequest",
+    "type": "object"
+   },
+   "PLCConnectionCreate": {
+    "properties": {
+     "conn_params": {
+      "additionalProperties": true,
+      "title": "Conn Params",
+      "type": "object"
+     },
+     "driver": {
+      "default": "s7",
+      "title": "Driver",
+      "type": "string"
+     },
+     "enabled": {
+      "default": false,
+      "title": "Enabled",
+      "type": "boolean"
+     },
+     "name": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Name",
+      "type": "string"
+     },
+     "options": {
+      "additionalProperties": true,
+      "title": "Options",
+      "type": "object"
+     },
+     "points": {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "title": "Points",
+      "type": "array"
+     },
+     "read_rules": {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "title": "Read Rules",
+      "type": "array"
+     },
+     "write_rules": {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "title": "Write Rules",
+      "type": "array"
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "title": "PLCConnectionCreate",
+    "type": "object"
+   },
+   "PLCConnectionUpdate": {
+    "properties": {
+     "conn_params": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Conn Params"
+     },
+     "driver": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Driver"
+     },
+     "enabled": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Enabled"
+     },
+     "name": {
+      "anyOf": [
+       {
+        "maxLength": 64,
+        "minLength": 1,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Name"
+     },
+     "options": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Options"
+     },
+     "points": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Points"
+     },
+     "read_rules": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Read Rules"
+     },
+     "write_rules": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Write Rules"
+     }
+    },
+    "title": "PLCConnectionUpdate",
+    "type": "object"
+   },
+   "PLCEnableRequest": {
+    "properties": {
+     "enabled": {
+      "title": "Enabled",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "enabled"
+    ],
+    "title": "PLCEnableRequest",
+    "type": "object"
+   },
+   "PLCPointWrite": {
+    "properties": {
+     "point": {
+      "title": "Point",
+      "type": "string"
+     },
+     "value": {
+      "title": "Value"
+     }
+    },
+    "required": [
+     "point"
+    ],
+    "title": "PLCPointWrite",
     "type": "object"
    },
    "PackagingFlowConfigCreate": {
@@ -6749,6 +6977,7 @@
      "display_payload": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -6798,6 +7027,7 @@
      "license_payload": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -6867,6 +7097,7 @@
       "type": "array"
      },
      "data_config": {
+      "additionalProperties": true,
       "title": "Data Config",
       "type": "object"
      },
@@ -6885,6 +7116,7 @@
       "type": "string"
      },
      "pipeline_config": {
+      "additionalProperties": true,
       "title": "Pipeline Config",
       "type": "object"
      },
@@ -6915,6 +7147,7 @@
      "alarm_config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -6927,6 +7160,7 @@
       "anyOf": [
        {
         "items": {
+         "additionalProperties": true,
          "type": "object"
         },
         "type": "array"
@@ -6940,6 +7174,7 @@
      "data_config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -6962,6 +7197,7 @@
      "detection_config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -6974,6 +7210,7 @@
       "anyOf": [
        {
         "items": {
+         "additionalProperties": true,
          "type": "object"
         },
         "type": "array"
@@ -7001,6 +7238,7 @@
      "pipeline_config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -7013,6 +7251,7 @@
       "anyOf": [
        {
         "items": {
+         "additionalProperties": true,
          "type": "object"
         },
         "type": "array"
@@ -7064,6 +7303,7 @@
       "type": "string"
      },
      "data": {
+      "additionalProperties": true,
       "title": "Data",
       "type": "object"
      },
@@ -7096,6 +7336,7 @@
      "alarm_config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -7108,6 +7349,7 @@
       "anyOf": [
        {
         "items": {
+         "additionalProperties": true,
          "type": "object"
         },
         "type": "array"
@@ -7126,6 +7368,7 @@
      "data_config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -7148,6 +7391,7 @@
      "detection_config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -7160,6 +7404,7 @@
       "anyOf": [
        {
         "items": {
+         "additionalProperties": true,
          "type": "object"
         },
         "type": "array"
@@ -7232,6 +7477,7 @@
      "pipeline_config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -7244,6 +7490,7 @@
       "anyOf": [
        {
         "items": {
+         "additionalProperties": true,
          "type": "object"
         },
         "type": "array"
@@ -7279,6 +7526,7 @@
      "alarm_config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -7291,6 +7539,7 @@
       "anyOf": [
        {
         "items": {
+         "additionalProperties": true,
          "type": "object"
         },
         "type": "array"
@@ -7304,6 +7553,7 @@
      "data_config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -7326,6 +7576,7 @@
      "detection_config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -7338,6 +7589,7 @@
       "anyOf": [
        {
         "items": {
+         "additionalProperties": true,
          "type": "object"
         },
         "type": "array"
@@ -7395,6 +7647,7 @@
      "pipeline_config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -7407,6 +7660,7 @@
       "anyOf": [
        {
         "items": {
+         "additionalProperties": true,
          "type": "object"
         },
         "type": "array"
@@ -7469,6 +7723,7 @@
       "type": "string"
      },
      "pull_config": {
+      "additionalProperties": true,
       "title": "Pull Config",
       "type": "object"
      }
@@ -7523,6 +7778,7 @@
      "display_payload": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -7566,6 +7822,7 @@
      "license_payload": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -7958,6 +8215,7 @@
      "data_window_config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -8523,6 +8781,7 @@
      "data_window_config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -8992,6 +9251,7 @@
     "description": "旁路 SN 监控状态快照 (内存态, 只读)。",
     "properties": {
      "by_channel": {
+      "additionalProperties": true,
       "description": "通道号 → 当前 SN 条目",
       "title": "By Channel",
       "type": "object"
@@ -9011,6 +9271,7 @@
      "current": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -9023,6 +9284,7 @@
      "default": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -9035,6 +9297,7 @@
      "entries": {
       "description": "全部监控规则的最新条目",
       "items": {
+       "additionalProperties": true,
        "type": "object"
       },
       "title": "Entries",
@@ -9190,6 +9453,7 @@
      "parse_config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -9242,6 +9506,7 @@
      "scan_d_line": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -9540,6 +9805,7 @@
      "parse_config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -9628,6 +9894,7 @@
      "scan_d_line": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -9739,6 +10006,7 @@
       "type": "number"
      },
      "counters_summary": {
+      "additionalProperties": true,
       "title": "Counters Summary",
       "type": "object"
      },
@@ -9815,6 +10083,7 @@
      "counters_snapshot": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -10876,6 +11145,7 @@
       "type": "string"
      },
      "cycle_context": {
+      "additionalProperties": true,
       "title": "Cycle Context",
       "type": "object"
      },
@@ -11461,6 +11731,7 @@
      "result_data": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -11515,6 +11786,7 @@
      "default_rule_config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -11586,6 +11858,7 @@
      "default_rule_config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -11662,6 +11935,7 @@
      "config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -11730,6 +12004,7 @@
      "protocol_config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -11781,6 +12056,7 @@
      "display_payload": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -11792,6 +12068,7 @@
      "license_payload": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -11897,6 +12174,173 @@
     "title": "TrendData",
     "type": "object"
    },
+   "TriggerChannelCreate": {
+    "properties": {
+     "enabled": {
+      "default": false,
+      "title": "Enabled",
+      "type": "boolean"
+     },
+     "name": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Name",
+      "type": "string"
+     },
+     "options": {
+      "additionalProperties": true,
+      "title": "Options",
+      "type": "object"
+     },
+     "params": {
+      "additionalProperties": true,
+      "title": "Params",
+      "type": "object"
+     },
+     "rules": {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "title": "Rules",
+      "type": "array"
+     },
+     "type": {
+      "default": "pixel_region",
+      "maxLength": 32,
+      "title": "Type",
+      "type": "string"
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "title": "TriggerChannelCreate",
+    "type": "object"
+   },
+   "TriggerChannelUpdate": {
+    "properties": {
+     "enabled": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Enabled"
+     },
+     "name": {
+      "anyOf": [
+       {
+        "maxLength": 64,
+        "minLength": 1,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Name"
+     },
+     "options": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Options"
+     },
+     "params": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Params"
+     },
+     "rules": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Rules"
+     },
+     "type": {
+      "anyOf": [
+       {
+        "maxLength": 32,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Type"
+     }
+    },
+    "title": "TriggerChannelUpdate",
+    "type": "object"
+   },
+   "TriggerEnableRequest": {
+    "properties": {
+     "enabled": {
+      "title": "Enabled",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "enabled"
+    ],
+    "title": "TriggerEnableRequest",
+    "type": "object"
+   },
+   "TriggerMockFire": {
+    "properties": {
+     "meta": {
+      "additionalProperties": true,
+      "title": "Meta",
+      "type": "object"
+     }
+    },
+    "title": "TriggerMockFire",
+    "type": "object"
+   },
+   "TriggerMockLevel": {
+    "properties": {
+     "meta": {
+      "additionalProperties": true,
+      "title": "Meta",
+      "type": "object"
+     },
+     "value": {
+      "title": "Value",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "value"
+    ],
+    "title": "TriggerMockLevel",
+    "type": "object"
+   },
    "TriggerRequest": {
     "properties": {
      "ip": {
@@ -11918,6 +12362,17 @@
      "ip"
     ],
     "title": "TriggerRequest",
+    "type": "object"
+   },
+   "TriggerTestFire": {
+    "properties": {
+     "rule_index": {
+      "default": 0,
+      "title": "Rule Index",
+      "type": "integer"
+     }
+    },
+    "title": "TriggerTestFire",
     "type": "object"
    },
    "UsbDeviceBindRequest": {
@@ -12211,6 +12666,7 @@
      "physical_trigger_config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -12303,6 +12759,7 @@
      "physical_trigger_config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -12417,6 +12874,7 @@
      "physical_trigger_config": {
       "anyOf": [
        {
+        "additionalProperties": true,
         "type": "object"
        },
        {
@@ -13580,6 +14038,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Get Auth Config Api V1 Auth Config Get",
          "type": "object"
         }
@@ -13612,6 +14071,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Put Auth Config Api V1 Auth Config Put",
          "type": "object"
         }
@@ -13770,6 +14230,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Get Me Api V1 Auth Me Get",
          "type": "object"
         }
@@ -16093,6 +16554,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Get Behavior Score Api V1 Data Stats Behavior Score Get",
          "type": "object"
         }
@@ -16392,6 +16854,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Get Yield Trend Api V1 Data Stats Yield Trend Get",
          "type": "object"
         }
@@ -16605,6 +17068,7 @@
      "content": {
       "application/json": {
        "schema": {
+        "additionalProperties": true,
         "title": "Payload",
         "type": "object"
        }
@@ -16663,6 +17127,7 @@
      "content": {
       "application/json": {
        "schema": {
+        "additionalProperties": true,
         "title": "Payload",
         "type": "object"
        }
@@ -16857,6 +17322,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response List Export Fields Api V1 Export Fields Get",
          "type": "object"
         }
@@ -16900,6 +17366,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Preview Template Api V1 Export Preview Post",
          "type": "object"
         }
@@ -16966,6 +17433,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response List Rules Api V1 Export Realtime Rules Get",
          "type": "object"
         }
@@ -17006,6 +17474,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Create Rule Api V1 Export Realtime Rules Post",
          "type": "object"
         }
@@ -17049,6 +17518,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Delete Rule Api V1 Export Realtime Rules  Rule Id  Delete",
          "type": "object"
         }
@@ -17090,6 +17560,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Get Rule Api V1 Export Realtime Rules  Rule Id  Get",
          "type": "object"
         }
@@ -17141,6 +17612,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Update Rule Api V1 Export Realtime Rules  Rule Id  Put",
          "type": "object"
         }
@@ -17223,6 +17695,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response List Rule Logs Api V1 Export Realtime Rules  Rule Id  Logs Get",
          "type": "object"
         }
@@ -17277,6 +17750,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Test Run Api V1 Export Realtime Rules  Rule Id  Test Run Post",
          "type": "object"
         }
@@ -17320,6 +17794,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Toggle Rule Api V1 Export Realtime Rules  Rule Id  Toggle Post",
          "type": "object"
         }
@@ -17466,6 +17941,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response List All Logs Api V1 Export Run Logs Get",
          "type": "object"
         }
@@ -17634,6 +18110,7 @@
      "content": {
       "application/json": {
        "schema": {
+        "additionalProperties": true,
         "title": "Payload",
         "type": "object"
        }
@@ -17691,6 +18168,7 @@
      "content": {
       "application/json": {
        "schema": {
+        "additionalProperties": true,
         "title": "Payload",
         "type": "object"
        }
@@ -18048,6 +18526,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response List Templates Api V1 Export Templates Get",
          "type": "object"
         }
@@ -18088,6 +18567,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Create Template Api V1 Export Templates Post",
          "type": "object"
         }
@@ -18132,6 +18612,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Delete Template File Api V1 Export Templates  Template Id  Template File Delete",
          "type": "object"
         }
@@ -18225,6 +18706,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Upload Template File Api V1 Export Templates  Template Id  Upload Template File Post",
          "type": "object"
         }
@@ -18268,6 +18750,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Delete Template Api V1 Export Templates  Tpl Id  Delete",
          "type": "object"
         }
@@ -18309,6 +18792,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Get Template Api V1 Export Templates  Tpl Id  Get",
          "type": "object"
         }
@@ -18360,6 +18844,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Update Template Api V1 Export Templates  Tpl Id  Put",
          "type": "object"
         }
@@ -18420,6 +18905,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Clone Template Api V1 Export Templates  Tpl Id  Clone Post",
          "type": "object"
         }
@@ -20561,6 +21047,7 @@
      "content": {
       "application/json": {
        "schema": {
+        "additionalProperties": true,
         "title": "Payload",
         "type": "object"
        }
@@ -21167,6 +21654,7 @@
      "content": {
       "application/json": {
        "schema": {
+        "additionalProperties": true,
         "title": "Body",
         "type": "object"
        }
@@ -22919,6 +23407,553 @@
     ]
    }
   },
+  "/api/v1/plc/connections": {
+   "get": {
+    "operationId": "list_connections_api_v1_plc_connections_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "List Connections",
+    "tags": [
+     "plc"
+    ]
+   },
+   "post": {
+    "operationId": "create_connection_api_v1_plc_connections_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/PLCConnectionCreate"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Create Connection",
+    "tags": [
+     "plc"
+    ]
+   }
+  },
+  "/api/v1/plc/connections/{connection_id}": {
+   "delete": {
+    "operationId": "delete_connection_api_v1_plc_connections__connection_id__delete",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "connection_id",
+      "required": true,
+      "schema": {
+       "title": "Connection Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Delete Connection",
+    "tags": [
+     "plc"
+    ]
+   },
+   "put": {
+    "operationId": "update_connection_api_v1_plc_connections__connection_id__put",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "connection_id",
+      "required": true,
+      "schema": {
+       "title": "Connection Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/PLCConnectionUpdate"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Update Connection",
+    "tags": [
+     "plc"
+    ]
+   }
+  },
+  "/api/v1/plc/connections/{connection_id}/enable": {
+   "post": {
+    "operationId": "enable_connection_api_v1_plc_connections__connection_id__enable_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "connection_id",
+      "required": true,
+      "schema": {
+       "title": "Connection Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/PLCEnableRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Enable Connection",
+    "tags": [
+     "plc"
+    ]
+   }
+  },
+  "/api/v1/plc/connections/{connection_id}/export": {
+   "get": {
+    "operationId": "export_connection_api_v1_plc_connections__connection_id__export_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "connection_id",
+      "required": true,
+      "schema": {
+       "title": "Connection Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Export Connection",
+    "tags": [
+     "plc"
+    ]
+   }
+  },
+  "/api/v1/plc/connections/{connection_id}/live": {
+   "get": {
+    "description": "实时监视: 点位当前值 / 变化时间 / 状态 / 计数器。前端 1s 轮询。",
+    "operationId": "live_values_api_v1_plc_connections__connection_id__live_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "connection_id",
+      "required": true,
+      "schema": {
+       "title": "Connection Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Live Values",
+    "tags": [
+     "plc"
+    ]
+   }
+  },
+  "/api/v1/plc/connections/{connection_id}/logs": {
+   "get": {
+    "operationId": "io_logs_api_v1_plc_connections__connection_id__logs_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "connection_id",
+      "required": true,
+      "schema": {
+       "title": "Connection Id",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 100,
+       "title": "Limit",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Io Logs",
+    "tags": [
+     "plc"
+    ]
+   }
+  },
+  "/api/v1/plc/connections/{connection_id}/mock-set": {
+   "post": {
+    "description": "mock 驱动专属: 模拟 PLC 侧改点位 (置读完成/写产品号), 驱动完整规则链路。",
+    "operationId": "mock_set_api_v1_plc_connections__connection_id__mock_set_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "connection_id",
+      "required": true,
+      "schema": {
+       "title": "Connection Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/PLCPointWrite"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Mock Set",
+    "tags": [
+     "plc"
+    ]
+   }
+  },
+  "/api/v1/plc/connections/{connection_id}/test": {
+   "post": {
+    "description": "按已存配置做一次连通测试 (独立短连接, 不影响运行中的引擎)。",
+    "operationId": "test_connection_api_v1_plc_connections__connection_id__test_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "connection_id",
+      "required": true,
+      "schema": {
+       "title": "Connection Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Test Connection",
+    "tags": [
+     "plc"
+    ]
+   }
+  },
+  "/api/v1/plc/connections/{connection_id}/write": {
+   "post": {
+    "description": "手动写值 (现场联调用), 同步等待写完成。",
+    "operationId": "manual_write_api_v1_plc_connections__connection_id__write_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "connection_id",
+      "required": true,
+      "schema": {
+       "title": "Connection Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/PLCPointWrite"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Manual Write",
+    "tags": [
+     "plc"
+    ]
+   }
+  },
+  "/api/v1/plc/drivers": {
+   "get": {
+    "operationId": "list_plc_drivers_api_v1_plc_drivers_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "List Plc Drivers",
+    "tags": [
+     "plc"
+    ]
+   }
+  },
+  "/api/v1/plc/import": {
+   "post": {
+    "description": "导入配置 (与 create 同构, 单独留端点便于前端语义区分; 导入默认不启用)。",
+    "operationId": "import_connection_api_v1_plc_import_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/PLCConnectionCreate"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Import Connection",
+    "tags": [
+     "plc"
+    ]
+   }
+  },
+  "/api/v1/plc/templates": {
+   "get": {
+    "description": "内置方案模板库: 载入后改地址/映射即用 (客户方案可导出后互相复制)。",
+    "operationId": "list_plc_templates_api_v1_plc_templates_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "List Plc Templates",
+    "tags": [
+     "plc"
+    ]
+   }
+  },
   "/api/v1/plugins": {
    "get": {
     "operationId": "list_plugins_api_v1_plugins_get",
@@ -22927,6 +23962,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response List Plugins Api V1 Plugins Get",
          "type": "object"
         }
@@ -22991,6 +24027,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Get Active Manifest Api V1 Plugins Active Manifest Get",
          "type": "object"
         }
@@ -23014,6 +24051,7 @@
      "content": {
       "application/json": {
        "schema": {
+        "additionalProperties": true,
         "title": "Payload",
         "type": "object"
        }
@@ -23071,6 +24109,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Install Plugin Api V1 Plugins Install Post",
          "type": "object"
         }
@@ -23126,6 +24165,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Delete Plugin Api V1 Plugins  Customer Code  Delete",
          "type": "object"
         }
@@ -23170,6 +24210,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Activate Plugin Api V1 Plugins  Customer Code  Activate Post",
          "type": "object"
         }
@@ -23214,6 +24255,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Deactivate Plugin Api V1 Plugins  Customer Code  Deactivate Post",
          "type": "object"
         }
@@ -23258,6 +24300,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Get Plugin Status Api V1 Plugins  Customer Code  Status Get",
          "type": "object"
         }
@@ -24042,6 +25085,7 @@
        "application/json": {
         "schema": {
          "items": {
+          "additionalProperties": true,
           "type": "object"
          },
          "title": "Response Get Records Api V1 Reports Records Get",
@@ -29385,6 +30429,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Get Device Status Api V1 System Device Status Get",
          "type": "object"
         }
@@ -29408,6 +30453,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Get Display Api V1 System Display Get",
          "type": "object"
         }
@@ -29439,6 +30485,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Put Display Api V1 System Display Put",
          "type": "object"
         }
@@ -29472,6 +30519,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Get License Cache Api V1 System License Cache Get",
          "type": "object"
         }
@@ -29503,6 +30551,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Put License Cache Api V1 System License Cache Put",
          "type": "object"
         }
@@ -29536,6 +30585,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Get Log Limits Api V1 System Log Limits Get",
          "type": "object"
         }
@@ -29556,6 +30606,7 @@
      "content": {
       "application/json": {
        "schema": {
+        "additionalProperties": true,
         "title": "Payload",
         "type": "object"
        }
@@ -29568,6 +30619,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Put Log Limits Api V1 System Log Limits Put",
          "type": "object"
         }
@@ -29601,6 +30653,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Get Polling Api V1 System Polling Get",
          "type": "object"
         }
@@ -29621,6 +30674,7 @@
      "content": {
       "application/json": {
        "schema": {
+        "additionalProperties": true,
         "title": "Payload",
         "type": "object"
        }
@@ -29633,6 +30687,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Put Polling Api V1 System Polling Put",
          "type": "object"
         }
@@ -29666,6 +30721,7 @@
       "content": {
        "application/json": {
         "schema": {
+         "additionalProperties": true,
          "title": "Response Get Startup Ready Api V1 System Startup Ready Get",
          "type": "object"
         }
@@ -30115,6 +31171,7 @@
        "schema": {
         "anyOf": [
          {
+          "additionalProperties": true,
           "type": "object"
          },
          {
@@ -30151,6 +31208,746 @@
     "summary": "Update Task",
     "tags": [
      "tasks"
+    ]
+   }
+  },
+  "/api/v1/triggers/actions": {
+   "get": {
+    "description": "动作注册表清单 (与 PLC 规则共用一套; 插件注册的也在)。",
+    "operationId": "list_trigger_actions_api_v1_triggers_actions_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "List Trigger Actions",
+    "tags": [
+     "triggers"
+    ]
+   }
+  },
+  "/api/v1/triggers/channels": {
+   "get": {
+    "operationId": "list_triggers_api_v1_triggers_channels_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "List Triggers",
+    "tags": [
+     "triggers"
+    ]
+   },
+   "post": {
+    "operationId": "create_trigger_api_v1_triggers_channels_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/TriggerChannelCreate"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Create Trigger",
+    "tags": [
+     "triggers"
+    ]
+   }
+  },
+  "/api/v1/triggers/channels/{trigger_id}": {
+   "delete": {
+    "operationId": "delete_trigger_api_v1_triggers_channels__trigger_id__delete",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "trigger_id",
+      "required": true,
+      "schema": {
+       "title": "Trigger Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Delete Trigger",
+    "tags": [
+     "triggers"
+    ]
+   },
+   "put": {
+    "operationId": "update_trigger_api_v1_triggers_channels__trigger_id__put",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "trigger_id",
+      "required": true,
+      "schema": {
+       "title": "Trigger Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/TriggerChannelUpdate"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Update Trigger",
+    "tags": [
+     "triggers"
+    ]
+   }
+  },
+  "/api/v1/triggers/channels/{trigger_id}/calibrate": {
+   "post": {
+    "description": "pixel_region 专属: 取当前区域均值作参考帧并持久化 (一键标定)。",
+    "operationId": "calibrate_pixel_api_v1_triggers_channels__trigger_id__calibrate_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "trigger_id",
+      "required": true,
+      "schema": {
+       "title": "Trigger Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Calibrate Pixel",
+    "tags": [
+     "triggers"
+    ]
+   }
+  },
+  "/api/v1/triggers/channels/{trigger_id}/enable": {
+   "post": {
+    "operationId": "enable_trigger_api_v1_triggers_channels__trigger_id__enable_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "trigger_id",
+      "required": true,
+      "schema": {
+       "title": "Trigger Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/TriggerEnableRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Enable Trigger",
+    "tags": [
+     "triggers"
+    ]
+   }
+  },
+  "/api/v1/triggers/channels/{trigger_id}/export": {
+   "get": {
+    "operationId": "export_trigger_api_v1_triggers_channels__trigger_id__export_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "trigger_id",
+      "required": true,
+      "schema": {
+       "title": "Trigger Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Export Trigger",
+    "tags": [
+     "triggers"
+    ]
+   }
+  },
+  "/api/v1/triggers/channels/{trigger_id}/history": {
+   "get": {
+    "operationId": "trigger_history_api_v1_triggers_channels__trigger_id__history_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "trigger_id",
+      "required": true,
+      "schema": {
+       "title": "Trigger Id",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 50,
+       "title": "Limit",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Trigger History",
+    "tags": [
+     "triggers"
+    ]
+   }
+  },
+  "/api/v1/triggers/channels/{trigger_id}/live": {
+   "get": {
+    "description": "实时状态: 源指标 / 计数器 / 变量。前端 1.5s 轮询。",
+    "operationId": "live_status_api_v1_triggers_channels__trigger_id__live_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "trigger_id",
+      "required": true,
+      "schema": {
+       "title": "Trigger Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Live Status",
+    "tags": [
+     "triggers"
+    ]
+   }
+  },
+  "/api/v1/triggers/channels/{trigger_id}/logs": {
+   "get": {
+    "operationId": "trigger_logs_api_v1_triggers_channels__trigger_id__logs_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "trigger_id",
+      "required": true,
+      "schema": {
+       "title": "Trigger Id",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 100,
+       "title": "Limit",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Trigger Logs",
+    "tags": [
+     "triggers"
+    ]
+   }
+  },
+  "/api/v1/triggers/channels/{trigger_id}/mock-fire": {
+   "post": {
+    "description": "mock 触发源专属: 注入一次脉冲 (走完整 规则→动作 链路)。",
+    "operationId": "mock_fire_api_v1_triggers_channels__trigger_id__mock_fire_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "trigger_id",
+      "required": true,
+      "schema": {
+       "title": "Trigger Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/TriggerMockFire"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Mock Fire",
+    "tags": [
+     "triggers"
+    ]
+   }
+  },
+  "/api/v1/triggers/channels/{trigger_id}/mock-level": {
+   "post": {
+    "description": "mock 触发源专属: 注入电平变化 (测防抖/边沿判定)。",
+    "operationId": "mock_level_api_v1_triggers_channels__trigger_id__mock_level_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "trigger_id",
+      "required": true,
+      "schema": {
+       "title": "Trigger Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/TriggerMockLevel"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Mock Level",
+    "tags": [
+     "triggers"
+    ]
+   }
+  },
+  "/api/v1/triggers/channels/{trigger_id}/test": {
+   "post": {
+    "description": "手动试触发: 绕过信号/防抖/窗口, 直接执行指定规则的动作 (现场联调)。",
+    "operationId": "test_fire_api_v1_triggers_channels__trigger_id__test_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "trigger_id",
+      "required": true,
+      "schema": {
+       "title": "Trigger Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/TriggerTestFire"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Test Fire",
+    "tags": [
+     "triggers"
+    ]
+   }
+  },
+  "/api/v1/triggers/fire/{key}": {
+   "post": {
+    "description": "外部系统触发入口。密钥经 X-Trigger-Secret 头或 ?secret= 传入。",
+    "operationId": "http_fire_api_v1_triggers_fire__key__post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "key",
+      "required": true,
+      "schema": {
+       "title": "Key",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "secret",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Secret"
+      }
+     },
+     {
+      "in": "header",
+      "name": "x-trigger-secret",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "X-Trigger-Secret"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Http Fire",
+    "tags": [
+     "triggers"
+    ]
+   }
+  },
+  "/api/v1/triggers/import": {
+   "post": {
+    "description": "导入配置 (与 create 同构; 导入默认不启用)。",
+    "operationId": "import_trigger_api_v1_triggers_import_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/TriggerChannelCreate"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Import Trigger",
+    "tags": [
+     "triggers"
+    ]
+   }
+  },
+  "/api/v1/triggers/templates": {
+   "get": {
+    "operationId": "list_trigger_templates_api_v1_triggers_templates_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "List Trigger Templates",
+    "tags": [
+     "triggers"
+    ]
+   }
+  },
+  "/api/v1/triggers/types": {
+   "get": {
+    "operationId": "list_trigger_types_api_v1_triggers_types_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "List Trigger Types",
+    "tags": [
+     "triggers"
     ]
    }
   },
@@ -31206,6 +33003,7 @@
      "content": {
       "application/json": {
        "schema": {
+        "additionalProperties": true,
         "title": "Body",
         "type": "object"
        }
