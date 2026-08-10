@@ -15,6 +15,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__playwright, mcp__context7, m
 
 > 事实校验基线：`frontend/src/views/Monitor/index.vue` (6847，v3.47 多工位布局重构后) / `views/Data/index.vue` (1985) / `store/useSystemStore.js` (277)。
 > v3.47 多工位布局：模板顶层链 `layoutBodyOverride → channelCount===2 → ===3（三行横排）→ >3（网格总览+分页+放大详情）→ 单工位`；4+ 工位只拉**可见工位**的 MJPEG 流（`visibleStreamChannels/syncMultiStreams`），数据轮询仍覆盖全部工位——排查"翻页后某工位没画面"先看该工位是否在当前页/放大路。
+> v3.48.1 快照轮询回退（多工位视频"加载不出/黑屏"治本）：浏览器同 host HTTP/1.1 只有 **6 条并发连接**，可见工位 > `MAX_MJPEG_STREAMS`(4) 时 `syncMultiStreams` 掐掉全部 MJPEG 长连接改走 `/snapshot?channel=N` 单帧轮询；另外任一工位 MJPEG **连续 2 次零帧断流**（`mjpegZeroFrameFails`，WebKit fetch 不支持 multipart/x-mixed-replace 的典型症状）也会单独降级快照。取帧节奏 `_snapshotIntervalMs()` 按并发工位数自适应：≤2 路 80ms（~12fps）/ ≤4 路 120ms / ≤9 路 200ms / 更多 300ms。排查"画面像幻灯片"先分清**显示帧率**（快照节奏决定）和底部 FPS（后端推理帧率），两者本来就不相等。
 > 前端通过 `axios.create({ baseURL })`，dev 默认 `http://localhost:8001/api/v1`，Electron 走 `file://` 时取 `DEFAULT_BACKEND_HOST`，浏览器经 Vite proxy。
 
 ---

@@ -629,14 +629,22 @@ def get_session_cycles(
     skip: int = 0,
     limit: int = 50,
     operator_id: Optional[int] = None,
+    result: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    """获取会话的周期（分页）"""
+    """获取会话的周期（分页）
+
+    result: 可选 'ok' / 'ng' —— 按判定结果过滤（v3.48.1, 数据中心"只看NG录像"）。
+    """
     base = db.query(DetectionCycle).filter(
         DetectionCycle.session_id == session_id
     )
     if operator_id is not None:
         base = base.filter(DetectionCycle.operator_id == operator_id)
+    if result == 'ok':
+        base = base.filter(DetectionCycle.is_good.is_(True))
+    elif result == 'ng':
+        base = base.filter(DetectionCycle.is_good.is_(False))
     total = base.count()
 
     cycles = base.order_by(DetectionCycle.cycle_number).offset(skip).limit(limit).all()
@@ -871,21 +879,29 @@ def get_cycle_steps(cycle_id: int, db: Session = Depends(get_db)):
 # ============ 视频 API ============
 
 def convert_video_for_browser(input_path: str) -> str:
-    """将视频转换为浏览器兼容的H.264格式"""
-    # 创建转换后的文件路径
+    """将视频转换为浏览器兼容的H.264格式
+
+    v3.48.1 治「视频加载失败」两根因:
+    1. 旧实现直接往缓存路径写, 转码超时/被杀会留残缺文件, 且下次请求
+       os.path.exists 命中坏缓存直接回传 → 该视频从此永远播放失败。
+       改为先写 .tmp 临时文件、转码成功后原子 rename, 缓存要么完整要么没有。
+    2. 缓存名 _h264 → _h264v2: 让历史上已经写坏的旧缓存自然失效重转。
+    3. 超时 60s → 300s: 会话级长录像 60s 根本转不完, 超时后回退原始
+       mp4v 编码文件, Chromium 解不了照样黑屏报错。
+    """
     cache_dir = os.path.join(settings.RECORDING_DIR, "cache")
     os.makedirs(cache_dir, exist_ok=True)
-    
+
     filename = os.path.basename(input_path)
     base_name = os.path.splitext(filename)[0]
-    output_path = os.path.join(cache_dir, f"{base_name}_h264.mp4")
-    
-    # 如果已经转换过，直接返回缓存
-    if os.path.exists(output_path):
+    output_path = os.path.join(cache_dir, f"{base_name}_h264v2.mp4")
+    tmp_path = output_path + ".tmp.mp4"
+
+    # 完整缓存(原子 rename 落位的)才可信
+    if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
         return output_path
-    
+
     try:
-        # 使用 ffmpeg 转换为 H.264 格式
         ffmpeg_path = get_cached_ffmpeg_path()
         cmd = [
             ffmpeg_path, "-y",
@@ -895,19 +911,32 @@ def convert_video_for_browser(input_path: str) -> str:
             "-crf", "23",
             "-c:a", "aac",
             "-movflags", "+faststart",  # 支持流式播放
-            output_path
+            tmp_path
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        
-        if result.returncode == 0 and os.path.exists(output_path):
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+
+        if result.returncode == 0 and os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
+            os.replace(tmp_path, output_path)  # 原子落位, 不存在半成品缓存
             print(f"视频转换成功: {output_path}")
+            # 顺手清掉旧命名的坏缓存(如有), 不占磁盘
+            legacy = os.path.join(cache_dir, f"{base_name}_h264.mp4")
+            if os.path.exists(legacy):
+                try:
+                    os.remove(legacy)
+                except OSError:
+                    pass
             return output_path
-        else:
-            print(f"视频转换失败: {result.stderr}")
-            return input_path  # 转换失败则返回原文件
+        print(f"视频转换失败: {(result.stderr or '')[-500:]}")
     except Exception as e:
         print(f"视频转换异常: {e}")
-        return input_path
+    finally:
+        # 失败/超时的半成品必须清掉, 绝不能留给下次命中
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+    return input_path  # 转换失败回退原文件(老编码浏览器可能放不了, 但至少可下载)
 
 
 @router.get("/videos/{video_id}")

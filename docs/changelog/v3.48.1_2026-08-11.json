@@ -1,0 +1,76 @@
+{
+  "version": "3.48.1",
+  "date": "2026-08-11",
+  "previous_version": "3.48.0",
+  "summary": "体验修复补丁版：多工位监控视频加载/卡顿治本（MJPEG 连接饿死+WebKit 兼容+自适应快照轮询）+ 数据中心录像播放失败治本（坏缓存原子落位+超时 300s）+ NG 录像回看三件套（结果筛选/倍速/下载）+ Electron 退出僵尸后端兜底 + PG 基线迁移 CI 修复",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "多工位监控（>4 工位）视频加载不出来 / WebKit 黑屏 / 显示帧率过低被感知为卡顿",
+      "symptom": "九工位总览页视频全部转圈；Safari 下单工位放大也黑屏；肉眼只有几帧但底部显示 20+ FPS",
+      "root_cause": "浏览器同 host HTTP/1.1 并发连接上限 6，九路 MJPEG 长连接+数据轮询互相踢流；WebKit fetch() 不支持 multipart/x-mixed-replace 流式读取一律零帧断流；回退快照轮询固定 300ms 仅 3.3fps",
+      "fix": "可见工位>4 改走 /snapshot 单帧轮询；MJPEG 连续 2 次零帧断流自动降级快照轮询；快照节奏按工位数自适应（≤2 路 80ms / ≤4 路 120ms / ≤9 路 200ms / 更多 300ms）",
+      "files": ["frontend/src/views/Monitor/index.vue"],
+      "keywords": ["九工位", "视频加载不出来", "黑屏", "卡顿", "MJPEG", "连接上限", "6 connections", "Safari", "WebKit", "multipart/x-mixed-replace", "snapshot", "快照轮询", "自适应帧率", "帧率低"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "数据中心录像「视频加载失败」且一旦失败永远失败",
+      "symptom": "Data 页周期录像弹窗黑屏报错，同一条录像每次点开都失败",
+      "root_cause": "convert_video_for_browser 直接往缓存路径写转码产物，超时/被杀留残缺文件后 os.path.exists 命中坏缓存永久回传；超时 60s 长录像转不完，回退的 mp4v 原始文件 Chromium 解不了",
+      "fix": ".tmp 临时文件 + os.replace 原子落位；缓存名 _h264→_h264v2 让历史坏缓存失效重转；超时 60s→300s；失败半成品 finally 必清",
+      "files": ["backend/api/sessions.py"],
+      "keywords": ["视频加载失败", "录像播放", "转码", "ffmpeg", "H.264", "坏缓存", "原子写入", "h264v2", "超时", "mp4v"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "Electron 退出留下僵尸 python 后端（每次启动都在清理残留进程）",
+      "symptom": "关闭应用后 python 进程残留占 GPU 显存，下次启动依赖清残留兜底",
+      "root_cause": "finishShutdown 的 3s race 抢跑 stopBackend()，stop() 最坏路径'优雅3s→软杀5s→强杀'排在后面，后端退出慢时 app.exit 先执行，强杀轮不到",
+      "fix": "race 3s→8s；新增 BackendManager.forceKillSync() 同步强杀兜底（win32 taskkill /f /t，POSIX 杀进程组），app.exit(0) 前必执行",
+      "files": ["electron/main.js", "electron/backend-manager.js"],
+      "keywords": ["僵尸进程", "残留进程", "python 残留", "关机流程", "forceKillSync", "taskkill", "app.exit", "GPU 显存占用"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-004",
+      "title": "DB Matrix CI（PostgreSQL）基线迁移 NoReferencedTableError",
+      "symptom": "alembic 基线 upgrade 报 detection_sessions.operator_id 找不到 users 表",
+      "root_cause": "alembic/env.py 缺 auth/notify/weighing/plc/trigger 五组模型 import，users 等表不在 metadata，外键解析失败",
+      "fix": "env.py 补齐 5 组模型模块 import",
+      "files": ["alembic/env.py"],
+      "keywords": ["alembic", "NoReferencedTableError", "users", "operator_id", "PostgreSQL", "DB Matrix", "基线迁移", "metadata"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "数据中心 NG 录像回看三件套：结果筛选 + 播放倍速 + 下载录像",
+      "symptom": "客户回看录像只关心 NG 周期但只能逐条翻；长录像原速看太久；老编码录像浏览器放不了拿不到文件",
+      "fix": "周期列表新增 全部/仅OK/仅NG 筛选（GET /data/sessions/{id}/cycles 新增 result=ok|ng 参数）；播放弹窗 0.5x~4x 倍速（记住选择）；下载录像按钮（/data/videos/{id} FileResponse）；报错文案引导下载兜底",
+      "files": ["backend/api/sessions.py", "frontend/src/api/data.js", "frontend/src/views/Data/index.vue"],
+      "keywords": ["NG 录像", "结果筛选", "只看NG", "播放倍速", "playbackRate", "下载录像", "周期筛选", "result 参数", "数据中心"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-frontend", "debug-electron", "debug-session"],
+  "files_changed": [
+    "alembic/env.py",
+    "backend/api/sessions.py",
+    "electron/backend-manager.js",
+    "electron/main.js",
+    "frontend/src/api/data.js",
+    "frontend/src/views/Data/index.vue",
+    "frontend/src/views/Monitor/index.vue",
+    "docs/dev/reference/api/openapi.json",
+    "tests/test_data_video_fixes.py",
+    "tests/e2e_browser/test_data_video_panel.py",
+    "tests/manual_uat/data_video_fixes_uat.py"
+  ]
+}

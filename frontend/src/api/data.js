@@ -39,9 +39,9 @@ export const renameSession = (sessionId, name) => {
 
 // ============ 周期管理 ============
 
-// 获取会话的周期（分页）
-export const getSessionCycles = (sessionId, skip = 0, limit = 50) => {
-  return api.get(`/data/sessions/${sessionId}/cycles`, { params: { skip, limit } });
+// 获取会话的周期（分页; result 可选 'ok'/'ng' 按判定结果过滤, v3.48.1）
+export const getSessionCycles = (sessionId, skip = 0, limit = 50, result = undefined) => {
+  return api.get(`/data/sessions/${sessionId}/cycles`, { params: { skip, limit, result } });
 };
 
 // 获取单个周期详情

@@ -20,6 +20,11 @@ from backend.models import models  # noqa: F401, E402
 from backend.models import export_models  # noqa: F401, E402
 from backend.models import mes_models  # noqa: F401, E402
 from backend.models import plugin_models  # noqa: F401, E402
+from backend.models import auth_models  # noqa: F401, E402  users 表 (detection_sessions.operator_id FK)
+from backend.models import notify_models  # noqa: F401, E402
+from backend.models import weighing_models  # noqa: F401, E402
+from backend.models import plc_models  # noqa: F401, E402
+from backend.models import trigger_models  # noqa: F401, E402
 
 config = context.config
 if config.config_file_name is not None:

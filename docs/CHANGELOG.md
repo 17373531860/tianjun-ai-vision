@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.48.1 (2026-08-11)
+
+> 主题：**体验修复补丁版**——多工位监控视频加载/卡顿治本 + 数据中心录像播放失败治本 + NG 录像回看三件套 + Electron 退出僵尸后端兜底 + PG 基线迁移 CI 修复。
+
+- [BUG-001] 修复: 多工位监控（>4 工位）视频加载不出来——浏览器同 host 6 连接上限被九路 MJPEG 挤爆互踢；改走 /snapshot 快照轮询 + WebKit 零帧断流自动降级 + 取帧节奏按工位数自适应（≤2 路 ~12fps / 九宫格 5fps）
+- [BUG-002] 修复: 数据中心录像「视频加载失败」且永远失败——转码坏缓存永久命中 + 60s 超时长录像转不完；改 .tmp 原子落位 + 缓存名 _h264v2 失效重转 + 超时 300s
+- [BUG-003] 修复: Electron 退出留僵尸 python 后端——3s race 抢跑强杀轮不到；race 8s + app.exit 前 forceKillSync 同步兜底
+- [BUG-004] 修复: DB Matrix CI（PostgreSQL）基线迁移 NoReferencedTableError——alembic/env.py 补齐 auth/notify/weighing/plc/trigger 五组模型 import
+- [FEAT-001] 新增: 数据中心 NG 录像回看三件套——周期列表 全部/仅OK/仅NG 筛选（cycles 端点 result 参数）+ 播放 0.5x~4x 倍速 + 下载录像按钮
+
 ## v3.48.0 (2026-08-10)
 
 > 主题：**三分支汇合发版**——SY9（上银记账精度）+ feat/tianyong（RFC 13/14 PLC 与触发中心）+ dev-qing（完成脉冲/短信形态）。**RFC 13 通用 PLC 连接器**（8 协议驱动 + 点位/规则全可配，默认无连接零开销）+ **RFC 14 统一触发中心**（6 种触发源 × 全局动作注册表）+ **计数组合判定表**（纯视觉判型 + positional 位置去重口径）。

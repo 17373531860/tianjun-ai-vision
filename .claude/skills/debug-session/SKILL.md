@@ -128,7 +128,7 @@ session 关闭 / 检测停止 / 班次切换 / 跨日
 **辅助函数**：
 - `_get_step_order_map(db, project_id|session_id|cycle_id)` — `{step_label: idx}`，从 Project.steps_config 读
 - `_filter_valid_steps(steps)` — 过滤 `duration < 0.1s` 的幻影步骤；**不在 `/cycles/{id}/steps` 里用**（与 `_reconcile_step_records` 已对齐过冲突）
-- `convert_video_for_browser(input_path)` — FFmpeg 转 H.264 + faststart，结果落 `RECORDING_DIR/cache/`
+- `convert_video_for_browser(input_path)` — FFmpeg 转 H.264 + faststart，结果落 `RECORDING_DIR/cache/`。**v3.48.1 起原子化**：先写 `.tmp.mp4` 成功后 `os.replace` 落位，缓存名 `_h264v2`（旧 `_h264` 一律不认，历史坏缓存自然失效），超时 60s→300s。排查「视频加载失败」：① 看 `cache/` 里有没有对应 `_h264v2.mp4`（size>0 才可信）；② 没有则看后端日志"视频转换失败/异常"；③ 转码失败会回退原始 mp4v 文件——Chromium 解不了但可下载（前端 v3.48.1 有「下载录像」按钮兜底）。周期列表 `GET /data/sessions/{id}/cycles` v3.48.1 新增 `result=ok|ng` 筛选参数（按 `DetectionCycle.is_good`）。
 
 **改 sessions 相关功能时 grep 范围：`backend/api/sessions*.py`**（4 个文件全扫）。
 

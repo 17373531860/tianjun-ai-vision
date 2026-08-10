@@ -724,13 +724,23 @@ async function finishShutdown(forced = false) {
   }
   
   // 停止后端（带超时保护）
+  // v3.48.1: 3s→8s。stop() 内部最坏路径是"优雅等3s→软杀等5s→强杀",
+  // 3s race 会在强杀执行前就 app.exit, 后端残留成僵尸(客户机每次启动都清残留)。
   try {
     await Promise.race([
       stopBackend(),
-      new Promise(resolve => setTimeout(resolve, 3000)) // 最多等3秒
+      new Promise(resolve => setTimeout(resolve, 8000))
     ]);
   } catch (e) {
     console.log('[App] Error stopping backend:', e.message);
+  }
+  
+  // v3.48.1 最后兜底: 无论上面走到哪一步, 退出前同步确认后端已死,
+  // 绝不把残留 python(占着 GPU 显存)留给下一次启动
+  try {
+    if (backendManager) backendManager.forceKillSync();
+  } catch (e) {
+    console.log('[App] forceKillSync error:', e.message);
   }
   
   // 确保退出应用

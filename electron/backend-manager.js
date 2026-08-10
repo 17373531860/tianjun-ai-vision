@@ -763,6 +763,36 @@ class BackendManager extends EventEmitter {
   }
   
   /**
+   * 同步强杀后端进程树（app.exit 前的最后兜底）。
+   *
+   * v3.48.1: finishShutdown 用 3s race 抢跑 stop(), 而 stop() 的强杀兜底
+   * 排在"优雅等 3s → 软杀等 5s"之后——后端退出慢(模型/CUDA 释放)时,
+   * Electron 先 app.exit 自尽, 强杀永远轮不到, python 残留成僵尸,
+   * 表现为客户机"每次启动都在清理残留进程"。此方法必须是同步的,
+   * 保证 app.exit(0) 之前一定执行完。
+   */
+  forceKillSync() {
+    if (!this.process || this.process.exitCode !== null) {
+      return; // 已退出, 无需处理
+    }
+    console.log(`[BackendManager] Force killing backend synchronously (pid=${this.process.pid})...`);
+    try {
+      if (process.platform === 'win32') {
+        execSync(`taskkill /pid ${this.process.pid} /f /t`, { stdio: 'ignore', timeout: 10000 });
+      } else {
+        try {
+          process.kill(-this.process.pid, 'SIGKILL');
+        } catch (e) {
+          this.process.kill('SIGKILL');
+        }
+      }
+      console.log('[BackendManager] Synchronous force kill done');
+    } catch (e) {
+      console.log('[BackendManager] Synchronous force kill failed:', e.message);
+    }
+  }
+
+  /**
    * 等待进程退出
    */
   waitForExit(timeout) {

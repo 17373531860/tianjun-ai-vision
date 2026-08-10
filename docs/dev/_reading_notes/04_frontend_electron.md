@@ -22,6 +22,12 @@
 > - `views/MES/ExternalDevicePanel.vue` + `api/external_device.js`（dev-qing）：`modbus_pulse` 协议配置区（线圈地址/pulse_ms/cooldown_ms/trigger_mode）+ 手动试发按钮
 > - `views/Alarm/index.vue`（dev-qing）：短信汇总「发送形态」单选（merged_detail 一条内分列多工位=默认 / per_channel 逐工位逐条）+ `summary_channel_ids` 参与工位多选
 
+> **v3.48.1 补账（2026-08-11，体验修复补丁版）**：
+> - `views/Monitor/index.vue`（→6942 行）：**快照轮询回退**——`syncMultiStreams` 在可见工位 > `MAX_MJPEG_STREAMS`(4) 时掐掉全部 MJPEG 长连接改 `/snapshot?channel=N` 单帧轮询（浏览器同 host HTTP/1.1 仅 6 条并发连接，九路 MJPEG + 数据轮询互踢饿死）；新增 `mjpegZeroFrameFails`/`_registerMjpegDeath`：任一工位 MJPEG 连续 2 次零帧断流（WebKit fetch 不支持 multipart/x-mixed-replace）单独降级快照；`startSnapshotPolling` 定时器 40ms 基础节拍 + `_snapshotIntervalMs()` 按并发工位数自适应取帧间隔（≤2 路 80ms / ≤4 路 120ms / ≤9 路 200ms / 更多 300ms），`snapshotInFlight` 背压跳 tick，`stopMultiStreams` 清零帧计数
+> - `views/Data/index.vue`：周期列表「全部/仅OK/仅NG」筛选（`cycleResultFilter` → cycles 端点 `result` 参数，换筛选重置分页/展开态）；播放弹窗 0.5x~4x 倍速（`videoPlaybackRate` + `applyPlaybackRate`，`@loadedmetadata` 时套用、换视频不重置）+「下载录像」按钮（a[download] 指向同 `/data/videos/{id}`）；视频报错文案引导下载兜底
+> - `api/data.js`：`getSessionCycles` 加第 4 参 `result`
+> - Electron：`main.js` `finishShutdown` 的 stopBackend race 3s→8s + `app.exit(0)` 前必调 `forceKillSync`；`backend-manager.js`（→806 行）新增 `forceKillSync()` 同步强杀兜底（win32 `taskkill /f /t` / POSIX 杀进程组）——治"退出留僵尸 python 占 GPU 显存、每次启动清残留"
+
 > v3.41 复核（2026-07-17）：基线 a23a8d2（v3.32/v3.33 之交）→ v3.41.0 的前端/Electron 增量已回写本文——各条目下的「v3.3x 起」引用块即补账内容，行号锚点已整体刷新为当前快照。逐版动机详见 `docs/changelog/`（v3.33.0 ~ v3.41.0 各版 md）。
 
 > **v3.44 补账（2026-07-22）**：NG 处置整改批次四文件——

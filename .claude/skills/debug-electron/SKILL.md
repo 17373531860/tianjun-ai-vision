@@ -70,6 +70,8 @@ app.ready
 
 **强制关闭:** shutdown.html 提供 "强制关闭" 按钮 → 发送 `shutdown-force` IPC → app.exit(0)
 
+**v3.48.1 僵尸后端兜底**：`finishShutdown` 里 `stopBackend()` 的 race 窗口 3s→8s（stop() 最坏路径是"优雅等 3s→软杀等 5s→强杀"，3s race 会在强杀执行前 `app.exit` 自尽，python 残留占 GPU 显存，客户机"每次启动都在清理残留进程"）；且 `app.exit(0)` 前必调 `backendManager.forceKillSync()` **同步**强杀（win32 `taskkill /pid X /f /t`，POSIX 杀进程组）。排查"退出后 python 还在"先确认这两处还在，再看 stop() 日志走到哪一步。
+
 ## Python 路径解析 (BackendManager)
 
 ```

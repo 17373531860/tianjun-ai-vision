@@ -16402,7 +16402,7 @@
   },
   "/api/v1/data/sessions/{session_id}/cycles": {
    "get": {
-    "description": "获取会话的周期（分页）",
+    "description": "获取会话的周期（分页）\n\nresult: 可选 'ok' / 'ng' —— 按判定结果过滤（v3.48.1, 数据中心\"只看NG录像\"）。",
     "operationId": "get_session_cycles_api_v1_data_sessions__session_id__cycles_get",
     "parameters": [
      {
@@ -16448,6 +16448,22 @@
         }
        ],
        "title": "Operator Id"
+      }
+     },
+     {
+      "in": "query",
+      "name": "result",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Result"
       }
      }
     ],

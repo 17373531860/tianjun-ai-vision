@@ -2441,18 +2441,101 @@ const visibleStreamChannels = () => {
   return gridPageChannels.value;
 };
 
+// 浏览器对同一 host 的 HTTP/1.1 并发连接上限是 6 (Chrome/Safari 硬限制)。
+// 每路 MJPEG 是一条永久占用的连接, 3x3 九工位 = 9 条流 + 150ms 数据轮询全挤同一个
+// 后端 host → 流被饿死, 前端 1s 重连 + 后端"新连接上位"互踢, 画面永远加载不出来。
+// 修复一: 可见工位 > 4 时放弃 MJPEG 长连接, 改为 /snapshot 单帧轮询 (短请求, keep-alive
+// 复用 socket, 与数据轮询共存); ≤4 工位(双/三/2x2页/放大单路)保持原 MJPEG 行为不变。
+// 修复二 (Safari/WebKit): WebKit 的 fetch() 读不了 multipart/x-mixed-replace 流
+// (立刻 "Load failed"), canvas 永远黑屏。某工位的 MJPEG 流连续 2 次一帧未出就断
+// → 该工位自动降级为快照轮询兜底 (Playwright webkit 内核实测复现+验证)。
+const MAX_MJPEG_STREAMS = 4;
+const MJPEG_FALLBACK_FAILS = 2;
+const SNAPSHOT_TICK_MS = 40;          // 定时器基础节拍; 实际取帧节奏按工位数自适应
+let snapshotPollTimer = null;
+const snapshotInFlight = {};
+const snapshotLastStart = {};         // ch -> 上次取帧起始时刻 (节奏控制)
+let snapshotChannels = new Set();     // 当前走快照轮询的工位 (定时器常驻读取)
+const mjpegZeroFrameFails = {};       // ch -> 连续"零帧断流"次数, 出过帧即归零
+
+// 快照取帧间隔按并发工位数自适应: 放大单路 ~12fps, 3x3 九宫格 5fps。
+// 不能一味调快: 每张快照是一次完整 JPEG 编码+HTTP 往返, 工位越多请求越挤
+// (浏览器同 host 只有 6 条连接, 还要让位给 150ms 数据轮询)。
+const _snapshotIntervalMs = () => {
+  const n = snapshotChannels.size || 1;
+  if (n <= 2) return 80;
+  if (n <= 4) return 120;
+  if (n <= 9) return 200;
+  return 300;
+};
+
+const startSnapshotPolling = (channels) => {
+  snapshotChannels = new Set(channels);
+  if (!snapshotChannels.size) {
+    stopSnapshotPolling();
+    return;
+  }
+  if (snapshotPollTimer) return;   // 定时器复用, 每 tick 读最新 snapshotChannels
+  snapshotPollTimer = setInterval(() => {
+    if (!multiStreamRunning) return;
+    const interval = _snapshotIntervalMs();
+    const now = Date.now();
+    snapshotChannels.forEach((ch) => {
+      if (snapshotInFlight[ch]) return;   // 上一帧还没取完/没解完, 跳过本 tick (背压)
+      if (now - (snapshotLastStart[ch] || 0) < interval) return;
+      snapshotInFlight[ch] = true;
+      snapshotLastStart[ch] = now;
+      fetch(`${streamHost()}/snapshot?channel=${ch}`, { cache: 'no-store' })
+        .then((res) => (res.ok ? res.arrayBuffer() : null))
+        .then((buf) => {
+          if (buf && multiStreamRunning) drawFrameToCanvas(ch, new Uint8Array(buf));
+        })
+        .catch(() => {})
+        .finally(() => { snapshotInFlight[ch] = false; });
+    });
+  }, SNAPSHOT_TICK_MS);
+};
+
+const stopSnapshotPolling = () => {
+  if (snapshotPollTimer) { clearInterval(snapshotPollTimer); snapshotPollTimer = null; }
+  snapshotChannels = new Set();
+  Object.keys(snapshotInFlight).forEach((k) => delete snapshotInFlight[k]);
+  Object.keys(snapshotLastStart).forEach((k) => delete snapshotLastStart[k]);
+};
+
 const syncMultiStreams = () => {
   if (!multiStreamRunning) return;
-  const want = new Set(visibleStreamChannels());
+  const visible = visibleStreamChannels();
+  const useSnapshotAll = visible.length > MAX_MJPEG_STREAMS;
+  const snapWant = visible.filter(
+    (ch) => useSnapshotAll || (mjpegZeroFrameFails[ch] || 0) >= MJPEG_FALLBACK_FAILS
+  );
+  const mjpegWant = new Set(visible.filter((ch) => !snapWant.includes(ch)));
+
   Object.keys(multiStreamAborts).forEach((k) => {
-    if (!want.has(Number(k))) {
+    if (!mjpegWant.has(Number(k))) {
       try { multiStreamAborts[k].abort(); } catch {}
       delete multiStreamAborts[k];
     }
   });
-  want.forEach((ch) => {
+  mjpegWant.forEach((ch) => {
     if (!(ch in multiStreamAborts)) connectMjpegStream(ch);
   });
+  startSnapshotPolling(snapWant);
+};
+
+// MJPEG 流死亡登记: 一帧未出就断 = 疑似环境不支持 (WebKit) 或被同通道新连接踢掉。
+// 连续 MJPEG_FALLBACK_FAILS 次 → 该工位转快照轮询, 返回 true = 调用方不要再排 MJPEG 重连。
+const _registerMjpegDeath = (ch, gotFrame) => {
+  if (gotFrame) return false;
+  mjpegZeroFrameFails[ch] = (mjpegZeroFrameFails[ch] || 0) + 1;
+  if (mjpegZeroFrameFails[ch] >= MJPEG_FALLBACK_FAILS) {
+    console.warn(`[MJPEGStream] ch${ch} 连续 ${mjpegZeroFrameFails[ch]} 次零帧断流, 降级为快照轮询`);
+    delete multiStreamAborts[ch];
+    syncMultiStreams();
+    return true;
+  }
+  return false;
 };
 
 const startMultiStreams = () => {
@@ -2470,6 +2553,7 @@ const connectMjpegStream = async (ch) => {
   if (!multiStreamRunning) return;
   const abort = new AbortController();
   multiStreamAborts[ch] = abort;
+  let gotFrame = false;   // 本条连接是否出过至少一帧 (零帧断流 → WebKit 兜底计数)
   try {
     const res = await fetch(`${streamHost()}/video_feed?channel=${ch}`, { signal: abort.signal });
     const reader = res.body.getReader();
@@ -2505,6 +2589,7 @@ const connectMjpegStream = async (ch) => {
         const jpegEnd = nextBoundary - 2;
         if (jpegEnd > jpegStart) {
           const jpegData = view.slice(jpegStart, jpegEnd);
+          if (!gotFrame) { gotFrame = true; mjpegZeroFrameFails[ch] = 0; }
           drawFrameToCanvas(ch, jpegData);
         }
         startIdx = nextBoundary;
@@ -2522,17 +2607,20 @@ const connectMjpegStream = async (ch) => {
     }
     // v3.47: 服务端正常关流 (done, 非异常) 也要重连 —— 例如后端重启/换源关旧流,
     // 否则该工位画面从此定格; 与 catch 分支同样按"仍可见"守门
+    // (该工位已转快照轮询时 snapshotChannels 含 ch, 禁止 MJPEG 复活抢连接)
     if (multiStreamRunning) {
+      if (_registerMjpegDeath(ch, gotFrame)) return;
       setTimeout(() => {
-        if (multiStreamRunning && visibleStreamChannels().includes(ch)) connectMjpegStream(ch);
+        if (multiStreamRunning && !snapshotChannels.has(ch) && visibleStreamChannels().includes(ch)) connectMjpegStream(ch);
       }, 1000);
     }
   } catch (e) {
     if (e.name !== 'AbortError' && multiStreamRunning) {
+      if (_registerMjpegDeath(ch, gotFrame)) return;
       console.warn(`[MJPEGStream] ch${ch} disconnected, reconnecting...`);
       // v3.47: 重连前确认该工位仍可见 (翻页/退出放大后不再为隐藏通道续命)
       setTimeout(() => {
-        if (multiStreamRunning && visibleStreamChannels().includes(ch)) connectMjpegStream(ch);
+        if (multiStreamRunning && !snapshotChannels.has(ch) && visibleStreamChannels().includes(ch)) connectMjpegStream(ch);
       }, 2000);
     }
   }
@@ -2612,6 +2700,8 @@ const drawFrameToCanvas = (ch, jpegData) => {
 
 const stopMultiStreams = () => {
   multiStreamRunning = false;
+  stopSnapshotPolling();
+  Object.keys(mjpegZeroFrameFails).forEach(k => delete mjpegZeroFrameFails[k]);
   Object.values(multiStreamAborts).forEach(a => { try { a.abort(); } catch {} });
   Object.keys(multiStreamAborts).forEach(k => delete multiStreamAborts[k]);
   multiFramePump.reset();
