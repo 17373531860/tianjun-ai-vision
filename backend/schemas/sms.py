@@ -197,6 +197,15 @@ class SmsConfigPayload(BaseModel):
         "panel",
         description="panel=监控面板当前会话OK/NG（默认）；window=调度时间窗落库合计",
     )
+    summary_send_mode: Literal["per_channel", "merged_detail"] = Field(
+        "merged_detail",
+        description="per_channel=逐工位多条；merged_detail=一条内分列多工位",
+    )
+    summary_channel_ids: list[int] = Field(
+        default_factory=list,
+        max_length=64,
+        description="参与汇总的 0-based 工位 ID；空数组表示全部启用工位",
+    )
 
     # 一期兼容字段：A′期间旧 Alarm 页仍按这些字段 GET/PUT。
     port: str = Field("", max_length=128)
@@ -249,6 +258,13 @@ class SmsConfigPayload(BaseModel):
             raise ValueError("重试退避秒数必须在 0~300 之间")
         return value
 
+    @field_validator("summary_channel_ids")
+    @classmethod
+    def normalize_summary_channel_ids(cls, value: list[int]) -> list[int]:
+        if any(isinstance(item, bool) or item < 0 or item >= 64 for item in value):
+            raise ValueError("汇总工位 ID 必须是 0~63 的整数")
+        return sorted(set(value))
+
     @model_validator(mode="after")
     def validate_provider_fields(self) -> "SmsConfigPayload":
         try:
@@ -279,6 +295,8 @@ class SmsConfigPayload(BaseModel):
             "shift_end_hour": self.shift_end_hour,
             "send_night_window": self.send_night_window,
             "summary_count_source": self.summary_count_source,
+            "summary_send_mode": self.summary_send_mode,
+            "summary_channel_ids": list(self.summary_channel_ids),
         }
 
     def to_service_config(self) -> SmsServiceConfig:
@@ -349,6 +367,8 @@ class SmsConfigPayload(BaseModel):
             shift_end_hour=config.shift_end_hour,
             send_night_window=config.send_night_window,
             summary_count_source=config.summary_count_source,
+            summary_send_mode=config.summary_send_mode,
+            summary_channel_ids=list(config.summary_channel_ids),
             port=config.port,
             baudrate=config.baudrate,
             recipients=list(config.recipients),

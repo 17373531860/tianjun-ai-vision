@@ -26,9 +26,15 @@ class AlarmPage(BasePage):
         SMS_PROVIDER_AT = "[data-testid='sms-provider-at']"
         SMS_PROVIDER_HTTP = "[data-testid='sms-provider-http']"
         SMS_PROVIDER_WXPUSHER = "[data-testid='sms-provider-wxpusher']"
+        SMS_PROVIDER_ALIYUN = "[data-testid='sms-provider-aliyun']"
         SMS_PROVIDER_AT_INPUT = "[data-testid='sms-provider-at'] input"
         SMS_PROVIDER_HTTP_INPUT = "[data-testid='sms-provider-http'] input"
         SMS_PROVIDER_WXPUSHER_INPUT = "[data-testid='sms-provider-wxpusher'] input"
+        SMS_PROVIDER_ALIYUN_INPUT = "[data-testid='sms-provider-aliyun'] input"
+        SMS_SUMMARY_SEND_MERGED = "[data-testid='sms-summary-send-merged']"
+        SMS_SUMMARY_SEND_PER_CHANNEL = "[data-testid='sms-summary-send-per-channel']"
+        SMS_SUMMARY_SEND_MERGED_INPUT = "[data-testid='sms-summary-send-merged'] input"
+        SMS_SUMMARY_CHANNEL_SELECT = "[data-testid='sms-summary-channel-select']"
         SMS_AT_FIELDS = "[data-testid='sms-at-fields']"
         SMS_HTTP_FIELDS = "[data-testid='sms-http-fields']"
         SMS_WX_FIELDS = "[data-testid='sms-wx-fields']"
@@ -36,6 +42,12 @@ class AlarmPage(BasePage):
         SMS_WX_UIDS = "textarea[data-testid='sms-wx-uids']"
         SMS_WX_TOPIC_IDS = "textarea[data-testid='sms-wx-topic-ids']"
         SMS_WX_HINT = "[data-testid='sms-wx-hint']"
+        SMS_ALIYUN_FIELDS = "[data-testid='sms-aliyun-fields']"
+        SMS_ALIYUN_AK = "input[data-testid='sms-aliyun-ak']"
+        SMS_ALIYUN_SK = "input[data-testid='sms-aliyun-sk']"
+        SMS_ALIYUN_SIGN = "input[data-testid='sms-aliyun-sign']"
+        SMS_ALIYUN_TEMPLATE = "input[data-testid='sms-aliyun-template']"
+        SMS_ALIYUN_HINT = "[data-testid='sms-aliyun-hint']"
         SMS_CLOUD_TEMPLATE_HINT = "[data-testid='sms-cloud-template-hint']"
         SMS_PORT = "[data-testid='sms-port-select']"
         SMS_REFRESH = "[data-testid='sms-refresh-ports']"
@@ -109,7 +121,8 @@ class AlarmPage(BasePage):
         return notice.is_visible() and all(
             text in notice.inner_text()
             for text in (
-                "每滚动 12 小时按工位",
+                # 默认 merged_detail；per_channel 时文案为「每工位一条」
+                "每滚动 12 小时以",
                 "不含进行中周期",
                 "均为 0 时不发送",
                 "不再按单次 NG 或累计 N 次即时推送",
@@ -169,13 +182,54 @@ class AlarmPage(BasePage):
             "at_modem": self.Sel.SMS_PROVIDER_AT,
             "generic_http": self.Sel.SMS_PROVIDER_HTTP,
             "wxpusher": self.Sel.SMS_PROVIDER_WXPUSHER,
+            "aliyun": self.Sel.SMS_PROVIDER_ALIYUN,
         }.get(provider)
         if not selector:
             raise ValueError(f"未知短信 Provider：{provider}")
         self.page.locator(selector).click()
         return self
 
+    def select_sms_summary_send_mode(self, mode: str):
+        selector = {
+            "merged_detail": self.Sel.SMS_SUMMARY_SEND_MERGED,
+            "per_channel": self.Sel.SMS_SUMMARY_SEND_PER_CHANNEL,
+        }.get(mode)
+        if not selector:
+            raise ValueError(f"未知短信汇总发送形态：{mode}")
+        self.page.locator(selector).click()
+        return self
+
+    def sms_summary_send_mode(self) -> str:
+        if self.page.locator(self.Sel.SMS_SUMMARY_SEND_MERGED_INPUT).is_checked():
+            return "merged_detail"
+        return "per_channel"
+
+    def select_sms_summary_channels(self, channel_ids: list[int]):
+        select = self.page.locator(self.Sel.SMS_SUMMARY_CHANNEL_SELECT)
+        select.click()
+        for channel_id in channel_ids:
+            option = self.page.locator(
+                f"[data-testid='sms-summary-channel-option-{channel_id}']:visible"
+            )
+            option.wait_for(state="visible", timeout=5000)
+            option.click()
+        self.page.keyboard.press("Escape")
+        return self
+
+    def sms_summary_channel_selected(self, channel_id: int) -> bool:
+        select = self.page.locator(self.Sel.SMS_SUMMARY_CHANNEL_SELECT)
+        select.click()
+        option = self.page.locator(
+            f"[data-testid='sms-summary-channel-option-{channel_id}']:visible"
+        )
+        option.wait_for(state="visible", timeout=5000)
+        selected = "is-selected" in (option.get_attribute("class") or "")
+        self.page.keyboard.press("Escape")
+        return selected
+
     def sms_provider(self) -> str:
+        if self.page.locator(self.Sel.SMS_PROVIDER_ALIYUN_INPUT).is_checked():
+            return "aliyun"
         if self.page.locator(self.Sel.SMS_PROVIDER_WXPUSHER_INPUT).is_checked():
             return "wxpusher"
         if self.page.locator(self.Sel.SMS_PROVIDER_HTTP_INPUT).is_checked():
@@ -190,6 +244,24 @@ class AlarmPage(BasePage):
 
     def sms_wx_fields_visible(self) -> bool:
         return self.page.locator(self.Sel.SMS_WX_FIELDS).is_visible()
+
+    def sms_aliyun_fields_visible(self) -> bool:
+        return self.page.locator(self.Sel.SMS_ALIYUN_FIELDS).is_visible()
+
+    def has_sms_aliyun_merged_template_guidance(self) -> bool:
+        hint = self.page.locator(self.Sel.SMS_ALIYUN_HINT)
+        if not hint.is_visible():
+            return False
+        text = hint.inner_text()
+        variables = (
+            "time_range", "device_name",
+            "ch1_ok", "ch1_ng", "ch1_total", "ch1_ok_rate", "ch1_ng_rate",
+            "ch2_ok", "ch2_ng", "ch2_total", "ch2_ok_rate", "ch2_ng_rate",
+            "total_ok", "total_ng", "total", "ok_rate", "ng_rate",
+        )
+        return all(f"${{{variable}}}" in text for variable in variables) and (
+            "旧「单工位即时 NG」模板不可复用" in text
+        )
 
     def has_sms_wx_hint(self) -> bool:
         hint = self.page.locator(self.Sel.SMS_WX_HINT)
@@ -206,6 +278,24 @@ class AlarmPage(BasePage):
     def fill_sms_wx_topic_ids(self, value: str):
         self.page.locator(self.Sel.SMS_WX_TOPIC_IDS).fill(value)
         return self
+
+    def fill_sms_aliyun_credentials(
+        self, access_key_id: str, access_key_secret: str,
+        sign_name: str, template_code: str,
+    ):
+        self.page.locator(self.Sel.SMS_ALIYUN_AK).fill(access_key_id)
+        self.page.locator(self.Sel.SMS_ALIYUN_SK).fill(access_key_secret)
+        self.page.locator(self.Sel.SMS_ALIYUN_SIGN).fill(sign_name)
+        self.page.locator(self.Sel.SMS_ALIYUN_TEMPLATE).fill(template_code)
+        return self
+
+    def sms_aliyun_values(self) -> dict[str, str]:
+        return {
+            "access_key_id": self.page.locator(self.Sel.SMS_ALIYUN_AK).input_value(),
+            "access_key_secret": self.page.locator(self.Sel.SMS_ALIYUN_SK).input_value(),
+            "sign_name": self.page.locator(self.Sel.SMS_ALIYUN_SIGN).input_value(),
+            "template_code": self.page.locator(self.Sel.SMS_ALIYUN_TEMPLATE).input_value(),
+        }
 
     def sms_wx_uids_value(self) -> str:
         return self.page.locator(self.Sel.SMS_WX_UIDS).input_value()

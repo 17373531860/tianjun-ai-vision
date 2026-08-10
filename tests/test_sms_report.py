@@ -189,6 +189,39 @@ class TestSmsProviders:
         assert tpl == {"time_range": "08-04 08:00~20:00",
                        "ok_count": "90", "ng_count": "3"}
 
+    def test_aliyun_merged_summary_uses_named_channel_and_rate_params(self):
+        import json as _json
+        from datetime import datetime
+        from backend.services.sms_providers import create_provider
+        from backend.services.sms_service import SummaryChannelMetrics, SummaryPayload
+
+        request = MagicMock(return_value=MagicMock(
+            status_code=200, json=lambda: {"Code": "OK", "BizId": "merged-1"}))
+        provider = create_provider(_cloud_config(), provider_name="aliyun",
+                                   request_func=request)
+        summary = SummaryPayload(
+            window_start=datetime(2026, 8, 9, 8, 0),
+            window_end=datetime(2026, 8, 9, 20, 0),
+            channels=(
+                SummaryChannelMetrics(channel_id=0, ok_count=9, ng_count=1),
+                SummaryChannelMetrics(channel_id=1, ok_count=3, ng_count=1),
+            ),
+        )
+
+        batch = provider.send(
+            ["13800000000"], summary.render_message(), message_id="merged-1",
+            event_name="12小时生产汇总", raw_message=summary.render_message(),
+            context=summary.to_context())
+
+        assert batch.success is True
+        params = _json.loads(request.call_args.kwargs["params"]["TemplateParam"])
+        assert params["ch1_ok"] == "9"
+        assert params["ch1_ng_rate"] == "10"
+        assert params["ch2_ok"] == "3"
+        assert params["ch2_ok_rate"] == "75"
+        assert params["total"] == "14"
+        assert params["ok_rate"] == "86"
+
     def test_aliyun_error_code_maps_to_failure(self):
         from backend.services.sms_providers import create_provider
         request = MagicMock(return_value=MagicMock(

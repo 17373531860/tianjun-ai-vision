@@ -46,6 +46,8 @@ def test_get_missing_config_returns_default_off_without_creating_file(
     assert body["baudrate"] == 115200
     assert body["recipients"] == []
     assert body["ng_threshold"] == 5
+    assert body["summary_send_mode"] == "merged_detail"
+    assert body["summary_channel_ids"] == []
     assert not store.path.exists()
 
 
@@ -67,6 +69,8 @@ def test_put_config_writes_independent_file_and_get_reads_it_back(
         "ng_threshold": 7,
         "cooldown_seconds": 120,
         "queue_size": 50,
+        "summary_send_mode": "merged_detail",
+        "summary_channel_ids": [0, 1],
     }
 
     put_response = client.put("/api/v1/sms/config", json=payload)
@@ -83,11 +87,15 @@ def test_put_config_writes_independent_file_and_get_reads_it_back(
     assert expected["retry_delay_seconds"] == 3
     assert expected["retry_backoff_seconds"] == [3.0, 3.0]
     assert expected["ng_threshold"] == 7
+    assert expected["summary_send_mode"] == "merged_detail"
+    assert expected["summary_channel_ids"] == [0, 1]
     on_disk = json.loads(store.path.read_text(encoding="utf-8"))
     assert on_disk["provider"] == "at_modem"
     assert on_disk["at_modem"]["port"] == "COM9"
     assert on_disk["phone_numbers"] == expected["recipients"]
     assert on_disk["ng_threshold"] == 7
+    assert on_disk["summary_send_mode"] == "merged_detail"
+    assert on_disk["summary_channel_ids"] == [0, 1]
     assert "recipients" not in on_disk
     assert "port" not in on_disk
     assert alarm_config.read_text(encoding="utf-8") == '{"sentinel":"tower-only"}'
