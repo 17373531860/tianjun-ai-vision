@@ -12,6 +12,16 @@
 > - `views/Alarm/index.vue`：NG 汇总数字口径单选（panel/window）+ `smsSummaryNoticeBody` 动态文案
 > - Electron：`main.js` 启动 300s 死线改弹性（后端日志滚动就延展、静默 90s 判死、绝对上限 20min；启动期进程退出立即止损报错）；`backend-manager.js` 日志滚动判活；`license-manager.js` machineId 缓存命中快路径 + 指纹校验后台异步（不匹配删缓存下次强制重算）；`preload.js` 透出 `license-backend-start-failed`；`build/installer.iss` 装完把安装目录+数据目录加 Defender 排除（卸载移除）
 
+> **v3.48 补账（2026-08-10，SY9 + tianyong + dev-qing 三分支汇合发版）**：
+> - 新增 `views/MES/PlcPanel.vue`（688 行）+ `api/plc.js`：RFC 13 PLC 连接器面板——连接卡片（8 驱动选择 + conn_params 按驱动动态表单）/点位表（地址/类型/字节序/scale + 实时值）/触发规则/事件写回/方案模板（s7_db_handshake V0.2 一键套用）/IO 日志；挂在 MES 页新 tab（`views/MES/index.vue`）
+> - 新增 `views/Settings/TriggerPanel.vue`（770 行）+ `api/triggers.js`：RFC 14 触发中心面板——触发源卡片（虚拟按钮 pixel_region/脚踏板 hid_key/HTTP/串口报文/定时/mock 六类 × 类型化参数表单）+ 动作链配置（manual_settle/trigger_event/ack_alarm 等全局动作注册表）+ 模板下拉 + 实时状态/触发历史；挂在系统设置新 tab（`views/Settings/index.vue`）
+> - `store/usePollingStore.js`：注册 `plc_status(3s)/plc_live(1.5s)/trigger_status(3s)/trigger_live(1.5s)` 轮询档
+> - `views/Project/LogicConfigTab.vue` + `index.vue`：①「计数组合判定表」卡（tianyong）——labels×rows 组合表 + 计数口径单选（按步骤账本 steps/按位置去重 positional）+ positional 六追踪参数网格；②容器装箱清点卡（SY9）——空槽标签+每盘槽位数（槽位完整性门，默认关、带 2026-08-05 实测警示文案）、物品框/托盘框去重 IoU 阈值（缺省 0.45/0，双边客户零差异）
+> - `views/Monitor/CustomMixItemPanel.vue`（SY9）：预计进箱数字（结账同源口径）
+> - `views/Settings/PackagingFlowPanel.vue`（SY9）：组⑦新增「只认收尾后放的工单」开关（默认关，长警示文案说明代价）
+> - `views/MES/ExternalDevicePanel.vue` + `api/external_device.js`（dev-qing）：`modbus_pulse` 协议配置区（线圈地址/pulse_ms/cooldown_ms/trigger_mode）+ 手动试发按钮
+> - `views/Alarm/index.vue`（dev-qing）：短信汇总「发送形态」单选（merged_detail 一条内分列多工位=默认 / per_channel 逐工位逐条）+ `summary_channel_ids` 参与工位多选
+
 > v3.41 复核（2026-07-17）：基线 a23a8d2（v3.32/v3.33 之交）→ v3.41.0 的前端/Electron 增量已回写本文——各条目下的「v3.3x 起」引用块即补账内容，行号锚点已整体刷新为当前快照。逐版动机详见 `docs/changelog/`（v3.33.0 ~ v3.41.0 各版 md）。
 
 > **v3.44 补账（2026-07-22）**：NG 处置整改批次四文件——

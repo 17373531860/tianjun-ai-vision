@@ -370,6 +370,12 @@ mgr._per_item_last_ng_detail = {
 4. **mock endpoint 仅注入第一个 per_item 步骤**：
    - `step = mgr._per_item_steps[0]` 写死的
    - 多步骤项目（如 "打螺丝 + 划螺丝"）只能看第一步效果
+
+5. **PLC 完成脉冲联动（v3.48，dev-qing）**：per_item 判定完成时给「Modbus 完成脉冲」外设（`external_device_pulse.py`，协议 `modbus_pulse`）发一次脉冲，PLC 控气阀等用。两个触发点：
+   - `all_covered`：所有 per_item 步骤**首次全部 completed** 的那一帧（`plc_pulse_fired` 同周期边沿锁，不等结算）
+   - `cycle_ok`：`_per_item_settle_cycle` 判 OK 落账时
+   - `_per_item_notify_plc_pulse` 跑在推理线程上**只入队**（Modbus 写在外设线程），try 兜底；外设没配同名 `trigger_mode` 时纯 no-op
+   - 排查"打完没吹气"：外设卡片 last_error → trigger_mode 是否匹配 → cooldown_ms 是否吞掉 → 手动试发按钮验证 PLC 通路；回归 `tests/test_external_device_modbus_pulse.py`
    - 真实模型运行时多步骤完整工作，仅 mock 简化
 
 5. **PerItemPanel 与 SOP/Tracking 互斥**：

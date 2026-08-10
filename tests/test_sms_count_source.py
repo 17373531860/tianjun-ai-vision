@@ -30,6 +30,7 @@ def test_panel_source_uses_session_snapshot_not_window_reader(tmp_path, monkeypa
         ),
         summary_state_path=tmp_path / "state.json",
         offline_queue_path=tmp_path / "offline.db",
+        workstation_config_path=tmp_path / "workstation_config.json",
         summary_reader=reader,
         wall_clock=lambda: datetime(2026, 8, 4, 10, 0, 0),
     )
@@ -77,6 +78,7 @@ def test_window_source_keeps_schedule_window_counts(tmp_path, monkeypatch) -> No
         ),
         summary_state_path=tmp_path / "state.json",
         offline_queue_path=tmp_path / "offline.db",
+        workstation_config_path=tmp_path / "workstation_config.json",
         summary_reader=lambda _s, _e: {0: SmsSummaryCounts(ok_count=5, ng_count=2)},
         wall_clock=lambda: datetime(2026, 8, 4, 10, 0, 0),
     )
@@ -118,6 +120,7 @@ def test_merged_panel_source_keeps_each_channel_counts_and_earliest_start(
         ),
         summary_state_path=tmp_path / "state.json",
         offline_queue_path=tmp_path / "offline.db",
+        workstation_config_path=tmp_path / "workstation_config.json",
         summary_reader=MagicMock(
             side_effect=AssertionError("window reader must not run")
         ),

@@ -53,6 +53,9 @@ def _service(tmp_path, *, config=None, reader=None, wall_clock=None) -> SmsServi
         config or _enabled_config(),
         summary_state_path=tmp_path / "sms_summary_state.json",
         offline_queue_path=tmp_path / "sms_offline_queue.db",
+        # 隔离: 不注入会读 DATA_DIR/workstation_config.json —— 同进程先跑过的
+        # 合成流水线测试会把 channel_count=1 写进去, 短路 payload-key 兜底分支
+        workstation_config_path=tmp_path / "workstation_config.json",
         summary_reader=reader or (lambda _start, _end: {}),
         wall_clock=wall_clock or (lambda: WINDOW_START),
     )
@@ -197,6 +200,7 @@ def test_merged_summary_worker_sends_one_aliyun_request_with_named_params(
         http_request=fake_request,
         summary_state_path=tmp_path / "sms_summary_state.json",
         offline_queue_path=tmp_path / "sms_offline_queue.db",
+        workstation_config_path=tmp_path / "workstation_config.json",
         summary_reader=lambda _start, _end: {
             0: SmsSummaryCounts(ok_count=8, ng_count=2),
             1: SmsSummaryCounts(ok_count=3, ng_count=1),

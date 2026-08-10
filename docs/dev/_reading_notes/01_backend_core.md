@@ -27,6 +27,18 @@
 > **v3.45 补账（2026-07-29）**：上银 SY 热补丁 0a~0e 收编（滑块记账体系重做 + 待机保留周期/确认定格停推理停画面 + 数量门升级放行/少装挂起完善）+ 萍乡称重整改（清秤指令智能选择 / 过程提醒档 remind_only / 网关推送异步化）+ 海康 SDK 帧率可配 + dev-qing 逐件修复合入（9973d4c）。逐文件增量见各条目「v3.45 变更」行与 1.4/1.5 表下增量清单；行数标注已按当前代码刷新。
 >
 > **短信补账（2026-08-03）**：主程序原生短信通知——`router_manifest` 挂载 `/sms`；`main.py` 启停 12h 汇总调度；SMS 服务族见本节 `sms.py` 条目与 `05_backend_misc.md`。**不**在 `_trigger_event` 热路径发短信。
+>
+> **v3.48 补账（2026-08-10，SY9 + tianyong + dev-qing 三分支汇合发版）**：
+> - `main.py`：startup 尾新增 RFC 13 `get_plc_manager().start_all()` + RFC 14 `get_trigger_manager().start_all()`（无启用实例零开销）；关机侧各自独立 try 停止（PLC/触发异常不阻塞 8 步关机）；ORM 注册段 import `plc_models` / `trigger_models` 两表
+> - `channel_manager.py`：`set_channel_count` 裁撤通道时新增**第 5 处配套清理** `get_trigger_manager().on_channel_removed(cid)`（治像素触发源对着裁撤工位空采样；AGENTS 不变量 4 已同步）
+> - `source_combo_positional.py`（**新，172 行**）：计数组合判定表 `count_mode='positional'` 的位置去重追踪器——检测框按 IoU 匹配已知位置（EMA 平滑），连续 N 帧确认新位置，消失超时/整类空闲重置；引擎由 `apply_project_config` 按 `combo_table.count_mode` 构建，未启用为 None
+> - `source_inference_loop_mixin.py`：新增 `_feed_combo_positional(detections)` 逐 tick 喂帧（`getattr` None 早退零开销，try 兜底不拖推理）
+> - `source_project_config_apply.py`（+75 行）：解析 `combo_table`（labels/rows/count_mode/tracking 六参数）+ SY9 custom_mix 新键（slot_check_label/slot_total/item_dedup_iou/tray_dedup_iou）
+> - `source_settlement_mixin.py`（+89 行）：结算时按 combo 表匹配计数组合出判型（steps 口径数步骤账本 / positional 口径取追踪器就位数），命中行 verdict+tag 进事件与周期记录
+> - `source_custom_mix.py`：SY9 槽位完整性门（本帧"货数+空槽数=槽位数"才采信，影子峰值兜底绝不漏账、空槽按中心归属不串盘）+ 物品/托盘去重 IoU 阈值可配；**双配置面归一化桥接**——v3.47 五开关布尔与 SY9 阈值在 `_ContainerAccumulator.__init__` 收敛为阈值单一执行体（布尔关优先归零；`dedup_trays=True` 未配阈值回填 0.45），交叉组合单测见 `tests/test_custom_mix_unit.py` 尾节
+> - `source_per_item_mixin.py`（+39 行）：PLC 完成脉冲两触发点——`all_covered`（首次全覆盖那一帧，`plc_pulse_fired` 同周期边沿锁）/ `cycle_ok`（判 OK 落账）；`_per_item_notify_plc_pulse` 跑在推理线程上**只入队**，Modbus 写在外设线程，try 兜底不抛穿热路径
+> - `system_display.py`：轮询间隔注册 `plc_status/plc_live/trigger_status/trigger_live`，日志条数注册 `plc/trigger`
+> - `router_manifest.py`：挂载 `/plc`（`api/plc.py`，242 行）+ `/triggers`（`api/triggers.py`，270 行）；两家族逐文件档案见 `05_backend_misc.md` PLC/触发中心家族节
 
 ---
 

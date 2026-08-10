@@ -44,6 +44,7 @@ argument-hint: "[问题描述]"
 5. **汇总调度二选一**：`summary_schedule_mode=rolling_12h`（默认：后端**冷启动**以启动时刻重新锚定，配置热替换不重锚）或 `daily_shift`（`shift_start_hour`/`shift_end_hour`，`send_night_window` 默认 false）。
 6. **汇总数字口径二选一**：`summary_count_source=panel`（默认，监控面板当前会话 OK/NG，与金龙 live-stats 同源）或 `window`（调度时间窗落库合计）。
 7. 启停接线在 `backend/main.py`：`_start_sms_summary_scheduler(reset_rolling_anchor=True)` / `_shutdown_sms_notifications()`。
+8. **汇总发送形态二选一（v3.48）**：`summary_form=merged_detail`（默认，一条内按工位分列明细）或 `per_channel`（逐工位逐条发）；`summary_channel_ids`（列表，空=全部）限定参与汇总的工位——排查"某工位 NG 不进短信"先看这两个键（`views/Alarm/index.vue` 配置卡可视）。
 
 ---
 

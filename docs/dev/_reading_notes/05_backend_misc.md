@@ -35,6 +35,39 @@
 
 **不变量**：采样挂点在推理热路径（`source_inference_loop_mixin.py:423`），全程 try/except 隔离 + 关闭 O(1) 早退——**绝不允许把重活挪进推理线程**；拉取到的模型永不自动启用。
 
+## 〇之三、PLC 连接器 + 统一触发中心（v3.48 新增家族，RFC 13/14）
+
+> 两家族同一设计基调：**默认无实例零开销**（不建连接/触发源就零线程零轮询）、整表 JSON 配置化（加点位/规则/动作不动 schema）、共享全局动作注册表。诊断分别见 `debug-plc` / `debug-triggers` skill；ORM 两张新表见 `03_data_plugin.md`。
+
+### `backend/services/plc/`（RFC 13，14 文件）
+
+| 文件 | 行数 | 一句话 |
+|---|---|---|
+| `manager.py` | 208 | 连接管理单例：每启用连接一条轮询线程；`start_all`/`stop_all` 挂 `main.py` 启停；断线退避重连 |
+| `point_engine.py` | 536 | 点位引擎：按点位表批量读 → `point_codec` 解码 → 值变化沿评估触发规则（防抖/min_interval）→ 执行动作（bind_sn 绑码建工件 / trigger_event / manual_settle 等） |
+| `point_codec.py` | 198 | 点位编解码：int16/32/float/string × 字节序（ABCD/BADC/CDAB/DCBA）× scale/offset |
+| `write_dispatcher.py` | 26 | `dispatch_plc_event(event, payload, channel_id)`——mes_hooks/结算侧唯一写回入口，enqueue 级非阻塞、内部全兜底永不抛 |
+| `rule_actions.py` | 18 | 规则动作到全局动作注册表的桥接 |
+| `presets.py` | 197 | 方案模板（s7_db_handshake V0.2：产品号+完成信号握手/结果码回写/心跳） |
+| `drivers/`（8 文件） | ~700 | `base.py` 抽象 + modbus/s7/mc/fins/enip/opcua/mock 七驱动；依赖库全部懒 import（缺库只在启用该驱动时报错） |
+
+### `backend/services/triggers/`（RFC 14，13 文件）
+
+| 文件 | 行数 | 一句话 |
+|---|---|---|
+| `manager.py` | 196 | 触发源管理单例：每启用源一实例；`on_channel_removed` 挂 channel_manager 裁撤清理（第 5 处配套清理） |
+| `engine.py` | 229 | 规则评估：防抖 debounce / min_interval / 生效时间窗拦截 → 动作链执行 |
+| `actions.py` | 347 | **全局动作注册表**（PLC 规则与触发中心共用）：manual_settle / trigger_event / ack_alarm / start_detection 等 |
+| `presets.py` | 126 | 触发源模板（虚拟按钮遮挡结算等） |
+| `sources/`（8 文件） | ~900 | `base.py` 抽象 + pixel_region（画面像素区域亮度/遮挡，参考帧缓漂 ref_drift）/ hid_key（脚踏板/USB 键）/ http_source（带 IP 白名单+变量提取）/ serial_pattern（串口报文正则）/ timer_source（间隔+每日定点）/ mock |
+
+### API / schemas
+
+- `api/plc.py`（242 行）：`/plc/*` 连接 CRUD + 点位实时值 + IO 日志 + 模板 + 试读试写；`api/triggers.py`（270 行）：`/triggers/*` 触发源 CRUD + 状态 + 触发历史 + 手动触发 + 模板；`schemas/plc.py` / `schemas/triggers.py` Pydantic 面。
+- `requirements.txt` 新增 PLC 驱动依赖（python-snap7/pymcprotocol/pycomm3/asyncua 等，均懒加载）+ pynput（hid_key）。
+
+**v3.48 短信增量（dev-qing）**：`sms_service.py`（+428/-98）汇总发送形态——`summary_form`：`merged_detail`（默认，一条短信内分列多工位明细）/ `per_channel`（逐工位逐条）；`summary_channel_ids` 限定参与汇总的工位（空=全部）；`sms_config.py`/`schemas/sms.py` 配置面同步，`sms_summary.py` 计数口径透传。UI 在 `views/Alarm/index.vue`。
+
 ## 〇、短信通知（新增）
 
 ### `backend/services/sms_service.py`（~935 行）

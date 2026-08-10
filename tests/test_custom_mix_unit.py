@@ -2201,3 +2201,61 @@ def test_slot_gate_counts_only_own_tray_slots():
     tids = sorted(acc._trays)
     assert acc._trays[tids[0]]["peak"]["滑块"] == 22     # 22+2 空槽 = 24 通过
     assert acc._trays[tids[1]]["peak"]["滑块"] == 24     # 24+0 = 24 通过
+
+
+# ==================== 去重双配置面归一化 (v3.47 五开关 × SY9 阈值可配合流) ====================
+# 两套配置面治同一处去重: 布尔开关 dedup_items/dedup_trays (v3.47 主线) 与
+# 阈值可配 item_dedup_iou/tray_dedup_iou (SY9)。__init__ 归一化后执行体只看阈值。
+
+
+def _acc_norm(**kw):
+    return _ContainerAccumulator("托盘", {"滑块": 24}, box_count=4,
+                                 gone_frames=3, **kw)
+
+
+def test_dedup_norm_defaults_zero_diff():
+    """双缺省 = 两边客户零差异: 物品 0.45 开、托盘 0 关."""
+    acc = _acc_norm()
+    assert acc.item_dedup_iou == 0.45
+    assert acc.tray_dedup_iou == 0.0
+
+
+def test_dedup_norm_bool_off_wins_over_threshold():
+    """dedup_items=False 视为关: 即使阈值配了值也归零 (布尔关优先)."""
+    acc = _acc_norm(dedup_items=False, item_dedup_iou=0.6)
+    assert acc.item_dedup_iou == 0.0
+
+
+def test_dedup_norm_tray_bool_on_fills_default_threshold():
+    """dedup_trays=True 未配阈值 → 沿用老硬编码 0.45 (v3.47 五开关客户零差异)."""
+    acc = _acc_norm(dedup_trays=True)
+    assert acc.tray_dedup_iou == 0.45
+
+
+def test_dedup_norm_tray_threshold_overrides_bool_default():
+    """dedup_trays=True 且显式配了阈值 → 用显式值 (SY9 配置面优先于回填)."""
+    acc = _acc_norm(dedup_trays=True, tray_dedup_iou=0.6)
+    assert acc.tray_dedup_iou == 0.6
+
+
+def test_dedup_norm_threshold_only_enables_tray_dedup():
+    """只配阈值不开布尔 (SY9 客户路径): tray_dedup_iou>0 即生效."""
+    acc = _acc_norm(tray_dedup_iou=0.5)
+    assert acc.tray_dedup_iou == 0.5
+    t_hi = {"x": 0.0, "y": 0.0, "w": 0.45, "h": 1.0, "confidence": 0.9}
+    t_lo = {"x": 0.02, "y": 0.0, "w": 0.45, "h": 1.0, "confidence": 0.4}
+    acc.update([t_hi, t_lo], [], 0.0)
+    assert len(acc._trays) == 1              # 重复框被去重, 无影子身份
+
+
+def test_dedup_norm_item_custom_threshold_effective():
+    """item_dedup_iou 显式调松到 0.9: IoU≈0.8 的重复对不再被滤."""
+    dup_items = [
+        {"class_name": "滑块", "confidence": 0.9,
+         "bbox": {"x": 0.10, "y": 0.5, "w": 0.05, "h": 0.05}},
+        {"class_name": "滑块", "confidence": 0.5,
+         "bbox": {"x": 0.105, "y": 0.5, "w": 0.05, "h": 0.05}},
+    ]
+    acc = _acc_norm(item_dedup_iou=0.9)
+    acc.update([_tray(0.0)], dup_items, 0.0)
+    assert acc._cur_counts.get("滑块") == 2  # 阈值 0.9 > 实际 IoU, 不判重

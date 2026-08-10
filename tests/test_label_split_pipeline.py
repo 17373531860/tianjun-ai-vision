@@ -122,6 +122,10 @@ def split_channel(client):
                     json=_project_config())
     assert r.status_code == 200, r.text[:300]
 
+    # 隔离: 计数器会落盘并在项目加载时恢复 —— 同进程先跑过的剧本测试留下的
+    # 不良总数会污染本文件的绝对值断言 (不良总数==0), 起测前清零
+    client.post(f"/api/v1/source/detection/reset-stats?channel={CH}")
+
     r = client.post(f"/api/v1/source/detection/start?channel={CH}",
                     json={"conf": 0.25, "iou": 0.45})
     assert r.status_code == 200, r.text[:300]

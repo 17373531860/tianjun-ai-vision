@@ -1,0 +1,90 @@
+{
+  "version": "3.48.0",
+  "date": "2026-08-10",
+  "previous_version": "3.47.0",
+  "summary": "三分支汇合发版：SY9（槽位完整性门+去重阈值可配+放工单只认收尾后）+ feat/tianyong（RFC13 通用 PLC 连接器 + RFC14 统一触发中心 + 计数组合判定表）+ dev-qing（Modbus 完成脉冲 + 短信汇总形态）",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "RFC 13 通用 PLC 连接器（8 协议驱动 + 点位/规则全可配 + 方案模板）",
+      "symptom": "客户产线 PLC 对接需求百花八门（读产品号绑码/完成信号触发/结果码回写/心跳握手），只能逐客户写死代码",
+      "fix": "/api/v1/plc/* + plc_connections 表整表 JSON 配置化：8 种驱动懒加载（modbus/s7/mc/fins/enip/opcua/mock），点位引擎批量读+编解码+值变化沿规则+动作（bind_sn/trigger_event/manual_settle），dispatch_plc_event 事件写回 enqueue 级非阻塞，s7_db_handshake V0.2 模板，MES 页 PlcPanel 面板。默认无连接零开销",
+      "files": ["backend/services/plc/", "backend/api/plc.py", "backend/schemas/plc.py", "backend/models/plc_models.py", "backend/services/mes_hooks.py", "backend/main.py", "backend/api/router_manifest.py", "frontend/src/views/MES/PlcPanel.vue", "frontend/src/api/plc.js"],
+      "keywords": ["PLC", "RFC13", "Modbus", "S7", "西门子", "三菱MC", "欧姆龙FINS", "EtherNet/IP", "OPC UA", "点位引擎", "绑码", "bind_sn", "结果码回写", "plc_connections", "方案模板", "s7_db_handshake"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "RFC 14 统一触发中心（6 种触发源 × 全局动作注册表）",
+      "symptom": "人工确认/手动结算的物理入口五花八门（手遮画面/脚踏板/中控接口/串口报文/定时），各自为战",
+      "fix": "/api/v1/triggers/* + trigger_channels 表：pixel_region（参考帧缓漂）/hid_key/http（IP 白名单+变量提取）/serial_pattern/timer（间隔+每日定点）/mock 六源 × 全局动作注册表（与 PLC 规则共用）；防抖/min_interval/生效时间窗；TriggerPanel 面板+模板；channel_manager 裁撤挂第 5 处 on_channel_removed 清理。默认无实例零开销",
+      "files": ["backend/services/triggers/", "backend/api/triggers.py", "backend/schemas/triggers.py", "backend/models/trigger_models.py", "backend/api/channel_manager.py", "frontend/src/views/Settings/TriggerPanel.vue", "frontend/src/api/triggers.js"],
+      "keywords": ["触发中心", "RFC14", "虚拟按钮", "脚踏板", "pixel_region", "hid_key", "串口触发", "定时触发", "HTTP 触发", "动作注册表", "manual_settle", "trigger_channels"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "计数组合判定表 + positional 位置去重计数口径（检测模式纯视觉判型）",
+      "symptom": "缸体判型类场景同工位混流多型号，需按各标签计数组合判 OK/NG 并打型号 tag",
+      "fix": "pipeline_config.combo_table（labels × rows[counts,verdict,tag]）结算匹配判型；计数口径 steps/positional 二选一，positional 用新 source_combo_positional.py 位置去重追踪器（IoU 匹配+EMA 平滑+连续 N 帧确认），六追踪参数 UI 可配，推理循环喂帧零开销早退",
+      "files": ["backend/api/source_combo_positional.py", "backend/api/source_project_config_apply.py", "backend/api/source_settlement_mixin.py", "backend/api/source_inference_loop_mixin.py", "frontend/src/views/Project/LogicConfigTab.vue", "tests/test_combo_table.py"],
+      "keywords": ["combo_table", "计数组合判定表", "判型", "positional", "位置去重", "缸体", "count_mode", "tracking", "EMA"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "容器装箱清点：槽位完整性门 + 物品/托盘去重 IoU 阈值可配 + 预计进箱数字（上银 SY9）",
+      "symptom": "滑块密排遮挡残数/模型重复框把 22 数成 25、一盘吐两框多挂空账工牌",
+      "fix": "槽位门（货数+空槽数=槽位数才采信本帧，影子峰值兜底不漏账、空槽按中心归属不串盘，默认关带实测警示）；物品/托盘去重从硬编码改 IoU 阈值可配（缺省 0.45/0 零差异）；监控容器卡加预计进箱数字（结账同源）",
+      "files": ["backend/api/source_custom_mix.py", "frontend/src/views/Project/LogicConfigTab.vue", "frontend/src/views/Monitor/CustomMixItemPanel.vue", "tests/test_custom_mix_unit.py"],
+      "keywords": ["槽位完整性门", "slot_check_label", "slot_total", "item_dedup_iou", "tray_dedup_iou", "空槽", "重复框", "影子托盘", "上银", "SY9", "预计进箱"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-005",
+      "title": "放工单只认「等收尾之后」的出现（tail_paper_only_after_awaiting，默认关）",
+      "symptom": "尾箱周期里放工单误检一次，工单当场收尾，工人其实没放也没人提醒",
+      "fix": "开关开时尾箱落账一律先挂等放工单收尾，历史检出不算、非等待态检出整条丢弃；代价是必须封箱后再放。迁移 m0009（原 SY9 m0006 撞号改号）",
+      "files": ["backend/services/packaging_flow_coordinator.py", "backend/api/packaging_flows.py", "backend/models/mes_models.py", "backend/db/migrations/m0009_pkg_tail_paper_only_after_awaiting.py", "frontend/src/views/Settings/PackagingFlowPanel.vue"],
+      "keywords": ["tail_paper_only_after_awaiting", "只认收尾后", "放工单", "尾箱", "误检收尾", "m0009", "包装箱结算"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-006",
+      "title": "Modbus 完成脉冲外设协议 + 逐件覆盖联动（modbus_pulse）",
+      "symptom": "打螺丝现场打完最后一颗要 PLC 立刻吹气/放行，等周期结算太慢",
+      "fix": "外设新协议 modbus_pulse：设备线程持 Modbus TCP/RTU，脉冲=线圈 ON→pulse_ms→OFF + cooldown_ms 冷却；per_item 两触发点（all_covered 首次全覆盖边沿锁 / cycle_ok 判 OK），推理线程只入队；面板可配置/试发；附台达 ES3 对接文档",
+      "files": ["backend/services/external_device_pulse.py", "backend/api/source_per_item_mixin.py", "backend/services/external_device.py", "frontend/src/views/MES/ExternalDevicePanel.vue", "docs/PLC完成脉冲对接指南_台达ES3.md", "tests/test_external_device_modbus_pulse.py"],
+      "keywords": ["modbus_pulse", "完成脉冲", "气阀", "吹气", "台达 ES3", "all_covered", "cycle_ok", "逐件覆盖", "per_item", "线圈", "pulse_ms", "cooldown_ms"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-007",
+      "title": "短信汇总发送形态：合并分列 / 逐工位 + 参与工位筛选",
+      "symptom": "多工位 12h 汇总短信全挤一条看不清工位；部分工位不值得发短信",
+      "fix": "summary_form 二选一（merged_detail 默认一条内分列 / per_channel 逐工位逐条）+ summary_channel_ids 限定参与工位（空=全部），Alarm 页配置卡同步",
+      "files": ["backend/services/sms_service.py", "backend/services/sms_config.py", "backend/schemas/sms.py", "frontend/src/views/Alarm/index.vue"],
+      "keywords": ["summary_form", "merged_detail", "per_channel", "summary_channel_ids", "短信汇总", "12h 汇总", "工位筛选", "合并分列"],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "CONFIG-001",
+      "title": "custom_mix 去重双配置面归一化桥接（合并语义收敛）",
+      "symptom": "v3.47 主线布尔五开关与 SY9 阈值可配指同一处去重执行体，合并需两边客户配置零差异",
+      "fix": "_ContainerAccumulator.__init__ 归一化：布尔关优先归零阈值；dedup_trays=True 未配阈值回填 0.45；显式阈值优先。交叉组合沉淀 6 个正式单测",
+      "files": ["backend/api/source_custom_mix.py", "tests/test_custom_mix_unit.py"],
+      "keywords": ["归一化", "dedup_items", "dedup_trays", "item_dedup_iou", "tray_dedup_iou", "配置面桥接", "零差异"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-plc", "debug-triggers", "debug-sms", "debug-per-item", "debug-mes", "api-sync", "modify-model", "modify-project-config"],
+  "files_changed": ["backend/services/plc/", "backend/services/triggers/", "backend/api/plc.py", "backend/api/triggers.py", "backend/api/source_combo_positional.py", "backend/api/source_custom_mix.py", "backend/api/source_per_item_mixin.py", "backend/services/external_device_pulse.py", "backend/services/packaging_flow_coordinator.py", "backend/services/sms_service.py", "backend/db/migrations/m0009_pkg_tail_paper_only_after_awaiting.py", "frontend/src/views/MES/PlcPanel.vue", "frontend/src/views/Settings/TriggerPanel.vue", "frontend/src/views/Project/LogicConfigTab.vue", "frontend/src/views/Settings/PackagingFlowPanel.vue", "frontend/src/views/Alarm/index.vue", "frontend/src/views/MES/ExternalDevicePanel.vue"]
+}

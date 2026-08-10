@@ -1,0 +1,50 @@
+{
+  "steps": [
+    {
+      "name": "A1 SY9 四字段渲染",
+      "ok": true,
+      "detail": "容器装箱清点\n开启后，物品按「当前主容器」分组，容器进箱(消失确认)即记账；封箱(末步)时整箱裁决\n容器标签\n托盘\n消失确认帧\n容器匹配IoU\n计数方式\n盘计数（计容器数 × 每盘门槛）\n滑块总数（累加进箱物品总数）\n整箱物品总目标\n进箱物品总数正好等于此值才合格（少了/多了均 NG）；不卡每盘数量与容器数\n每盘数量校验\n错盘当场拦截：进箱那一刻核这盘数量是否等于每盘期望（步骤设置 → 物品的期望"
+    },
+    {
+      "name": "A2 去重默认值零差异 (物品0.45/托盘0)",
+      "ok": true,
+      "detail": "item=0.45 tray=0.00"
+    },
+    {
+      "name": "A3 槽位门落库",
+      "ok": true,
+      "detail": "{'custom_mix_container_slot_check_label': '凹槽', 'custom_mix_container_slot_total': 24}"
+    },
+    {
+      "name": "A4 去重阈值落库",
+      "ok": true,
+      "detail": "{'custom_mix_container_item_dedup_iou': 0.5, 'custom_mix_container_tray_dedup_iou': 0.5}"
+    },
+    {
+      "name": "A5 重进回显",
+      "ok": true,
+      "detail": "item=0.50 tray=0.50 slot=24 lbl=凹槽"
+    },
+    {
+      "name": "B0 演示包装配置创建",
+      "ok": true,
+      "detail": "{\"name\":\"演示-SY9只认收尾后\",\"enabled\":false,\"channel_id\":0,\"scan_device_id\":null,\"pull_conn_id\":null,\"box_count_source\":\"field\",\"box_count_field\":\"dispatch_qty\",\"tray_qty_mode\":\"fixed\",\"tray_qty_fixed\":0,\"t"
+    },
+    {
+      "name": "B1 开关可见",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "B2 默认关",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "B3 tail_paper_only_after_awaiting 落库",
+      "ok": true,
+      "detail": "{'name': '演示-SY9只认收尾后', 'enabled': False, 'channel_id': 0, 'scan_device_id': None, 'pull_conn_id': None, 'box_count_source': 'field', 'box_count_field': 'dispatch_qty', 'tray_qty_mode': 'fixed', 'tray_qty_fixed': 0, 'tray_qty_table': None, 'trays_per_box_mode': 'fixed', 'trays_per_box_fixed': 4, 'tr"
+    }
+  ],
+  "pass": true
+}

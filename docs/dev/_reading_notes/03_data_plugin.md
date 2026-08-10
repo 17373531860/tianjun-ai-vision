@@ -11,6 +11,11 @@
 > - `services/export_context.py`：`_fill_plugin_sections` 执行 provider(db, ctx)，值挂 `ctx["plugin"]["<cc_snake>"]`，异常隔离、缺字段静默空值
 > - `api/export_custom.py`：范围导出未收尾会话回落实数（不再等收尾快照）
 > - 测试锚点：`tests/plugin_system/test_export_fields_registry_F8.py`
+>
+> **v3.48 补账（2026-08-10）**：
+> - **`models/plc_models.py`（新，47 行）**：`plc_connections` 表（RFC 13）——name/driver（8 选一）/conn_params JSON/points JSON（点位清单：地址+类型+字节序+scale）/rules JSON（触发规则）/write_backs JSON（事件写回）/enabled。整表 JSON 配置化，加点位/规则不动 schema。
+> - **`models/trigger_models.py`（新，27 行）**：`trigger_channels` 表（RFC 14）——name/source_type（6 选一）/params JSON/actions JSON（动作链）/enabled/channel_id。
+> - 迁移 **`m0009_pkg_tail_paper_only_after_awaiting`**：`packaging_flow_configs` 加 `tail_paper_only_after_awaiting` 列（SY9 分支原编号 m0006，吸收时因与主线 m0006_sms_report_content_template 撞号改 m0009）。plc/trigger 两张新表由 `Base.metadata.create_all` 建，无需迁移。
 
 ---
 

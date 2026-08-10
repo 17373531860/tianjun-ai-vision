@@ -38,6 +38,8 @@ def _service(tmp_path, *, config=None, reader=None, wall_clock=None) -> SmsServi
         config or _shift_config(),
         summary_state_path=tmp_path / "sms_summary_state.json",
         offline_queue_path=tmp_path / "sms_offline_queue.db",
+        # 隔离: 见 test_sms_summary._service 同名注释
+        workstation_config_path=tmp_path / "workstation_config.json",
         summary_reader=reader or (lambda _start, _end: {}),
         wall_clock=wall_clock or (lambda: DAY),
     )
@@ -129,6 +131,7 @@ def test_rolling_default_unchanged(tmp_path, monkeypatch) -> None:
         ),
         summary_state_path=tmp_path / "sms_summary_state.json",
         offline_queue_path=tmp_path / "offline.db",
+        workstation_config_path=tmp_path / "workstation_config.json",
         summary_reader=lambda _s, _e: {0: SmsSummaryCounts(ok_count=2)},
         wall_clock=lambda: start,
     )

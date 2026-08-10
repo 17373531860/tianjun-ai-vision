@@ -17,7 +17,7 @@
 | 性质 | **商业项目，客户已在用** — 工厂工控机部署 |
 | 客户场景 | 装配线视觉检测 / 包装线 / MES 数据回传 / 多工位集群 |
 | 部署模式 | Windows 工控机本地安装（Inno Setup 一键包，约 1.5 GB），Electron 桌面壳套 FastAPI 后端 + Vue3 前端 |
-| 当前线上版本 | **v3.47.0**（2026-08-07）— 多分支汇合发版：多工位监控布局重构（三工位横排 + 4+ 网格分页总览 + 放大详情，MAX_CHANNELS 4→64）+ YoloVision 训练平台互连（模型双向分发 + 现场帧采样回流，`/api/v1/interconnect/*`，默认关，迁移 m0008）+ 开机首启提速/授权激活治本六项（迁移 m0007）+ LG 工时看板插件 v1.5.2/插件平台 F8 导出字段 + custom_mix 记账五开关 + NG 汇总数字口径可选。**逐版变更详见 `docs/changelog/`，本文件不再记版本流水账** |
+| 当前线上版本 | **v3.48.0**（2026-08-10）— 三分支汇合发版：RFC 13 通用 PLC 连接器（`/api/v1/plc/*`，8 驱动 + 点位/规则全可配，默认无连接零开销）+ RFC 14 统一触发中心（`/api/v1/triggers/*`，6 触发源 × 全局动作注册表）+ 计数组合判定表（combo_table 判型 + positional 位置去重口径）+ 上银 SY9 记账精度（槽位完整性门/去重 IoU 阈值可配/放工单只认收尾后，迁移 m0009）+ Modbus 完成脉冲外设协议（per_item 联动）+ 短信汇总发送形态（合并分列/逐工位 + 工位筛选）。**逐版变更详见 `docs/changelog/`，本文件不再记版本流水账** |
 | 主仓库 | `17373531860/tianjun-ai-vision`（**PRIVATE**） |
 | 中转仓库 | `xu-yanzhi32/tianjun-releases` + `tianjun-releases-2`（Gitee 公开 release，给客户下载用） |
 | 母语 | **中文**（用户和注释主语言；技术术语保留英文） |
@@ -277,7 +277,7 @@
 1. **API 前缀必须 `/api/v1/`**（不是 `/api/`）
 2. **`OPENCV_FFMPEG_CAPTURE_OPTIONS=threads;1` 必须在 cv2 import 前 setdefault**（`backend/main.py:line 4`，v3.1.3 关键修复，否则 libavcodec 断言）
 3. **修改 `source.py` 主类前必须看 `__getattr__/setattr__` 兼容层**（在 `source.py` 内）— 老代码访问 `self._kalman_enabled` 等会被路由到 has-a 组件
-4. **`channel_manager.set_channel_count` 必须完成全部 4 处 `on_channel_removed` 配套清理**（`mes_hook` / `alarm_router` / channel-group 协调器 / workpiece-flow 协调器），否则 MES dict 残留 + 报警串口未释放 + 协调器幽灵工位。**插件如维护 channel 维度的状态，同样必须挂 `on_channel_removed` 清理**，不能只加不清
+4. **`channel_manager.set_channel_count` 必须完成全部 5 处 `on_channel_removed` 配套清理**（`mes_hook` / `alarm_router` / channel-group 协调器 / workpiece-flow 协调器 / 触发中心 trigger_manager（v3.48+）），否则 MES dict 残留 + 报警串口未释放 + 协调器幽灵工位 + 像素触发源对着裁撤工位空采样。**插件如维护 channel 维度的状态，同样必须挂 `on_channel_removed` 清理**，不能只加不清
 5. **测试 fixture 必须独立 DB / unique uuid，不要 reload uvicorn**（v3.5.0 BDD 框架痛过）
 6. **修改 `mes_hooks.py` / `services/scanner.py` 前先读对应 changelog**（debug-mes 是项目最大踩坑区）
 7. **改前端 `views/Monitor` 前**：双缓冲 MJPEG + 多通道 state 隔离（v2.6.0 / v3.0.0 / v3.1.3 多次修过）。其中 `STREAM_SWAP_INTERVAL=600`（600 个 150ms 轮询拍 ≈ 90 秒）的定期换流是为释放 Chromium 原生解码器内存增长，**勿删勿大改间隔**
@@ -328,6 +328,7 @@
 
 | 版本 | 日期 | 一句话 |
 |---|---|---|
+| v3.48.0 | 2026-08-10 | 三分支汇合发版：RFC 13 通用 PLC 连接器（8 协议驱动 + 点位引擎 + bind_sn 绑码/结果码写回 + s7_db_handshake 模板，默认无连接零开销）+ RFC 14 统一触发中心（虚拟按钮/脚踏板/HTTP/串口/定时 6 源 × 全局动作注册表，channel 裁撤第 5 处清理）+ 计数组合判定表（纯视觉判型 + positional 位置去重六参数）+ 上银 SY9（槽位完整性门 + 物品/托盘去重 IoU 可配 + 放工单只认收尾后，m0009；与 v3.47 五开关归一化桥接零差异）+ Modbus 完成脉冲外设协议（逐件覆盖 all_covered/cycle_ok 联动，台达 ES3 文档）+ 短信汇总合并分列/逐工位 + 工位筛选 |
 | v3.47.0 | 2026-08-07 | 多分支汇合发版：多工位监控布局重构（三工位横排+网格分页总览+放大详情，工位上限 4→64）+ YoloVision 训练平台互连（模型双向分发+现场帧采样回流自学习闭环，默认关，m0008）+ 开机首启提速/授权激活治本六项（Defender 排除+startup-heavy-init 后台化+machineId 快路径，m0007）+ LG 工时看板插件 v1.5.2（F8 插件导出字段落地）+ custom_mix 记账五开关 + NG 汇总数字口径可选 + macOS MPS 并发串行锁 |
 | v3.46.0 | 2026-08-05 | 主程序原生短信/微信通知栈（NG 12h 汇总 + 每日短信日报，五通道统一 sms_providers 工厂共享 sms_config，默认关，迁移 m0006，插件 hook daily_report_before_send）+ 推理设备 auto 档支持 Apple MPS（torch_device 统一出口，MPS 强制 FP32）+ tools/sms_4g 独立 AT 调试工具 + debug-sms skill |
 | v3.45.0 | 2026-07-29 | 上银 SY 包装线热补丁收编（0a~0e 滑块记账体系重做：在位身份各自累计峰值+结算挂账等真账+动作前稳定计数快照，双真实视频回归零误判）+ 箱标签扫码授权（组⑧逐箱扫码定数量）+ 包装工单同步进工单管理（默认开）+ 萍乡称重整改（清秤 Z/T 智能选择+过程提醒档+网关推送异步化+达梦溢出）+ 海康 SDK 帧率可配 + dev-qing 逐件修复合入 |
@@ -372,6 +373,6 @@
 
 ---
 
-**本文件最后更新**：2026-08-07（发版 v3.47.0：多分支汇合——多工位布局重构 + 训练平台互连 + 首启提速六项 + LG 工时插件 + custom_mix 五开关；第一节版本号 + 第五节路由表 `/interconnect` + 第四节触发表 `debug-interconnect` + 第十一节里程碑同步）
+**本文件最后更新**：2026-08-10（发版 v3.48.0：三分支汇合——RFC 13 PLC 连接器 + RFC 14 触发中心 + 计数组合判定表 + SY9 记账精度 + Modbus 完成脉冲 + 短信汇总形态；第一节版本号 + 第八节不变量 4 改 5 处清理 + 第十一节里程碑同步。路由表 `/plc` `/triggers` 与触发表 `debug-plc` `debug-triggers` 已随分支合入时同步）
 **维护者**：项目主作者 + AI agents
 **维护铁律**：本文件只放"地图 + 守则 + 不变量"。模块细节进 skill，版本变更进 `docs/changelog/`，扩展点/技术债进 `docs/plugin-system/inventory/`。**发版时务必同步更新本文件第一节版本号 + 文件尾日期**（详见 `update-release` skill）。

@@ -391,6 +391,8 @@ class ExternalDeviceService(
 ):
 ```
 
+> **v3.48 新协议 `modbus_pulse`（Modbus 完成脉冲，`external_device_pulse.py` 400 行）**：per_item 判定完成 → 给 PLC 线圈发脉冲（ON→pulse_ms→OFF，cooldown_ms 冷却窗丢重复）。触发入口 `notify_per_item_complete(channel_id, trigger_mode)`（推理线程只入队，Modbus 写在设备线程）；trigger_mode 二选一 `all_covered`/`cycle_ok`，与 per_item 侧同名匹配。诊断走 `debug-per-item` skill 第六节 #5；与 RFC 13 通用 PLC 连接器（`debug-plc`）互不相干——这是外设栏的专用轻量协议。
+
 ### 8.2 称重 idle/stabilizing/stable 状态机（`_handle_weight_stability`）
 
 ```

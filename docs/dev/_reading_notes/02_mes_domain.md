@@ -18,6 +18,13 @@
 > - `packaging_flow_coordinator.py`：①箱标签扫码授权（组⑧，FEAT-002）——「等扫箱标签」态 waiting_label / `_extract_label_qty` / `_authorize_box_by_label` / `on_cycle_started`（未扫开做报警）/ 收尾对账 label_total_check，见其条目「v3.45 变更」节；②包装工单镜像进工单管理（FEAT-003）——`_sync_work_order` upsert work_orders 表，默认开、异常隔离。
 > - `api/packaging_flows.py`：Pydantic 面加组⑧ 10 字段 + `sync_work_orders`。
 > - `database_adapter.py`：`_dm_bind_safe` 达梦 32 位整型溢出降级字符串绑定 + 连接端口守门（BUG-009）。
+>
+> **v3.48 补账（2026-08-10，SY9 + tianyong + dev-qing 三分支汇合发版）**：
+> - **`external_device_pulse.py`（新，400 行，dev-qing）**：外设新协议 `modbus_pulse`——「Modbus 完成脉冲」设备（PLC 控气阀等）。设备线程持 Modbus TCP/RTU 连接，暴露 `enqueue_pulse()` 只入队即返回（调用方在推理线程，见 01 册 `source_per_item_mixin`）；脉冲=写线圈 ON→保持 pulse_ms→写 OFF，`cooldown_ms` 冷却窗内丢弃重复请求；断线自动重连、失败落 `last_error` 不外抛。触发模式 `trigger_mode`：`all_covered`（逐件首次全覆盖）/ `cycle_ok`（周期判 OK）。
+> - `external_device.py` / `external_device_models.py` / `external_device_protocols.py`：注册 `modbus_pulse` 协议 + `notify_per_item_complete(channel_id, trigger_mode)` 分发入口（按工位绑定 + trigger_mode 同名匹配，无配置纯 no-op）；面板试发端点。对接文档 `docs/PLC完成脉冲对接指南_台达ES3.md`（+附录A PLC 侧程序）。
+> - `mes_hooks.py`（+12 行，tianyong）：cycle_start / cycle_end 等触点挂 `dispatch_plc_event()`（RFC 13 事件写回，enqueue 级非阻塞、内部全兜底永不抛——遵守"Hook 队列不阻塞热路径"不变量）。
+> - `mes_models.py`：`PackagingFlowConfig` 新增 `tail_paper_only_after_awaiting`（Boolean 默认 False，迁移 **m0009**）——放工单只认"等收尾之后"的出现（SY9，治尾箱周期里误检一次就当场收尾）。
+> - `packaging_flow_coordinator.py`（SY9）：尾箱落账先挂「等放工单收尾」，开关开时历史检出一概不算、非等待态检出整条丢弃（连提前放工单报警也不报）；`api/packaging_flows.py` Pydantic 面同步透出。
 > - PackagingFlowConfig 新 11 列与迁移 m0004/m0005 见 `03_data_plugin.md`。
 >
 > **v3.47 补账（2026-08-07）**：MES 域本轮仅一处触碰——`mes_models.py` `DefectRecord.cycle_id` 补索引（`index=True`，老库走迁移 `m0007_defect_cycle_index`），为开机首启的孤儿缺陷扫描按 cycle_id 关联探查提速（feat/system-optimize 六项之一）。services/api 层零变更。

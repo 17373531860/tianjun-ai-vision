@@ -7734,6 +7734,24 @@
     "title": "PullTest",
     "type": "object"
    },
+   "PulseRequest": {
+    "properties": {
+     "device_id": {
+      "title": "Device Id",
+      "type": "integer"
+     },
+     "wait": {
+      "default": true,
+      "title": "Wait",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "device_id"
+    ],
+    "title": "PulseRequest",
+    "type": "object"
+   },
    "RemediationRedoInput": {
     "properties": {
      "channel_id": {
@@ -10545,6 +10563,15 @@
       "title": "Shift Start Hour",
       "type": "integer"
      },
+     "summary_channel_ids": {
+      "description": "参与汇总的 0-based 工位 ID；空数组表示全部启用工位",
+      "items": {
+       "type": "integer"
+      },
+      "maxItems": 64,
+      "title": "Summary Channel Ids",
+      "type": "array"
+     },
      "summary_count_source": {
       "default": "panel",
       "description": "panel=监控面板当前会话OK/NG（默认）；window=调度时间窗落库合计",
@@ -10563,6 +10590,16 @@
        "daily_shift"
       ],
       "title": "Summary Schedule Mode",
+      "type": "string"
+     },
+     "summary_send_mode": {
+      "default": "merged_detail",
+      "description": "per_channel=逐工位多条；merged_detail=一条内分列多工位",
+      "enum": [
+       "per_channel",
+       "merged_detail"
+      ],
+      "title": "Summary Send Mode",
       "type": "string"
      },
      "template": {
@@ -10740,6 +10777,15 @@
       "title": "Shift Start Hour",
       "type": "integer"
      },
+     "summary_channel_ids": {
+      "description": "参与汇总的 0-based 工位 ID；空数组表示全部启用工位",
+      "items": {
+       "type": "integer"
+      },
+      "maxItems": 64,
+      "title": "Summary Channel Ids",
+      "type": "array"
+     },
      "summary_count_source": {
       "default": "panel",
       "description": "panel=监控面板当前会话OK/NG（默认）；window=调度时间窗落库合计",
@@ -10758,6 +10804,16 @@
        "daily_shift"
       ],
       "title": "Summary Schedule Mode",
+      "type": "string"
+     },
+     "summary_send_mode": {
+      "default": "merged_detail",
+      "description": "per_channel=逐工位多条；merged_detail=一条内分列多工位",
+      "enum": [
+       "per_channel",
+       "merged_detail"
+      ],
+      "title": "Summary Send Mode",
       "type": "string"
      },
      "template": {
@@ -19182,6 +19238,47 @@
      }
     },
     "summary": "List Logs",
+    "tags": [
+     "External Devices",
+     "External Devices"
+    ]
+   }
+  },
+  "/api/v1/external-devices/pulse": {
+   "post": {
+    "description": "向「Modbus 完成脉冲」设备手动下发一次脉冲（外部设备页「试发脉冲」按钮）。\n\n等价于逐件覆盖完成时自动发的那一下，用来现场确认 PLC 侧气阀真动了。\n手动试发不受 cooldown_ms 限制，方便连点调试。",
+    "operationId": "send_pulse_api_v1_external_devices_pulse_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/PulseRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Send Pulse",
     "tags": [
      "External Devices",
      "External Devices"
