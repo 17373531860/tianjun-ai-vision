@@ -295,6 +295,9 @@ def _diag_db_health():
     except Exception as e:
         print(f"[DIAG] DB health: inspect 失败: {e}")
         return
+    # 大表 COUNT(*) 在 SQLite 上是全表扫描 (客户库百万行级、开机冷盘时是十秒级),
+    # 诊断日志用 MAX(id) 近似即可 (主键索引求极值, 恒定耗时); 小表保留精确计数。
+    _big_tables = {'detection_sessions', 'detection_cycles', 'step_records', 'video_clips'}
     try:
         with engine.connect() as conn:
             for table in ('projects', 'models', 'detection_sessions', 'detection_cycles', 'step_records', 'video_clips'):
@@ -302,8 +305,12 @@ def _diag_db_health():
                     print(f"[DIAG] DB health: {table} = <table not found>")
                     continue
                 try:
-                    count = conn.execute(text(f'SELECT COUNT(*) FROM "{table}"')).scalar()
-                    print(f"[DIAG] DB health: {table} = {count} rows")
+                    if table in _big_tables:
+                        max_id = conn.execute(text(f'SELECT MAX(id) FROM "{table}"')).scalar()
+                        print(f"[DIAG] DB health: {table} ~ {max_id or 0} rows (max id)")
+                    else:
+                        count = conn.execute(text(f'SELECT COUNT(*) FROM "{table}"')).scalar()
+                        print(f"[DIAG] DB health: {table} = {count} rows")
                 except Exception as e:
                     print(f"[DIAG] DB health: {table} 读取失败: {e}")
             if 'models' in existing:
@@ -385,6 +392,38 @@ def _restore_session_tokens():
         print(f"[Auth] token 启动恢复失败 (忽略): {e}")
 
 
+def _should_run_orphan_scan() -> bool:
+    """孤儿扫描降频: 每 7 天最多跑一次 (system_configs KV 记账).
+
+    三条 NOT EXISTS 关联扫描在大库上是 O(全表) 的, 曾参与把客户机开机首启拖到
+    分钟级; 孤儿引用本身只影响统计口径、不影响功能, 无需每次启动都扫。
+    KV 读写失败时保守放行 (照常扫), 不改变老行为。
+    """
+    try:
+        from backend.models.models import SystemConfig
+        from sqlalchemy.orm import Session as DBSession
+        import time as _time
+        _KEY = "orphan_scan_last_ts"
+        with DBSession(engine) as db:
+            row = db.query(SystemConfig).filter(SystemConfig.key == _KEY).first()
+            now = _time.time()
+            if row is not None:
+                try:
+                    if now - float(row.value or 0) < 7 * 86400:
+                        return False
+                except (TypeError, ValueError):
+                    pass
+                row.value = str(now)
+            else:
+                db.add(SystemConfig(key=_KEY, value=str(now),
+                                    description="启动孤儿扫描上次执行时间 (unix 秒)"))
+            db.commit()
+            return True
+    except Exception as e:
+        print(f"[孤儿清理] 降频记账失败, 本次照常执行: {e}")
+        return True
+
+
 def _run_startup_init():
     """统一启动初始化：诊断、迁移、孤儿清理
 
@@ -397,7 +436,10 @@ def _run_startup_init():
     from backend.db.migrations import apply_pending
     apply_pending(engine)
     fix_orphan_sessions()
-    cleanup_orphan_inspections()
+    if _should_run_orphan_scan():
+        cleanup_orphan_inspections()
+    else:
+        print("[孤儿清理] 7 天内已扫过, 本次跳过 (启动提速)")
     _seed_export_builtin_templates()
     # v3.10.0 用户系统: 种子三个内置角色 + 从落盘恢复内存 token 缓存
     _seed_auth_builtin_roles()
@@ -461,8 +503,11 @@ def auto_load_active_project():
                 if proj.default_model_id:
                     model = db.query(Model).filter(Model.id == proj.default_model_id).first()
                     if model and model.file_path and os.path.exists(model.file_path):
-                        success = channel_manager.load_model_for_channel(ch_id, model.file_path,
-                                                                         ch_cfg.get("gpu_device", "auto"))
+                        # or 兜底: 配置条目存在但值为 None 时也回落 auto (dict.get
+                        # 的 default 只管键缺失, None 值曾漏成 device=None → mps)
+                        success = channel_manager.load_model_for_channel(
+                            ch_id, model.file_path,
+                            ch_cfg.get("gpu_device") or "auto")
                         if success:
                             print(f"[启动] ch{ch_id} 加载模型: {model.name}")
                         else:
@@ -480,7 +525,11 @@ def auto_load_active_project():
                     if model and model.file_path and os.path.exists(model.file_path):
                         all_ok = True
                         for ch_id in remaining:
-                            ok = channel_manager.load_model_for_channel(ch_id, model.file_path)
+                            # 兜底路径同样尊重该通道 gpu_device (与上面绑定项目路径一致);
+                            # 漏传曾让 mac 开发机 ch1 落到 MPS, 停检测触发 Metal 断言崩后端
+                            ok = channel_manager.load_model_for_channel(
+                                ch_id, model.file_path,
+                                (sources.get(str(ch_id)) or {}).get("gpu_device") or "auto")
                             all_ok = all_ok and ok
                             print(f"[启动] 兜底: ch{ch_id} 模型 '{model.name}' "
                                   f"{'加载成功' if ok else '加载失败'}")
@@ -491,8 +540,10 @@ def auto_load_active_project():
         print(f"[启动] 自动加载项目失败: {e}")
         import traceback; traceback.print_exc()
 
-if not os.environ.get("BACKEND_SKIP_INIT"):
-    auto_load_active_project()
+# v3.47: auto_load_active_project() 不再在 import 阶段同步执行 — 逐通道模型加载
+# (CUDA 冷初始化 + 多工位 N 份实例) 曾把 uvicorn 绑端口拖后几分钟, Electron 健康
+# 探测全程失败, 300s 超时直接判"启动失败"。现与视频源恢复一起移入
+# _start_heavy_init_async() 后台线程 (见 _init_mes_services 之后), 内部顺序不变。
 
 # v3.15.1: CUDA 预热 — 把 torch CUDA 上下文首次初始化的开销移到启动期 (splash 期间).
 # 现场问题: 项目未激活时启动全程不碰 GPU, 用户进设置页首次查 GPU 列表才触发 CUDA
@@ -669,8 +720,8 @@ def auto_restore_video_sources():
     except Exception as e:
         print(f"[启动] 视频源自动恢复整体失败: {e}")
 
-if not os.environ.get("BACKEND_SKIP_INIT"):
-    auto_restore_video_sources()
+# v3.47: auto_restore_video_sources() 同样移入 _start_heavy_init_async() 后台线程 —
+# RTSP/相机打开是同步阻塞 (开机时 NVR 常比工控机起得慢), 不能挡在端口绑定之前。
 
 # ========== MES Hook + Scanner 初始化 ==========
 def _init_mes_services():
@@ -722,6 +773,36 @@ def _init_mes_services():
 if not os.environ.get("BACKEND_SKIP_INIT"):
     _init_mes_services()
 
+
+# ========== v3.47: 重初始化后台化 (启动提速) ==========
+# 把"逐通道模型加载 → 视频源恢复(→自动开始检测)"整链放到后台线程, 让 uvicorn
+# 尽快绑端口对外服务。链内部顺序与老的 import 期串行完全一致; 放在
+# _init_mes_services() 之后启动, 保证检测自动恢复时 _mes_hook 已注入各通道
+# (老代码检测恢复反而先于 MES 注入, 顺带修掉这个隐患)。
+# 前端首屏此时可能撞上"模型/视频源仍在加载", 表现为源处于连接中状态, 与手动
+# 逐个启动源的过渡态一致, axios 层无需特殊处理。
+_heavy_init_done = threading.Event()
+
+def _start_heavy_init_async():
+    def _worker():
+        import time as _t
+        _t0 = _t.time()
+        print("[启动] 重初始化后台线程开始 (模型加载 + 视频源恢复)")
+        try:
+            auto_load_active_project()
+        except Exception as _e:
+            print(f"[启动] 后台模型/项目加载失败 (隔离, 不影响主流程): {_e}")
+        try:
+            auto_restore_video_sources()
+        except Exception as _e:
+            print(f"[启动] 后台视频源恢复失败 (隔离, 不影响主流程): {_e}")
+        _heavy_init_done.set()
+        print(f"[启动] 重初始化后台线程完成, 耗时 {_t.time() - _t0:.1f}s")
+    threading.Thread(target=_worker, daemon=True, name="startup-heavy-init").start()
+
+if not os.environ.get("BACKEND_SKIP_INIT"):
+    _start_heavy_init_async()
+
 # ========== 后台自动清理定时任务 ==========
 _cleanup_timer = None
 _daily_cleanup_timer = None
@@ -739,9 +820,17 @@ def _schedule_auto_cleanup():
     _cleanup_timer.start()
 
 def _start_auto_cleanup():
-    """启动时执行一次清理，然后每24小时重复"""
-    print("[定时清理] 启动时执行首次自动清理...")
-    _schedule_auto_cleanup()
+    """启动 5 分钟后执行首次清理，然后每24小时重复。
+
+    v3.47: 首次清理从"开机立即"推迟 5 分钟 — 删旧周期/录像是重磁盘 IO + SQLite
+    写锁, 曾与启动初始化 (迁移/模型加载/视频源恢复) 抢同一块盘和同一个库,
+    把客户机开机首启进一步拖慢。5 分钟后启动窗口已过, 清理照常执行。
+    """
+    global _cleanup_timer
+    print("[定时清理] 首次自动清理将在启动 5 分钟后执行 (避开启动窗口)...")
+    _cleanup_timer = threading.Timer(300, _schedule_auto_cleanup)
+    _cleanup_timer.daemon = True
+    _cleanup_timer.start()
 
 threading.Thread(target=_start_auto_cleanup, daemon=True).start()
 
@@ -1135,6 +1224,26 @@ def _start_sms_report():
 
 
 _start_sms_report()
+
+
+# v3.47 训练平台互连 — 配置启用时拉起帧回传 worker (默认关 = 零开销零差异)。
+def _start_interconnect_uploader():
+    if os.environ.get("BACKEND_SKIP_INIT"):
+        return
+    try:
+        from backend.services.interconnect import config as _icfg
+        _cfg = _icfg.get_config()
+        if _cfg.get("enabled"):
+            from backend.services.interconnect.uploader import ensure_worker
+            ensure_worker()
+            if (_cfg.get("model_pull") or {}).get("enabled"):
+                from backend.services.interconnect.puller import ensure_puller
+                ensure_puller()
+    except Exception as e:
+        print(f"[Interconnect] 帧回传 worker 启动失败 (已隔离, 主程序继续): {e}")
+
+
+_start_interconnect_uploader()
 
 
 # 出站 MES 连接主动健康探测调度器 (A2): 后台周期探活, 配置驱动 (默认全关零开销)。

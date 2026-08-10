@@ -1,7 +1,7 @@
 # 数据库表参考
 
 > **类型**：reference（生成物勿手改）
-> **生成命令**：`python scripts/docgen/gen_db_schema.py`（生成日 2026-08-04）
+> **生成命令**：`python scripts/docgen/gen_db_schema.py`（生成日 2026-08-07）
 > **单一事实源**：SQLAlchemy ORM（Base.metadata）。字段含义看模型源文件行内注释；
 > 迁移历史看 backend/db/migrations/ 与 backend/main.py 的 migrate_database。
 
@@ -270,7 +270,7 @@ ORM 类 `DefectRecord`，定义于 `backend/models/mes_models.py`。
 | `defect_uuid` | VARCHAR(32) | UNIQUE INDEX NOT NULL |  |
 | `workpiece_id` | INTEGER | FK→workpieces.id INDEX NOT NULL |  |
 | `inspection_id` | INTEGER | FK→workpiece_inspections.id |  |
-| `cycle_id` | INTEGER | FK→detection_cycles.id |  |
+| `cycle_id` | INTEGER | FK→detection_cycles.id INDEX |  |
 | `step_record_id` | INTEGER | FK→step_records.id |  |
 | `defect_code` | VARCHAR(32) | INDEX NOT NULL |  |
 | `defect_name` | VARCHAR(128) | NOT NULL |  |
@@ -602,6 +602,8 @@ ORM 类 `Model`，定义于 `backend/models/models.py`。
 | `description` | TEXT |  |  |
 | `version` | VARCHAR(50) |  |  |
 | `status` | VARCHAR(20) |  | 'idle' |
+| `source` | VARCHAR(50) |  | 'local' |
+| `meta` | JSON |  |  |
 | `upload_time` | DATETIME |  | server |
 
 ## packaging_flow_configs

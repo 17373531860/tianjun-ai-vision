@@ -63,7 +63,8 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7, mcp__sentry, mcp__
 ### 3. 加载到通道（`ModelLoadMixin.load_model`）
 - **每个通道一个独立 `YOLO()` 实例**（`channel_manager._propagate_model` 已是 no-op；通道间不共享 runtime 对象，避免推理竞争）
 - 转换模型加载失败 → 自动 fallback 回原始 `.pt`
-- 设备选择：`device == 'auto'` → `cuda:0` / `cpu`；`.to(device)` 仅对原生 PyTorch 生效
+- 设备选择：`device == 'auto'` → `cuda:0` > `mps` > `cpu`（v3.46 起，统一出口 `backend/core/torch_device.py::resolve_auto_device`；MPS 强制 FP32）；`.to(device)` 仅对原生 PyTorch 生效
+- **macOS MPS 多通道注意（v3.47）**：MPS 跨通道并发推理会撞 Metal 断言弑进程，`torch_device.py` 全局 `MPS_LOCK` 把 predict/warmup/release/empty_cache 全部串行化——多通道在 mac 上吞吐受限是**设计行为**，客户机 Windows CUDA 不受影响；模型加载幂等按**实际设备**比对（激活/启动尊重通道 `gpu_device`），排查"通道设备没生效"看 `source_model_load_mixin`
 - `model.task` 写入 `self.model_task`（`detect` / `segment`），下游决定走哪条 runner
 - **`use_half`** 来自 `device_config.json`，仅在 `device.startswith('cuda') and is_native_pytorch` 时真正生效
 - **CUDA warm-up** 用 `_model_imgsz` 跑一次 `np.zeros` 预热，命中 `AssertionError "model size (1, 3, H, W)"` 会自动改写 `_model_imgsz` 重试

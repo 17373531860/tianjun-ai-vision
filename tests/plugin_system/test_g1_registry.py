@@ -148,10 +148,11 @@ def test_plugin_registry_snapshot_includes_all_subregistries(tmp_path):
     assert snap["customer_code"] == "internal-demo"
     assert len(snap["routes"]) == 1
     assert len(snap["hooks"]) == 1
-    # v3.13: 三个尚未接入的 registry 在 snapshot 里以 *_status 字段标记 (不再是 *_count).
+    # v3.13: 尚未接入的 registry 在 snapshot 里以 *_status 字段标记 (不再是 *_count).
     # 见 backend/plugin_system/registry.py _UnimplementedRegistry.
+    # v3.46 F8: export_fields 已真实现, snapshot 改为已注册字段 path 列表.
     assert snap["export_templates_status"] == "not_implemented_F7"
-    assert snap["export_fields_status"] == "not_implemented_F8"
+    assert snap["export_fields"] == []
     assert snap["realtime_triggers_status"] == "not_implemented_F9"
 
 

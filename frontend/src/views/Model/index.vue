@@ -21,9 +21,12 @@
           <div class="p-3 bg-tech-blue/10 rounded-lg text-tech-blue">
             <el-icon :size="24"><Cpu /></el-icon>
           </div>
-          <el-tag :type="model.status === 'active' ? 'success' : 'info'" effect="dark" size="small">
-            {{ model.status === 'active' ? '使用中' : '闲置' }}
-          </el-tag>
+          <div class="flex gap-1 items-center">
+            <el-tag v-if="model.source === 'yolovision'" type="warning" effect="dark" size="small">训练平台</el-tag>
+            <el-tag :type="model.status === 'active' ? 'success' : 'info'" effect="dark" size="small">
+              {{ model.status === 'active' ? '使用中' : '闲置' }}
+            </el-tag>
+          </div>
         </div>
         
         <h3 class="text-lg font-bold truncate" :title="model.name">{{ model.name }}</h3>
@@ -37,6 +40,7 @@
 
         <div class="mt-6 flex gap-2">
           <el-button size="small" class="flex-1" @click="handleEdit(model)">详情</el-button>
+          <el-button v-if="model.meta && model.meta.analysis" size="small" type="primary" plain @click="showAnalysis(model)">训练分析</el-button>
           <el-button size="small" type="danger" plain @click="confirmDelete(model)">删除</el-button>
         </div>
       </div>
@@ -135,11 +139,72 @@
             </el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="类别数">{{ getLabelsCount(currentModel.labels) }} 个</el-descriptions-item>
+          <el-descriptions-item label="来源">
+            {{ currentModel.source === 'yolovision' ? 'YoloVision 训练平台' : '本地上传' }}
+          </el-descriptions-item>
         </el-descriptions>
       </div>
       <template #footer>
         <el-button @click="detailDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="isSaving" @click="saveModel">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- v3.47 训练平台互连: 训练分析弹窗 (数据来自 .yvmodel 包 x-analysis 扩展) -->
+    <el-dialog v-model="analysisDialogVisible" title="训练分析 (来自 YoloVision 训练平台)" width="720px" destroy-on-close>
+      <div v-if="analysisModel" class="space-y-5">
+        <div class="text-sm text-gray-400">
+          {{ analysisModel.name }} <span v-if="analysisModel.version">v{{ analysisModel.version }}</span>
+          <el-tag v-if="analysis.training && analysis.training.trigger === 'auto_retrain'" type="warning" size="small" class="ml-2">自动增强训练产出</el-tag>
+        </div>
+
+        <!-- 核心指标 -->
+        <div v-if="analysis.metrics" class="grid grid-cols-4 gap-3 text-center">
+          <div v-for="m in metricCells" :key="m.label" class="bg-gray-900/50 rounded-lg py-3">
+            <div class="text-xl font-bold text-tech-blue">{{ m.value }}</div>
+            <div class="text-xs text-gray-500 mt-1">{{ m.label }}</div>
+          </div>
+        </div>
+
+        <!-- 训练信息 -->
+        <el-descriptions v-if="analysis.training" :column="2" border size="small">
+          <el-descriptions-item v-if="analysis.training.base_model" label="基线模型">{{ analysis.training.base_model }}</el-descriptions-item>
+          <el-descriptions-item v-if="analysis.training.epochs" label="训练轮数">{{ analysis.training.epochs }}</el-descriptions-item>
+          <el-descriptions-item v-if="analysis.training.imgsz" label="输入尺寸">{{ analysis.training.imgsz }}</el-descriptions-item>
+          <el-descriptions-item v-if="analysis.training.finished_at" label="完成时间">{{ analysis.training.finished_at }}</el-descriptions-item>
+          <el-descriptions-item v-if="analysis.dataset" label="数据集 (训/验/测)">
+            {{ analysis.dataset.train ?? '-' }} / {{ analysis.dataset.val ?? '-' }} / {{ analysis.dataset.test ?? '-' }}
+          </el-descriptions-item>
+          <el-descriptions-item v-if="analysis.dataset && analysis.dataset.field_feedback_samples != null" label="现场回流样本">
+            {{ analysis.dataset.field_feedback_samples }} 张
+          </el-descriptions-item>
+        </el-descriptions>
+
+        <!-- 训练曲线 -->
+        <div v-if="hasCurves">
+          <div class="text-sm text-gray-300 mb-2">训练曲线</div>
+          <div ref="curveChartRef" class="w-full h-64"></div>
+        </div>
+
+        <!-- 逐类别指标 -->
+        <div v-if="analysis.per_class && analysis.per_class.length">
+          <div class="text-sm text-gray-300 mb-2">逐类别指标</div>
+          <el-table :data="analysis.per_class" size="small" max-height="240">
+            <el-table-column prop="name" label="类别" min-width="120" />
+            <el-table-column label="AP50" width="100">
+              <template #default="{ row }">{{ fmtPct(row.ap50) }}</template>
+            </el-table-column>
+            <el-table-column label="精确率" width="100">
+              <template #default="{ row }">{{ fmtPct(row.precision) }}</template>
+            </el-table-column>
+            <el-table-column label="召回率" width="100">
+              <template #default="{ row }">{{ fmtPct(row.recall) }}</template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="analysisDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
   </div>
@@ -148,9 +213,10 @@
 
 <script setup>
 import TjSlot from '@/components/TjSlot.vue';
-import { ref, onMounted } from 'vue';
+import { ref, computed, nextTick, onMounted } from 'vue';
 import { ElMessageBox, ElMessage } from 'element-plus';
 import { UploadFilled, Cpu, Upload } from '@element-plus/icons-vue';
+import * as echarts from 'echarts';
 import { getModels, uploadModel, updateModel, deleteModel } from '@/api/model';
 import { dbg, dbgErr } from '@/utils/debug';
 
@@ -328,6 +394,71 @@ const saveModel = async () => {
   } finally {
     isSaving.value = false;
   }
+};
+
+// ==================== v3.47 训练分析弹窗 (x-analysis) ====================
+const analysisDialogVisible = ref(false);
+const analysisModel = ref(null);
+const curveChartRef = ref(null);
+let curveChart = null;
+
+const analysis = computed(() => analysisModel.value?.meta?.analysis || {});
+
+const fmtPct = (v) => (v == null || v === '' ? '—' : (Number(v) * 100).toFixed(1) + '%');
+
+const metricCells = computed(() => {
+  const m = analysis.value.metrics || {};
+  return [
+    { label: 'mAP@50', value: fmtPct(m.map50) },
+    { label: 'mAP@50-95', value: fmtPct(m.map50_95) },
+    { label: '精确率', value: fmtPct(m.precision) },
+    { label: '召回率', value: fmtPct(m.recall) },
+  ];
+});
+
+const hasCurves = computed(() => {
+  const c = analysis.value.curves || {};
+  return Array.isArray(c.epochs) && c.epochs.length > 0;
+});
+
+const showAnalysis = (model) => {
+  dbg('model.manage', '点击「训练分析」', `id=${model?.id} name=${model?.name}`);
+  analysisModel.value = model;
+  analysisDialogVisible.value = true;
+  nextTick(() => renderCurveChart());
+};
+
+const renderCurveChart = () => {
+  if (!hasCurves.value || !curveChartRef.value) return;
+  const c = analysis.value.curves;
+  if (curveChart) {
+    curveChart.dispose();
+    curveChart = null;
+  }
+  curveChart = echarts.init(curveChartRef.value);
+  const series = [];
+  const legends = [];
+  const addLine = (key, name, yAxisIndex = 0) => {
+    if (Array.isArray(c[key]) && c[key].length) {
+      series.push({ name, type: 'line', smooth: true, data: c[key], yAxisIndex, showSymbol: false });
+      legends.push(name);
+    }
+  };
+  addLine('train_loss', '训练 Loss', 0);
+  addLine('val_loss', '验证 Loss', 0);
+  addLine('map50', 'mAP@50', 1);
+  curveChart.setOption({
+    backgroundColor: 'transparent',
+    tooltip: { trigger: 'axis' },
+    legend: { data: legends, textStyle: { color: '#94a3b8' } },
+    grid: { left: 48, right: 48, top: 36, bottom: 28 },
+    xAxis: { type: 'category', data: c.epochs, name: 'epoch', axisLabel: { color: '#64748b' } },
+    yAxis: [
+      { type: 'value', name: 'Loss', axisLabel: { color: '#64748b' }, splitLine: { lineStyle: { color: '#1e293b' } } },
+      { type: 'value', name: 'mAP', min: 0, max: 1, axisLabel: { color: '#64748b' }, splitLine: { show: false } },
+    ],
+    series,
+  });
 };
 
 const confirmDelete = async (model) => {

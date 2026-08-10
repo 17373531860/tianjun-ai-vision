@@ -16,7 +16,10 @@ from backend.core.config import DATA_DIR
 
 router = APIRouter(prefix="/workstations", tags=["workstations"])
 
-MAX_CHANNELS = 4
+# v3.47: 工位数不再限制在 4。MAX_CHANNELS 仅作为防呆安全上界
+# (脏配置文件 / 误传超大值时避免瞬间创建成百上千个 VSM 线程组), 不是产品限制。
+# 前端总览网格 (2x2/3x3/4x4) + 分页可承载任意工位数。
+MAX_CHANNELS = 64
 _CONFIG_FILE = os.path.join(DATA_DIR, 'workstation_config.json')
 
 
@@ -32,7 +35,7 @@ class WorkstationConfig(BaseModel):
 
 
 class WorkstationModeRequest(BaseModel):
-    channel_count: int = 1             # 1, 2, or 4
+    channel_count: int = 1             # 1..MAX_CHANNELS (v3.47 起不限于 1/2/4)
     channels: List[WorkstationConfig] = Field(default_factory=list)
 
 
@@ -97,7 +100,7 @@ class ChannelManager:
     # ------------------------------------------------------------------
 
     def set_channel_count(self, count: int):
-        """Resize the number of active channels (1, 2 or 4)."""
+        """Resize the number of active channels (1..MAX_CHANNELS)."""
         from backend.api.source import VideoSourceManager
 
         if count < 1 or count > MAX_CHANNELS:
@@ -221,6 +224,21 @@ class ChannelManager:
             return False
 
         resolved_device = self._resolve_device(device)
+        # 幂等守门: 同模型同设备已加载 → 直接复用, 不走"释放旧模型再重载"。
+        # 重复重载纯浪费 (卡启动/激活好几秒); 且 macOS MPS 上释放推理中的旧模型
+        # 会触发 IOGPUMetalCommandBuffer 断言直接崩后端 (2026-08 LG 飞书试跑实测,
+        # 触发链: 进 Monitor → Navbar 恢复项目 → activate → 重载同一模型)。
+        # ⚠ 必须比"实际加载设备" (current_device_info.device), 不能比 mgr.device:
+        # /workstations/{ch}/gpu 端点只改期望设备、不搬已加载模型, 比 mgr.device 会把
+        # "换设备后重启检测"误判成已就位 → 模型滞留旧设备 (2026-08-06 调参实测:
+        # 钉回 mps 后推理仍 9fps 跑在 CPU 上, 日志却报 already loaded on mps)。
+        actual_device = (getattr(mgr, 'current_device_info', None) or {}).get('device')
+        if (getattr(mgr, 'model', None) is not None
+                and getattr(mgr, 'model_path', None) == model_path
+                and actual_device == resolved_device):
+            print(f"[ChannelManager] ch{channel_id} model already loaded on {resolved_device}, "
+                  f"skip reload: {os.path.basename(model_path)}")
+            return True
         mgr.device = resolved_device
         success = mgr.load_model(model_path)
         if success:

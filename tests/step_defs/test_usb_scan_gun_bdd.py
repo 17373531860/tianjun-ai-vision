@@ -17,6 +17,25 @@ scenarios("../features/usb_scan_gun.feature")
 SC = "/api/v1/scanner"
 
 
+@pytest.fixture(autouse=True)
+def _usb_janitor(client):
+    """场景收尾删掉本文件建的枪 (名字前缀 BDD-USB-)。
+
+    不清理会残留在 ch0: mes_hooks._get_duplicate_scan_action 按工位取策略是
+    "第一把枪说了算", 残留枪会遮蔽后续 parity 文件自建枪的 reject 策略
+    (2026-08-07 CI test-gate 顺序污染事故)。"""
+    yield
+    r = client.get(f"{SC}/devices")
+    if r.status_code != 200:
+        return
+    body = r.json()
+    items = body if isinstance(body, list) else \
+        (body.get("items") or body.get("data") or [])
+    for d in items:
+        if isinstance(d, dict) and str(d.get("name", "")).startswith("BDD-USB-"):
+            client.delete(f"{SC}/devices/{d['id']}")
+
+
 def _usb_body(usage="bind"):
     return {
         "name": f"BDD-USB-{uuid.uuid4().hex[:6]}",

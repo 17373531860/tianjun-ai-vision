@@ -103,11 +103,13 @@ class AlarmPage(BasePage):
             return False
 
     def has_sms_summary_copy(self) -> bool:
+        # v3.47: 文案随「数字口径」动态化（panel=监控面板当前会话 / window=时间窗落库合计），
+        # 断言取两种口径共有的前缀，不再钉死老的静态整句
         notice = self.page.locator(self.Sel.SMS_SUMMARY_NOTICE)
         return notice.is_visible() and all(
             text in notice.inner_text()
             for text in (
-                "每滚动 12 小时按工位分别汇总",
+                "每滚动 12 小时按工位",
                 "不含进行中周期",
                 "均为 0 时不发送",
                 "不再按单次 NG 或累计 N 次即时推送",

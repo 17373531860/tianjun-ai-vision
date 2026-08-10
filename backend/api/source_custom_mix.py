@@ -75,7 +75,11 @@ class _ContainerAccumulator:
                  action_label: str = '', confirm_combine: str = 'or',
                  action_min_frames: int = 3, action_gone_frames: int = 8,
                  action_cooldown_s: float = 2.0, per_tray_guard: bool = False,
-                 peak_cap: int = 0, stable_min_frames: int = 0):
+                 peak_cap: int = 0, stable_min_frames: int = 0,
+                 dedup_items: bool = True, dedup_trays: bool = False,
+                 purge_empty_primary: bool = False,
+                 yield_primary: bool = False,
+                 unified_book_source: bool = False):
         self.container_label = container_label
         self.item_expected = {k: int(v) for k, v in (item_expected or {}).items()}
         # v3.44.4 每盘峰值封顶 (可配, 默认 0=关): 模型偶发重复框瞬时数出 25/26,
@@ -116,6 +120,17 @@ class _ContainerAccumulator:
         # (下一盘继续用同一身份攒稳定值)。与工人速度解耦: 快慢只影响稳定段长短,
         # 不再依赖"两次动作之间标签必须断开/身份必须消失"。
         self.stable_min_frames = max(0, int(stable_min_frames or 0))
+        # v3.46 五个可选开关 (默认值 = v3.45 线上行为, 关掉即回退, 不用打补丁):
+        # - dedup_items: 滑块同标签高重叠去重 (v3.44 起线上一直开, 默认开)
+        # - dedup_trays: 托盘框同帧高重叠去重 (新, 治影子身份, 默认关)
+        # - purge_empty_primary: 主盘指针指着的空账身份离场满帧照样清 (默认关)
+        # - yield_primary: 指针可让位给在位且账面更实的身份 (默认关)
+        # - unified_book_source: 卡片三数 + 封箱凑数统一问"结账候选" (默认关)
+        self.dedup_items = bool(dedup_items)
+        self.dedup_trays = bool(dedup_trays)
+        self.purge_empty_primary = bool(purge_empty_primary)
+        self.yield_primary = bool(yield_primary)
+        self.unified_book_source = bool(unified_book_source)
         self.reset()
 
     # 稳定值回看窗口 (秒): 稳定值取近 N 秒内有效窗口众数的最大值 — 免疫收尾
@@ -140,6 +155,7 @@ class _ContainerAccumulator:
         self._last_action_settle_ts = None  # 上一次动作确认进箱的时刻 (不应期基准; None=还没结过)
         self._settle_defer_frames = 0  # v3.44.3 动作结账"峰值就绪等待"已挂帧数
         self.wrong_tray_alert = None   # 错盘警报 (宿主每帧消费): {'index','count','expected'}
+        self._tid_cur = {}      # v3.46 各在位身份的当帧计数 {tid: {label: cnt}} (同源展示用)
 
     def _update_action_fsm(self, action_present: bool, current_time: float = 0.0):
         """放托盘动作状态机: 标签连续在场满 action_min_frames 帧 → 动作成立(进行中,
@@ -273,7 +289,8 @@ class _ContainerAccumulator:
         # -1) 同标签高重叠去重: 模型对密排滑块会输出持续 1s+ 的重复框
         # (7-27 取证: 22 个滑块检出 25 个, 重复对 IoU 0.4-0.6, 窗口众数滤不掉
         # 持续性重复) → 计数前按 IoU>0.45 去重, 置信度高者优先保留
-        if item_objs and len(item_objs) > 1:
+        # (v3.46 起可关: dedup_items=False 回退到 v3.44 之前的不去重行为)
+        if self.dedup_items and item_objs and len(item_objs) > 1:
             _srt = sorted(item_objs,
                           key=lambda o: -(o.get('confidence') or 0.0))
             _kept = []
@@ -290,6 +307,33 @@ class _ContainerAccumulator:
                 if not _dup:
                     _kept.append((_o, _obt))
             item_objs = [o for o, _ in _kept]
+
+        # -0.5) 托盘框同帧高重叠去重 (v3.46 主盘指针诊断): 模型偶发对同一个盘
+        # 输出两个重叠框时, 第二个框会因身份已被本帧占用 (step1 matched 守门)
+        # 而另立影子身份 — 长期在位、带跨盘旧峰值, 主位一释放就顶上污账
+        # (2026-07-30 探针实测复现)。与滑块去重同款: IoU>0.45 判重, 置信度高者
+        # 保留 (tray_dets 无 confidence 时全 0, sorted 稳定保序 = 先到者留)。
+        # 可选开关 dedup_trays, 默认关 = 零差异。
+        if self.dedup_trays and tray_dets and len(tray_dets) > 1:
+            _tsrt = sorted(tray_dets,
+                           key=lambda d: -(d.get('confidence') or 0.0))
+            _tkept = []
+            for _d in _tsrt:
+                _dbt = (_d.get('x', 0), _d.get('y', 0),
+                        _d.get('w', 0), _d.get('h', 0))
+                if any(_bbox_iou(_dbt, _kbt) > 0.45 for _, _kbt in _tkept):
+                    continue
+                _tkept.append((_d, _dbt))
+            if len(_tkept) < len(tray_dets):
+                try:
+                    from backend.core import debug_center
+                    if debug_center.is_on("backend.packaging"):
+                        debug_center.dbg(
+                            "backend.packaging", "托盘重复框去重",
+                            f"{len(tray_dets)}→{len(_tkept)} t={current_time:.2f}")
+                except Exception:
+                    pass
+            tray_dets = [d for d, _ in _tkept]
 
         # 0) 放托盘动作状态机 (仅 confirm_by_action 生效): 驱动屏蔽窗口 + 进箱脉冲
         self._update_action_fsm(action_present, current_time)
@@ -344,6 +388,67 @@ class _ContainerAccumulator:
             if tid not in matched:
                 t['gone'] += 1
 
+        # 2b) v3.46 第一件·空账主位销掉 (可选 purge_empty_primary, 默认关):
+        #     老规则对主盘指针指着的身份有清理豁免 — 空账幽灵 (动作期计数冻结
+        #     从没数到滑块 / 结账清零后被拿走 / 托盘框误检闪现) 占住指针后离场
+        #     十秒也不清, 卡片大数字长期 0 而实时稳定 24 (2026-07-30 现场)。
+        #     开了后: 指针指着的身份离场满消失确认帧、峰值空、且不持有本次动作
+        #     的稳定快照 (账真的什么都没有) → 照样清掉、指针交出来 (step3 重选)。
+        #     动作进行中 / 动作脉冲待配对时不清 — 那两段归结算逻辑管。
+        if (self.purge_empty_primary and self._primary is not None
+                and self._primary in self._trays
+                and not self._action_in_progress
+                and not self._action_done_pending):
+            _pp = self._trays[self._primary]
+            if (_pp['gone'] >= self.gone_frames and not _pp['peak']
+                    and not self._fresh_snapshot(_pp)):
+                del self._trays[self._primary]
+                self._primary = None
+                self._primary_frames_ok = False
+                try:
+                    from backend.core import debug_center
+                    if debug_center.is_on("backend.packaging"):
+                        debug_center.dbg("backend.packaging", "空账主位身份销掉",
+                                         f"t={current_time:.2f} 指针交出重选")
+                except Exception:
+                    pass
+
+        # 2c) v3.46 第二件·主盘指针让位 (可选 yield_primary, 默认关):
+        #     老规则指针只在进箱结账那一刻才可能换指 — 同一物理盘断检超过围栏
+        #     帧数被拆成新身份后, 旧身份带残数占指针, 后面每盘的大数字和封箱
+        #     凑数都跟旧身份走 (取出重装/搬动/手挡都会触发)。开了后: 指针指着
+        #     的身份已判定离场 (动作模式按动作消失帧, 与围栏同门), 且画面上有
+        #     在位、账面严格更实的身份 → 指针让给它。动作进行中 / 脉冲待配对
+        #     不让 (放盘瞬间锁主位 + 结算改配逻辑的既有保护不动); 严格大于
+        #     才让 — 在途满盘(24)不会被下一盘的半账(12)抢走指针。
+        if (self.yield_primary and self._primary is not None
+                and self._primary in self._trays
+                and not self._action_in_progress
+                and not self._action_done_pending):
+            _yg = (self.action_gone_frames if self.confirm_by_action
+                   else self.gone_frames)
+            _yp = self._trays[self._primary]
+            if _yp['gone'] >= _yg:
+                _p_sum = sum(_yp['peak'].values())
+                _cands = [(sum(t['peak'].values()), -t['first_seen'], tid)
+                          for tid, t in self._trays.items()
+                          if tid != self._primary and t['gone'] == 0
+                          and t['peak']]
+                if _cands:
+                    _c_sum, _, _ctid = max(_cands)
+                    if _c_sum > _p_sum:
+                        try:
+                            from backend.core import debug_center
+                            if debug_center.is_on("backend.packaging"):
+                                debug_center.dbg(
+                                    "backend.packaging", "主盘指针让位",
+                                    f"{self._primary}(峰值和{_p_sum}, gone={_yp['gone']})"
+                                    f" → {_ctid}(峰值和{_c_sum})")
+                        except Exception:
+                            pass
+                        self._primary = _ctid
+                        self._primary_frames_ok = False
+
         # 3) 主托盘选取: 当前主托盘只要还在累积器里 (没被 gone-confirm 移除) 就一直保持,
         #    抗瞬时漏检 / 托盘ID抖动 —— 漏检一两帧不切主、不清峰值, 等真正进箱 (step5
         #    移除) 才按 FIFO 重选下一盘。只有从未选出 / 主托盘已被移除时才重新挑。
@@ -397,6 +502,7 @@ class _ContainerAccumulator:
         elif self._primary in count_tids:
             disp_tid = self._primary
         primary_counts = {}
+        self._tid_cur = {}   # v3.46 各身份当帧计数 (unified_book_source 展示用)
         for count_tid in count_tids:
             pb = self._trays[count_tid]['bbox']
             px1, py1 = pb['x'], pb['y']
@@ -415,6 +521,7 @@ class _ContainerAccumulator:
                 cy = b.get('y', 0) + b.get('h', 0) / 2.0
                 if px1 <= cx <= px2 and py1 <= cy <= py2:
                     cnt[lbl] = cnt.get(lbl, 0) + 1
+            self._tid_cur[count_tid] = dict(cnt)
             peak = self._trays[count_tid]['peak']
             for lbl, c in cnt.items():
                 # v3.44.4 每盘峰值封顶 (peak_cap, 默认关): 见 __init__ 注释
@@ -792,6 +899,25 @@ class _ContainerAccumulator:
         alert, self.wrong_tray_alert = self.wrong_tray_alert, None
         return alert
 
+    def _book_candidate_tid(self):
+        """v3.46 第三件·"结账此刻真正会被选中的身份" (与 update step5 的改配
+        顺序同步: 本次动作的快照持有者 > 主盘指针)。展示三数与封箱凑数统一问它,
+        杜绝"大数字问指针、实时问别的盘"的两身份数字混排。"""
+        if self.stable_min_frames > 0 and self.confirm_by_action:
+            _stid = self._best_fresh_snapshot_tid()
+            if _stid is not None:
+                return _stid
+        return self._primary
+
+    def _fold_tid(self):
+        """封箱凑数/展示取值的身份: unified_book_source 开 → 结账候选;
+        关 → 主盘指针 (老口径零差异)。"""
+        if self.unified_book_source:
+            cand = self._book_candidate_tid()
+            if cand is not None and cand in self._trays:
+                return cand
+        return self._primary
+
     def _primary_foldable(self) -> bool:
         """结算折算守门: 在位主托盘可否折进本箱裁决。
 
@@ -816,7 +942,7 @@ class _ContainerAccumulator:
         """封箱裁决用的托盘全集: 已装清单 + 当前主托盘 (最后一盘可能还没 gone-confirm)。"""
         trays = list(self._done)
         if self._primary_foldable():
-            peak = self._trays.get(self._primary, {}).get('peak')
+            peak = self._trays.get(self._fold_tid(), {}).get('peak')
             if peak:
                 trays.append(dict(peak))
         return trays
@@ -836,7 +962,7 @@ class _ContainerAccumulator:
             done_total = sum(sum(t.values()) for t in self._done)
             total = done_total
             if target > 0 and done_total < target and self._primary_foldable():
-                cur_peak = self._trays.get(self._primary, {}).get('peak', {}) or {}
+                cur_peak = self._trays.get(self._fold_tid(), {}).get('peak', {}) or {}
                 total += sum(cur_peak.values())
             if target > 0 and total != target:
                 rel = '不足' if total < target else '超出'
@@ -881,7 +1007,7 @@ class _ContainerAccumulator:
         if self.item_target <= 0 or done_total < self.item_target:
             cur_peak = {}
             if self._primary_foldable():
-                cur_peak = self._trays.get(self._primary, {}).get('peak', {}) or {}
+                cur_peak = self._trays.get(self._fold_tid(), {}).get('peak', {}) or {}
             total += sum(cur_peak.values())
         return total
 
@@ -907,7 +1033,7 @@ class _ContainerAccumulator:
             return 0
         if not (self._action_done_pending or self._primary_frames_ok):
             return 0
-        peak = self._trays.get(self._primary, {}).get('peak', {}) or {}
+        peak = self._trays.get(self._fold_tid(), {}).get('peak', {}) or {}
         return sum(peak.values())
 
     def to_state(self, display_map: dict):
@@ -918,6 +1044,16 @@ class _ContainerAccumulator:
         peak = {}
         if self._primary is not None:
             peak = self._trays.get(self._primary, {}).get('peak', {}) or {}
+        # v3.46 第三件·三数同源 (可选 unified_book_source, 默认关):
+        # 老口径的实时/峰值/预计进箱可能来自两张不同工牌 (峰值问指针, 实时在
+        # 指针漏检帧临时问画面上唯一在位的盘) → 屏幕出现 8 与 23 并排的矛盾。
+        # 开了后三个数统一问"结账候选" (与封箱凑数 _fold_tid 同一张工牌)。
+        _src_tid = None
+        if self.unified_book_source:
+            _src_tid = self._fold_tid()
+            if _src_tid is not None and _src_tid in self._trays:
+                cur = self._tid_cur.get(_src_tid, {}) or {}
+                peak = self._trays[_src_tid].get('peak', {}) or {}
         # 展示标签集: 盘计数模式沿用每盘期望清单 (零差异);
         # 总数模式期望可留空, 改取实际计到的物品标签 (实时/峰值/已进箱)
         disp_labels = list(self.item_expected.keys())
@@ -933,8 +1069,11 @@ class _ContainerAccumulator:
         # 峰值, 见 update step5 的 book_val = 快照 or peak) — 开了"动作前稳定
         # 计数"后记账不再等于峰值, 操作员在卡片上要能提前看到"这盘会记几个"。
         stable = {}
-        if self.stable_min_frames > 0 and self._primary is not None:
-            stable = self._trays.get(self._primary, {}).get('stable', {}) or {}
+        _stable_tid = (_src_tid if (self.unified_book_source
+                                    and _src_tid is not None)
+                       else self._primary)
+        if self.stable_min_frames > 0 and _stable_tid is not None:
+            stable = self._trays.get(_stable_tid, {}).get('stable', {}) or {}
         cur_items = [{
             'label': lbl,
             'display_name': dm.get(lbl, lbl),
@@ -1007,6 +1146,11 @@ class _TrackingMixEngine:
                 per_tray_guard=container_cfg.get('per_tray_guard', False),
                 peak_cap=container_cfg.get('peak_cap', 0),
                 stable_min_frames=container_cfg.get('stable_min_frames', 0),
+                dedup_items=container_cfg.get('dedup_items', True),
+                dedup_trays=container_cfg.get('dedup_trays', False),
+                purge_empty_primary=container_cfg.get('purge_empty_primary', False),
+                yield_primary=container_cfg.get('yield_primary', False),
+                unified_book_source=container_cfg.get('unified_book_source', False),
             )
         # 静态期望清单 (verdict 用, 不依赖喂帧): 与真 loader 的注入规则一致 —
         # event 行 → event_required_count; 堆叠行 → stack_required_count;
@@ -1083,6 +1227,8 @@ class _TrackingMixEngine:
                 tray_dets.append({
                     'x': float(det.get('x', 0)), 'y': float(det.get('y', 0)),
                     'w': float(det.get('w', 0)), 'h': float(det.get('h', 0)),
+                    # v3.46 托盘置信度进记账链: 重复框去重时置信度高者保留
+                    'confidence': float(det.get('confidence', 0) or 0.0),
                 })
                 continue
             if action_label and label == action_label:
@@ -1663,6 +1809,17 @@ def build_custom_mix(config: dict):
                 # 无缝接上下一盘身份永不消失, 改按动作成立瞬间的稳定计数入账
                 'stable_min_frames': int(pipeline.get(
                     'custom_mix_container_stable_min_frames', 0) or 0),
+                # v3.46 五个可选开关 (默认 = v3.45 线上行为, 详见累加器 __init__):
+                'dedup_items': bool(pipeline.get(
+                    'custom_mix_container_dedup_items', True)),
+                'dedup_trays': bool(pipeline.get(
+                    'custom_mix_container_dedup_trays', False)),
+                'purge_empty_primary': bool(pipeline.get(
+                    'custom_mix_container_purge_empty_primary', False)),
+                'yield_primary': bool(pipeline.get(
+                    'custom_mix_container_yield_primary', False)),
+                'unified_book_source': bool(pipeline.get(
+                    'custom_mix_container_unified_book_source', False)),
             }
             confirm_desc = []
             if confirm_by_frames:

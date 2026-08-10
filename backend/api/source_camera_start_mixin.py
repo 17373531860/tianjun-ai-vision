@@ -425,8 +425,10 @@ class CameraStartMixin:
         time.sleep(0.2)
 
         import os
+        # threads;1 是 v3.1.3 关键保护 (libavcodec pthread 断言), 这里整串覆盖 env
+        # 时必须一起带上, 否则第一次 RTSP 启动后视频文件回放就失去单线程保护。
         os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
-            "rtsp_transport;tcp|analyzeduration;5000000|probesize;5000000"
+            "rtsp_transport;tcp|analyzeduration;5000000|probesize;5000000|threads;1"
         )
 
         safe_url = url.split("@")[-1] if "@" in url else url
@@ -435,7 +437,13 @@ class CameraStartMixin:
         max_retries = 3
         for attempt in range(max_retries):
             print(f"[RTSP] 尝试 {attempt + 1}/{max_retries} ...")
-            self.capture = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+            # OPEN_TIMEOUT: 目标不可达时 cv2 的 open 会阻塞到系统 TCP 超时 (可达
+            # 每次 30-75s)。开机场景 NVR/相机常比工控机起得慢, 3 次重试串行阻塞
+            # 曾把后端启动拖到分钟级。用 OpenCV 自带的打开超时 (中断回调实现,
+            # 不依赖 FFmpeg 版本的 stimeout/timeout 选项名) 把单次尝试封顶 10s。
+            self.capture = cv2.VideoCapture(url, cv2.CAP_FFMPEG, [
+                cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10000,
+            ])
             if self.capture.isOpened():
                 break
             if self.capture:

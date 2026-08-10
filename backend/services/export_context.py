@@ -551,6 +551,7 @@ def _empty_context() -> Dict[str, Any]:
     ctx["mes"] = _empty_mes_section()
     ctx["stats"] = _empty_stats_section()
     ctx["aggregations"] = _empty_aggregations_section()
+    ctx["plugin"] = {}                  # v3.46 F8: 插件动态字段命名空间
     return ctx
 
 
@@ -566,6 +567,16 @@ def _fill_app_display_license_system(ctx: Dict[str, Any], db: DBSession,
     ctx["display"].update(_read_display_info(db))
     ctx["license"].update(_read_license_info(db, license_payload))
     ctx["system"].update(_read_system_info())
+
+
+def _fill_plugin_sections(ctx: Dict[str, Any], db: DBSession) -> None:
+    """v3.46 F8: 执行 active 插件注册的导出字段 provider，填 ctx['plugin'][<cc>]。
+
+    必须在其它子树都填完后最后调用（provider 可读 ctx['cycle'] 等已填数据）。
+    provider 异常在 collect_plugin_context 内部隔离，不影响导出主流程。
+    """
+    from backend.services.export_field_registry import collect_plugin_context
+    ctx["plugin"].update(collect_plugin_context(db, ctx))
 
 
 def _fill_project(ctx: Dict[str, Any], db: DBSession, project_id: Optional[int]) -> None:
@@ -997,6 +1008,7 @@ def build_cycle_context(db: DBSession, cycle_id: int,
     _fill_counters(ctx, db, cycle_id, live_state)
     _fill_live_from_state(ctx, live_state)
     _fill_mes_subtree(ctx)
+    _fill_plugin_sections(ctx, db)
 
     return ctx
 
@@ -1064,20 +1076,33 @@ def build_range_context(db: DBSession,
     A["sessions"] = []
     total_cycles = total_good = total_ng = 0
     for s in sessions:
-        total_cycles += (s.total_cycles or 0)
-        total_good += (s.good_cycles or 0)
-        total_ng += (s.ng_cycles or 0)
+        s_total = s.total_cycles or 0
+        s_good = s.good_cycles or 0
+        s_ng = s.ng_cycles or 0
+        # 会话计数器只在收尾时回填 —— 未收尾会话 (进行中 / 后端异常退出) 缓存恒为 0,
+        # 但周期已真实落库。范围导出撞上这种会话时回落到实数, 否则白班中途导"今天"
+        # 会把当前会话整段漏计 (2026-08-07 全面测试对账发现: 缓存 36 轮 vs 实际 75 轮)
+        if s_total == 0 and s.end_time is None:
+            rows = (db.query(DetectionCycle.is_good,)
+                    .filter(DetectionCycle.session_id == s.id).all())
+            if rows:
+                s_total = len(rows)
+                s_good = sum(1 for (g,) in rows if g)
+                s_ng = s_total - s_good
+        total_cycles += s_total
+        total_good += s_good
+        total_ng += s_ng
         A["sessions"].append({
             "id": s.id, "session_uuid": s.session_uuid,
             "name": getattr(s, "name", None),
             "channel_id": getattr(s, "channel_id", 0),
             "start_time": s.start_time.isoformat() if s.start_time else None,
             "end_time": s.end_time.isoformat() if s.end_time else None,
-            "total_cycles": s.total_cycles or 0,
-            "good_cycles": s.good_cycles or 0,
-            "ng_cycles": s.ng_cycles or 0,
-            "yield_rate": (round(100.0 * (s.good_cycles or 0) / s.total_cycles, 2)
-                           if s.total_cycles else None),
+            "total_cycles": s_total,
+            "good_cycles": s_good,
+            "ng_cycles": s_ng,
+            "yield_rate": (round(100.0 * s_good / s_total, 2)
+                           if s_total else None),
         })
     A["total_cycles"] = total_cycles
     A["total_good"] = total_good
@@ -1246,6 +1271,7 @@ def build_range_context(db: DBSession,
         ctx["session"]["yield_rate"] = round(100.0 * total_good / total_cycles, 2)
         ctx["session"]["yield_ratio"] = round(total_good / total_cycles, 4)
 
+    _fill_plugin_sections(ctx, db)
     return ctx
 
 
@@ -1259,4 +1285,5 @@ def build_system_context(db: DBSession,
     """仅系统级 — 软件信息卡片、License 报告等场景"""
     ctx = _empty_context()
     _fill_app_display_license_system(ctx, db, license_payload)
+    _fill_plugin_sections(ctx, db)
     return ctx

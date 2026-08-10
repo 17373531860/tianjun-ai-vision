@@ -343,6 +343,20 @@
     "title": "Body_install_plugin_api_v1_plugins_install_post",
     "type": "object"
    },
+   "Body_push_model_package_api_v1_interconnect_models_push_post": {
+    "properties": {
+     "package": {
+      "contentMediaType": "application/octet-stream",
+      "title": "Package",
+      "type": "string"
+     }
+    },
+    "required": [
+     "package"
+    ],
+    "title": "Body_push_model_package_api_v1_interconnect_models_push_post",
+    "type": "object"
+   },
    "Body_record_detection_api_v1_tasks_record_post": {
     "properties": {
      "confidence": {
@@ -3915,6 +3929,92 @@
     "title": "InferOnceResponse",
     "type": "object"
    },
+   "InterconnectConfigBody": {
+    "properties": {
+     "device_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Device Name"
+     },
+     "enabled": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Enabled"
+     },
+     "model_pull": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Model Pull"
+     },
+     "platform_url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Platform Url"
+     },
+     "queue": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Queue"
+     },
+     "sampling": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Sampling"
+     },
+     "token": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Token"
+     }
+    },
+    "title": "InterconnectConfigBody",
+    "type": "object"
+   },
    "KalmanConfigRequest": {
     "properties": {
      "enabled": {
@@ -4188,6 +4288,18 @@
       ],
       "title": "Labels"
      },
+     "meta": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Meta"
+     },
      "name": {
       "title": "Name",
       "type": "string"
@@ -4202,6 +4314,18 @@
        }
       ],
       "title": "Project Id"
+     },
+     "source": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": "local",
+      "title": "Source"
      },
      "status": {
       "default": "idle",
@@ -10202,6 +10326,16 @@
       "title": "Shift Start Hour",
       "type": "integer"
      },
+     "summary_count_source": {
+      "default": "panel",
+      "description": "panel=监控面板当前会话OK/NG（默认）；window=调度时间窗落库合计",
+      "enum": [
+       "panel",
+       "window"
+      ],
+      "title": "Summary Count Source",
+      "type": "string"
+     },
      "summary_schedule_mode": {
       "default": "rolling_12h",
       "description": "rolling_12h=滚动12小时；daily_shift=班次（默认早八到晚八）",
@@ -10386,6 +10520,16 @@
       "minimum": 0.0,
       "title": "Shift Start Hour",
       "type": "integer"
+     },
+     "summary_count_source": {
+      "default": "panel",
+      "description": "panel=监控面板当前会话OK/NG（默认）；window=调度时间窗落库合计",
+      "enum": [
+       "panel",
+       "window"
+      ],
+      "title": "Summary Count Source",
+      "type": "string"
      },
      "summary_schedule_mode": {
       "default": "rolling_12h",
@@ -18835,6 +18979,264 @@
     "tags": [
      "External Devices",
      "External Devices"
+    ]
+   }
+  },
+  "/api/v1/interconnect/config": {
+   "get": {
+    "operationId": "get_interconnect_config_api_v1_interconnect_config_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "读取互连配置",
+    "tags": [
+     "interconnect"
+    ]
+   },
+   "put": {
+    "operationId": "save_interconnect_config_api_v1_interconnect_config_put",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/InterconnectConfigBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "保存互连配置",
+    "tags": [
+     "interconnect"
+    ]
+   }
+  },
+  "/api/v1/interconnect/health": {
+   "get": {
+    "operationId": "interconnect_health_api_v1_interconnect_health_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "互连健康检查 (契约端点, 免鉴权)",
+    "tags": [
+     "interconnect"
+    ]
+   }
+  },
+  "/api/v1/interconnect/models/push": {
+   "post": {
+    "operationId": "push_model_package_api_v1_interconnect_models_push_post",
+    "parameters": [
+     {
+      "in": "header",
+      "name": "X-Interconnect-Token",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "X-Interconnect-Token"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "multipart/form-data": {
+       "schema": {
+        "$ref": "#/components/schemas/Body_push_model_package_api_v1_interconnect_models_push_post"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "接收训练平台推送的 .yvmodel 模型包 (契约端点)",
+    "tags": [
+     "interconnect"
+    ]
+   }
+  },
+  "/api/v1/interconnect/pull-now": {
+   "post": {
+    "operationId": "pull_now_api_v1_interconnect_pull_now_post",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "立即向训练平台拉取一轮新模型包",
+    "tags": [
+     "interconnect"
+    ]
+   }
+  },
+  "/api/v1/interconnect/samples/recent": {
+   "get": {
+    "operationId": "recent_samples_api_v1_interconnect_samples_recent_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 50,
+       "title": "Limit",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "最近采样回传流水",
+    "tags": [
+     "interconnect"
+    ]
+   }
+  },
+  "/api/v1/interconnect/status": {
+   "get": {
+    "operationId": "interconnect_status_api_v1_interconnect_status_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "互连运行状态 (队列/上传/采样/拉取/设备身份)",
+    "tags": [
+     "interconnect"
+    ]
+   }
+  },
+  "/api/v1/interconnect/test-connection": {
+   "post": {
+    "operationId": "test_connection_api_v1_interconnect_test_connection_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "anyOf": [
+         {
+          "additionalProperties": true,
+          "type": "object"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "title": "Body"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "探活训练平台 health 端点",
+    "tags": [
+     "interconnect"
     ]
    }
   },

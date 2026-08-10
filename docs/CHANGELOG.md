@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.47.0 (2026-08-07)
+
+> 主题：**多分支汇合发版**——5 个并行 worktree 分支 + dev-qing 补账全部吸收进主线。**多工位监控布局重构**（三工位横排 + 网格分页总览 + 放大详情，工位上限 4→64）+ **YoloVision 训练平台互连**（模型双向分发 + 现场帧采样回流自学习闭环，默认关）+ **开机首启提速/授权激活治本六项**。
+
+- [FEAT-001] 新增: 多工位监控布局重构——三工位三行横排（左视频右数据）；4+ 工位网格总览（自动/2x2/3x3/4x4 + 分页）+ 点卡片放大单工位详情；MAX_CHANNELS 4→64；MJPEG 按可见工位收放流（数据轮询仍覆盖全部工位）
+- [FEAT-002] 新增: YoloVision 训练平台互连 v1.1——模型包 push 接收 + 拉取分发（SHA-256/防穿越/防 zip 炸弹），models 表 source/meta 列（m0008）+ 来源徽标/训练分析弹窗；推理循环采样器（置信度带/未检出守门/闪断/NG 帧）+ 磁盘队列异步回传；互连设置页；默认关
+- [FEAT-003] 优化: 开机首启提速 + 授权激活转圈治本六项——验签立即返回/startup-heavy-init 后台化/RTSP 超时/Electron 启动死线弹性化/安装器 Defender 排除/DB 降负+defect 索引（m0007）/machineId 快路径
+- [FEAT-004] 新增: LG 工时看板客户插件 v1.5.2（Tier 3 整页看板 + LEAN 分析）+ 插件平台 F8 导出字段注册落地 + 任意工位列级 Toast
+- [FEAT-005] 新增: custom_mix 容器记账五个可选修复开关（滑块去重默认开=存量行为；托盘影子去重/空账清理/指针让位/结账同源默认关=零差异回退）
+- [FEAT-006] 新增: NG 汇总数字口径可选（监控面板会话/调度时间窗，默认面板=存量行为）
+- [BUG-001~006] 修复: 短信配置保存中文模板乱码；macOS MPS 并发 Metal 断言（全局串行锁）；模型加载幂等按实际设备比对；layout.body 插件与宿主取流互踢；start_backend.sh conda 兼容；alarm e2e 文案断言对齐
+- [CONF-001] 工程: 并行分支迁移撞号治理（m0007 x2 → m0007+m0008，教训固化 modify-model skill）
+- [SKILL-001] 新建 debug-interconnect skill + api-sync 32→33 组 + modify-model/debug-channel/debug-frontend/debug-detection 五处更新 + 操作手册 4.1/4.3/4.9/4.10/Q28
+
 ## v3.46.0 (2026-08-05)
 
 > 主题：**主程序原生短信/微信通知栈**（NG 12h 汇总 + 每日短信日报，统一系统级五通道 at_modem/generic_http/wxpusher/aliyun/tencent，默认全关 = 存量零差异）+ **推理设备 auto 档支持 Apple MPS**。短信栈自 `feat/jinlong` 吸收（含 dev-qing NG 通知栈合流），`sms_adapters` 平行实现已删。

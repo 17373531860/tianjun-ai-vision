@@ -1476,6 +1476,22 @@ const initProjectDefaults = (project) => {
   if (project.custom_mix_container_stable_min_frames === undefined) {
     project.custom_mix_container_stable_min_frames = pipelineConfig.custom_mix_container_stable_min_frames ?? 0;
   }
+  // v3.46 记账修正开关组 (默认值 = v3.45 线上行为: 滑块去重开, 其余关)
+  if (project.custom_mix_container_dedup_items === undefined) {
+    project.custom_mix_container_dedup_items = pipelineConfig.custom_mix_container_dedup_items !== false;
+  }
+  if (project.custom_mix_container_dedup_trays === undefined) {
+    project.custom_mix_container_dedup_trays = pipelineConfig.custom_mix_container_dedup_trays === true;
+  }
+  if (project.custom_mix_container_purge_empty_primary === undefined) {
+    project.custom_mix_container_purge_empty_primary = pipelineConfig.custom_mix_container_purge_empty_primary === true;
+  }
+  if (project.custom_mix_container_yield_primary === undefined) {
+    project.custom_mix_container_yield_primary = pipelineConfig.custom_mix_container_yield_primary === true;
+  }
+  if (project.custom_mix_container_unified_book_source === undefined) {
+    project.custom_mix_container_unified_book_source = pipelineConfig.custom_mix_container_unified_book_source === true;
+  }
   // 物品行原生字段兜底：老数据/手改 JSON 可能缺字段，表C输入框依赖它们存在
   (project.steps_config || []).forEach(s => {
     if (s.detect_role !== 'item') return;
@@ -1870,6 +1886,12 @@ const initProjectDefaults = (project) => {
   project.pipeline_config.custom_mix_container_per_tray_guard = project.custom_mix_container_per_tray_guard === true;
   project.pipeline_config.custom_mix_container_peak_cap = project.custom_mix_container_peak_cap || 0;
   project.pipeline_config.custom_mix_container_stable_min_frames = project.custom_mix_container_stable_min_frames || 0;
+  // v3.46 记账修正开关组
+  project.pipeline_config.custom_mix_container_dedup_items = project.custom_mix_container_dedup_items !== false;
+  project.pipeline_config.custom_mix_container_dedup_trays = project.custom_mix_container_dedup_trays === true;
+  project.pipeline_config.custom_mix_container_purge_empty_primary = project.custom_mix_container_purge_empty_primary === true;
+  project.pipeline_config.custom_mix_container_yield_primary = project.custom_mix_container_yield_primary === true;
+  project.pipeline_config.custom_mix_container_unified_book_source = project.custom_mix_container_unified_book_source === true;
   project.pipeline_config.custom_sequence_order = project.custom_sequence_order;
   project.pipeline_config.custom_detection_steps = project.custom_detection_steps;
   project.pipeline_config.accumulate_repeats = project.accumulate_repeats;
@@ -2068,6 +2090,12 @@ const handleSaveProject = async () => {
         custom_mix_container_per_tray_guard: activeProject.value.custom_mix_container_per_tray_guard === true,
         custom_mix_container_peak_cap: activeProject.value.custom_mix_container_peak_cap || 0,
         custom_mix_container_stable_min_frames: activeProject.value.custom_mix_container_stable_min_frames || 0,
+        // v3.46 记账修正开关组
+        custom_mix_container_dedup_items: activeProject.value.custom_mix_container_dedup_items !== false,
+        custom_mix_container_dedup_trays: activeProject.value.custom_mix_container_dedup_trays === true,
+        custom_mix_container_purge_empty_primary: activeProject.value.custom_mix_container_purge_empty_primary === true,
+        custom_mix_container_yield_primary: activeProject.value.custom_mix_container_yield_primary === true,
+        custom_mix_container_unified_book_source: activeProject.value.custom_mix_container_unified_book_source === true,
         custom_sequence_order: activeProject.value.custom_sequence_order,
         custom_detection_steps: activeProject.value.custom_detection_steps,
         accumulate_repeats: activeProject.value.accumulate_repeats,

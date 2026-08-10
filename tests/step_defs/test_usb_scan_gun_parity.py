@@ -113,6 +113,16 @@ def _given_clear(client, ctx):
     r = client.post("/api/v1/source/detection/clear_pending_scan"
                     "?channel=0&force=true")
     assert r.status_code == 200, r.text[:300]
+    # 兜底扫除其他测试文件残留的 BDD- 前缀测试枪: 按工位取重复扫码策略
+    # 是"第一把枪说了算", 残留枪会遮蔽本文件自建枪的策略配置
+    lr = client.get(f"{SC}/devices")
+    if lr.status_code == 200:
+        body = lr.json()
+        items = body if isinstance(body, list) else \
+            (body.get("items") or body.get("data") or [])
+        for d in items:
+            if isinstance(d, dict) and str(d.get("name", "")).startswith("BDD-"):
+                client.delete(f"{SC}/devices/{d['id']}")
     ctx["guns"] = []
 
 

@@ -39,6 +39,14 @@ class BackendManager extends EventEmitter {
       port: options.port || 8001,
       host: options.host || 'localhost',
       startupTimeout: options.startupTimeout || 300000,
+      // v3.47 启动超时策略升级: startupTimeout 不再是硬死线。
+      // 超过 startupTimeout 后, 只要后端最近 startupQuietMs 内仍有日志输出
+      // (= 进程活着且在干活, 如 Defender 首扫/模型加载/相机重连), 就继续等;
+      // 静默超过 startupQuietMs 或总时长到 startupMaxMs 才判启动失败。
+      // 背景: 客户工控机开机首启曾 >5min, 老的 300s 硬超时直接弹"启动失败"退出,
+      // 用户重开一次 (缓存已热) 反而能起 — 即"第一次启动不了要重开"的根因。
+      startupQuietMs: options.startupQuietMs ?? 90000,
+      startupMaxMs: options.startupMaxMs ?? 1200000,
       healthCheckInterval: options.healthCheckInterval || 5000,
       isDev: options.isDev || false,
       resourcesPath: options.resourcesPath || '',
@@ -70,6 +78,9 @@ class BackendManager extends EventEmitter {
     this._shallowUpSince = null;          // 首次"浅就绪但深未就绪"的时刻
     this.deepDowngraded = false;          // 已降级标记 (只通知一次)
     this._startupResolved = false;        // 启动就绪阶段是否已结束 (降级判定只在启动期生效)
+    // v3.47 启动等待状态
+    this._lastOutputAt = 0;               // 后端最近一次 stdout/stderr 输出时刻 (活性判据)
+    this._startupExitInfo = null;         // 首次启动期进程退出信息 → waitForStartup 立即止损, 不再空轮询满超时
   }
   
   /**
@@ -153,6 +164,12 @@ class BackendManager extends EventEmitter {
     // 生产模式：将用户数据目录传给 Python 后端，使数据存在安装目录之外
     if (!this.options.isDev && this.options.userDataPath) {
       env.TIANJUN_DATA_DIR = this.options.userDataPath;
+    }
+    if (this.options.licensePath) {
+      env.TIANJUN_LICENSE_PATH = this.options.licensePath;
+    }
+    if (this.options.machineId) {
+      env.TIANJUN_MACHINE_ID = this.options.machineId;
     }
     
     // 强制 Python 使用 UTF-8 编码（解决 Windows 中文乱码）
@@ -247,19 +264,45 @@ class BackendManager extends EventEmitter {
   }
   
   /**
-   * 等待后端启动
+   * 等待后端启动 (v3.47 策略见构造器注释)
+   *
+   * 判失败的三种情况:
+   *   1. 启动期后端进程已退出 (_startupExitInfo) → 立即失败, 不再空轮询满超时
+   *   2. 总时长超过 startupMaxMs 绝对上限
+   *   3. 总时长超过 startupTimeout 基础线, 且后端已静默超过 startupQuietMs
    */
   async waitForStartup() {
     const startTime = Date.now();
-    
-    while (Date.now() - startTime < this.options.startupTimeout) {
+    this._lastOutputAt = Date.now();
+
+    for (;;) {
+      if (this._startupExitInfo) {
+        const { code, signal } = this._startupExitInfo;
+        console.error(`[BackendManager] 后端进程在启动期退出 (code=${code}, signal=${signal}), 停止等待`);
+        return false;
+      }
       if (await this.checkHealth()) {
         return true;
       }
-      await new Promise(resolve => setTimeout(resolve, 2000));  // 增加检查间隔到 2 秒
+      const elapsed = Date.now() - startTime;
+      if (elapsed >= this.options.startupMaxMs) {
+        console.error(`[BackendManager] 启动等待超过绝对上限 ${this.options.startupMaxMs / 1000}s, 判启动失败`);
+        return false;
+      }
+      if (elapsed >= this.options.startupTimeout &&
+          Date.now() - this._lastOutputAt >= this.options.startupQuietMs) {
+        console.error(
+          `[BackendManager] 启动超过 ${this.options.startupTimeout / 1000}s 且后端已静默 ` +
+          `${Math.round((Date.now() - this._lastOutputAt) / 1000)}s, 判启动失败`
+        );
+        return false;
+      }
+      if (elapsed >= this.options.startupTimeout) {
+        // 超过基础线但后端仍在输出日志 → 大概率是冷盘/杀软首扫/模型加载, 继续等
+        console.log(`[BackendManager] 启动已 ${Math.round(elapsed / 1000)}s, 后端仍有输出, 继续等待...`);
+      }
+      await new Promise(resolve => setTimeout(resolve, 2000));
     }
-    
-    return false;
   }
   
   /**
@@ -440,6 +483,8 @@ class BackendManager extends EventEmitter {
     }
     // 新一轮启动: 清主动停止标志, 让看门狗在本轮进程崩溃时能接管
     this._intentionalStop = false;
+    this._startupExitInfo = null;  // v3.47: 清上一轮的启动期退出记录
+    this._lastOutputAt = Date.now();
     
     // 先清理可能残留的后端进程
     await this.cleanupStaleProcesses();
@@ -504,6 +549,7 @@ class BackendManager extends EventEmitter {
       this.process.stdout.on('data', (data) => {
         const msg = data.toString().trim();
         if (msg) {
+          this._lastOutputAt = Date.now();  // v3.47: 活性判据, 供启动等待策略用
           console.log(`[Backend] ${msg}`);
           this.emit('stdout', msg);
         }
@@ -512,6 +558,7 @@ class BackendManager extends EventEmitter {
       this.process.stderr.on('data', (data) => {
         const msg = data.toString().trim();
         if (msg) {
+          this._lastOutputAt = Date.now();
           console.log(`[Backend] ${msg}`);
           this.emit('stderr', msg);
         }
@@ -528,6 +575,11 @@ class BackendManager extends EventEmitter {
         console.log(`[BackendManager] Process exited (code: ${code}, signal: ${signal})`);
         this.isRunning = false;
         this.stopHealthCheck();
+        // v3.47: 首次启动期 (从未就绪过) 进程退出 → 记下退出信息,
+        // waitForStartup 下一拍立即止损, 不再对着死进程空轮询满超时 (曾要等满 5 分钟才报错)。
+        if (!this._everReady) {
+          this._startupExitInfo = { code, signal };
+        }
         this.emit('exit', { code, signal });
         // v3.29.0 看门狗: 已就绪过 + 非主动停止 → 后端进程意外死亡, 自动拉起。
         // 初次启动期(未就绪过)的退出交给原启动失败流程处理, 不在此重启。
@@ -547,7 +599,11 @@ class BackendManager extends EventEmitter {
           this.emit('ready');
           resolve(true);
         } else {
-          const error = new Error('Backend startup timeout');
+          // v3.47: 区分"进程死了"和"真超时", 弹给用户的错误信息更可诊断
+          const exitInfo = this._startupExitInfo;
+          const error = exitInfo
+            ? new Error(`后端进程启动失败 (exit code: ${exitInfo.code}, signal: ${exitInfo.signal || 'none'}), 详见 logs/backend.log`)
+            : new Error('Backend startup timeout');
           this.stop();
           reject(error);
         }

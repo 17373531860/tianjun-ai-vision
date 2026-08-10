@@ -9,6 +9,32 @@
 
 ---
 
+## 〇之二、训练平台互连（v3.47 新增家族）
+
+> 与 YoloVision 训练平台双向互连（契约 interconnect-contract 1.1，共同事实源在训练平台仓库 `TIANJUN_INTERCONNECT_SPEC.md`）。默认关；配置存 SystemConfig KV `interconnect.config`（**不是**独立 json 文件）。诊断见 `debug-interconnect` skill。
+
+### `backend/api/interconnect.py`（175 行）
+
+| 维度 | 内容 |
+|---|---|
+| **职责** | `/api/v1/interconnect/*` 8 端点：health（免鉴权契约端点）/ models/push（接收 .yvmodel）/ config GET+PUT / status / test-connection / samples/recent / pull-now |
+| **鉴权** | `_require_token`：除 health 外全部校验共享令牌（双方同一随机串 ≥32 字符） |
+| **上下游** | 入库委托 `package_ingest`（push 与 puller 复用同一路径）；状态聚合 uploader/puller/sampler/identity |
+
+### `backend/services/interconnect/`（7 文件）
+
+| 文件 | 行数 | 一句话 |
+|---|---|---|
+| `config.py` | 171 | 配置存取（SystemConfig KV `interconnect.config`）+ 校验 |
+| `identity.py` | 83 | device_id 稳定身份（KV `interconnect.device_id`，License machineId 同源，`tj-` 前缀持久化；随所有出站请求与 health 携带） |
+| `package_ingest.py` | 257 | .yvmodel 包安全入库：逐产物 SHA-256 / 防路径穿越 / 防 zip 炸弹 / 违禁载荷拦截 → primary 产物入模型仓库 → `x-project-name` 精确匹配项目 → `x-analysis` 入 `Model.meta` |
+| `puller.py` | 241 | 拉取分发线程：轮询对端 packages 游标增量列包 → 下载 → 复用 push 入库路径；**坏包跳过不卡游标，传输失败停轮保序重试**；`pull_now()` 手动触发 |
+| `sampler.py` | 226 | 推理循环采样决策 `maybe_sample_frame`：置信度带 / 未检出周期内守门（空帧≠漏检）/ 检出闪断 detection_dropout / NG 事件帧；限流 `_pass_rate_limit`（最小间隔+每小时上限） |
+| `sample_queue.py` | 215 | 磁盘队列（默认 max 500 / TTL 72h），进程重启可恢复 |
+| `uploader.py` | 189 | 后台 worker 异步回传：指数退避、对端离线不丢帧、404 项目不存在丢弃不堵队列；`main.py::_start_interconnect_uploader()` 启动挂载 |
+
+**不变量**：采样挂点在推理热路径（`source_inference_loop_mixin.py:423`），全程 try/except 隔离 + 关闭 O(1) 早退——**绝不允许把重活挪进推理线程**；拉取到的模型永不自动启用。
+
 ## 〇、短信通知（新增）
 
 ### `backend/services/sms_service.py`（~935 行）
@@ -37,6 +63,10 @@
 | `schemas/sms.py` | 237 | API Schema（含一期平铺兼容字段） |
 
 独立调试工具：`tools/sms_4g/`（不进主程序运行时）。诊断见 `debug-sms` skill。
+
+**v3.47 补账（2026-08-07，dev-qing 补账两提交）**：
+- `sms_config.py`：保存时嵌套 `at_modem` 段优先于一期平铺脏字段（治前端保存后配置乱码/被平铺旧值覆盖）
+- `sms_summary.py` + `schemas/sms.py`：NG 汇总数字口径可选 `summary_numeric_scope`（`panel`=面板会话累计（默认，与监控页对齐）/ `window`=12h 时间窗）；前端 Alarm 页文案随口径动态变化，e2e 断言只锁公共前缀「每滚动 12 小时按工位」
 
 ---
 
@@ -383,7 +413,7 @@
 | 维度 | 内容 |
 |---|---|
 | **职责** | 版本化数据库迁移注册表 + runner（2026-07 治理批次落地，取代 `main.py` 只增不减的 `migrate_database()` 大列表——旧函数已改断言桩，别再往里塞 ALTER）。启动时 `apply_pending(engine)` 按编号升序应用缺失迁移，行为对外等价于旧函数 |
-| **核心函数** | L25-32 `_MIGRATION_MODULES` 显式注册表（**不做目录扫描**——兼容 Nuitka 编译形态；v3.43 注册 m0002/m0003，**v3.45 注册 m0004/m0005**）；L35 `_ALWAYS_RUN={"m0000_legacy"}`；L34-42 `_load_migrations()` 断言 MIGRATION_ID 与文件名一致；L45-58 `_ensure_ledger()` 建 `schema_migrations` 记账表；L61-68 `_applied_ids()`；L71-80 `_record()` 记账；L83-109 `apply_pending()`：m0000 不看记账每次幂等跑、其余"记账跳过"，某个新迁移失败即停止应用后续迁移（保留原库、不阻断启动） |
+| **核心函数** | L25-32 `_MIGRATION_MODULES` 显式注册表（**不做目录扫描**——兼容 Nuitka 编译形态；v3.43 注册 m0002/m0003，v3.45 注册 m0004/m0005，v3.46 注册 m0006，**v3.47 注册 m0007/m0008**）；L35 `_ALWAYS_RUN={"m0000_legacy"}`；L34-42 `_load_migrations()` 断言 MIGRATION_ID 与文件名一致；L45-58 `_ensure_ledger()` 建 `schema_migrations` 记账表；L61-68 `_applied_ids()`；L71-80 `_record()` 记账；L83-109 `apply_pending()`：m0000 不看记账每次幂等跑、其余"记账跳过"，某个新迁移失败即停止应用后续迁移（保留原库、不阻断启动） |
 | **线程/锁** | 无（启动时单线程跑） |
 | **上下游** | 上游：`main.py` 启动调用；下游：各 `mXXXX_*.py` 模块 + `schema_migrations` 表 |
 | **注释坑** | L10 记账表建不起来（磁盘满/只读）→ 降级为只跑 m0000 幂等路径，打显著日志不阻断启动；L13-16 **新增 schema 变更三步规约**（即 AGENTS.md 不变量 8）：①改 ORM 模型 ②本目录新建 `m<下一编号>_<语义名>.py::apply(engine)` 写 DDL/数据回填 ③模块名追加到 `_MIGRATION_MODULES` 显式注册；设计 RFC 见 `docs/rfc/DB迁移版本化治理_设计方案_RFC.md`；记账失败不致命（L79-80，下次启动幂等/重跑兜底） |
@@ -425,6 +455,29 @@
 | **职责** | v3.45 包装结算「工单同步进工单管理」开关列：给 `packaging_flow_configs` 补 `sync_work_orders`（**BOOLEAN DEFAULT 1 默认开**——只补数据可见性不改判定行为，关=老行为包装单只存运行记录）；开时扫码开工/收尾/中止把包装工单镜像到 `work_orders` 表（source='packaging'），工单管理页可见可管理 |
 | **核心函数** | L12-14 `_COLUMNS` 单列清单；L17-34 `apply(engine)` 同 m0004 幂等补列模板（PostgreSQL `DEFAULT 1`→`TRUE`） |
 | **上下游** | 上游：runner；下游：协调器 `_sync_work_order`（老库 NULL 在 `_row_to_dict` 侧视为开，见 02 册） |
+
+### `backend/db/migrations/m0006_sms_report_content_template.py`（30 行，v3.46 新增）
+
+| 维度 | 内容 |
+|---|---|
+| **职责** | 短信日报规则「正文模板」列：`sms_report_rules` 补 `content_template` TEXT（内容式通道 AT/HTTP/WxPusher 的 `${变量}` 正文模板，云模板通道忽略）。该表未随任何已发版本出厂，只兜底开发期已建表的库 |
+| **核心函数** | 幂等补列模板（表不存在/列已存在跳过） |
+
+### `backend/db/migrations/m0007_defect_cycle_index.py`（29 行，v3.47 新增）
+
+| 维度 | 内容 |
+|---|---|
+| **职责** | `defect_records.cycle_id` 补索引（2026-08 启动提速批次）：启动孤儿扫描按 cycle_id 做 NOT EXISTS 关联探查，缺陷数据多的客户机每次开机全表扫描 |
+| **核心函数** | `CREATE INDEX IF NOT EXISTS ix_defect_records_cycle_id`——索引名与 ORM `index=True` 的 SQLAlchemy 默认命名一致，新装库 create_all 与老库迁移收敛同一形态 |
+| **注释坑** | ⚠️ 本编号曾与互连分支的迁移撞号——多分支并行各自领 `m0007`，合并时互连迁移改号 `m0008`（含文件名与 MIGRATION_ID 双改），撞号处置惯例见 `modify-model` skill |
+
+### `backend/db/migrations/m0008_model_interconnect_meta.py`（29 行，v3.47 新增）
+
+| 维度 | 内容 |
+|---|---|
+| **职责** | 训练平台互连：`models` 表补 `source` VARCHAR(50) DEFAULT 'local'（'local'/'yolovision'，老库存量 NULL 读取端视同 local）+ `meta` JSON（x-analysis 训练分析/包 provenance；PostgreSQL 用 JSONB 分道） |
+| **核心函数** | inspect 探查缺列才 ALTER；`models` 表不存在直接返回 |
+| **上下游** | 下游：`Model` ORM（见 03 册）+ `package_ingest`（写 meta）+ 前端模型仓库来源徽标 |
 
 ### `backend/hcnetsdk/types.py`（150 行）
 
@@ -523,4 +576,4 @@
 
 ---
 
-**本文件最后更新**：2026-07-29（v3.45 补账：`api/weighing.py` 新端点 `GET /weighing/operators`（作业员候选名单）+ 新增 `m0004_pkg_box_label_scan` / `m0005_pkg_sync_work_orders` 两迁移条目 + runner 注册表刷新；上一轮 2026-07-17 v3.41 复核；现 46 个文件）
+**本文件最后更新**：2026-08-07（v3.47 补账：新增「训练平台互连」节（`api/interconnect.py` + `services/interconnect/` 7 文件）+ 短信节 v3.47 增量（config 嵌套优先/汇总数字口径）+ m0006/m0007/m0008 三迁移条目 + runner 注册表刷新；上一轮 2026-07-29 v3.45 补账）

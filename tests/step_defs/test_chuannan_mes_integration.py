@@ -77,12 +77,20 @@ def _wipe_cn():
             db.close()
         # v3.38 场景 17-19 会动 hook 单例的内存态, 前后都复位防串场
         from backend.services.mes_hooks import get_mes_hook
-        hook = get_mes_hook()
-        hook._active_orders.clear()
-        hook.enabled = False
+        get_mes_hook()._active_orders.clear()
+
+    # ⚠️ enabled 必须"进场记基线/退场还原", 不能强写 False:
+    # app 是 session 级单例 (hook.start() 后基线=True), 强写 False 会让本文件
+    # 之后所有测试的 MES 任务在 _enqueue 被静默丢弃
+    # (2026-08-07 CI test-gate 事故: usb_scan_gun_parity 扫码事件永不出现)。
+    from backend.services.mes_hooks import get_mes_hook
+    hook = get_mes_hook()
+    baseline_enabled = hook.enabled
     _wipe()
+    hook.enabled = False  # 本文件场景内仍以"关"为前置 (17-19 场景自行开)
     yield
     _wipe()
+    hook.enabled = baseline_enabled
 
 
 # ============================================================

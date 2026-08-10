@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Any, Dict
 from datetime import datetime
 
 class ModelBase(BaseModel):
@@ -26,6 +26,9 @@ class ModelResponse(ModelBase):
     file_size: int
     labels: Optional[List[str]] = None
     status: str = "idle"
+    # v3.47 训练平台互连: 来源 (local / yolovision, 老库 NULL 视同 local) + 扩展元数据
+    source: Optional[str] = "local"
+    meta: Optional[Dict[str, Any]] = None
     upload_time: datetime
 
     class Config:

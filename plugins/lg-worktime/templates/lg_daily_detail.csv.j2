@@ -1,0 +1,9 @@
+{#- LG 日明细 (xlsx 路线 A: 渲染成 CSV 文本 → 主程序转 xlsx 表格)
+    数据源: 范围/单session 导出 + include_cycles=True 时的 stats.cycles
+    LEAN 列: 插件字段 plugin.lg_worktime.cycles 按 cycle_id 逐行取 (插件停用时列为空不崩) -#}
+轮次ID,轮次号,工位,开始时间,结束时间,CT(秒),VA(秒),BVA(秒),NVA(秒),等待(秒),结果,NG步骤,步骤明细
+{%- set leanmap = plugin.lg_worktime.cycles or {} %}
+{%- for c in stats.cycles %}
+{%- set pl = leanmap.get(c.id) or {} %}
+{{ c.id }},{{ c.cycle_number or '' }},{{ c.channel_id if c.channel_id is not none else '' }},{{ (c.start_time or '')|replace('T',' ') }},{{ (c.end_time or '')|replace('T',' ') }},{{ '%.2f'|format(c.duration or 0) }},{{ '%.2f'|format(pl.get('va') or 0) if pl else '' }},{{ '%.2f'|format(pl.get('bva') or 0) if pl else '' }},{{ '%.2f'|format(pl.get('nva') or 0) if pl else '' }},{{ '%.2f'|format(pl.get('wait') or 0) if pl else '' }},{{ c.result or '' }},{{ c.ng_step or '' }},{% for s in c.steps %}{{ s.label }}({{ '%.1f'|format(s.duration or 0) }}s){{ '' if loop.last else ' / ' }}{% endfor %}
+{%- endfor %}

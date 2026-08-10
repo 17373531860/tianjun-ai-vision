@@ -3,6 +3,15 @@
 > 覆盖范围：`frontend/src/` 全部约 100 文件（含 `Monitor/index.vue` 6245 行分段通读）、`electron/` 核心壳文件（`main.js` / `backend-manager.js` / `license-manager.js` / `preload.js`；vendor/splash 第三方资源仅记用途）。
 > 行号锚点均来自当前仓库快照，后续改动以代码为准。
 
+> **v3.47 补账（2026-08-07，多分支汇合发版）**：
+> - `views/Monitor/index.vue`（→6847 行）：**多工位布局重构**——模板顶层链 `layoutBodyOverride → channelCount===2 → ===3（三行横排：左视频 16:9 + 右数据面板 ChannelVideoCard）→ >3（网格总览「多工位总览」工具条 auto/2x2/3x3/4x4 + 分页 + 点卡片放大详情）→ 单工位`；新状态区（:2265 起）`gridPage/gridDims/zoomedChannel/gridPageChannels`；MJPEG 按可见工位收放：`visibleStreamChannels()`（≤3 全拉 / 放大只拉一路 / 网格只拉当前页）+ `syncMultiStreams()`（翻页/换布局/进出放大 watcher 触发，:2315），数据轮询仍覆盖全部工位；流被服务端正常收流（done 非异常）也自动重连（带可见性守门，:2523）；`startMultiStreams` 入口守卫 layout.body 插件独占（互踢修复）；列级 OK/NG Toast 从仅双工位放开到任意工位数（`channelCount >= 1` 网格，:30）；`fetchChannelCount` 工位数变化后放大越界退回总览
+> - `views/Source/index.vue`：自定义工位数输入放开（同步后端 MAX_CHANNELS 64）
+> - `views/Project/LogicConfigTab.vue` + `index.vue`：容器装箱清点卡新增记账五开关（滑块去重默认开/托盘去重/空账清理/指针让位/结账同源默认关）
+> - 新增 `views/Interconnect/index.vue` + `api/interconnect.js`：互连设置页四块（连接配置/帧采样回传/模型拉取/运行状态与采样流水表）；`layout/index.vue` + `router/index.js` 加「互连」导航
+> - `views/Activation/index.vue`：导入授权验签通过即进「系统启动中」等待态；监听 `license-backend-start-failed` 弹明确错误（不再无限转圈）
+> - `views/Alarm/index.vue`：NG 汇总数字口径单选（panel/window）+ `smsSummaryNoticeBody` 动态文案
+> - Electron：`main.js` 启动 300s 死线改弹性（后端日志滚动就延展、静默 90s 判死、绝对上限 20min；启动期进程退出立即止损报错）；`backend-manager.js` 日志滚动判活；`license-manager.js` machineId 缓存命中快路径 + 指纹校验后台异步（不匹配删缓存下次强制重算）；`preload.js` 透出 `license-backend-start-failed`；`build/installer.iss` 装完把安装目录+数据目录加 Defender 排除（卸载移除）
+
 > v3.41 复核（2026-07-17）：基线 a23a8d2（v3.32/v3.33 之交）→ v3.41.0 的前端/Electron 增量已回写本文——各条目下的「v3.3x 起」引用块即补账内容，行号锚点已整体刷新为当前快照。逐版动机详见 `docs/changelog/`（v3.33.0 ~ v3.41.0 各版 md）。
 
 > **v3.44 补账（2026-07-22）**：NG 处置整改批次四文件——

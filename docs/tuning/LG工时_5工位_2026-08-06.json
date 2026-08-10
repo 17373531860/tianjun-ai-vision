@@ -1,0 +1,155 @@
+{
+  "project": "LG工时_5工位",
+  "date": "2026-08-06",
+  "plugin": "lg-worktime v1.5.2",
+  "environment": {
+    "device": "Apple M 系列 (MPS 推理 26~55fps)",
+    "note": "参数与设备无关，Windows+CUDA 通用；离线分析 imgsz 必须与模型自带训练分辨率一致",
+    "video_format": "1224x1024 @ 29.94fps avi，每套模型 3 段产线实录",
+    "logic_mode": "detection (检测计数模式，必做步骤齐活=OK，不看顺序)"
+  },
+  "shared_architecture": {
+    "logic_mode": "detection",
+    "non_anchor_accept_once": true,
+    "anchor_rules": {
+      "threshold": "40~60",
+      "disappear_delay": 0.8,
+      "disappear_uninterruptible": true,
+      "min_duration": "0.6~1.0 (双手并行工位防结算风暴止血阀)"
+    },
+    "tail_step_rules": {
+      "disappear_delay": "0.4~0.5",
+      "disappear_uninterruptible": false,
+      "reason": "尾步距下周期锚步仅 0.3~0.7s，不可打断的等待会跨过结算边界把尾步漏进下一周期"
+    },
+    "weak_class_rules": "模型盲区类保持 enabled 观测但移出 detection_steps，threshold 提到 40 消音"
+  },
+  "sets": [
+    {
+      "model": "2K17421",
+      "project_name": "LG工时-2K17421",
+      "project_id": 3,
+      "cycle_time_s": 3.8,
+      "pass_rates": {"video1": 0.97, "video2": 0.92, "video3": 0.95},
+      "final_config": {
+        "detection_steps": ["拿取产品", "调节螺丝", "检查内框活动性", "转动滑轮", "检查外观", "放计数板"],
+        "steps": [
+          {"label": "拿取产品", "role": "anchor", "threshold": 40, "min_frames": 3, "disappear_delay": 0.8, "disappear_uninterruptible": true, "min_duration": null, "value_type": "BVA"},
+          {"label": "调节螺丝", "threshold": 35, "min_frames": 4, "disappear_delay": 0.5, "disappear_uninterruptible": false, "value_type": "VA"},
+          {"label": "检查内框活动性", "threshold": 15, "min_frames": 2, "disappear_delay": 0.8, "disappear_uninterruptible": true, "value_type": "VA"},
+          {"label": "转动滑轮", "threshold": 25, "min_frames": 5, "disappear_delay": 1.0, "disappear_uninterruptible": true, "value_type": "VA"},
+          {"label": "检查外观", "threshold": 25, "min_frames": 5, "disappear_delay": 1.0, "disappear_uninterruptible": true, "value_type": "VA"},
+          {"label": "确认内框有无下落", "role": "observe_only", "threshold": 40, "min_frames": 3, "disappear_delay": 0.5, "disappear_uninterruptible": false, "value_type": "VA"},
+          {"label": "放计数板", "role": "tail", "threshold": 30, "min_frames": 4, "disappear_delay": 0.4, "disappear_uninterruptible": false, "value_type": "BVA"}
+        ]
+      },
+      "notes": ["确认内框有无下落在部分机位全置信度段无检出，转观测不判定"]
+    },
+    {
+      "model": "3K11311",
+      "project_name": "LG工时-3K11311",
+      "project_id": 4,
+      "cycle_time_s": 5,
+      "pass_rates": {"video1": 0.91, "video2": 1.0, "video3": 0.81},
+      "final_config": {
+        "detection_steps": ["拿取产品", "调节螺丝", "检查内框活动性", "转动滑轮", "检查外观", "放计数板"],
+        "steps": [
+          {"label": "拿取产品", "role": "anchor", "threshold": 60, "min_frames": 3, "disappear_delay": 0.8, "disappear_uninterruptible": true, "min_duration": 0.6, "value_type": "BVA"},
+          {"label": "调节螺丝", "threshold": 15, "min_frames": 2, "disappear_delay": 0.5, "disappear_uninterruptible": false, "value_type": "VA"},
+          {"label": "检查内框活动性", "threshold": 15, "min_frames": 2, "disappear_delay": 0.8, "disappear_uninterruptible": true, "value_type": "VA"},
+          {"label": "转动滑轮", "threshold": 15, "min_frames": 2, "disappear_delay": 1.0, "disappear_uninterruptible": true, "value_type": "VA"},
+          {"label": "检查外观", "threshold": 15, "min_frames": 2, "disappear_delay": 1.0, "disappear_uninterruptible": true, "value_type": "VA"},
+          {"label": "确认内框有无下落", "role": "observe_only", "threshold": 40, "min_frames": 3, "disappear_delay": 0.5, "disappear_uninterruptible": false, "value_type": "VA"},
+          {"label": "放计数板", "role": "tail", "threshold": 15, "min_frames": 2, "disappear_delay": 0.4, "disappear_uninterruptible": false, "value_type": "BVA"}
+        ]
+      },
+      "notes": ["双手并行工位: 左手拿新品右手放板同框，锚步 min_duration=0.6 + threshold=60 是防结算风暴关键", "真实拿取可见 1.2~2.7s，min_duration 门不误伤"]
+    },
+    {
+      "model": "3K30919",
+      "project_name": "LG工时-3K30919",
+      "project_id": 5,
+      "cycle_time_s": 7.5,
+      "pass_rates": {"video1": 0.90, "video2": 0.75, "video3": 0.75},
+      "final_config": {
+        "detection_steps": ["螺丝和本体配膳", "螺丝组装", "装袋"],
+        "steps": [
+          {"label": "螺丝和本体配膳", "role": "anchor", "threshold": 40, "min_frames": 3, "disappear_delay": 1.0, "disappear_uninterruptible": true, "min_duration": 1.0, "value_type": "BVA"},
+          {"label": "螺丝组装", "threshold": 18, "min_frames": 2, "disappear_delay": 1.5, "disappear_uninterruptible": true, "value_type": "VA"},
+          {"label": "装袋", "role": "tail", "threshold": 15, "min_frames": 2, "disappear_delay": 0.5, "disappear_uninterruptible": false, "value_type": "VA"}
+        ]
+      },
+      "notes": ["锚步真实可见 1.9~3.7s，周期中段有 0.6s 级重现闪，min_duration=1.0 挡掉", "残余 ~25% NG 为模型对螺丝组装/装袋的真实检出缺口，非参数问题"]
+    },
+    {
+      "model": "5K15111",
+      "project_name": "LG工时-5K15111",
+      "project_id": 6,
+      "cycle_time_s": 19,
+      "pass_rates": {"video1": 0.77, "video2": 0.78, "video3": 0.91},
+      "final_config": {
+        "detection_steps": ["拿取产品", "调节螺丝", "确认内框活动性", "转动滑轮", "保持架方向确认并检查外观", "放置计数板"],
+        "steps": [
+          {"label": "拿取产品", "role": "anchor", "threshold": 35, "min_frames": 3, "disappear_delay": 0.8, "disappear_uninterruptible": true, "min_duration": 0.6, "value_type": "BVA"},
+          {"label": "调节螺丝", "threshold": 35, "min_frames": 2, "disappear_delay": 0.5, "disappear_uninterruptible": false, "value_type": "VA"},
+          {"label": "确认内框活动性", "threshold": 35, "min_frames": 2, "disappear_delay": 0.8, "disappear_uninterruptible": true, "value_type": "VA"},
+          {"label": "转动滑轮", "threshold": 35, "min_frames": 2, "disappear_delay": 1.0, "disappear_uninterruptible": true, "value_type": "VA"},
+          {"label": "保持架方向确认并检查外观", "threshold": 35, "min_frames": 2, "disappear_delay": 1.0, "disappear_uninterruptible": true, "value_type": "VA"},
+          {"label": "确认内框有无下落", "role": "observe_only", "threshold": 40, "min_frames": 3, "disappear_delay": 0.5, "disappear_uninterruptible": false, "value_type": "VA"},
+          {"label": "放置计数板", "role": "tail", "threshold": 30, "min_frames": 2, "disappear_delay": 0.4, "disappear_uninterruptible": false, "value_type": "BVA"}
+        ]
+      },
+      "notes": []
+    },
+    {
+      "model": "K10916",
+      "project_name": "LG工时-K10916",
+      "project_id": 7,
+      "cycle_time_s": 7,
+      "pass_rates": {"video1": 0.78, "video2": 0.86, "video3": 0.58},
+      "final_config": {
+        "detection_steps": ["拿取产品", "调节螺丝", "检查外观", "放计数板"],
+        "steps": [
+          {"label": "拿取产品", "role": "anchor", "threshold": 45, "min_frames": 3, "disappear_delay": 0.8, "disappear_uninterruptible": true, "min_duration": 0.6, "value_type": "BVA"},
+          {"label": "调节螺丝", "threshold": 12, "min_frames": 2, "disappear_delay": 0.5, "disappear_uninterruptible": false, "value_type": "VA"},
+          {"label": "转动滑轮", "role": "observe_only", "threshold": 15, "min_frames": 2, "disappear_delay": 1.0, "disappear_uninterruptible": false, "value_type": "VA"},
+          {"label": "检查外观", "threshold": 12, "min_frames": 2, "disappear_delay": 1.0, "disappear_uninterruptible": true, "value_type": "VA"},
+          {"label": "确认内框活动性", "role": "observe_only", "threshold": 15, "min_frames": 2, "disappear_delay": 0.8, "disappear_uninterruptible": false, "value_type": "VA"},
+          {"label": "放计数板", "role": "tail", "threshold": 18, "min_frames": 2, "disappear_delay": 0.4, "disappear_uninterruptible": false, "value_type": "BVA"}
+        ]
+      },
+      "notes": ["视频3 的 58% 是模型盲区: 调节螺丝/检查外观在 conf>=0.03 无任何检出，需补采该机位数据重训", "转动滑轮/确认内框活动性漏检 25~50%，只观测不判定"]
+    }
+  ],
+  "tuning_rounds": [
+    {"round": 1, "purpose": "基线 (顺序模式+2倍速+CPU)", "observation": "0% OK，推理仅 8.9fps，2倍速把 0.2s 级步骤压到采样线以下，通道被前次压测钉在 CPU", "changes": ["通道钉回 mps", "1 倍速", "min_frames 全降 1"], "result": "34%", "passed": false},
+    {"round": 2, "purpose": "修主程序设备切换回归 bug", "observation": "改 GPU 设备后重启检测不生效，模型滞留 CPU (幂等守门比对期望设备而非实际设备)", "changes": ["backend/api/channel_manager.py: 守门改比对 current_device_info['device']"], "result": "MPS 生效 27.9fps，但拿取产品过触发", "passed": false},
+    {"round": 3, "purpose": "首步噪声治理", "observation": "拿取产品 150s 计 84 次(真实~45 周期)，段内闪断被规则B切成两次，记录序列旋转一位", "changes": ["拿取产品 disappear_delay=0.8 + disappear_uninterruptible=true", "threshold 提到 40+"], "result": "视频1 90%", "passed": true},
+    {"round": 4, "purpose": "中段分裂治理", "observation": "转动滑轮/检查外观一周期分裂两段(间隔~0.8s)判步骤回退 NG；噪声闪现 1~4 帧 vs 真实段 >=6 帧双峰分布", "changes": ["两步 disappear_delay=1.0 不可打断", "min_frames=5"], "result": "分裂消除", "passed": true},
+    {"round": 5, "purpose": "尾步跨界治理", "observation": "放计数板 1.0s 不可打断等待跨过结算边界，完成时刻漏进新周期，周期变成 [拿取产品,放计数板]", "changes": ["尾步 disappear_delay=0.4 可打断 (定为通用规则)"], "result": "旋转错位消除", "passed": true},
+    {"round": 6, "purpose": "顺序判定撞墙 -> 切计数模式", "observation": "步骤全齐但确认顺序随机互换(动作真实交叠)，顺序模式必误 NG，参数无操作空间", "changes": ["logic_mode=detection", "非锚步骤 accept_once=true", "弱检出步骤移出 detection_steps"], "result": "2K17421 三视频 97/92/95% 定稿", "passed": true},
+    {"round": 7, "purpose": "推广其余 4 套 + 结算风暴止血", "observation": "3K11311/5K15111/K10916 出现每帧重结算风暴(150s 刷 165~248 个 NG，锚步/尾步成对 0 秒完成): 结算重置清 step_last_seen 后每帧被当锚步重现", "changes": ["锚步 min_duration=0.6~1.0 (风暴 held 仅 0.06~0.14s 被挡，真实锚步 1.2~3.2s 放行)"], "result": "全部达标", "passed": true}
+  ],
+  "summary": {
+    "key_findings": [
+      "工时测量与质量卡控是两种判定语义: 前者用 detection 计数模式，后者才用 sequential 顺序模式，选错模式参数调不回来",
+      "锚步(结算首步)是状态机命门: threshold + 消失桥接(不可打断) + min_duration 时长门三件套",
+      "尾步消失等待必须短(0.4~0.5s)且可打断，否则跨结算边界漏进下一周期",
+      "min_frames 定标依据是噪声/真实段的双峰分布，不拍脑袋",
+      "离线分析 imgsz 必须与模型训练分辨率一致，否则阈值结论漂移",
+      "本次同时修复主程序 bug: channel_manager 设备切换幂等守门比对错误导致模型滞留 CPU"
+    ],
+    "recommended_ranges": {
+      "anchor": {"threshold": "40~60", "min_frames": 3, "disappear_delay": 0.8, "disappear_uninterruptible": true, "min_duration": 0.6},
+      "middle": {"threshold": "15~35", "min_frames": "2~5", "disappear_delay": "0.5~1.0", "note": "分裂就开不可打断"},
+      "tail": {"threshold": "15~30", "min_frames": "2~4", "disappear_delay": 0.4, "disappear_uninterruptible": false}
+    },
+    "notes": [
+      "全部参数可在前端 项目管理->步骤设置 修改，改完重新激活项目生效",
+      "detection_steps 必做集合在 pipeline_config，计数模式配置页可勾选",
+      "LG 看板全局参数(默认价值类型/等待归属/统计口径/趋势天数)在系统设置 LG 工时参数卡片",
+      "K10916 视频3 与 3K30919 的残余 NG 为模型盲区，需补采数据重训"
+    ]
+  },
+  "keywords": ["LG工时", "lg-worktime", "detection", "计数模式", "结算风暴", "min_duration", "disappear_delay", "disappear_uninterruptible", "accept_once", "锚步", "拿取产品", "放计数板", "2K17421", "3K11311", "3K30919", "5K15111", "K10916", "MPS", "channel_manager", "双手并行", "双峰分布"]
+}
