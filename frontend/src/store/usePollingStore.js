@@ -12,6 +12,10 @@ const DEFAULTS = {
   scanner_status: 5000,
   external_device: 5000,
   wmax_status: 5000,
+  plc_status: 3000,
+  plc_live: 1500,
+  trigger_status: 3000,
+  trigger_live: 1500,
 };
 
 const MIN_MS = 500;
@@ -23,6 +27,8 @@ const LOG_DEFAULTS = {
   inbound: 50,
   gateway: 50,
   cluster: 20,
+  plc: 60,
+  trigger: 60,
 };
 const LOG_MIN = 1;
 const LOG_MAX = 500;

@@ -1362,6 +1362,13 @@ class MESHookManager:
             print(f"[MES] cycle_start snapshot error ch{channel_id} "
                   f"cycle#{cycle_id}: {e}", flush=True)
 
+        # RFC 13: PLC 事件写回 (enqueue 级非阻塞, 内部全兜底永不抛)
+        from backend.services.plc.write_dispatcher import dispatch_plc_event
+        dispatch_plc_event("cycle_start", {
+            "cycle": {"id": cycle_id},
+            "project": {"id": project_id},
+        }, channel_id)
+
         wp_id = self._pending_workpiece.pop(channel_id, None)
         if not wp_id:
             return
@@ -1560,6 +1567,11 @@ class MESHookManager:
                 step_sequence=step_sequence,
                 project_id=project_id,
             )
+
+            # RFC 13: PLC 事件写回 (与 MES 推送/集群解耦: 结果码写 PLC 不受
+            # 集群 skip / gateway 熔断影响; enqueue 级非阻塞, 内部全兜底永不抛)
+            from backend.services.plc.write_dispatcher import dispatch_plc_event
+            dispatch_plc_event("cycle_end", ctx, channel_id)
 
             skip_cycle_push = self._cluster_dispatch(
                 db, ctx, channel_id, is_good, event_name,

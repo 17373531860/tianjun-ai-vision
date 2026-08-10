@@ -34,6 +34,8 @@ def mount_all_routers(app: FastAPI) -> None:
     from backend.api import packaging_flows   # v3.21 包装箱结算 (上银包装线)
     from backend.api import showcase_stats    # RFC12 展会: 行为评分/趋势只读统计
     from backend.api import interconnect      # v3.47 训练平台互连 (契约 1.0)
+    from backend.api import plc               # RFC 13 通用 PLC 连接器
+    from backend.api import triggers          # RFC 14 统一触发中心
 
     app.include_router(projects.router, prefix=f"{v1}/projects", tags=["projects"])
     app.include_router(models.router, prefix=f"{v1}/models", tags=["models"])
@@ -53,6 +55,8 @@ def mount_all_routers(app: FastAPI) -> None:
     # 展会统计挂 /data 前缀，与下方 sessions 的 /data 共存——本段必须先注册
     app.include_router(showcase_stats.router, prefix=f"{v1}/data", tags=["showcase-stats"])
     app.include_router(interconnect.router, prefix=f"{v1}/interconnect", tags=["interconnect"])
+    app.include_router(plc.router, prefix=f"{v1}/plc", tags=["plc"])
+    app.include_router(triggers.router, prefix=f"{v1}/triggers", tags=["triggers"])
 
     # -------- 核心/重量级路由（原 main.py 直挂段，保持原注册顺序） --------
     from backend.api.source import router as source_router          # 视频源 + 检测核心

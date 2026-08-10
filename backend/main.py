@@ -46,6 +46,10 @@ from backend.models import mes_models as _mes_models  # noqa: F401
 from backend.models import weighing_models as _weighing_models  # noqa: F401
 # 每日短信日报: SmsReportRule/SmsSendLog/CounterDailyStat 三张表
 from backend.models import notify_models as _notify_models  # noqa: F401
+# RFC 13 通用 PLC 连接器: plc_connections 表
+from backend.models import plc_models as _plc_models  # noqa: F401
+# RFC 14 统一触发中心: trigger_channels 表
+from backend.models import trigger_models as _trigger_models  # noqa: F401
 # 路由挂载统一走 router_manifest（OVERLAP-3 治理）; 这里只保留非路由用途的 import
 from backend.api.router_manifest import mount_all_routers
 from backend.api.source import get_video_manager
@@ -766,6 +770,14 @@ def _init_mes_services():
         from backend.services.mes_puller import get_pull_scheduler
         get_pull_scheduler().start()
 
+        # RFC 13: 通用 PLC 连接器 (无启用连接则零开销)
+        from backend.services.plc.manager import get_plc_manager
+        get_plc_manager().start_all()
+
+        # RFC 14: 统一触发中心 (无启用触发源则零开销)
+        from backend.services.triggers.manager import get_trigger_manager
+        get_trigger_manager().start_all()
+
         print("[MES] 服务初始化完成（含集群汇总、外部设备、工单拉取调度）")
     except Exception as e:
         print(f"[MES] 服务初始化失败（非致命）: {e}")
@@ -998,6 +1010,20 @@ def cleanup_on_exit():
             get_external_device_service().stop_all()
         except Exception as _e:
             print(f"[Shutdown] 停止 MES/集群/外设服务时异常（已忽略）: {_e}", flush=True)
+
+        # RFC 13 停止 PLC 连接器 (独立 try: PLC 异常不阻塞其余关机步骤)
+        try:
+            from backend.services.plc.manager import get_plc_manager
+            get_plc_manager().stop_all()
+        except Exception as _e:
+            print(f"[Shutdown] 停止 PLC 连接器时异常（已忽略）: {_e}", flush=True)
+
+        # RFC 14 停止统一触发中心 (独立 try: 触发源异常不阻塞其余关机步骤)
+        try:
+            from backend.services.triggers.manager import get_trigger_manager
+            get_trigger_manager().stop_all()
+        except Exception as _e:
+            print(f"[Shutdown] 停止触发中心时异常（已忽略）: {_e}", flush=True)
 
         # v3.8.x 停止定时导出调度器
         try:

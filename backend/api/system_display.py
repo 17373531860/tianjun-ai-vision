@@ -120,6 +120,10 @@ POLLING_DEFAULTS = {
     "scanner_status": 5000,
     "external_device": 5000,
     "wmax_status": 5000,
+    "plc_status": 3000,   # RFC 13 PLC 连接卡片列表刷新
+    "plc_live": 1500,     # RFC 13 PLC 点位实时值/IO 日志刷新
+    "trigger_status": 3000,  # RFC 14 触发源卡片列表刷新
+    "trigger_live": 1500,    # RFC 14 触发源实时状态/历史/日志刷新
 }
 _POLLING_MIN_MS = 500   # 下限保护: 太频繁会压垮后端
 
@@ -169,6 +173,8 @@ LOG_LIMIT_DEFAULTS = {
     "inbound": 50,
     "gateway": 50,
     "cluster": 20,
+    "plc": 60,            # RFC 13 PLC IO 日志显示条数
+    "trigger": 60,        # RFC 14 触发中心日志显示条数
 }
 _LOG_LIMIT_MIN = 1
 _LOG_LIMIT_MAX = 500
