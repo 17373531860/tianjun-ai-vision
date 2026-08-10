@@ -146,6 +146,8 @@
 | 排查报警不响应 | `debug-alarm` |
 | 排查短信通知（12h 汇总不发 / AT 失败 / 云 HTTP 失败 / 与灯塔串口冲突）| `debug-sms` |
 | 排查训练平台互连（模型包不入库 / 采样不回传 / 队列堆积 / 拉取游标不动）| `debug-interconnect` |
+| 排查 PLC 对接（连不上 / 点位值乱码 / 规则不触发 / 绑码不建工件 / 结果码不回写）| `debug-plc` |
+| 排查触发中心（虚拟按钮不结算 / 脚踏板没反应 / HTTP 触发 403 / 串口不匹配 / 定时不发 / 动作不执行）| `debug-triggers` |
 | 排查 MES 异常（工单 / 工件 / 缺陷 / 扫码器 / Hook / Gateway / 外设）| `debug-mes` |
 | 排查集群主从（box 不齐 / 副机心跳 / box_complete 不推 MES）| `debug-cluster` |
 | 排查 Session/Cycle/Step 数据问题 | `debug-session` |
@@ -238,6 +240,8 @@
 | `/mes/inbound/*` | `mes_inbound.py` | v3.26+ 外部生产管控系统入站 REST（开工/完工/报警） |
 | `/plugins/*` | `plugins.py` | 插件安装/激活/清单/client-log |
 | `/interconnect/*` | `interconnect.py` | v3.47 YoloVision 训练平台互连（模型分发 + 帧采样回流，默认关） |
+| `/plc/*` | `plc.py` | RFC 13 通用 PLC 连接器（8 种驱动 + 点位/规则全可配 + 方案模板，默认无连接零开销） |
+| `/triggers/*` | `triggers.py` | RFC 14 统一触发中心（虚拟按钮/脚踏板/HTTP/串口/定时 6 种触发源 × 全局动作注册表，默认无实例零开销） |
 | `/debug/*` | `debug.py` | 通道诊断 + 调试日志中心 |
 
 > **常见误解**：路径前缀是 **`/api/v1/`** 不是 `/api/`；旧手册写的 `/api/detection/*` 已删，等价端点在 `/api/v1/source/detection/*`。

@@ -1,6 +1,6 @@
 ---
 name: api-sync
-description: "前后端 API 对齐检查（含短信 /sms 与日报 /sms-report）：33 组 /api/v1/* 路由前缀真相表（全仓唯一事实源）、前端 24 个 axios 客户端、字段命名、已知不一致与修复流程。怀疑前后端数据不通或新增 API 后必读。"
+description: "前后端 API 对齐检查（含短信 /sms 与日报 /sms-report、PLC /plc、触发中心 /triggers）：35 组 /api/v1/* 路由前缀真相表（全仓唯一事实源）、前端 23 个 axios 客户端、字段命名、已知不一致与修复流程。怀疑前后端数据不通或新增 API 后必读。"
 argument-hint: "[具体的 API 对齐问题，或 'full-check' 做全量检查]"
 model: opus
 effort: high
@@ -24,11 +24,11 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 2. **前端 axios 实例在 `frontend/src/api/index.js`**：`baseURL = http://localhost:8001/api/v1`。
    所有 `api.get('/foo')` 实际打 `http://localhost:8001/api/v1/foo`，**前端写路径时不要再加 `/api/v1`**。
 3. **MJPEG / 备份下载走 `getBackendHost()`**（不带 `/api/v1`）：例如 `${getBackendHost()}/video_feed`、`${getBackendHost()}/api/v1/data/videos/{id}`。
-4. **新增端点必须挂到下面 33 组前缀之一**；如果没有合适的，先回到 `add-api-endpoint` skill 决定挂哪儿。
+4. **新增端点必须挂到下面 35 组前缀之一**；如果没有合适的，先回到 `add-api-endpoint` skill 决定挂哪儿。
 
 ---
 
-## 1. 路由前缀真相表（★ 全仓唯一事实源 · 33 组）
+## 1. 路由前缀真相表（★ 全仓唯一事实源 · 35 组）
 
 > **单点维护约定**：本表是路由前缀 ↔ 后端文件 ↔ 前端 client 对应关系的**唯一**明细表。
 > `modify-api` / `add-api-endpoint` / AGENTS.md 第五节只保留速查或指回这里，**不要再复制整表**。
@@ -69,6 +69,8 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `/weighing/*` | `weighing.py` | `weighing.js` | ★ v3.31 称重投料模式（前置选择/扫码/去皮/记录查询/虚拟喂重）；v3.45 加 `/weighing/operators`（作业员名单下拉取数，只暴露启用账号显示名，不挂用户管理权限） |
 | `/plugins/*` | `plugins.py` | `plugins.js` | 插件安装/激活/清单/client-log |
 | `/interconnect/*` | `interconnect.py` | `interconnect.js` | ★ v3.47 YoloVision 训练平台互连：`/models/push` 接收模型包 + 拉取分发游标轮询 + 现场帧采样回流配置/状态/流水（互连设置页） |
+| `/plc/*` | `plc.py` | `plc.js` | ★ v3.48 RFC 13 通用 PLC 连接器：连接 CRUD/启停/测试 + 驱动清单 + 方案模板 + 点位实时值/手动写/IO 日志 + mock-set 联调 + 配置导入导出（MES 页「PLC 对接」tab） |
+| `/triggers/*` | `triggers.py` | `triggers.js` | ★ v3.48 RFC 14 统一触发中心：触发源实例 CRUD/启停 + 类型/动作/模板清单 + 实时状态/触发历史/日志 + 试触发/mock 注入 + 像素标定 + `fire/{key}` HTTP 触发入口 + 导入导出（系统设置页「触发中心」tab） |
 | `/debug/*` | `debug.py` | 无封装（手测用） | 通道诊断 + 调试日志中心 |
 | `/test/synthetic/*` | `test_runtime_routes.py` | —（测试专用） | 仅 `RUNTIME_MODE=test` 挂载：虚拟剧本源 |
 
@@ -80,7 +82,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 
 ## 2. 前端 API 客户端清单（`frontend/src/api/`）
 
-23 个文件。前缀对应关系**看 §1 真相表第三列**，此处只记状态与坑。所有文件统一 `import api from './index'`，`api.get('/xxx')` 自动加 `/api/v1` 前缀。
+23 个文件（2026-08 实数盘点）。前缀对应关系**看 §1 真相表第三列**，此处只记状态与坑。所有文件统一 `import api from './index'`，`api.get('/xxx')` 自动加 `/api/v1` 前缀。
 
 | 前端文件 | 状态 / 坑 |
 |---|---|
@@ -93,6 +95,8 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `sms.js` | 在用（Alarm 页「短信通知」卡：`/sms/config|ports|test`；v3.46 起该配置为系统级统一短信通道，日报共用） |
 | `smsReport.js` | ★ v3.46 在用（Data 页短信日报对话框：`/sms-report/*`） |
 | `interconnect.js` | ★ v3.47 在用（互连设置页：连接/采样规则/模型拉取/运行状态与采样流水） |
+| `plc.js` | ★ v3.48 在用（MES 页 PLC 对接 tab：`/plc/*` 全组封装） |
+| `triggers.js` | ★ v3.48 在用（系统设置页触发中心 tab：`/triggers/*` 全组封装） |
 | `auth.js` | 在用（一个文件封装 `/auth` `/users` `/roles` `/api-keys` 四组） |
 | `plugins.js` / `channel_group.js` / `packaging_flow.js` | 在用 |
 | `export.js` | 在用（v3.5.0 自定义导出 + 实时规则） |

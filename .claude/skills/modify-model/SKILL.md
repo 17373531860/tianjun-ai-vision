@@ -11,16 +11,16 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 
 修改 ORM 前先读这一份。计划修改：$ARGUMENTS
 
-## 0. 一眼看懂当前的数据库（v3.31.0 真相）
+## 0. 一眼看懂当前的数据库（v3.48 真相）
 
-- **47 张表 = 13 + 20 + 4 + 5 + 4 + 1**，分布在 **六个** ORM 文件（models / mes_models / export_models / auth_models / plugin_models / weighing_models）
+- **52 张表 = 13 + 20 + 4 + 5 + 4 + 1 + 3 + 1 + 1**，分布在 **九个** ORM 文件（models / mes_models / export_models / auth_models / plugin_models / weighing_models / notify_models / plc_models / trigger_models）
 - **迁移已版本化（2026-07 治理）**：运行时迁移在 `backend/db/migrations/`（注册表 + runner + `schema_migrations` 记账表）；alembic 仅服务 PG 工程（db-matrix CI），不进客户机运行时
 - 数据库是单文件 SQLite (`sql_app.db`)，开 WAL + busy_timeout=15s
 - 启动时序：`Base.metadata.create_all()` 建新表 → `apply_pending(engine)` 按序应用迁移（老库补列在 m0000 基线里） → `fix_orphan_*()` 清孤儿
 - **旧版交接文档写的"22 张表 / `MLModel` 类名 / 表名 `ml_models`"全是过时信息，以代码为准**（该手册已于 2026-06-26 删除）
 - `Operator`/`operators` 表已随 v3.10.0 用户系统移除（端点 410 Gone），别再引用
 
-## 1. 六个 models 文件的 47 张表清单
+## 1. 九个 models 文件的 52 张表清单
 
 ### 1.1 `backend/models/models.py`（13 张，核心检测）
 
@@ -98,6 +98,26 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | ORM 类 | 表名 | 一句话 |
 |---|---|---|
 | `WeighingRecord` | `weighing_records` | 逐件逐料称重台账：一行 = 一件产品的一道料一次称量（channel_id / product_sn / model_name / operator / material / standard / initial / net / verdict(ok・shortage・over・no_spec) / ts）；字段与 `weighing_engine.py` 产出的 result dict 对齐，新表走 create_all 无需 ALTER；`main.py` 已显式 import `weighing_models` |
+
+### 1.7 `backend/models/notify_models.py`（3 张，v3.46 每日短信日报）
+
+| ORM 类 | 表名 | 一句话 |
+|---|---|---|
+| `SmsReportRule` | `sms_report_rules` | 日报规则（发送时刻/收件人/内容模板/开关） |
+| `SmsSendLog` | `sms_send_logs` | 发送日志（渠道/状态/错误） |
+| `CounterDailyStat` | `counter_daily_stats` | 计数器按日快照（供日报变量取数） |
+
+### 1.8 `backend/models/plc_models.py`（1 张，v3.48 RFC 13 PLC 连接器）
+
+| ORM 类 | 表名 | 一句话 |
+|---|---|---|
+| `PLCConnection` | `plc_connections` | 一行 = 一条 PLC 连接：driver + conn_params/points/read_rules/write_rules/options 五个 JSON 列，全配置驱动；create_all 自建无迁移 |
+
+### 1.9 `backend/models/trigger_models.py`（1 张，v3.48 RFC 14 触发中心）
+
+| ORM 类 | 表名 | 一句话 |
+|---|---|---|
+| `TriggerChannel` | `trigger_channels` | 一行 = 一个触发源实例：type（pixel_region/hid_key/http/serial_pattern/timer/mock）+ params/rules/options 三个 JSON 列；create_all 自建无迁移 |
 
 ## 2. 关键命名陷阱（别再写错了）
 
