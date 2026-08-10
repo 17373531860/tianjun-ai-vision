@@ -79,7 +79,9 @@ class _ContainerAccumulator:
                  dedup_items: bool = True, dedup_trays: bool = False,
                  purge_empty_primary: bool = False,
                  yield_primary: bool = False,
-                 unified_book_source: bool = False):
+                 unified_book_source: bool = False,
+                 slot_check_label: str = '', slot_total: int = 0,
+                 item_dedup_iou: float = 0.45, tray_dedup_iou: float = 0.0):
         self.container_label = container_label
         self.item_expected = {k: int(v) for k, v in (item_expected or {}).items()}
         # v3.44.4 每盘峰值封顶 (可配, 默认 0=关): 模型偶发重复框瞬时数出 25/26,
@@ -131,6 +133,29 @@ class _ContainerAccumulator:
         self.purge_empty_primary = bool(purge_empty_primary)
         self.yield_primary = bool(yield_primary)
         self.unified_book_source = bool(unified_book_source)
+        # v3.46 槽位完整性门 (可配, 默认关 → 零差异): 盘的物理槽位数固定, 每个槽
+        # 要么装着货要么空着 — 模型加训"空槽"类后, 一帧里 货数+空槽数 应恒等于
+        # 槽位总数。不相等 = 这一帧没看全 (手挡住 / 盘半出画 / 重复框多数出来),
+        # 该帧对该盘的观察一律不采信: 不抬峰值、不进稳定窗口。
+        # 治的是"遮挡期的残数被记成峰值后咬死"与"重复框数出 25 顶峰值"两类老账。
+        # 兜底: 另存一份不过门的峰值, 万一整盘全程没有一帧看全, 记账仍退回它,
+        # 最坏情况与开关关闭时等价, 绝不会因为开了门就把盘漏账。
+        self.slot_check_label = (slot_check_label or '').strip()
+        self.slot_total = max(0, int(slot_total or 0))
+        self.slot_check_on = bool(self.slot_check_label) and self.slot_total > 0
+        # v3.46 两处"同一目标被画两个框"的去重阈值 (可配, 0 = 关闭该项去重):
+        #   物品框 — v3.45 起硬编码常开 0.45, 现改为可配, 默认值保持 0.45 = 零差异
+        #   托盘框 — 新增, 默认 0 关闭: 一个盘被吐两个框会多出一张影子工牌, 长期
+        #            在位且带着跨盘旧数字, 主位一释放它就顶上去 (实测可复现)
+        self.item_dedup_iou = max(0.0, float(item_dedup_iou or 0.0))
+        self.tray_dedup_iou = max(0.0, float(tray_dedup_iou or 0.0))
+        # 合流归一 (v3.47 五开关 × SY9 阈值可配, 同治一处去重, 两套配置面并存):
+        # dedup_items=False 视为该项关(阈值归零); dedup_trays=True 但没配阈值
+        # 时沿用老硬编码 0.45 — 两边客户的默认行为都零差异
+        if not self.dedup_items:
+            self.item_dedup_iou = 0.0
+        if self.dedup_trays and self.tray_dedup_iou <= 0:
+            self.tray_dedup_iou = 0.45
         self.reset()
 
     # 稳定值回看窗口 (秒): 稳定值取近 N 秒内有效窗口众数的最大值 — 免疫收尾
@@ -156,6 +181,8 @@ class _ContainerAccumulator:
         self._settle_defer_frames = 0  # v3.44.3 动作结账"峰值就绪等待"已挂帧数
         self.wrong_tray_alert = None   # 错盘警报 (宿主每帧消费): {'index','count','expected'}
         self._tid_cur = {}      # v3.46 各在位身份的当帧计数 {tid: {label: cnt}} (同源展示用)
+        # v3.46 槽位完整性门的本帧结果 (前端展示"这一帧看全了没"): None=未开门
+        self._slot_view = None
 
     def _update_action_fsm(self, action_present: bool, current_time: float = 0.0):
         """放托盘动作状态机: 标签连续在场满 action_min_frames 帧 → 动作成立(进行中,
@@ -238,6 +265,24 @@ class _ContainerAccumulator:
                 # 还没成立就消失 = 误检闪现, 不算一次动作
                 self._action_seen = 0
 
+    def _eff_peak(self, t: dict) -> dict:
+        """这张工牌的有效账面: 过了槽位门的真峰值优先, 没有才退影子峰值。
+
+        v3.46: 结算链上所有"这盘到底装没装货 / 装了多少"的判断都走这里 —
+        开了槽位门以后真峰值可能还没等到一帧完整视角就要结账, 若那些判断只认
+        真峰值, 真盘会被当成空框幽灵清掉、脉冲被烧, 整盘丢账 (7-30 视频实测
+        4 盘只记住 2 盘)。
+        """
+        if t.get('peak'):
+            return t['peak']
+        if self.slot_check_on and t.get('peak_raw'):
+            return t['peak_raw']
+        return {}
+
+    def _has_goods(self, t: dict) -> bool:
+        """这张工牌名下到底有没有装过货。"""
+        return bool(self._eff_peak(t))
+
     def _fresh_snapshot(self, t: dict) -> dict:
         """v3.44.5 返回该身份"本次动作"的稳定计数快照 (无/过期 → 空 dict)。"""
         if self.stable_min_frames <= 0 or self._action_started_ts is None:
@@ -283,14 +328,18 @@ class _ContainerAccumulator:
         return self._primary_frames_ok
 
     def update(self, tray_dets: list, item_objs: list, current_time: float,
-               action_present: bool = False):
+               action_present: bool = False, empty_slot_objs: list = None):
         from backend.api.source_per_item_mixin import _bbox_iou
+
+        # 每帧重算; 无盘/未开门时前端不应看到上一帧残留
+        self._slot_view = None
 
         # -1) 同标签高重叠去重: 模型对密排滑块会输出持续 1s+ 的重复框
         # (7-27 取证: 22 个滑块检出 25 个, 重复对 IoU 0.4-0.6, 窗口众数滤不掉
-        # 持续性重复) → 计数前按 IoU>0.45 去重, 置信度高者优先保留
-        # (v3.46 起可关: dedup_items=False 回退到 v3.44 之前的不去重行为)
-        if self.dedup_items and item_objs and len(item_objs) > 1:
+        # 持续性重复) → 计数前按 item_dedup_iou 去重, 置信度高者优先保留
+        # (可关: dedup_items=False 或阈值配 0 都回退到 v3.44 之前的不去重行为,
+        #  __init__ 已把两套配置面归一到 item_dedup_iou)
+        if item_objs and len(item_objs) > 1 and self.item_dedup_iou > 0:
             _srt = sorted(item_objs,
                           key=lambda o: -(o.get('confidence') or 0.0))
             _kept = []
@@ -301,27 +350,43 @@ class _ContainerAccumulator:
                 _dup = False
                 for _k, _kbt in _kept:
                     if (_k.get('class_name') == _o.get('class_name')
-                            and _bbox_iou(_obt, _kbt) > 0.45):
+                            and _bbox_iou(_obt, _kbt) > self.item_dedup_iou):
                         _dup = True
                         break
                 if not _dup:
                     _kept.append((_o, _obt))
             item_objs = [o for o, _ in _kept]
 
-        # -0.5) 托盘框同帧高重叠去重 (v3.46 主盘指针诊断): 模型偶发对同一个盘
-        # 输出两个重叠框时, 第二个框会因身份已被本帧占用 (step1 matched 守门)
-        # 而另立影子身份 — 长期在位、带跨盘旧峰值, 主位一释放就顶上污账
-        # (2026-07-30 探针实测复现)。与滑块去重同款: IoU>0.45 判重, 置信度高者
-        # 保留 (tray_dets 无 confidence 时全 0, sorted 稳定保序 = 先到者留)。
-        # 可选开关 dedup_trays, 默认关 = 零差异。
-        if self.dedup_trays and tray_dets and len(tray_dets) > 1:
-            _tsrt = sorted(tray_dets,
-                           key=lambda d: -(d.get('confidence') or 0.0))
+        # -1b) 空槽框同样去重 (同一个空槽被画两个框会把总数顶过槽位数, 反而
+        # 让完整的一帧被门拦掉)
+        empty_slot_objs = empty_slot_objs or []
+        if len(empty_slot_objs) > 1 and self.item_dedup_iou > 0:
+            _kept_e = []
+            for _o in sorted(empty_slot_objs,
+                             key=lambda o: -(o.get('confidence') or 0.0)):
+                _ob = _o.get('bbox') or {}
+                _obt = (_ob.get('x', 0), _ob.get('y', 0),
+                        _ob.get('w', 0), _ob.get('h', 0))
+                if any(_bbox_iou(_obt, _kbt) > self.item_dedup_iou
+                       for _, _kbt in _kept_e):
+                    continue
+                _kept_e.append((_o, _obt))
+            empty_slot_objs = [o for o, _ in _kept_e]
+
+        # -1c) 托盘框同帧高重叠去重 (可配, 默认 0=关; dedup_trays=True 未配阈值
+        # 时 __init__ 已归一到 0.45): 同一个盘被模型吐两个框 → 关联时一个吸附到
+        # 既有身份、另一个新建身份, 一个物理盘挂两张工牌; 空账那张长期在位、带
+        # 跨盘旧峰值, 主位一释放就顶上去, 或在救账候选里被捡走造成多记
+        # (2026-07-30 探针实测复现)。置信度高者优先保留 (置信度已随检测流传进来,
+        # 无 confidence 时全 0, sorted 稳定保序 = 先到者留)。
+        if self.tray_dedup_iou > 0 and len(tray_dets) > 1:
             _tkept = []
-            for _d in _tsrt:
+            for _d in sorted(tray_dets,
+                             key=lambda d: -(d.get('confidence') or 0.0)):
                 _dbt = (_d.get('x', 0), _d.get('y', 0),
                         _d.get('w', 0), _d.get('h', 0))
-                if any(_bbox_iou(_dbt, _kbt) > 0.45 for _, _kbt in _tkept):
+                if any(_bbox_iou(_dbt, _kbt) > self.tray_dedup_iou
+                       for _, _kbt in _tkept):
                     continue
                 _tkept.append((_d, _dbt))
             if len(_tkept) < len(tray_dets):
@@ -329,8 +394,9 @@ class _ContainerAccumulator:
                     from backend.core import debug_center
                     if debug_center.is_on("backend.packaging"):
                         debug_center.dbg(
-                            "backend.packaging", "托盘重复框去重",
-                            f"{len(tray_dets)}→{len(_tkept)} t={current_time:.2f}")
+                            "backend.packaging", "托盘框重复检出已去重",
+                            f"{len(tray_dets)} → {len(_tkept)} 框 "
+                            f"(IoU>{self.tray_dedup_iou:g}) t={current_time:.2f}")
                 except Exception:
                     pass
             tray_dets = [d for d, _ in _tkept]
@@ -380,6 +446,8 @@ class _ContainerAccumulator:
                     # pre_action_* = 动作成立瞬间的稳定计数快照 (记账值)
                     'hist': {}, 'modes': {}, 'stable': {},
                     'pre_action_stable': {}, 'pre_action_ts': None,
+                    # v3.46 影子峰值: 不过槽位门的老口径峰值, 仅作兜底
+                    'peak_raw': {},
                 }
                 matched.add(self._seq)
 
@@ -460,13 +528,13 @@ class _ContainerAccumulator:
             # 检出, 生成"空峰值、出生早"的幽灵身份; 纯 FIFO 会让幽灵抢主位, 真正
             # 看满 24 个滑块的备盘观察者永远排不上, 配对链整个错位 (末盘丢账
             # 72/96 误NG)。峰值非空 = 真装着货的盘, 优先; 同档内仍按 FIFO。
-            in_place = [(not t['peak'], t['first_seen'], tid)
+            in_place = [(not self._has_goods(t), t['first_seen'], tid)
                         for tid, t in self._trays.items() if t['gone'] == 0]
             if in_place:
                 self._primary = min(in_place)[2]
             elif self._trays:
                 self._primary = min(self._trays.items(),
-                                    key=lambda kv: (not kv[1]['peak'],
+                                    key=lambda kv: (not self._has_goods(kv[1]),
                                                     kv[1]['gone'],
                                                     kv[1]['first_seen']))[0]
             else:
@@ -522,6 +590,46 @@ class _ContainerAccumulator:
                 if px1 <= cx <= px2 and py1 <= cy <= py2:
                     cnt[lbl] = cnt.get(lbl, 0) + 1
             self._tid_cur[count_tid] = dict(cnt)
+            # v3.46 槽位完整性门: 货数 + 空槽数 != 槽位总数 → 这一帧没看全这盘,
+            # 观察不采信 (先把不过门的影子峰值记下当兜底, 再跳过真峰值/稳定窗口)
+            slot_ok = True
+            if self.slot_check_on:
+                n_empty = 0
+                for _e in empty_slot_objs:
+                    _eb = _e.get('bbox') or {}
+                    _ecx = _eb.get('x', 0) + _eb.get('w', 0) / 2.0
+                    _ecy = _eb.get('y', 0) + _eb.get('h', 0) / 2.0
+                    if px1 <= _ecx <= px2 and py1 <= _ecy <= py2:
+                        n_empty += 1
+                n_items = sum(cnt.values())
+                slot_ok = (n_items + n_empty) == self.slot_total
+                if count_tid == disp_tid or (disp_tid is None
+                                             and len(count_tids) == 1):
+                    self._slot_view = {
+                        'ok': slot_ok, 'items': n_items, 'empty': n_empty,
+                        'total': self.slot_total,
+                    }
+                raw = self._trays[count_tid].setdefault('peak_raw', {})
+                for lbl, c in cnt.items():
+                    if self.peak_cap > 0 and c > self.peak_cap:
+                        c = self.peak_cap
+                    if c > raw.get(lbl, 0):
+                        raw[lbl] = c
+                if not slot_ok:
+                    try:
+                        from backend.core import debug_center
+                        if debug_center.is_on("backend.packaging"):
+                            debug_center.dbg(
+                                "backend.packaging", "槽位不齐, 本帧不采信",
+                                f"tid={count_tid} 货={n_items} 空槽={n_empty} "
+                                f"应为 {self.slot_total} t={current_time:.1f}")
+                    except Exception:
+                        pass
+                    if count_tid == disp_tid or (disp_tid is None
+                                                 and len(count_tids) == 1):
+                        primary_counts = cnt
+                    continue
+
             peak = self._trays[count_tid]['peak']
             for lbl, c in cnt.items():
                 # v3.44.4 每盘峰值封顶 (peak_cap, 默认关): 见 __init__ 注释
@@ -626,7 +734,7 @@ class _ContainerAccumulator:
                 # 显形, 这盘的账就永远丢了。脉冲在手且主位空峰值时, 先在账里找
                 # "已离场(≥动作消失帧)、有峰值、未记账"的真盘改配记账; 取最近
                 # 离场者 (训练端反馈: 多候选取最大会捡走盘堆假消失轨迹)。
-                if (not pt['peak'] and self.confirm_by_action
+                if (not self._has_goods(pt) and self.confirm_by_action
                         and self._action_done_pending):
                     try:
                         from backend.core import debug_center
@@ -653,15 +761,15 @@ class _ContainerAccumulator:
                     _th = ((self._action_started_ts - 1.0)
                            if self._action_started_ts is not None else 0.0)
                     for _tid, _t in self._trays.items():
-                        if _tid == self._primary or not _t['peak']:
+                        if _tid == self._primary or not self._has_goods(_t):
                             continue
                         if _t['first_seen'] < _th and _t['last_seen'] < _th:
                             continue  # 与本次动作无关的陈旧身份
-                        if (_best is None
-                                or sum(_t['peak'].values())
-                                > sum(self._trays[_best]['peak'].values())
-                                or (sum(_t['peak'].values())
-                                    == sum(self._trays[_best]['peak'].values())
+                        _sum_t = sum(self._eff_peak(_t).values())
+                        _sum_b = (sum(self._eff_peak(self._trays[_best]).values())
+                                  if _best is not None else -1)
+                        if (_best is None or _sum_t > _sum_b
+                                or (_sum_t == _sum_b
                                     and _t['last_seen'] > self._trays[_best]['last_seen'])):
                             _best = _tid
                     if _best is not None:
@@ -676,12 +784,14 @@ class _ContainerAccumulator:
                                     f"peak={dict(pt['peak'])} gone={pt['gone']}")
                         except Exception:
                             pass
-                keep_pending = (not pt['peak'] and self.confirm_by_action
+                keep_pending = (not self._has_goods(pt) and self.confirm_by_action
                                 and self._action_done_pending)
                 # v3.44.5 记账值: 本次动作的稳定快照 ("手接触前"核准数) 优先,
                 # 没有快照才退回峰值 (老口径)
                 _snap_val = self._fresh_snapshot(pt)
-                book_val = _snap_val or pt['peak']
+                # v3.46 兜底: 开了槽位门但整盘全程没有一帧看全 → 退回不过门的
+                # 影子峰值, 最坏情况与门关闭时等价, 绝不因为开门而漏账
+                book_val = _snap_val or self._eff_peak(pt)
                 if book_val and self._reject_wrong_tray(book_val):
                     # v3.44.1 错盘拦截: 这盘数量不对 → 不记账, 身份照常清掉
                     # (盘已物理进箱, 等工人取出重装); 警报由宿主消费后报警定格。
@@ -708,6 +818,7 @@ class _ContainerAccumulator:
                 if (self.stable_min_frames > 0 and pt['gone'] == 0
                         and self._primary in self._trays):
                     pt['peak'] = {}
+                    pt['peak_raw'] = {}
                     pt['hist'] = {}
                     # 重开新账时保留"本次动作开始之后"的观察 (计数在动作进行中
                     # 冻结, 动作开始后的众数全部来自动作结束后已露出的下一盘) —
@@ -754,7 +865,9 @@ class _ContainerAccumulator:
             if tid == self._primary:
                 continue
             gone = self._trays[tid]['gone']
-            if gone >= self.gone_frames and not self._trays[tid]['peak']:
+            # v3.46 开了槽位门时, 用"含影子峰值"判有没有装货 — 真盘若一直没等到
+            # 一帧完整视角, 真峰值还是空的, 不能把它当空框幽灵清掉
+            if gone >= self.gone_frames and not self._has_goods(self._trays[tid]):
                 del self._trays[tid]
             elif gone >= self.gone_frames * 3:
                 del self._trays[tid]
@@ -764,7 +877,7 @@ class _ContainerAccumulator:
         if self._primary is None and not self._action_in_progress:
             # v3.44.4 与 step3 同步: 有峰值的真盘优先, 空峰值幽灵 (箱内已放盘的
             # 持续检出) 靠后, 防止幽灵抢主位错乱配对链
-            in_place = [(not t['peak'], t['first_seen'], tid)
+            in_place = [(not self._has_goods(t), t['first_seen'], tid)
                         for tid, t in self._trays.items() if t['gone'] == 0]
             if in_place:
                 self._primary = min(in_place)[2]
@@ -812,9 +925,9 @@ class _ContainerAccumulator:
         if self._best_fresh_snapshot_tid() is not None:
             self._settle_defer_frames = 0
             return False
-        if pt['gone'] >= self.gone_frames and pt['peak']:
+        if pt['gone'] >= self.gone_frames and self._has_goods(pt):
             return False  # 有峰值且盘已物理离场, 账已定格 → 不等
-        peak_total = sum(pt['peak'].values())
+        peak_total = sum(self._eff_peak(pt).values())
         per_tray = sum(self.item_expected.values())
         booked = sum(sum(t.values()) for t in self._done)
         remaining = self.item_target - booked
@@ -836,9 +949,9 @@ class _ContainerAccumulator:
             # 视角 (手挡着少 1-2 个)。有救账候选爬满本盘期望 → 立即结 (结算分支
             # 的救账改配它); 没爬满等满窗, 到期只要有峰值候选照样结给救账。
             for _tid, _t in self._trays.items():
-                if _tid == self._primary or not _t['peak']:
+                if _tid == self._primary or not self._has_goods(_t):
                     continue
-                best_cand = max(best_cand, sum(_t['peak'].values()))
+                best_cand = max(best_cand, sum(self._eff_peak(_t).values()))
             if expected_this > 0 and best_cand >= expected_this:
                 self._settle_defer_frames = 0
                 return False
@@ -1100,6 +1213,9 @@ class _ContainerAccumulator:
                     totals[lbl] = totals.get(lbl, 0) + c
             state['item_total_done'] = totals
             state['item_target'] = self.item_target
+        # v3.46 槽位完整性: 让操作员一眼看出"这一帧算不算数" (门没开则不下发)
+        if self.slot_check_on and self._slot_view is not None:
+            state['slot_view'] = dict(self._slot_view)
         return state
 
 
@@ -1151,6 +1267,10 @@ class _TrackingMixEngine:
                 purge_empty_primary=container_cfg.get('purge_empty_primary', False),
                 yield_primary=container_cfg.get('yield_primary', False),
                 unified_book_source=container_cfg.get('unified_book_source', False),
+                slot_check_label=container_cfg.get('slot_check_label', ''),
+                slot_total=container_cfg.get('slot_total', 0),
+                item_dedup_iou=container_cfg.get('item_dedup_iou', 0.45),
+                tray_dedup_iou=container_cfg.get('tray_dedup_iou', 0.0),
             )
         # 静态期望清单 (verdict 用, 不依赖喂帧): 与真 loader 的注入规则一致 —
         # event 行 → event_required_count; 堆叠行 → stack_required_count;
@@ -1216,8 +1336,24 @@ class _TrackingMixEngine:
         container_label = self._container.container_label if self._container else None
         action_label = getattr(self._container, 'action_label', '') if self._container else ''
         action_present = False  # 本帧"放托盘"动作标签是否在场 → 驱动动作状态机
+        # v3.46 空槽标签: 与动作标签同级的旁路信号 — 不进物品流、不进跟踪机械、
+        # 不计入任何记账总数, 只喂给槽位完整性门判断"这一帧看全了没有"
+        slot_label = getattr(self._container, 'slot_check_label', '') if self._container else ''
+        empty_slot_objs = []
         for det in detections or []:
             label = det.get('label', '')
+            if slot_label and label == slot_label:
+                threshold = conf_map.get(label)
+                if ((threshold is None or det.get('confidence', 0) >= threshold)
+                        and _in_roi(det, label)):
+                    empty_slot_objs.append({
+                        'bbox': {
+                            'x': float(det.get('x', 0)), 'y': float(det.get('y', 0)),
+                            'w': float(det.get('w', 0)), 'h': float(det.get('h', 0)),
+                        },
+                        'confidence': det.get('confidence', 0),
+                    })
+                continue
             if container_label and label == container_label:
                 threshold = conf_map.get(label)
                 if threshold is not None and det.get('confidence', 0) < threshold:
@@ -1320,7 +1456,8 @@ class _TrackingMixEngine:
                 },
             } for d in dets if _in_roi(d, d.get('label', ''))]
             self._container.update(tray_dets, item_dets_for_container, current_time,
-                                   action_present=action_present)
+                                   action_present=action_present,
+                                   empty_slot_objs=empty_slot_objs)
             # v3.44.1 错盘警报消费: 数量不对的盘刚被拒账 → 借收尾防呆提示事件
             # 报警 (事件配了「需人工确认」则整线定格, 工人取出错盘、确认后重装;
             # 配「确认后保留周期」可断点续做)。异常隔离, 绝不打断检测热路径。
@@ -1820,6 +1957,21 @@ def build_custom_mix(config: dict):
                     'custom_mix_container_yield_primary', False)),
                 'unified_book_source': bool(pipeline.get(
                     'custom_mix_container_unified_book_source', False)),
+                # v3.46 槽位完整性门 (空槽标签 + 槽位总数都配齐才开门):
+                # 货数+空槽数 == 槽位总数 的帧才抬峰值/进稳定窗口, 治遮挡残数与重复框
+                'slot_check_label': (
+                    str(pipeline.get('custom_mix_container_slot_check_label') or '')
+                    .strip()),
+                'slot_total': int(pipeline.get(
+                    'custom_mix_container_slot_total', 0) or 0),
+                # v3.46 两处重复框去重阈值 (0=关该项)。物品框缺省 0.45 = 保持
+                # v3.45 起的既有行为; 托盘框缺省 0 = 不动老项目
+                'item_dedup_iou': (
+                    0.45 if pipeline.get('custom_mix_container_item_dedup_iou') is None
+                    else max(0.0, float(
+                        pipeline.get('custom_mix_container_item_dedup_iou') or 0.0))),
+                'tray_dedup_iou': max(0.0, float(
+                    pipeline.get('custom_mix_container_tray_dedup_iou', 0) or 0)),
             }
             confirm_desc = []
             if confirm_by_frames:
@@ -1829,12 +1981,21 @@ def build_custom_mix(config: dict):
                     f"放托盘动作[{action_label}](出现≥{action_min_frames}帧/"
                     f"消失≥{action_gone_frames}帧/不应期{action_cooldown_s:g}s)")
             confirm_str = f" 进箱确认={('+' + confirm_combine.upper() + '+').join(confirm_desc) if len(confirm_desc) > 1 else (confirm_desc[0] if confirm_desc else '消失满帧')}"
+            _slot_lbl = container_cfg.get('slot_check_label') or ''
+            _slot_n = int(container_cfg.get('slot_total') or 0)
+            slot_str = (f" 槽位门=开[{_slot_lbl}]×{_slot_n}"
+                        if _slot_lbl and _slot_n > 0 else " 槽位门=关")
+            _idi = container_cfg.get('item_dedup_iou') or 0.0
+            _tdi = container_cfg.get('tray_dedup_iou') or 0.0
+            slot_str += (f" 物品框去重={f'IoU>{_idi:g}' if _idi > 0 else '关'}"
+                         f" 托盘框去重={f'IoU>{_tdi:g}' if _tdi > 0 else '关'}")
             if count_mode == 'items_total':
                 print(f"[CustomMix] 托盘容器累加器[总数模式]: 容器={clabel} "
-                      f"整箱滑块目标={container_cfg['item_target']}{confirm_str}")
+                      f"整箱滑块目标={container_cfg['item_target']}"
+                      f"{confirm_str}{slot_str}")
             else:
                 print(f"[CustomMix] 托盘容器累加器[盘计数]: 容器={clabel} 每盘期望={item_expected} "
-                      f"每箱={container_cfg['box_count']}盘{confirm_str}")
+                      f"每箱={container_cfg['box_count']}盘{confirm_str}{slot_str}")
 
     machine = CustomMixMachine(mix_type, item_cfgs,
                                item_timeout_seconds=item_timeout,

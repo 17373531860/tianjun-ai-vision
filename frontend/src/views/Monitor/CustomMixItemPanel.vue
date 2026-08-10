@@ -43,6 +43,11 @@
             实时 <span class="text-cyan-400 font-bold">{{ it.current_count }}</span>
             · 预计进箱 <span class="text-emerald-400 font-bold">{{ it.book_preview ?? it.peak_count ?? 0 }}</span>
           </div>
+          <div v-if="slotView" class="text-[0.6rem] text-center mt-0.5"
+            :class="slotView.ok ? 'text-emerald-400' : 'text-amber-400'">
+            {{ slotView.ok ? '本帧看全' : '本帧未看全' }}
+            · 货{{ slotView.items }}+空{{ slotView.empty }}={{ slotView.items + slotView.empty }}/{{ slotView.total }}
+          </div>
         </div>
         <!-- 已装托盘明细 (每盘装了多少) -->
         <div v-if="(customMixContainer.done_detail || []).length"
@@ -122,4 +127,6 @@ const customMixItemTotal = computed(() => {
   const disp = c.current_tray_items?.find(i => i.label === label)?.display_name || label;
   return { done, target: c.item_target || 0, display: disp };
 });
+// v3.46 槽位完整性门本帧结果 (门没开则后端不下发)
+const slotView = computed(() => customMixContainer.value?.slot_view || null);
 </script>

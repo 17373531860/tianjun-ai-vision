@@ -408,6 +408,19 @@
                   尾箱落账后 N 秒内等放工单动作: 等到 → 工单合格收尾; 到点没等到 → 报警 + 判 NG 收尾
                 </span>
               </el-form-item>
+              <!-- v3.46 只认等收尾之后的放工单: 治"尾箱周期里误检一次就当场收尾" -->
+              <el-form-item label="只认收尾后放的工单"
+                            v-if="form.tail_paper_order_required && form.tail_paper_as_close_action">
+                <el-switch v-model="form.tail_paper_only_after_awaiting" />
+                <span class="text-xs text-gray-400 ml-2">
+                  默认关。关 = 尾箱落账时回查步骤记录, 尾箱这一周期（含上一周期）里出现过放工单就算已放
+                  —— 允许工人封箱前先放纸, 但那个窗口里误检一次, 工单就会当场收尾, 工人其实没放也没人提醒。
+                  开 = 尾箱落账一律先挂「等放工单收尾」, 之前的检出一概不算, 只认挂起之后新做的放工单动作;
+                  非等待态的检出整条丢弃, <b>连「提前放工单」报警也不报</b>（该报警与「未放工单」共用「缺工单触发事件」档,
+                  现场若把该档设成 NG, 过程中误检一次就会刷一条 NG）。
+                  <b class="text-amber-400">代价: 工人必须在封箱之后再放工单</b>, 封箱前就放好、纸一直在画面里的会被判成没放。
+                </span>
+              </el-form-item>
               <el-form-item label="缺工单触发事件">
                 <el-select v-model="form.event_missing_paper" class="w-full" clearable
                            placeholder="默认通用报警" filterable>
@@ -700,6 +713,7 @@ const _newForm = () => ({
   tail_paper_as_close_action: false,  // v3.43 箱归周期结算/放工单归工单收尾 (默认关=老行为)
   tail_paper_scan_alarm: true,        // v3.43 扫新单发现没放工单时报警 (默认开)
   tail_paper_timeout_s: 0,            // v3.43 尾箱落账→放工单时限报警 (0=不限)
+  tail_paper_only_after_awaiting: false,  // v3.46 只认等收尾之后的放工单 (默认关)
   event_missing_paper: null,
   // 缺油嘴 gate (v3.23, 每箱查, 默认关)
   oil_nozzle_required: false,

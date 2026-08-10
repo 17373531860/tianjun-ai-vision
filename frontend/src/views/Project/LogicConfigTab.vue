@@ -294,6 +294,26 @@
                     <el-input-number v-model="project.custom_mix_container_peak_cap" :min="0" :step="1" size="small" class="!w-28" />
                     <span class="text-gray-500">0 = 关闭。防模型偶发重复框把一盘数成 25/26 后峰值卡住降不回来：设为每盘期望数（如 24）后单盘峰值最多记到该值；只封上限，少装照常判定</span>
                   </div>
+                  <!-- v3.46 槽位完整性门: 货+空槽=槽位数才采信本帧, 治遮挡残数/重复框 -->
+                  <div class="flex items-center gap-2 text-xs flex-wrap">
+                    <span class="text-gray-400 shrink-0">空槽标签</span>
+                    <el-select v-model="project.custom_mix_container_slot_check_label" size="small"
+                      class="!w-40" clearable filterable allow-create default-first-option
+                      placeholder="如：凹槽">
+                      <el-option v-for="lbl in availableLabels" :key="lbl" :label="lbl" :value="lbl" />
+                    </el-select>
+                    <span class="text-gray-400 shrink-0">每盘槽位数</span>
+                    <el-input-number v-model="project.custom_mix_container_slot_total" :min="0" :step="1" size="small" class="!w-28" />
+                    <span class="text-gray-500">⚠️ 默认关，两个都填才开门，开之前先看这段。原理是盘的物理槽位固定，本帧「货数+空槽数」= 槽位数才采信这一帧。<b class="text-amber-400">2026-08-05 实测：空槽召回不足时反而更差</b>——短装盘的空槽检不出来，倒是「重复框凑够满数 + 空槽 0」的坏帧完美满足等式被当成唯一可信帧，短装盘被记成满盘；同时挡帧会饿死「动作前稳定计数」的快照，紧凑连放时两盘并一次结算丢整盘账。只有在空槽类召回确实够高（现场逐帧核过）时才开；开则须给空槽画与物品相同的 ROI</span>
+                  </div>
+                  <!-- v3.46 两处重复框去重: 物品框原为硬编码常开, 现改可配; 托盘框新增默认关 -->
+                  <div class="flex items-center gap-2 text-xs flex-wrap">
+                    <span class="text-gray-400 shrink-0">物品框去重(IoU)</span>
+                    <el-input-number v-model="project.custom_mix_container_item_dedup_iou" :min="0" :max="1" :step="0.05" :precision="2" size="small" class="!w-24" />
+                    <span class="text-gray-400 shrink-0">托盘框去重(IoU)</span>
+                    <el-input-number v-model="project.custom_mix_container_tray_dedup_iou" :min="0" :max="1" :step="0.05" :precision="2" size="small" class="!w-24" />
+                    <span class="text-gray-500">均 0 = 关闭该项。同一个目标被模型画两个框时，重叠超过此值就只留置信度高的那个。物品框缺省 0.45（密排滑块 22 个检出 25 个的老账，建议保持）；托盘框缺省 0 关闭，一个盘被吐两个框会多挂一张空账工牌，长期在位、带着上一盘的旧数字，主位一释放就顶上去——遇到「盘数对不上/凭空多记一盘」再开，建议 0.5</span>
+                  </div>
                   <!-- 进箱确认方式：消失满帧 / 标签动作，可二选一或组合(OR/AND) -->
                   <div class="flex items-start gap-2 text-xs pt-2 border-t border-slate-700">
                     <span class="text-gray-400 shrink-0 mt-1">进箱确认方式</span>

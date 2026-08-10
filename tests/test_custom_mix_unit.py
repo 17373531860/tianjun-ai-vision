@@ -1632,6 +1632,78 @@ def test_build_container_action_thresholds_from_pipeline():
     assert m2._engine._container.action_cooldown_s == 0.0   # 显式 0 = 关闭
 
 
+def test_build_container_slot_gate_from_pipeline():
+    """空槽标签 + 槽位总数都配齐才开门; 只配一个 = 关."""
+    cfg = _base_config(mixed_with="tracking")
+    cfg["pipeline_config"].update({
+        "custom_mix_container_label": "托盘",
+        "custom_mix_container_count_mode": "items_total",
+        "custom_mix_container_item_target": 96,
+    })
+    m = build_custom_mix(cfg)
+    assert m._engine._container.slot_check_on is False
+    cfg["pipeline_config"]["custom_mix_container_slot_check_label"] = "凹槽"
+    m2 = build_custom_mix(cfg)
+    assert m2._engine._container.slot_check_on is False   # 缺槽位数仍关
+    cfg["pipeline_config"]["custom_mix_container_slot_total"] = 24
+    m3 = build_custom_mix(cfg)
+    assert m3._engine._container.slot_check_on is True
+    assert m3._engine._container.slot_check_label == "凹槽"
+    assert m3._engine._container.slot_total == 24
+
+
+def test_build_container_dedup_defaults_from_pipeline():
+    """重复框去重阈值: 物品框缺省 0.45 (保持既有行为), 托盘框缺省 0 关闭; 均可配."""
+    cfg = _base_config(mixed_with="tracking")
+    cfg["pipeline_config"].update({
+        "custom_mix_container_label": "托盘",
+        "custom_mix_container_count_mode": "items_total",
+        "custom_mix_container_item_target": 96,
+    })
+    c = build_custom_mix(cfg)._engine._container
+    assert c.item_dedup_iou == 0.45      # 没配 = v3.45 既有行为
+    assert c.tray_dedup_iou == 0.0       # 没配 = 不动老项目
+
+    cfg["pipeline_config"]["custom_mix_container_item_dedup_iou"] = 0
+    cfg["pipeline_config"]["custom_mix_container_tray_dedup_iou"] = 0.5
+    c2 = build_custom_mix(cfg)._engine._container
+    assert c2.item_dedup_iou == 0.0      # 显式 0 = 关掉物品框去重
+    assert c2.tray_dedup_iou == 0.5
+
+
+def test_container_item_dedup_switchable():
+    """物品框去重: 默认把重叠重复框滤掉; 阈值配 0 时不滤 (重复框照数)."""
+    dup = _tray_items(24, 0.0, 0.45) + [
+        {"class_name": "滑块", "bbox": {"x": 0.0085, "y": 0.5,
+                                        "w": 0.004, "h": 0.004}}]
+    on = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=4, gone_frames=3)
+    for _ in range(3):
+        on.update([_tray(0.0)], list(dup), 0.0)
+    assert on._cur_counts.get("滑块") == 24
+
+    off = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=4, gone_frames=3,
+                                item_dedup_iou=0)
+    for _ in range(3):
+        off.update([_tray(0.0)], list(dup), 0.0)
+    assert off._cur_counts.get("滑块") == 25
+
+
+def test_container_tray_dedup_switchable():
+    """托盘框去重: 默认关 → 同一个盘的两个框各挂一张工牌; 开了才并成一张."""
+    two_boxes = [dict(_tray(0.0), confidence=0.9),
+                 dict(_tray(0.01), confidence=0.6)]   # 高度重叠 = 同一个盘
+    items = _tray_items(24, 0.0, 0.45)
+
+    off = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=4, gone_frames=3)
+    off.update([dict(b) for b in two_boxes], items, 0.0)
+    assert len(off._trays) == 2          # 老行为: 一个物理盘两张工牌
+
+    on = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=4, gone_frames=3,
+                               tray_dedup_iou=0.5)
+    on.update([dict(b) for b in two_boxes], items, 0.0)
+    assert len(on._trays) == 1           # 去重后只剩置信度高的那个
+
+
 def _make_container_vsm(box_count=2, per_tray=3, gone_frames=2,
                         slider_roi=None, tray_roi=None):
     slider_row = {"id": "s3", "label": "滑块", "enabled": True,
@@ -2035,3 +2107,97 @@ def test_container_stable_snapshot_wins_over_ghost_primary():
         acc.update([stack, mover], _tray_items(4, 0.6, 0.9, y=0.75), t,
                    action_present=False); t += 0.1
     assert acc._done == [{"滑块": 24}], acc._done
+
+
+# ==================== v3.46 槽位完整性门 (空槽标签) ====================
+def _slot_acc(**kw):
+    """开了槽位门的累加器: 盘 24 个槽, 空槽标签「凹槽」."""
+    kw.setdefault("gone_frames", 3)
+    return _ContainerAccumulator("托盘", {"滑块": 24}, box_count=4,
+                                 slot_check_label="凹槽", slot_total=24, **kw)
+
+
+def _slots(n, x0, x1, y=0.52):
+    """空槽对象 (与滑块同区间错开一点 y, 中心仍落在盘框内)."""
+    return _tray_items(n, x0, x1, label="凹槽", y=y)
+
+
+def test_slot_gate_off_by_default():
+    """不配空槽标签 = 门不开, 行为与改前完全一致."""
+    acc = _ContainerAccumulator("托盘", {"滑块": 24}, box_count=4, gone_frames=3)
+    assert acc.slot_check_on is False
+    tray = _tray(0.0)
+    for _ in range(3):
+        acc.update([tray], _tray_items(20, 0.0, 0.45), 0.0)
+    # 门没开: 20 个照常抬峰值
+    assert acc._trays[acc._primary]["peak"]["滑块"] == 20
+    assert "slot_view" not in acc.to_state({"滑块": "滑块"})
+
+
+def test_slot_gate_accepts_complete_view():
+    """货 23 + 空槽 1 = 24 → 视角完整, 照常抬峰值到 23."""
+    acc = _slot_acc()
+    tray = _tray(0.0)
+    for _ in range(3):
+        acc.update([tray], _tray_items(23, 0.0, 0.40), 0.0,
+                   empty_slot_objs=_slots(1, 0.42, 0.45))
+    assert acc._trays[acc._primary]["peak"]["滑块"] == 23
+    st = acc.to_state({"滑块": "滑块"})
+    assert st["slot_view"] == {"ok": True, "items": 23, "empty": 1, "total": 24}
+
+
+def test_slot_gate_rejects_occluded_frame():
+    """手挡住一格: 货 23 + 空槽 0 = 23 ≠ 24 → 本帧不采信, 峰值不被残数抬起."""
+    acc = _slot_acc()
+    tray = _tray(0.0)
+    for _ in range(4):                       # 先给几帧完整视角: 峰值 = 22
+        acc.update([tray], _tray_items(22, 0.0, 0.40), 0.0,
+                   empty_slot_objs=_slots(2, 0.41, 0.45))
+    assert acc._trays[acc._primary]["peak"]["滑块"] == 22
+    for _ in range(4):                       # 遮挡帧: 只看到 23, 空槽一个都没看到
+        acc.update([tray], _tray_items(23, 0.0, 0.40), 0.1, empty_slot_objs=[])
+    # 残缺视角不许改写账面
+    assert acc._trays[acc._primary]["peak"]["滑块"] == 22
+    st = acc.to_state({"滑块": "滑块"})
+    assert st["slot_view"]["ok"] is False
+    assert st["current_tray_items"][0]["current_count"] == 23   # 实时数照常显示
+
+
+def test_slot_gate_rejects_duplicate_box_overcount():
+    """重复框数出 25: 25 + 0 ≠ 24 → 拦掉, 治"误检到 25 顶峰值咬死"."""
+    acc = _slot_acc()
+    tray = _tray(0.0)
+    for _ in range(3):
+        acc.update([tray], _tray_items(24, 0.0, 0.45), 0.0, empty_slot_objs=[])
+    assert acc._trays[acc._primary]["peak"]["滑块"] == 24
+    # 制造 25 个互不重叠的框 (躲开去重), 空槽 0 → 合计 25
+    for _ in range(3):
+        acc.update([tray], _tray_items(25, 0.0, 0.45), 0.1, empty_slot_objs=[])
+    assert acc._trays[acc._primary]["peak"]["滑块"] == 24
+
+
+def test_slot_gate_never_loses_a_tray():
+    """兜底: 整盘全程没有一帧看全 → 记账退回影子峰值, 绝不漏账."""
+    acc = _slot_acc()
+    tray = _tray(0.0)
+    for _ in range(5):                       # 每帧都缺一格 (空槽始终没检出)
+        acc.update([tray], _tray_items(23, 0.0, 0.45), 0.0, empty_slot_objs=[])
+    assert not acc._trays[acc._primary]["peak"]          # 真峰值一直空
+    assert acc._trays[acc._primary]["peak_raw"]["滑块"] == 23
+    for _ in range(4):                       # 盘消失 → 进箱
+        acc.update([], [], 0.1)
+    assert acc._done == [{"滑块": 23}], acc._done        # 用影子峰值记了账
+
+
+def test_slot_gate_counts_only_own_tray_slots():
+    """两盘同框: 空槽按中心归属各算各的, 不串盘 (否则完整的盘会被误判不齐)."""
+    acc = _slot_acc(gone_frames=2)
+    t1, t2 = _tray(0.0), _tray(0.5)
+    for _ in range(3):
+        acc.update([t1, t2],
+                   _tray_items(22, 0.0, 0.40) + _tray_items(24, 0.5, 0.95),
+                   0.0,
+                   empty_slot_objs=_slots(2, 0.41, 0.45))
+    tids = sorted(acc._trays)
+    assert acc._trays[tids[0]]["peak"]["滑块"] == 22     # 22+2 空槽 = 24 通过
+    assert acc._trays[tids[1]]["peak"]["滑块"] == 24     # 24+0 = 24 通过

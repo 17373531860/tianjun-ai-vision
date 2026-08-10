@@ -665,6 +665,7 @@ ORM 类 `PackagingFlowConfig`，定义于 `backend/models/mes_models.py`。
 | `event_missing_paper` | INTEGER |  |  |
 | `tail_paper_scan_alarm` | BOOLEAN |  | True |
 | `tail_paper_timeout_s` | INTEGER |  | 0 |
+| `tail_paper_only_after_awaiting` | BOOLEAN |  | False |
 | `oil_nozzle_required` | BOOLEAN |  | False |
 | `oil_nozzle_step_label` | VARCHAR(64) |  |  |
 | `event_missing_nozzle` | INTEGER |  |  |
