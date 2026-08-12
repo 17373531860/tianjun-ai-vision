@@ -330,7 +330,7 @@
             </div>
           </el-card>
 
-          <!-- B1②: MES 外推并发派发 (默认关) -->
+          <!-- B1②: MES 外推并发派发 (v3.49 起默认开) -->
           <el-card shadow="never" class="bg-slate-800 border-slate-700">
             <template #header>
               <div class="flex items-center gap-2">
@@ -340,20 +340,32 @@
             </template>
             <div class="mb-3 text-xs text-gray-500">
               控制把检测结果推送给外部 MES 系统的方式。<br>
-              关闭（默认）= 在统一队列里<b>顺序推送</b>，与旧版一致；若客户 MES 系统响应慢或断连，重试期间会拖慢扫码配对等其它处理。<br>
-              开启 = 每个工位<b>独立线程推送</b>，同工位严格保序，<b>某个工位的 MES 慢/断连不再拖累其它工位和扫码流程</b>；适合多工位且 MES 偶发卡顿的现场。<br>
+              开启（默认，v3.49 起）= 每个工位<b>独立线程推送</b>，同工位严格保序，<b>某个工位的 MES 慢/断连不再拖累其它工位和扫码流程</b>；长时间断连时积压推送自动落盘，恢复后补发不丢单。<br>
+              关闭 = 在统一队列里<b>顺序推送</b>，与旧版一致；若客户 MES 系统响应慢或断连，重试期间会拖慢扫码配对等其它处理，仅在需要严格复现旧行为时使用。<br>
               修改后<b>立即生效</b>。
             </div>
             <div class="space-y-2">
               <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
                 <div class="flex flex-col">
                   <span class="text-gray-300">每工位独立线程推送外部 MES</span>
-                  <span class="text-[10px] text-gray-500">关闭 = 统一队列顺序推；开启 = 慢 MES 不拖累其它工位</span>
+                  <span class="text-[10px] text-gray-500">开启（默认）= 慢 MES 不拖累其它工位，断连积压落盘补发；关闭 = 统一队列顺序推（旧行为）</span>
                 </div>
                 <el-switch
                   v-model="mesAsyncDispatchEnabled"
                   data-testid="mes-async-dispatch-switch"
                   @change="onMesAsyncDispatchChange"
+                />
+              </div>
+              <!-- v3.49 WS3: scan_pair 新码先上屏 -->
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="flex flex-col">
+                  <span class="text-gray-300">扫码配对：新条码立即上屏</span>
+                  <span class="text-[10px] text-gray-500">开启（默认）= 扫到新码先显示、上一箱结算在后台完成，工人不用等；关闭 = 先结算完上一箱再显示新码（旧行为，排查用）</span>
+                </div>
+                <el-switch
+                  v-model="scanPairNewFirstEnabled"
+                  data-testid="scan-pair-new-first-switch"
+                  @change="onScanPairNewFirstChange"
                 />
               </div>
             </div>
@@ -977,6 +989,49 @@
       <!-- Performance Settings Tab -->
       <el-tab-pane label="性能设置">
         <div class="space-y-6 p-4">
+          <!-- WS5(PG): 数据库信息卡片 (只读展示) -->
+          <el-card shadow="never" class="bg-slate-800 border-slate-700">
+            <template #header>
+              <div class="flex items-center gap-2">
+                <el-icon class="text-green-400"><Coin /></el-icon>
+                <span class="font-bold text-white">数据库</span>
+                <el-tag v-if="dbInfo" size="small" :type="dbInfo.dialect === 'postgresql' ? 'success' : 'info'" data-testid="db-dialect-tag">
+                  {{ dbInfo.dialect === 'postgresql' ? 'PostgreSQL' : 'SQLite' }}
+                </el-tag>
+                <el-button size="small" text class="ml-auto" @click="loadDbInfo">刷新</el-button>
+              </div>
+            </template>
+            <div v-if="dbInfo" class="space-y-2 text-sm">
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <span class="text-gray-400">位置</span>
+                <span class="text-gray-200 font-mono text-xs break-all">{{ dbInfo.location || '—' }}</span>
+              </div>
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <span class="text-gray-400">服务端版本</span>
+                <span class="text-gray-200">{{ dbInfo.server_version || '—' }}</span>
+              </div>
+              <div v-if="dbInfo.dialect !== 'postgresql' && dbInfo.file_size_bytes != null"
+                   class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <span class="text-gray-400">文件大小（含 WAL）</span>
+                <span class="text-gray-200">{{ (dbInfo.file_size_bytes / 1024 / 1024).toFixed(1) }} MB</span>
+              </div>
+              <div v-if="dbInfo.pool" class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <span class="text-gray-400">连接池</span>
+                <span class="text-gray-200">{{ dbInfo.pool.checked_out }} 使用中 / {{ dbInfo.pool.size }} 池容量（溢出 {{ dbInfo.pool.overflow }}）</span>
+              </div>
+              <el-alert v-if="dbInfo.dialect !== 'postgresql'" type="info" :closable="false" show-icon>
+                <template #default>
+                  <div class="text-xs text-gray-300">
+                    切换 PostgreSQL：在用户数据目录放置 <code>db_config.json</code>（内容
+                    <code>{"database_url": "postgresql+psycopg2://用户:密码@主机:端口/库名"}</code>），
+                    先用迁移工具搬数据并校验，再重启应用生效。
+                  </div>
+                </template>
+              </el-alert>
+            </div>
+            <div v-else class="text-gray-500 text-sm p-3">数据库信息加载中…</div>
+          </el-card>
+
           <!-- 视频流设置 -->
           <el-card shadow="never" class="bg-slate-800 border-slate-700">
             <template #header>
@@ -1880,7 +1935,7 @@ import { useSystemStore } from '@/store/useSystemStore';
 import { useProjectStore } from '@/store/useProjectStore';
 import { usePluginStore } from '@/store/usePluginStore';
 import { usePluginThemeStore } from '@/store/usePluginThemeStore';
-import { Top, Monitor, Box, Bell, Edit, VideoCamera, Cpu, Refresh, DataLine, Lightning, Aim, User, Plus, Close, Minus, Loading } from '@element-plus/icons-vue';
+import { Top, Monitor, Box, Bell, Edit, VideoCamera, Cpu, Refresh, DataLine, Lightning, Aim, User, Plus, Close, Minus, Loading, Coin } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { getProjectDetail } from '@/api/project';
 import api from '@/api/index';
@@ -2563,9 +2618,21 @@ async function onStartupReadyGateChange(val) {
   }
 }
 
-// ========== B1②: MES 外推并发派发开关 (默认关) ==========
+// ========== WS5(PG): 数据库信息卡片 ==========
+const dbInfo = ref(null);
+
+async function loadDbInfo() {
+  try {
+    const res = await api.get('/system/db-info');
+    dbInfo.value = res?.data || null;
+  } catch (e) {
+    console.warn('加载数据库信息失败:', e?.message);
+  }
+}
+
+// ========== B1②: MES 外推并发派发开关 (v3.49 起默认开) ==========
 // 后端 SystemConfig(mes_async_dispatch) 为准, 立即生效。
-const mesAsyncDispatchEnabled = ref(false);
+const mesAsyncDispatchEnabled = ref(true);
 
 async function loadMesAsyncDispatchConfig() {
   try {
@@ -2584,6 +2651,30 @@ async function onMesAsyncDispatchChange(val) {
   } catch (e) {
     ElMessage.error('保存 MES 外推并发派发配置失败: ' + (e?.response?.data?.detail || e?.message || ''));
     mesAsyncDispatchEnabled.value = !val;
+  }
+}
+
+// ========== v3.49 WS3: scan_pair 新码先上屏开关 (默认开) ==========
+// 后端 SystemConfig(scan_pair_new_code_first) 为准, 立即生效。
+const scanPairNewFirstEnabled = ref(true);
+
+async function loadScanPairNewFirstConfig() {
+  try {
+    const res = await api.get('/scanner/scan-pair/new-code-first');
+    scanPairNewFirstEnabled.value = res?.data?.enabled === true;
+  } catch (e) {
+    console.warn('加载扫码配对新码先上屏配置失败:', e?.message);
+  }
+}
+
+async function onScanPairNewFirstChange(val) {
+  dbg('settings.ops', '切换扫码配对新码先上屏', `enabled=${!!val}`);
+  try {
+    await api.put('/scanner/scan-pair/new-code-first', { enabled: !!val });
+    ElMessage.success(val ? '已开启, 扫到新码立即上屏, 上一箱结算后台完成' : '已关闭, 恢复先结算后上屏 (旧行为)');
+  } catch (e) {
+    ElMessage.error('保存扫码配对新码先上屏配置失败: ' + (e?.response?.data?.detail || e?.message || ''));
+    scanPairNewFirstEnabled.value = !val;
   }
 }
 
@@ -2729,6 +2820,8 @@ onMounted(async () => {
   loadStartupReadyGateConfig();  // v3.23.x: 加深启动就绪门槛开关
   loadPolling();  // B3: 各管理面板轮询间隔
   loadMesAsyncDispatchConfig();  // B1②: MES 外推并发派发开关
+  loadScanPairNewFirstConfig();  // v3.49 WS3: 扫码配对新码先上屏开关
+  loadDbInfo();  // WS5(PG): 数据库信息卡片
   await loadProjectDetection();
 });
 

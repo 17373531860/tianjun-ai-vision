@@ -12,6 +12,9 @@
 > - `source_model_load_mixin.py` / `source_detect_runners_mixin.py` / `source_lifecycle_mixin.py`：MPS 触点全部走 `backend/core/torch_device.py` 的 `mps_guard()`（全局 `MPS_LOCK` RLock 串行，治 macOS 多通道并发 Metal 断言弑进程；CUDA 路径零影响）
 > - 新增 `backend/api/interconnect.py`（175 行，8 端点，见 05 册互连家族节）
 >
+> **v3.49 补账（2026-08-12，捷昌整改批次）**：
+> - `api/system_display.py`：新增 **`GET /system/db-info`**（WS5）——返回 dialect / 脱敏 DSN 位置（密码恒不下发）/ 连接状态 / 服务端版本 / 连接池水位（SQLite 回 pool=null + 文件大小），Settings 性能设置页数据库卡片的数据源。
+>
 > **v3.41 增量复核（2026-07-17）**：source/检测核心域按 `git diff a23a8d2..HEAD` 补账 v3.33~v3.41 九个版本变更。各条目内新增「v3.3x 变更」行；1.4 / 1.5 表下补增量清单；新建 `source_persist_worker.py`（v3.38）完整条目并补录 `source_region_events.py` / `source_region_events_mixin.py`（v3.32 落地时漏收）。受影响文件的行数标注与漂移行号已按当前代码刷新。
 >
 > **v3.44 补账（2026-07-22）**：NG 处置整改批次，source 族 10 文件——

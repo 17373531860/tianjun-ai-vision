@@ -3962,10 +3962,14 @@ const displayWorkpiece = computed(() => {
 });
 
 // 真实工件变化（新扫码绑了新工件）立即恢复默认显示，清掉残留的 override
+// v3.49 WS3: 记录"新码刚上屏"时刻——scan_pair 新序下新码先显示、旧周期结果后到,
+// 结果盖章逻辑据此跳过, 避免把上一箱的 OK/NG 贴到新码头上 / 把新码压回"等待扫码"。
+let lastWpSnChange = { sn: null, at: 0 };
 watch(
   () => mesData.value?.workpiece?.serial_no,
   (newSn, oldSn) => {
     if (newSn && newSn !== oldSn) {
+      lastWpSnChange = { sn: newSn, at: Date.now() };
       if (workpieceOverrideTimer) { clearTimeout(workpieceOverrideTimer); workpieceOverrideTimer = null; }
       if (workpieceHideTimer) { clearTimeout(workpieceHideTimer); workpieceHideTimer = null; }
       workpieceOverride.value = undefined;
@@ -5853,17 +5857,27 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
     // 当作"上限". 现在改为"至少持续到下一轮真正开始".
 
     // 工件卡片：把"检测中"替换成本轮最终结果(OK/NG)保留一会儿，之后清空回到"等待扫码..."
+    // v3.49 WS3: scan_pair 新序下新码先上屏、旧周期结果后到——此刻 mesData.workpiece
+    // 已是新码, 结果不属于它: 既不能把 OK/NG 贴到新码头上, 也不能到点强制"等待扫码"
+    // 把新码压掉。判据: 当前 sn 就是"刚换上的新码"(5s 内) → 跳过盖章, 保持新码显示。
     const cycleIsNg = lastNgCount >= 0 && currentNg > lastNgCount;
     const realWp = mesData.value?.workpiece;
-    if (realWp) {
+    const wpJustRotated = realWp && realWp.serial_no
+      && realWp.serial_no === lastWpSnChange.sn
+      && (Date.now() - lastWpSnChange.at) < 5000;
+    if (realWp && !wpJustRotated) {
       if (workpieceOverrideTimer) { clearTimeout(workpieceOverrideTimer); workpieceOverrideTimer = null; }
       if (workpieceHideTimer) { clearTimeout(workpieceHideTimer); workpieceHideTimer = null; }
+      const overrideSn = realWp.serial_no;
       workpieceOverride.value = {
         ...realWp,
         status: cycleIsNg ? 'ng' : 'ok',
       };
       workpieceHideTimer = setTimeout(() => {
-        workpieceOverride.value = null; // 清空 → 模板显示"等待扫码..."
+        // 守护: 若真实工件已换成新码 (override 挂着期间轮转), 跟随真实数据显示新码,
+        // 不再强制"等待扫码"。
+        const curSn = mesData.value?.workpiece?.serial_no;
+        workpieceOverride.value = (curSn && curSn !== overrideSn) ? undefined : null;
         workpieceHideTimer = null;
       }, WORKPIECE_RESULT_HOLD_MS);
     }

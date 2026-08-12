@@ -590,15 +590,92 @@ def _perform_auto_cleanup_safe():
 
 @router.get("/backup/database")
 def backup_database():
-    """备份数据库文件，下载 sql_app.db"""
-    db_path = os.path.abspath(os.path.join(settings.UPLOAD_DIR, "..", "sql_app.db"))
-    if not os.path.exists(db_path):
-        raise HTTPException(status_code=404, detail="数据库文件不存在")
+    """备份数据库并下载。
+
+    - SQLite: 直接下载 sql_app.db 文件（历史行为不变）。
+    - PostgreSQL: 调 pg_dump 导出 custom 格式 (.dump)，可用 pg_restore 恢复。
+      pg_dump 不在 PATH 时返回 500 + 明确指引，绝不静默给出错误备份。
+    """
+    from backend.db.database import get_dialect
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if get_dialect() != "postgresql":
+        db_path = os.path.abspath(os.path.join(settings.UPLOAD_DIR, "..", "sql_app.db"))
+        if not os.path.exists(db_path):
+            raise HTTPException(status_code=404, detail="数据库文件不存在")
+        return FileResponse(
+            path=db_path,
+            filename=f"sql_app_backup_{timestamp}.db",
+            media_type="application/octet-stream",
+        )
+    return _backup_postgres(timestamp)
+
+
+def _backup_postgres(timestamp: str):
+    """pg_dump -Fc 导出到临时文件后下载，响应发送完自动删除临时文件。"""
+    import shutil as _shutil
+    import subprocess
+    import tempfile
+    from starlette.background import BackgroundTask
+
+    from backend.db.database import engine
+
+    pg_dump = _shutil.which("pg_dump")
+    if not pg_dump:
+        raise HTTPException(
+            status_code=500,
+            detail="未找到 pg_dump（PostgreSQL 客户端工具）。请安装 PG 客户端并加入 PATH，"
+                   "或在数据库服务器上手动执行 pg_dump 备份。",
+        )
+
+    url = engine.url
+    env = dict(os.environ)
+    if url.password:
+        env["PGPASSWORD"] = str(url.password)
+    cmd = [pg_dump, "-Fc", "--no-owner"]
+    if url.host:
+        cmd += ["-h", url.host]
+    if url.port:
+        cmd += ["-p", str(url.port)]
+    if url.username:
+        cmd += ["-U", url.username]
+    cmd += ["-d", url.database or "tianjun"]
+
+    fd, tmp_path = tempfile.mkstemp(prefix="tianjun_pg_backup_", suffix=".dump")
+    os.close(fd)
+    try:
+        proc = subprocess.run(
+            cmd + ["-f", tmp_path], env=env,
+            capture_output=True, text=True, timeout=600,
+        )
+        if proc.returncode != 0:
+            raise HTTPException(
+                status_code=500,
+                detail=f"pg_dump 失败: {(proc.stderr or '').strip()[:500]}",
+            )
+    except HTTPException:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
+    except Exception as e:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise HTTPException(status_code=500, detail=f"pg_dump 执行异常: {e}")
+
+    def _cleanup(path=tmp_path):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
     return FileResponse(
-        path=db_path,
-        filename=f"sql_app_backup_{timestamp}.db",
+        path=tmp_path,
+        filename=f"tianjun_pg_backup_{timestamp}.dump",
         media_type="application/octet-stream",
+        background=BackgroundTask(_cleanup),
     )
 
 

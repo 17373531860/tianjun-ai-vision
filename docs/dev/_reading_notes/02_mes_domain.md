@@ -28,10 +28,17 @@
 > - PackagingFlowConfig 新 11 列与迁移 m0004/m0005 见 `03_data_plugin.md`。
 >
 > **v3.47 补账（2026-08-07）**：MES 域本轮仅一处触碰——`mes_models.py` `DefectRecord.cycle_id` 补索引（`index=True`，老库走迁移 `m0007_defect_cycle_index`），为开机首启的孤儿缺陷扫描按 cycle_id 关联探查提速（feat/system-optimize 六项之一）。services/api 层零变更。
+>
+> **v3.49 补账（2026-08-12，捷昌整改批次 WS1~WS4）**：
+> - `mes_hooks.py`（→2104 行）：①**WS1 外推并发派发**——B1② 执行器族从"每工位"重构为**每网关连接**独立 `ThreadPoolExecutor(1)`（同连接 FIFO 保序、连接间并发，慢/挂连接不再互堵），积压超上限落盘 **`gateway_spool.jsonl`** 恢复后补发（与 `mes_hook_spool.jsonl` 分文件），`mes_async_dispatch` 默认值改**开**；box_complete 集群汇总推送同走异步。②**WS3 scan_pair 新码先上屏**——`_handle_scan_pair_event` 新序：先 `_scan_pair_promote_pending` 顶替上屏+提交扫码状态，再用**显式 `prev_wp_id`/`prev_scanned_at`** 调 `_dispatch_scan_pair_settle` 异步结算旧窗口（顶替后 `_inspecting_workpiece` 已是新工件，结算身份必须走显式传参不能回读）；开关 `scan_pair_new_code_first`（SystemConfig，默认开，关=回退旧序）。③**广播兄弟通道结算串身份修复**——广播超时/停止结算身份改 `_inspecting_workpiece.get(channel_id) or entry.get("wp_id")`，每通道各归各账（老代码统一拿主通道 wp_id）。④**WS4 耗时埋点**——扫码处理/窗口结算/外推派发关键路径打 `backend.timing` 分段耗时点（debug_center 新类目，见 05 册）。
+> - `mes_gateway.py`（→881 行）：每连接**重试预算** `retry_budget_sec`（读自连接 **config JSON**，非顶层列；0=不限），重试循环按预算钳制总耗时，防单条推送重试黑洞。
+> - `cluster_collector.py`（→1428 行）：**WS2 副机上报异步化**——`report_to_master` 改独立发送线程+内存队列（结算路径只入队即返回），失败落盘 **`cluster_report_spool.jsonl`** 恢复后按序重放；`report_timeout_sec`/`report_async` 进 ClusterConfig 可配（默认异步开/10s）；新增 `get_report_queue_status()`（queued/spooled/spool_replayed_total）。
+> - api 层：`mes_gateway.py` 新增 `GET/PUT /async-dispatch`；`scanner.py` 新增 `GET/PUT /scan-pair/new-code-first`；`cluster.py` 新增 `GET /report-status` + `/config` 面扩 `report_timeout_sec`/`report_async`。
+> - 回归：`test_mes_async_dispatch_b1b.py`（扩）/ `test_mes_gateway_dispatch_isolation.py`（扩）/ `test_cluster_report_async.py`（新）/ `test_scan_pair_new_first.py`（新）/ `test_scan_pair_three_window_gold.py`（新，三窗金标准含双通道广播）/ `test_timing_probe_ws4.py`（新）。
 
 ## 一、逐文件档案
 
-### 1. backend/services/mes_hooks.py（1784 行，v3.41 复核）
+### 1. backend/services/mes_hooks.py（2104 行，v3.49 复核）
 
 **职责一句话**：MES 检测引擎回调管理器——检测状态机（source.py）与 MES 子系统（工件/工单/缺陷/外推/集群）之间的唯一异步桥，5 个 hook 全部经内存队列由单条后台线程消费，保证不阻塞检测帧率。
 
@@ -187,7 +194,7 @@
 - L103（同目录多规则合并）："mtime 策略不加保险, 其余取最严 (宁严勿松), 与 export_snapshot 口径一致"。
 - L209（同通道命中多目录）："后者覆盖前者 (罕见配置, 取扫描顺序最后一个)"。
 
-### 3. backend/services/mes_gateway.py（860 行，v3.41 复核）
+### 3. backend/services/mes_gateway.py（881 行，v3.49 复核）
 
 **职责一句话**：MES 外部对接网关（出站推送侧）——把 cycle/session/box 等事件按连接配置（push_events 过滤 + bound_channels 过滤）分发到对应适配器，带重试/退避/4xx 策略、推送熔断器（v3.38）、截图注入、物料名映射、鉴权头合成、报警去重与在途报警台账登记，每次通讯写 MESCommLog。注意：**6 种推送适配器本身不在本文件**（v3.35 起含 database 直写，见 §3.1），在 `backend/services/mes_adapters/` 子包，本文件通过 `get_adapter(conn.adapter_type)`（L442）取用。
 
@@ -329,7 +336,7 @@
 - L497-500（PullScheduler 设计要点）："错误隔离: 单条连接拉取失败不影响其他连接…启动即先拉一次 (last_run=0), 满足客户'开机就同步当班工单'"。
 - 注意：模块头注释 L34 写 triggers 支持 `"on_scan": false`，但全文件搜不到 on_scan 的消费代码（调度器只看 scheduled）——疑似规划了未实现，记入疑点清单。
 
-### 6. backend/services/cluster_collector.py（1205 行）
+### 6. backend/services/cluster_collector.py（1428 行，v3.49 复核）
 
 **职责一句话**：集群数据汇总服务——主机接收本地/远程工位的 cycle 结果（BoxAggregation 表），按 box_serial 聚齐 expected_stations 后生成 BoxSummary 并推 MES `box_complete`；副机侧提供上报主机 + 定时心跳；超时未齐按策略推 `box_timeout` 或仅标记。
 

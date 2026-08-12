@@ -1037,6 +1037,7 @@ def build_range_context(db: DBSession,
     """
     from backend.models.models import DetectionSession, DetectionCycle, StepRecord
     from sqlalchemy import func as sa_func
+    from backend.db.sql_compat import date_str, sum_bool
 
     ctx = _empty_context()
     _fill_app_display_license_system(ctx, db, license_payload)
@@ -1125,9 +1126,9 @@ def build_range_context(db: DBSession,
     # 按日聚合 daily_stats[]
     if sids:
         rows = db.query(
-            sa_func.date(DetectionCycle.start_time).label("d"),
+            date_str(DetectionCycle.start_time).label("d"),
             sa_func.count(DetectionCycle.id),
-            sa_func.sum(DetectionCycle.is_good == True),  # noqa: E712
+            sum_bool(DetectionCycle.is_good == True),  # noqa: E712
         ).filter(DetectionCycle.session_id.in_(sids)).group_by("d").order_by("d").all()
         for d, total, good in rows:
             good = int(good or 0)
@@ -1180,7 +1181,7 @@ def build_range_context(db: DBSession,
         step_rows = db.query(
             StepRecord.step_label,
             sa_func.count(StepRecord.id),
-            sa_func.sum(StepRecord.is_valid == True),  # noqa: E712
+            sum_bool(StepRecord.is_valid == True),  # noqa: E712
             sa_func.avg(StepRecord.duration),
             sa_func.min(StepRecord.duration),
             sa_func.max(StepRecord.duration),

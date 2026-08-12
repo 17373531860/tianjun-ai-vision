@@ -1188,6 +1188,28 @@
       ],
       "title": "Master Url"
      },
+     "report_async": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Report Async"
+     },
+     "report_timeout_sec": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Report Timeout Sec"
+     },
      "role": {
       "anyOf": [
        {
@@ -9249,6 +9271,17 @@
     "title": "ScanInput",
     "type": "object"
    },
+   "ScanPairNewFirstToggle": {
+    "properties": {
+     "enabled": {
+      "default": true,
+      "title": "Enabled",
+      "type": "boolean"
+     }
+    },
+    "title": "ScanPairNewFirstToggle",
+    "type": "object"
+   },
    "ScanPairStopRequest": {
     "properties": {
      "channel_id": {
@@ -15215,6 +15248,27 @@
     ]
    }
   },
+  "/api/v1/cluster/report-status": {
+   "get": {
+    "description": "返回副机→主机上报链路的实时状态。\n\n含内存队列深度(queued)、落盘积压条数(spooled)、累计补发数\n(spool_replayed_total)等字段，供 ClusterPanel 状态区展示。",
+    "operationId": "report_status_api_v1_cluster_report_status_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "副机上报链路状态",
+    "tags": [
+     "Cluster",
+     "Cluster"
+    ]
+   }
+  },
   "/api/v1/cluster/slaves": {
    "get": {
     "description": "查询当前在线的副机",
@@ -15238,7 +15292,7 @@
   },
   "/api/v1/data/backup/database": {
    "get": {
-    "description": "备份数据库文件，下载 sql_app.db",
+    "description": "备份数据库并下载。\n\n- SQLite: 直接下载 sql_app.db 文件（历史行为不变）。\n- PostgreSQL: 调 pg_dump 导出 custom 格式 (.dump)，可用 pg_restore 恢复。\n  pg_dump 不在 PATH 时返回 500 + 明确指引，绝不静默给出错误备份。",
     "operationId": "backup_database_api_v1_data_backup_database_get",
     "responses": {
      "200": {
@@ -20251,6 +20305,7 @@
   },
   "/api/v1/mes/gateway/async-dispatch": {
    "get": {
+    "description": "返回 MES 网关外推「并发派发」开关当前值（默认开）。",
     "operationId": "get_async_dispatch_api_v1_mes_gateway_async_dispatch_get",
     "responses": {
      "200": {
@@ -20262,13 +20317,14 @@
       "description": "Successful Response"
      }
     },
-    "summary": "Get Async Dispatch",
+    "summary": "读取 MES 外推并发派发开关",
     "tags": [
      "MES-Gateway",
      "MES-Gateway"
     ]
    },
    "put": {
+    "description": "开=外推按连接甩到独立执行器，慢/挂的客户 MES 不阻塞 hook 队列，\n积压超上限落盘 gateway_spool.jsonl 恢复后补发；关=回退旧内联派发。\n\n存 SystemConfig(mes_async_dispatch)，即时生效无需重启。",
     "operationId": "set_async_dispatch_api_v1_mes_gateway_async_dispatch_put",
     "requestBody": {
      "content": {
@@ -20300,7 +20356,7 @@
       "description": "Validation Error"
      }
     },
-    "summary": "Set Async Dispatch",
+    "summary": "设置 MES 外推并发派发开关",
     "tags": [
      "MES-Gateway",
      "MES-Gateway"
@@ -26188,6 +26244,66 @@
     ]
    }
   },
+  "/api/v1/scanner/scan-pair/new-code-first": {
+   "get": {
+    "description": "返回 scan_pair 配对模式「新码先上屏」开关当前值（默认开）。",
+    "operationId": "get_scan_pair_new_first_api_v1_scanner_scan_pair_new_code_first_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "读取 scan_pair 新码先上屏开关",
+    "tags": [
+     "Scanner",
+     "Scanner"
+    ]
+   },
+   "put": {
+    "description": "开=新码到达先顶替上屏、旧窗口用显式身份异步结算；关=回退旧序（先结算再上屏）。\n\n存 SystemConfig(scan_pair_new_code_first)，即时生效无需重启。",
+    "operationId": "set_scan_pair_new_first_api_v1_scanner_scan_pair_new_code_first_put",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ScanPairNewFirstToggle"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "设置 scan_pair 新码先上屏开关",
+    "tags": [
+     "Scanner",
+     "Scanner"
+    ]
+   }
+  },
   "/api/v1/scanner/scan-pair/stop": {
    "post": {
     "description": "v3.3.0 在停止检测 / 进入待机时由前端调用, 收尾最后一码窗口.\n\n前端流程: 用户点击 '停止检测'/'待机' → 先调 GET /scan-pair/active 查到\nactive_serial 非空 → 弹弹窗 [丢弃] [结算] (默认结算) → 调本接口 → 真正停止.",
@@ -30530,6 +30646,30 @@
     "summary": "Upload Video",
     "tags": [
      "source"
+    ]
+   }
+  },
+  "/api/v1/system/db-info": {
+   "get": {
+    "description": "返回当前数据库 dialect、脱敏 DSN、连接状态与服务端版本。\n\n只读展示用（Settings 数据库卡片）。DSN 中的密码恒不下发。",
+    "operationId": "get_db_info_api_v1_system_db_info_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Get Db Info Api V1 System Db Info Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "当前数据库信息",
+    "tags": [
+     "system"
     ]
    }
   },

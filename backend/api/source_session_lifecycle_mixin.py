@@ -1466,7 +1466,8 @@ class SessionLifecycleMixin:
 
     # ============== v3.3.0 码-码闭环结算 (bind_timing="scan_pair") ==============
 
-    def _ensure_cycle_for_scan_pair_settle(self) -> bool:
+    def _ensure_cycle_for_scan_pair_settle(self, prev_wp_id: int = None,
+                                            prev_scanned_at: float = None) -> bool:
         """v3.4.2 hotfix: scan_pair 模式不走 start_cycle 路径, current_cycle_id
         永远是 None → end_cycle 早返回 → 不调 on_cycle_end → 工件 set_result /
         外部 MES 推送 / 集群汇总 全都不发生. 这里在 settle 触发 _trigger_event
@@ -1475,6 +1476,10 @@ class SessionLifecycleMixin:
 
         cycle.start_time 取上一码 _scan_pair_active.scanned_at (即 ScanPair 真实
         起点), 让 cycle 表里时长跟 _trigger_event log 的 "周期时间(OK)" 一致.
+
+        v3.49 WS3: prev_wp_id / prev_scanned_at 显式钳制被结算窗口的身份。
+        新码先上屏路径下 _inspecting_workpiece / _scan_pair_active 已指向新码,
+        隐式读会把旧周期绑到新工件头上; 不传时保留隐式读 (旧序 / 超时 / 停止兼容)。
         """
         # v3.38: 看 uuid (id 可能在落库线程尚未回填, 只看 id 会重复建行)
         if getattr(self, "current_cycle_uuid", None):
@@ -1484,7 +1489,7 @@ class SessionLifecycleMixin:
         if not getattr(self, "_mes_hook", None):
             return False
         ch = getattr(self, "channel_id", 0)
-        wp_id = self._mes_hook._inspecting_workpiece.get(ch)
+        wp_id = prev_wp_id or self._mes_hook._inspecting_workpiece.get(ch)
         if not wp_id:
             # 没绑工件就不起 cycle, 让 _trigger_event/end_cycle 走原 fallback
             # 路径 (counters +1, 不写 cycle 行, 不发集群 — 跟修前一样).
@@ -1501,12 +1506,13 @@ class SessionLifecycleMixin:
             self.current_cycle_number += 1
             cycle_uuid = str(uuid.uuid4())[:8]
 
-            scanned_at = None
-            try:
-                sp = self._mes_hook._scan_pair_active.get(ch) or {}
-                scanned_at = sp.get("scanned_at")
-            except Exception:
-                scanned_at = None
+            scanned_at = prev_scanned_at
+            if not scanned_at:
+                try:
+                    sp = self._mes_hook._scan_pair_active.get(ch) or {}
+                    scanned_at = sp.get("scanned_at")
+                except Exception:
+                    scanned_at = None
             start_dt = _dt.fromtimestamp(scanned_at) if scanned_at else now
 
             cycle = DetectionCycle(
@@ -1548,8 +1554,13 @@ class SessionLifecycleMixin:
                   flush=True)
             return False
 
-    def settle_for_scan_pair(self, *, force_ng: bool = False, reason: str = "") -> int:
+    def settle_for_scan_pair(self, *, force_ng: bool = False, reason: str = "",
+                             prev_wp_id: int = None,
+                             prev_scanned_at: float = None) -> int:
         """v3.3.0 由 mes_hooks 在扫码 B 到达 (或超时) 时调用, 结算当前周期 / 容器.
+
+        v3.49 WS3: prev_wp_id / prev_scanned_at 显式钳制被结算窗口身份
+        (新码先上屏后共享 dict 已指向新码), 透传给 _ensure_cycle_for_scan_pair_settle.
 
         与 force_settle_pending_cycle 的区别:
           - 不依赖 min_items 件数门槛, 完全按"曾齐过"sticky flag 判 OK/NG.
@@ -1573,7 +1584,8 @@ class SessionLifecycleMixin:
         try:
             # v3.4.2 hotfix: 确保有 cycle 行 (用上一码扫码时间作 start_time),
             # 否则下游 end_cycle → on_cycle_end → 集群分发 整条链路全断.
-            self._ensure_cycle_for_scan_pair_settle()
+            self._ensure_cycle_for_scan_pair_settle(
+                prev_wp_id=prev_wp_id, prev_scanned_at=prev_scanned_at)
             pcfg = (self.project_config.get("pipeline_config") or {}) if self.project_config else {}
             expected_items = pcfg.get("counting_expected_items", {}) or {}
 

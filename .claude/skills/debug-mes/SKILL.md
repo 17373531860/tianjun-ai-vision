@@ -797,3 +797,28 @@ curl http://localhost:8001/api/v1/cluster/slaves
 - **NG 箱账挂起**（`packaging_flow_coordinator.py`）：NG 事件带「需人工确认」→ 箱账进 `pending_remediation(reason=ng_ack)` 不落账不翻页；确认弹窗二选一（认NG落账进下一箱 / 重做本箱不记NG），`resolve_channel_hold_on_ack` 由 ack 接口统一收口，超时自动确认按"重做"。与 v3.23 少装挂起共用状态位，**按 reason 分流**（前端包装卡已分横幅）。排"箱号翻早了/重做重错箱"先查这里。
 - **工单收尾快照**：完成/作废的工单存 `_last_done`，`get_display_state` 供 UI 轮询返回快照直到新单顶掉；`get_state` 语义不变（在途才有值，扫码/结算判定用）。**别把内部判定改成 display 口径**——会把已收尾工单当在途。
 - **秤串口延迟治本**（`external_device_protocols.py`）：读串口"有多少收多少"（`in_waiting`）+ 帧读取见帧尾立即交货（无分隔符 ~60ms 静默兜底）。现场再报"数值条慢 2 秒"先确认没人把 `ser.read(固定大块)` 改回去。回归：`tests/test_extdev_serial_latency.py`。
+
+---
+
+## v3.49.0 补充：外推并发派发 + scan_pair 新码先上屏（捷昌整改 WS1/WS3）
+
+三个新开关全存 SystemConfig、默认开、即时生效，现场异常可一键回退不用回滚版本：
+
+### 外推并发派发（WS1）
+
+- **旧痛点**：网关外推在 hook 队列内联串行——一个慢/挂的客户 MES 连接堵住全部后续任务（含结算关键路径），"扫码后卡好几秒"的头号嫌疑
+- **机制**（`mes_hooks.py` + `mes_gateway.py`）：开关 `mes_async_dispatch`（`GET/PUT /api/v1/mes/gateway/async-dispatch`）开时外推按**连接**甩独立执行器并发派发；单连接积压超上限落盘 **`gateway_spool.jsonl`** 恢复后补发；box_complete 集群汇总推送同样走异步
+- **每连接重试预算** `retry_budget_sec`：存连接 **config JSON 内**（不是顶层字段！UAT 踩过），GatewayPanel 弹窗可编辑，0=不限预算
+- 排查：外推没到客户 MES → 先看 spool 文件是否堆积（连接一直挂）；再看 `mes_comm_logs`。回归 `tests/test_mes_async_dispatch_b1b.py` + `tests/test_mes_gateway_dispatch_isolation.py`
+
+### scan_pair 新码先上屏（WS3）
+
+- **旧痛点**（捷昌第一工位）：旧序"先结算前一件（含慢 IO）→ 再顶替新码上屏"，前一件结算多慢新码就多久不上屏
+- **新序**：新码到达**先顶替上屏 → 提交扫码状态 → 用显式 `prev_wp_id`/`prev_scanned_at` 异步结算旧窗口**。结算范围用显式身份钳制——顶替之后 `_inspecting_workpiece` 已是新工件，绝不能再从它取"上一件"身份（这是新序最大陷阱）
+- 开关 `scan_pair_new_code_first`（`GET/PUT /api/v1/scanner/scan-pair/new-code-first`，Settings 显示设置页有 UI），关=回退旧序
+- **广播兄弟通道结算串身份修复**（同批 BUG-001）：广播结算身份改 `_inspecting_workpiece.get(channel_id) or entry.get("wp_id")`——老代码统一拿主通道 wp_id，兄弟通道超时/停止结算会记错工件账。改广播结算路径必须保住 per-channel 取身份
+- 金标准回归：`tests/test_scan_pair_three_window_gold.py`（A→B→C 三窗连续 + 新旧序对照 + 超时收窗 + 双通道广播 + 重复扫码/停止丢弃六剧本）+ `tests/test_scan_pair_new_first.py`
+
+### 结算耗时埋点（WS4）
+
+- `debug_center` 新增 **`backend.timing`** 类目：扫码处理/窗口结算/MES 外推分段耗时。现场"卡"不再靠猜——调试日志中心筛 `backend.timing` 直接看哪段吃掉的时间。回归 `tests/test_timing_probe_ws4.py`

@@ -494,6 +494,34 @@ def settle_scan_pair_for_stop(req: ScanPairStopRequest):
         raise HTTPException(500, f"settle_scan_pair_for_stop failed: {e}")
 
 
+# ==================== v3.49 WS3: scan_pair 新码先上屏开关 (默认开) ====================
+# 开(默认) → 扫码 B 到达先开新窗 + promote 上屏, 再结算上一窗口 (结算身份显式钳制);
+# 显式关 → 旧序 (先结算后上屏), 排查回退用。存 SystemConfig(scan_pair_new_code_first)。
+
+class ScanPairNewFirstToggle(BaseModel):
+    enabled: bool = True
+
+
+@router.get("/scan-pair/new-code-first", summary="读取 scan_pair 新码先上屏开关")
+def get_scan_pair_new_first():
+    """返回 scan_pair 配对模式「新码先上屏」开关当前值（默认开）。"""
+    from backend.services.mes_hooks import get_mes_hook
+    return {"enabled": get_mes_hook().get_scan_pair_new_first()}
+
+
+@router.put("/scan-pair/new-code-first", summary="设置 scan_pair 新码先上屏开关",
+            dependencies=[Depends(require_perm("settings.edit"))])
+def set_scan_pair_new_first(body: ScanPairNewFirstToggle):
+    """开=新码到达先顶替上屏、旧窗口用显式身份异步结算；关=回退旧序（先结算再上屏）。
+
+    存 SystemConfig(scan_pair_new_code_first)，即时生效无需重启。
+    """
+    from backend.services.mes_hooks import get_mes_hook
+    hook = get_mes_hook()
+    hook.set_scan_pair_new_first(body.enabled)
+    return {"status": "success", "enabled": hook.get_scan_pair_new_first()}
+
+
 # ==================== v3.4.2 "禁用扫码"按工位开关 ====================
 
 class ScannerDisableToggleRequest(BaseModel):

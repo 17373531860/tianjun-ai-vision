@@ -28,10 +28,13 @@ def _make_mgr(monkeypatch):
 
     settles = []
 
-    def _fake_settle(channel_id, *, force_ng, reason):
-        settles.append({"ch": channel_id, "force_ng": force_ng, "reason": reason})
-        # 真实 settle 会清 inspecting；race 防御用例会故意不清来模拟异常路径
-        mgr._inspecting_workpiece.pop(channel_id, None)
+    def _fake_settle(channel_id, *, force_ng, reason,
+                     prev_wp_id=None, prev_scanned_at=None):
+        settles.append({"ch": channel_id, "force_ng": force_ng, "reason": reason,
+                        "prev_wp_id": prev_wp_id,
+                        "inspecting_at_settle": mgr._inspecting_workpiece.get(channel_id)})
+        # v3.49 WS3 新序: settle 前 inspecting 已被摘下(进 prev_wp_id)或已是新码,
+        # 真实 settle 只读不 pop——不再模拟"settle 清 inspecting"。
         return 1
 
     monkeypatch.setattr(mgr, "_dispatch_scan_pair_settle", _fake_settle)
@@ -58,7 +61,11 @@ def test_scan_a_opens_window_and_promotes(monkeypatch):
 
 
 def test_scan_b_settles_a_then_promotes_b(monkeypatch):
-    """核心契约：换码时先 settle 上一窗口、inspecting 只会落在新码上。"""
+    """核心契约：换码时 settle 上一窗口、inspecting 只会落在新码上。
+
+    v3.49 WS3 新序 (默认): 先 promote 新码上屏、后 settle——settle 时
+    inspecting 已是新码 102, 旧码身份 101 由 prev_wp_id 显式带给 settle。
+    """
     mgr, settles, _toasts, _timers = _make_mgr(monkeypatch)
     ch = 0
     mgr._pending_workpiece[ch] = 101
@@ -70,6 +77,8 @@ def test_scan_b_settles_a_then_promotes_b(monkeypatch):
     assert len(settles) == 1
     assert settles[0]["ch"] == ch
     assert "SN-B" in settles[0]["reason"]                  # 结算归因到触发它的新码
+    assert settles[0]["prev_wp_id"] == 101                 # 旧码身份显式钳制
+    assert settles[0]["inspecting_at_settle"] == 102       # settle 时新码已上屏
     assert mgr._scan_pair_active[ch]["serial_no"] == "SN-B"
     assert mgr._inspecting_workpiece[ch] == 102            # 绝不能还是 101
     assert ch not in mgr._pending_workpiece

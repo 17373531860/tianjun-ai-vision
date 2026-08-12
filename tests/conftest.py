@@ -105,7 +105,11 @@ def _seed_dummy_project() -> None:
     from backend.models.models import Project
     session = SessionLocal()
     try:
-        if session.query(Project).count() == 0:
+        # 按名字判断而非 count==0: clean_db teardown 补种时表里可能残留
+        # 测试自己的项目, 只看 count 会漏补种子
+        _has_seed = session.query(Project).filter(
+            Project.name == "__bdd_seed_project__").count() > 0
+        if not _has_seed:
             session.add(Project(
                 name="__bdd_seed_project__",
                 task_type="detection",
@@ -191,7 +195,12 @@ def db_session():
 
 @pytest.fixture
 def clean_db():
-    """彻底清空所有表（个别需要从零开始的场景用）"""
+    """彻底清空所有表（个别需要从零开始的场景用）。
+
+    teardown 补回 __bdd_seed_project__ 种子：清表把 session 级种子一起抹掉，
+    不补回会让后面依赖种子的测试（mes_inbound / BDD 等）串挂——只在
+    单独跑时绿、全量跑时红，极难排查（2026-08 实锤案例）。
+    """
     session = SessionLocal()
     try:
         for table in reversed(Base.metadata.sorted_tables):
@@ -203,6 +212,7 @@ def clean_db():
         yield
     finally:
         session.close()
+    _seed_dummy_project()
 
 
 @pytest.fixture

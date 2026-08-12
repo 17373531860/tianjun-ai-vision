@@ -165,6 +165,29 @@ class BackendManager extends EventEmitter {
     if (!this.options.isDev && this.options.userDataPath) {
       env.TIANJUN_DATA_DIR = this.options.userDataPath;
     }
+
+    // WS5(PG): 数据库 DSN 注入。优先级:
+    //   1. 已有环境变量 DATABASE_URL（...process.env 已透传，运维可临时覆盖）
+    //   2. 用户数据目录下 db_config.json 的 database_url 字段（现场持久化配置）
+    //   3. 都没有 → 后端回落 SQLite（settings.SQLALCHEMY_DATABASE_URI），行为与历史一致
+    // db_config.json 解析失败只告警不阻断启动：数据库配置坏了也要能起 SQLite 兜底。
+    if (!env.DATABASE_URL && this.options.userDataPath) {
+      try {
+        const dbConfigPath = path.join(this.options.userDataPath, 'db_config.json');
+        if (fs.existsSync(dbConfigPath)) {
+          const dbConfig = JSON.parse(fs.readFileSync(dbConfigPath, 'utf-8'));
+          const dsn = (dbConfig && typeof dbConfig.database_url === 'string')
+            ? dbConfig.database_url.trim() : '';
+          if (dsn) {
+            env.DATABASE_URL = dsn;
+            console.log('[BackendManager] 已从 db_config.json 注入 DATABASE_URL (' +
+              dsn.split('@').pop() + ')');
+          }
+        }
+      } catch (e) {
+        console.warn('[BackendManager] db_config.json 解析失败, 回落 SQLite:', e.message);
+      }
+    }
     
     // 强制 Python 使用 UTF-8 编码（解决 Windows 中文乱码）
     env.PYTHONIOENCODING = 'utf-8';

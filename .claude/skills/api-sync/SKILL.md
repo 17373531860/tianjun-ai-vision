@@ -316,6 +316,7 @@ rg -n "channel_id=|channel=" frontend/src/api/*.js backend/api/*.py
 - **v3.5.0**：`/export/*` 整组（自定义导出 + 实时规则 + 字段树）；`source.py` 周期性强制动作；session/cycle 置信度聚合（`/data/stats/*`）。
 - **v3.5.1（线上）**：CSV 导出加 `pt_mode/ct_mode`；操作手册补完。
 - **v3.5.2（未发）**：扫码器列表为空时静默"⚠ 未绑码"；海康相机 NameError；检测框三层 clip。
+- **v3.49.0**：捷昌整改批次四组新端点——`GET/PUT /mes/gateway/async-dispatch`（MES 外推并发派发开关，SystemConfig `mes_async_dispatch`）；`GET/PUT /scanner/scan-pair/new-code-first`（scan_pair 新码先上屏开关，SystemConfig `scan_pair_new_code_first`）；`GET /cluster/report-status`（副机上报链路状态：queued/spooled/spool_replayed_total，ClusterPanel 状态区）；`GET /system/db-info`（数据库 dialect/脱敏位置/版本/连接池，Settings 数据库卡片）。`/cluster/config` 增 `report_timeout_sec`/`report_async` 字段。⚠️ 网关连接的 `retry_budget_sec` 存 **config JSON 内**不是顶层字段，前端 GatewayPanel 与 UAT 都按 config 取。前端封装：`api/cluster.js`（report-status）、Settings/GatewayPanel/ClusterPanel 直调。
 
 ---
 

@@ -38,9 +38,18 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 ; 开机自启 (可选, 默认不勾选). 工控机/无人值守场景勾上, 普通安装保持原样不污染.
 Name: "autostart"; Description: "Auto-start on Windows boot (recommended for industrial PC)"; GroupDescription: "Startup options:"; Flags: unchecked
+; WS5(PG): 嵌入式 PostgreSQL 可选组件 (默认不勾选, 勾选 = 高负载/集群站点).
+; 编译期开关: CI 把 PG Windows 便携包铺到 ..\dist\pg-portable\ (含 bin\initdb.exe 等)
+; 并以 /DIncludePostgres 编译本脚本时, 该任务与文件才进安装包; 否则零影响.
+#ifdef IncludePostgres
+Name: "pgdb"; Description: "Install embedded PostgreSQL database (for multi-station / high-load sites; default SQLite otherwise)"; GroupDescription: "Database options:"; Flags: unchecked
+#endif
 
 [Files]
 Source: "..\dist\win-unpacked\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+#ifdef IncludePostgres
+Source: "..\dist\pg-portable\*"; DestDir: "{app}\pgsql"; Flags: ignoreversion recursesubdirs createallsubdirs; Tasks: pgdb
+#endif
 
 [Icons]
 Name: "{group}\TianJun AI Vision"; Filename: "{app}\{#MyAppExeName}"
@@ -273,6 +282,88 @@ begin
   end;
 end;
 
+// WS5(PG): 嵌入式 PostgreSQL 初始化.
+// 勾选 pgdb 任务时执行: initdb 数据目录 -> 注册 Windows 服务 -> 启动 -> 建业务库
+// -> 写 db_config.json (backend-manager.js 启动后端时据此注入 DATABASE_URL).
+// 全程失败只 Log 不中断安装: PG 初始化失败时应用仍以 SQLite 正常可用 (兜底不变).
+// 端口固定 5433 (与开发 docker-compose 一致, 避开客户机可能已有的 5432 实例).
+procedure SetupEmbeddedPostgres;
+var
+  ResultCode: Integer;
+  PgBin, PgData, PwFile, CfgFile, Pwd: String;
+  I: Integer;
+begin
+  PgBin := ExpandConstant('{app}\pgsql\bin');
+  if not FileExists(PgBin + '\initdb.exe') then
+  begin
+    Log('PG: initdb.exe not found, skip embedded PostgreSQL setup');
+    Exit;
+  end;
+  PgData := ExpandConstant('{userappdata}\tianjun-ai-vision\pgdata');
+  CfgFile := ExpandConstant('{userappdata}\tianjun-ai-vision\db_config.json');
+
+  // 已初始化过 (升级安装) -> 只确保服务在跑, 不动数据不改密码.
+  if FileExists(PgData + '\PG_VERSION') then
+  begin
+    Log('PG: existing data dir found, ensure service running');
+    Exec(PgBin + '\pg_ctl.exe', 'start -D "' + PgData + '" -w -t 60', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Exit;
+  end;
+
+  // 生成每机唯一密码: 随机字母 + 安装时间戳 (Random 种子可能固定, 时间戳兜底唯一性).
+  // PG 只监听 127.0.0.1, 密码仅防本机误连, 不承担网络面安全.
+  Pwd := '';
+  for I := 1 to 8 do
+    Pwd := Pwd + Chr(Ord('a') + Random(26));
+  Pwd := Pwd + GetDateTimeString('hhnnss', #0, #0);
+  PwFile := ExpandConstant('{tmp}\pg_pwfile.txt');
+  SaveStringToFile(PwFile, Pwd, False);
+
+  ForceDirectories(PgData);
+  if not Exec(PgBin + '\initdb.exe',
+      '-D "' + PgData + '" -U tianjun -E UTF8 --auth=scram-sha-256 --pwfile="' + PwFile + '"',
+      '', SW_HIDE, ewWaitUntilTerminated, ResultCode) or (ResultCode <> 0) then
+  begin
+    Log('PG: initdb failed, exit=' + IntToStr(ResultCode) + ', app will fall back to SQLite');
+    DeleteFile(PwFile);
+    Exit;
+  end;
+  DeleteFile(PwFile);
+
+  // 端口钉到 5433 (追加到 postgresql.conf 尾部, 后写覆盖先写).
+  SaveStringToFile(PgData + '\postgresql.conf',
+    #13#10 + 'port = 5433' + #13#10 + 'listen_addresses = ''127.0.0.1''' + #13#10, True);
+
+  // 注册 Windows 服务 (开机自启) 并启动.
+  Exec(PgBin + '\pg_ctl.exe',
+    'register -N "TianjunPG" -D "' + PgData + '" -S auto',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Log('PG: service register exit=' + IntToStr(ResultCode));
+  if not Exec('net', 'start TianjunPG', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) or (ResultCode <> 0) then
+  begin
+    Log('PG: service start failed (' + IntToStr(ResultCode) + '), trying pg_ctl start');
+    Exec(PgBin + '\pg_ctl.exe', 'start -D "' + PgData + '" -w -t 60', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  end;
+
+  // 建业务库 (createdb 需要 PGPASSWORD, 用 cmd /c set 传递).
+  Exec('cmd.exe',
+    '/c set PGPASSWORD=' + Pwd + '&& "' + PgBin + '\createdb.exe" -h 127.0.0.1 -p 5433 -U tianjun tianjun',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Log('PG: createdb exit=' + IntToStr(ResultCode));
+  if ResultCode <> 0 then
+  begin
+    Log('PG: createdb failed, NOT writing db_config.json, app falls back to SQLite');
+    Exit;
+  end;
+
+  // 写 db_config.json — 后端下次启动即用 PG (空库由后端 create_all 自动建表).
+  ForceDirectories(ExpandConstant('{userappdata}\tianjun-ai-vision'));
+  SaveStringToFile(CfgFile,
+    '{"database_url": "postgresql+psycopg2://tianjun:' + Pwd + '@127.0.0.1:5433/tianjun"}',
+    False);
+  Log('PG: db_config.json written, backend will use embedded PostgreSQL');
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   BackupLicenseFiles;
@@ -292,6 +383,9 @@ begin
     InstallCH341Driver;
     InstallPL2303Driver;
     AddDefenderExclusions;
+    // WS5(PG): 勾选了嵌入式 PostgreSQL 组件才初始化 (文件已由 [Files] Tasks: pgdb 铺好).
+    if WizardIsTaskSelected('pgdb') then
+      SetupEmbeddedPostgres;
     // 搬家收尾: 新目录已装好、快捷方式/卸载注册表已指向新目录, 旧目录整体清除.
     // 用户数据在 userappdata, 不在安装目录, 删旧目录不碰数据.
     if OldInstallDirToRemove <> '' then

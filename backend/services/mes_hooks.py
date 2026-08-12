@@ -92,19 +92,37 @@ class MESHookManager:
         self._spill_write_count = 0
         self._spill_replay_count = 0
 
-        # B1②: 外部 MES 推送并发派发 (默认关). 背景: cycle_end 的外推
+        # B1②: 外部 MES 推送并发派发 (v3.49 起默认开). 背景: cycle_end 的外推
         #   gw.dispatch() 自带阻塞式重试 (time.sleep(retry_interval)×retry_count),
         #   跑在单条 mes-hook-worker 线程上; 客户 MES 慢/挂时这一下就把整个 hook 队列
-        #   (扫码配对/绑工件/...) 全堵住。开关开 → 把外推甩到"每工位一条"的独立执行器:
-        #   同工位推送仍 FIFO 严格保序, 但慢工位不再拖垮 worker / 其他工位; 每工位设
-        #   积压上限, 超了丢最新一条 + 告警 (MES 长时间不通时的背压, 防内存涨爆)。
-        #   默认关时走原内联路径, 字节级一致。开关存 SystemConfig(mes_async_dispatch),
+        #   (扫码配对/绑工件/...) 全堵住 (捷昌现场: ames 断连 5 天, 每箱结算卡 15s)。
+        #   开关开 → 把外推甩到"每工位一条"的独立执行器:
+        #   同工位推送仍 FIFO 严格保序, 但慢工位不再拖垮 worker / 其他工位。
+        #   v3.49: 每工位积压超上限不再丢最新, 改为落盘 gateway_spool.jsonl,
+        #   MES 恢复后由 worker 循环回放补账 (长时间断连不丢推送)。
+        #   显式设 false 走原内联路径, 字节级一致。开关存 SystemConfig(mes_async_dispatch),
         #   start() 时读, set_async_dispatch() 实时改运行态。
-        self._async_dispatch_enabled = False
+        self._async_dispatch_enabled = True
         self._gateway_executors: dict = {}          # channel_id -> ThreadPoolExecutor(1)
         self._gateway_pending: dict = {}            # channel_id -> 在途+排队任务数
         self._gateway_exec_lock = threading.Lock()
         self._GATEWAY_MAX_PENDING = 200             # 每工位外推积压上限 (正常 0~1)
+        # v3.49: 外推积压落盘 (超上限 → 追加写 spool; 积压清空后回放)
+        self._gateway_spool_file = os.path.join(DATA_DIR, "gateway_spool.jsonl")
+        self._gateway_spool_lock = threading.Lock()
+        self._gateway_spool_write_count = 0
+        self._gateway_spool_replay_count = 0
+
+        # v3.49 WS3: scan_pair "新码先上屏" (默认开)。
+        #   旧序: 扫码 B → 先结算上一窗口 (DB 写/事件/录像收尾都在 worker 上跑完)
+        #         → 才开新窗 + promote → 前端才看到新码 (捷昌现场: 工人已装完两箱)。
+        #   新序: 扫码 B → 立即开新窗 + promote (前端马上显示新码) → 再结算上一窗口,
+        #         结算用显式 prev_wp_id/prev_scanned_at 钳制到旧窗口身份, 不再隐式读
+        #         _inspecting_workpiece/_scan_pair_active (此刻已是新码)。
+        #   下游安全锚: _handle_cycle_end 按 cycle_id 反查 WorkpieceInspection 拿 wp
+        #   (v3.4.2 hotfix-2), 不受 promote 先行影响。
+        #   显式设 false 回旧序。开关存 SystemConfig(scan_pair_new_code_first)。
+        self._scan_pair_new_first = True
 
         # v3.4.2 "禁用扫码"全局开关 (按工位粒度).
         #   _disabled_channels 里的工位:
@@ -127,6 +145,7 @@ class MESHookManager:
         self._stop_event.clear()
         self._load_disabled_state_from_disk()
         self._load_async_dispatch_config()
+        self._load_scan_pair_new_first_config()
         self._worker_thread = threading.Thread(
             target=self._worker_loop, daemon=True, name="mes-hook-worker"
         )
@@ -154,21 +173,27 @@ class MESHookManager:
     # ==================== B1②: 外部 MES 推送并发派发 (默认关) ====================
 
     def _load_async_dispatch_config(self):
-        """启动时从 SystemConfig(mes_async_dispatch) 读开关; 缺省/异常 → 关。"""
+        """启动时从 SystemConfig(mes_async_dispatch) 读开关。
+
+        v3.49 起默认开: 缺省(没配过)/异常 → 开; 只有显式配成 false 才走旧内联路径。
+        升级客户若曾手动关过, 值保留生效。"""
         try:
             db = SessionLocal()
             try:
                 from backend.models.models import SystemConfig
                 row = db.query(SystemConfig).filter(
                     SystemConfig.key == "mes_async_dispatch").first()
-                self._async_dispatch_enabled = bool(
-                    row and str(row.value).strip().lower() in ("1", "true", "yes", "on"))
+                if row is None:
+                    self._async_dispatch_enabled = True
+                else:
+                    self._async_dispatch_enabled = (
+                        str(row.value).strip().lower() in ("1", "true", "yes", "on"))
             finally:
                 db.close()
         except Exception as e:
-            self._async_dispatch_enabled = False
-            print(f"[MES] read async-dispatch switch failed (default off): {e}", flush=True)
-        print(f"[MES] external push async dispatch: {'ON' if self._async_dispatch_enabled else 'OFF(default)'}",
+            self._async_dispatch_enabled = True
+            print(f"[MES] read async-dispatch switch failed (default on): {e}", flush=True)
+        print(f"[MES] external push async dispatch: {'ON(default)' if self._async_dispatch_enabled else 'OFF'}",
               flush=True)
 
     def get_async_dispatch(self) -> bool:
@@ -185,7 +210,7 @@ class MESHookManager:
                     SystemConfig.key == "mes_async_dispatch").first()
                 if row is None:
                     row = SystemConfig(key="mes_async_dispatch",
-                                       description="外部MES推送并发派发(默认关)")
+                                       description="外部MES推送并发派发(v3.49起默认开)")
                     db.add(row)
                 row.value = "true" if enabled else "false"
                 db.commit()
@@ -195,16 +220,87 @@ class MESHookManager:
             print(f"[MES] persist async-dispatch switch failed: {e}", flush=True)
         print(f"[MES] external push async dispatch toggled: {'ON' if enabled else 'OFF'}", flush=True)
 
+    # ==================== v3.49 WS3: scan_pair 新码先上屏 (默认开) ====================
+
+    def _load_scan_pair_new_first_config(self):
+        """启动时从 SystemConfig(scan_pair_new_code_first) 读开关。
+        缺省(没配过)/异常 → 开; 只有显式配成 false 才回旧序(先结算后上屏)。"""
+        try:
+            db = SessionLocal()
+            try:
+                from backend.models.models import SystemConfig
+                row = db.query(SystemConfig).filter(
+                    SystemConfig.key == "scan_pair_new_code_first").first()
+                if row is None:
+                    self._scan_pair_new_first = True
+                else:
+                    self._scan_pair_new_first = (
+                        str(row.value).strip().lower() in ("1", "true", "yes", "on"))
+            finally:
+                db.close()
+        except Exception as e:
+            self._scan_pair_new_first = True
+            print(f"[MES] read scan-pair-new-first switch failed (default on): {e}", flush=True)
+        print(f"[ScanPair] new-code-first display: "
+              f"{'ON(default)' if self._scan_pair_new_first else 'OFF(legacy order)'}", flush=True)
+
+    def get_scan_pair_new_first(self) -> bool:
+        return bool(self._scan_pair_new_first)
+
+    def set_scan_pair_new_first(self, enabled: bool):
+        """实时改运行态 + 落盘 SystemConfig。"""
+        self._scan_pair_new_first = bool(enabled)
+        try:
+            db = SessionLocal()
+            try:
+                from backend.models.models import SystemConfig
+                row = db.query(SystemConfig).filter(
+                    SystemConfig.key == "scan_pair_new_code_first").first()
+                if row is None:
+                    row = SystemConfig(key="scan_pair_new_code_first",
+                                       description="scan_pair新码先上屏(v3.49起默认开)")
+                    db.add(row)
+                row.value = "true" if enabled else "false"
+                db.commit()
+            finally:
+                db.close()
+        except Exception as e:
+            print(f"[MES] persist scan-pair-new-first switch failed: {e}", flush=True)
+        print(f"[ScanPair] new-code-first toggled: {'ON' if enabled else 'OFF'}", flush=True)
+
+    def dispatch_gateway(self, event_type: str, ctx: dict, channel_id=None):
+        """外部 MES 推送统一入口: 开关开 → 每工位执行器异步推 (慢 MES 不堵调用方);
+        显式关 → 内联同步推 (与旧版字节级一致)。cluster box_complete / session_end
+        等所有出 mes-hook-worker 或集群线程的外推都应走这里, 不要直连 gw.dispatch()。"""
+        if self._async_dispatch_enabled:
+            self._submit_gateway_dispatch(event_type, ctx, channel_id)
+        else:
+            from backend.services.mes_gateway import get_mes_gateway
+            _t0 = time.time()
+            get_mes_gateway().dispatch(event_type, ctx, channel_id)
+            _dur = time.time() - _t0
+            # 同步内联推送跑在调用方线程 (worker/集群), 慢就是堵——无条件留痕
+            if _dur > 2.0:
+                print(f"[MES][SLOW] inline external push ch={channel_id} "
+                      f"event={event_type} took {_dur:.2f}s (async dispatch OFF)",
+                      flush=True)
+            if debug_center.is_on("backend.timing"):
+                debug_center.dbg("backend.timing", "外推耗时(同步内联)",
+                                 f"ch={channel_id} event={event_type} dur={_dur*1000:.0f}ms")
+
     def _submit_gateway_dispatch(self, event_type: str, ctx: dict, channel_id):
         """把一次外部 MES 推送甩到"每工位一条"的执行器, 同工位严格保序, 慢工位不拖累他人。
-        每工位积压超上限 → 丢最新一条 + 告警 (MES 长时间不通的背压)。"""
+        v3.49: 每工位积压超上限 → 不再丢最新, 改为落盘 gateway_spool.jsonl,
+        待积压清空后由 worker 循环回放补账 (MES 长时间不通的背压 + 不丢推送)。"""
         cid = int(channel_id) if channel_id is not None else -1
         with self._gateway_exec_lock:
             pending = self._gateway_pending.get(cid, 0)
             if pending >= self._GATEWAY_MAX_PENDING:
+                spooled = self._spool_gateway_push(event_type, ctx, cid)
                 print(f"[MES] WARN channel {cid} external-push backlog reached limit {self._GATEWAY_MAX_PENDING}, "
-                      f"dropping this {event_type} push (MES may be down for long)", flush=True)
-                debug_center.dbg("backend.mes", "外推积压丢弃",
+                      f"{'spooled to disk' if spooled else 'DROPPED (spool write failed)'} "
+                      f"this {event_type} push (MES may be down for long)", flush=True)
+                debug_center.dbg("backend.mes", "外推积压落盘" if spooled else "外推积压丢弃",
                                  f"ch={cid} event={event_type} pending={pending}")
                 return
             ex = self._gateway_executors.get(cid)
@@ -215,6 +311,7 @@ class MESHookManager:
             self._gateway_pending[cid] = pending + 1
 
         def _run():
+            _t0 = time.time()
             try:
                 from backend.services.mes_gateway import get_mes_gateway
                 get_mes_gateway().dispatch(
@@ -224,6 +321,11 @@ class MESHookManager:
                 debug_center.dbg("backend.mes", "异步外推异常",
                                  f"ch={cid} event={event_type} err={e}")
             finally:
+                if debug_center.is_on("backend.timing"):
+                    debug_center.dbg("backend.timing", "外推耗时(异步)",
+                                     f"ch={cid} event={event_type} "
+                                     f"dur={(time.time()-_t0)*1000:.0f}ms "
+                                     f"pending={self._gateway_pending.get(cid, 0)}")
                 with self._gateway_exec_lock:
                     self._gateway_pending[cid] = max(
                         0, self._gateway_pending.get(cid, 1) - 1)
@@ -241,6 +343,95 @@ class MESHookManager:
                     event_type, ctx, cid if cid >= 0 else None)
             except Exception:
                 pass
+
+    def _spool_gateway_push(self, event_type: str, ctx: dict, cid: int) -> bool:
+        """外推积压超上限时把这次推送落盘 (JSONL 追加写)。
+
+        ctx 可能含 datetime 等非 JSON 原生类型 → default=str 序列化;
+        回放后这些字段变成字符串, 与 adapter 侧 json.dumps(default=str) 的
+        最终线上报文一致, 不影响推送语义。"""
+        payload = {
+            "event_type": event_type,
+            "ctx": ctx,
+            "channel_id": cid,
+            "created_at": time.time(),
+        }
+        try:
+            with self._gateway_spool_lock:
+                os.makedirs(os.path.dirname(self._gateway_spool_file), exist_ok=True)
+                with open(self._gateway_spool_file, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+                self._gateway_spool_write_count += 1
+            return True
+        except Exception as e:
+            print(f"[MES] gateway push spool failed: {e}", flush=True)
+            return False
+
+    def _drain_gateway_spool_once(self, max_items: int = 5):
+        """worker 循环里定期尝试回放落盘的外推 (FIFO)。
+
+        只在对应工位积压降到上限一半以下时才回放, 避免 MES 仍不通时
+        落盘↔回放打转; 遇到第一条"还回放不动"的就停 (保序)。"""
+        if max_items <= 0 or not self._async_dispatch_enabled:
+            return
+        with self._gateway_spool_lock:
+            if not os.path.exists(self._gateway_spool_file):
+                return
+            try:
+                with open(self._gateway_spool_file, "r", encoding="utf-8") as f:
+                    lines = [ln.strip() for ln in f if ln.strip()]
+            except Exception:
+                return
+            if not lines:
+                try:
+                    os.remove(self._gateway_spool_file)
+                except Exception:
+                    pass
+                return
+
+            replay_threshold = max(1, self._GATEWAY_MAX_PENDING // 2)
+            kept_lines = []
+            replayed = 0
+            idx = 0
+            while idx < len(lines):
+                if replayed >= max_items:
+                    kept_lines.extend(lines[idx:])
+                    break
+                line = lines[idx]
+                try:
+                    payload = json.loads(line)
+                    cid = int(payload.get("channel_id", -1))
+                    with self._gateway_exec_lock:
+                        pending = self._gateway_pending.get(cid, 0)
+                    if pending >= replay_threshold:
+                        # 该工位积压还没消化, 整段保留并停止 (FIFO 保序)
+                        kept_lines.extend(lines[idx:])
+                        break
+                    self._submit_gateway_dispatch(
+                        payload.get("event_type", ""),
+                        payload.get("ctx") or {},
+                        cid if cid >= 0 else None,
+                    )
+                    replayed += 1
+                except Exception:
+                    # 单行损坏直接跳过, 不阻塞整份 spool
+                    pass
+                idx += 1
+
+            try:
+                if kept_lines:
+                    with open(self._gateway_spool_file, "w", encoding="utf-8") as f:
+                        f.write("\n".join(kept_lines) + "\n")
+                else:
+                    os.remove(self._gateway_spool_file)
+            except Exception:
+                pass
+
+            if replayed:
+                self._gateway_spool_replay_count += replayed
+                print(f"[MES] replayed {replayed} spooled gateway pushes "
+                      f"(replayed_total={self._gateway_spool_replay_count}, left={len(kept_lines)})",
+                      flush=True)
 
     # ==================== v3.4.2 "禁用扫码"按工位开关 ====================
 
@@ -371,6 +562,11 @@ class MESHookManager:
         while not self._stop_event.is_set():
             # 优先尝试把落盘的关键事件回放回队列
             self._drain_spill_once(max_items=20)
+            # v3.49: 回放积压期落盘的外部 MES 推送 (submit 非阻塞, 不拖 worker)
+            try:
+                self._drain_gateway_spool_once(max_items=5)
+            except Exception as e:
+                print(f"[MES] gateway spool drain failed: {e}", flush=True)
             try:
                 task = self._task_queue.get(timeout=1.0)
             except queue.Empty:
@@ -378,11 +574,26 @@ class MESHookManager:
 
             db = SessionLocal()
             try:
-                func, args, kwargs = task
+                # v3.49 WS4: 4 元组带入队时间戳算队列滞留 (兼容老 3 元组)
+                func, args, kwargs = task[0], task[1], task[2]
+                enq_ts = task[3] if len(task) > 3 else None
+                lag = (time.time() - enq_ts) if enq_ts else 0.0
                 if debug_center.is_on("backend.mes"):
                     debug_center.dbg("backend.mes", "hook 队列出队", f"handler={getattr(func, '__name__', '?')} qsize={self._task_queue.qsize()}")
+                _t0 = time.time()
                 func(db, *args, **kwargs)
                 db.commit()
+                dur = time.time() - _t0
+                # 慢任务无条件留痕 (不开调试也能在 backend.log 里找到现场证据)
+                if lag > 0.5 or dur > 1.0:
+                    print(f"[MES][SLOW] handler={getattr(func, '__name__', '?')} "
+                          f"queue_lag={lag:.2f}s exec={dur:.2f}s "
+                          f"qsize={self._task_queue.qsize()}", flush=True)
+                if debug_center.is_on("backend.timing"):
+                    debug_center.dbg("backend.timing", "hook 任务耗时",
+                                     f"handler={getattr(func, '__name__', '?')} "
+                                     f"queue_lag={lag*1000:.0f}ms exec={dur*1000:.0f}ms "
+                                     f"qsize={self._task_queue.qsize()}")
             except Exception as e:
                 db.rollback()
                 debug_center.dbg("backend.mes", "worker 任务异常", f"handler={getattr(task[0], '__name__', '?') if task else '?'} err={e}")
@@ -461,7 +672,8 @@ class MESHookManager:
                         continue
                     args = payload.get("args", [])
                     kwargs = payload.get("kwargs", {})
-                    self._task_queue.put_nowait((handler, tuple(args), kwargs))
+                    self._task_queue.put_nowait((handler, tuple(args), kwargs,
+                                                 time.time()))
                     replayed += 1
                 except queue.Full:
                     kept_lines.append(line)
@@ -497,7 +709,8 @@ class MESHookManager:
         if not self.enabled:
             return
         try:
-            self._task_queue.put_nowait((func, args, kwargs))
+            # v3.49 WS4: 第 4 元素 = 入队时间戳, worker 出队时算队列滞留耗时
+            self._task_queue.put_nowait((func, args, kwargs, time.time()))
         except queue.Full:
             # B1①: 队列满时绝不阻塞调用方(结算/检测热路径)。
             # 原来 critical 会 put(timeout=0.8) 阻塞最多 0.8s, 队列长期满时
@@ -844,19 +1057,32 @@ class MESHookManager:
             )
             if debug_center.is_on("backend.mes"):
                 debug_center.dbg("backend.mes", "scan_pair 超时翻转→强制NG", f"channel={channel_id} serial={entry.get('serial_no') or '-'}")
+            # 身份真相源: _inspecting_workpiece[ch] 是各通道自己的在检 wp;
+            # 广播开窗时 entry["wp_id"] 记的是主 ch 的 wp, 兄弟 ch 直接用会漂
+            # (三窗金标准剧本抓出), entry 仅作 fallback。
+            prev_wp = self._inspecting_workpiece.get(channel_id) or entry.get("wp_id")
             self._dispatch_scan_pair_settle(channel_id, force_ng=True,
-                                            reason="scan_pair_timeout")
+                                            reason="scan_pair_timeout",
+                                            prev_wp_id=prev_wp,
+                                            prev_scanned_at=entry.get("scanned_at"))
         except Exception as e:
             print(f"[ScanPair] timeout handling error ch={channel_id}: {e}", flush=True)
 
     def _dispatch_scan_pair_settle(self, channel_id: int, *,
                                     force_ng: bool = False,
-                                    reason: str = "") -> int:
+                                    reason: str = "",
+                                    prev_wp_id: int = None,
+                                    prev_scanned_at: float = None) -> int:
         """把'结算当前窗口'分发给 source 的 _settle_for_scan_pair() 方法.
 
         force_ng=True 时直接判 NG (用于超时); 否则交给 source 看 _was_complete 判 OK/NG.
         多工位广播时由调用方负责对每个工位都调一次本方法.
         返回结算的 box 数 (容器) 或 1/0 (非容器).
+
+        v3.49 WS3: prev_wp_id / prev_scanned_at 显式钳制"被结算窗口"的身份——
+        新码先上屏后 _inspecting_workpiece / _scan_pair_active 已经指向新码,
+        source 侧不能再隐式读; 不传 (None) 时 source 沿旧行为隐式读 (超时/停止
+        路径与开关关闭时的兼容路径)。
         """
         try:
             from backend.api.channel_manager import channel_manager
@@ -871,12 +1097,28 @@ class MESHookManager:
             print(f"[ScanPair] ch{channel_id} backend has no settle_for_scan_pair method",
                   flush=True)
             return 0
+        _t0 = time.time()
         try:
-            return int(fn(force_ng=force_ng, reason=reason) or 0)
+            try:
+                return int(fn(force_ng=force_ng, reason=reason,
+                              prev_wp_id=prev_wp_id,
+                              prev_scanned_at=prev_scanned_at) or 0)
+            except TypeError:
+                # 老签名兜底 (插件/测试替身未升级): 退回两参调用
+                return int(fn(force_ng=force_ng, reason=reason) or 0)
         except Exception as e:
             print(f"[ScanPair] settle_for_scan_pair error ch={channel_id}: {e}",
                   flush=True)
             return 0
+        finally:
+            _dur = time.time() - _t0
+            # v3.49 WS4: 结算跑在 mes-hook-worker 上, 慢 = 后续扫码全排队——无条件留痕
+            if _dur > 1.0:
+                print(f"[MES][SLOW] scan_pair settle ch={channel_id} "
+                      f"took {_dur:.2f}s (reason={reason})", flush=True)
+            if debug_center.is_on("backend.timing"):
+                debug_center.dbg("backend.timing", "scan_pair 结算耗时",
+                                 f"ch={channel_id} dur={_dur*1000:.0f}ms reason={reason}")
 
     def settle_scan_pair_for_stop(self, channel_id: int, *,
                                    discard: bool) -> int:
@@ -897,8 +1139,13 @@ class MESHookManager:
                 flush=True,
             )
             return 0
+        # 同 _on_scan_pair_timeout: per-channel 身份优先读 inspecting,
+        # 广播拓扑下 entry["wp_id"] 是主 ch 的 wp, 兄弟 ch 用它会结错工件。
+        prev_wp = self._inspecting_workpiece.get(channel_id) or entry.get("wp_id")
         return self._dispatch_scan_pair_settle(
-            channel_id, force_ng=False, reason="stop_or_standby_user_settle"
+            channel_id, force_ng=False, reason="stop_or_standby_user_settle",
+            prev_wp_id=prev_wp,
+            prev_scanned_at=entry.get("scanned_at"),
         )
 
     def _handle_scan_pair_event(self, db, channel_id: int, serial_no: str,
@@ -948,18 +1195,32 @@ class MESHookManager:
             return
 
         # 触发各工位的结算 (有开始码的工位才结算)
-        triggered_settle = []
+        # 收集"有开窗待结算"的工位 + 捕获旧窗口身份 (wp_id / scanned_at)
+        new_first = bool(self._scan_pair_new_first)
+        prev_entries: dict[int, dict] = {}
         for ch in broadcast_chs:
             with self._scan_pair_lock:
-                if ch in self._scan_pair_active:
+                entry = self._scan_pair_active.get(ch)
+                if entry is not None:
                     self._cancel_scan_pair_timer(ch)
-                    triggered_settle.append(ch)
-        for ch in triggered_settle:
-            self._dispatch_scan_pair_settle(
-                ch, force_ng=False, reason=f"scan_pair_next_code:{serial_no}"
-            )
-            # settle 完成 → 清掉 inspecting, 让本码 promote 上来
-            self._inspecting_workpiece.pop(ch, None)
+                    prev_entries[ch] = dict(entry)
+        triggered_settle = list(prev_entries.keys())
+
+        if not new_first:
+            # 旧序 (显式关开关): 先结算上一窗口, 再开新窗 + promote。
+            # 结算走隐式读 (_inspecting_workpiece 此刻仍是旧码), 与 v3.4.2 行为一致。
+            for ch in triggered_settle:
+                self._dispatch_scan_pair_settle(
+                    ch, force_ng=False, reason=f"scan_pair_next_code:{serial_no}"
+                )
+                # settle 完成 → 清掉 inspecting, 让本码 promote 上来
+                self._inspecting_workpiece.pop(ch, None)
+        else:
+            # v3.49 WS3 新序: ① 先摘下旧码 inspecting (身份进 prev_wp_map, 结算显式带走)
+            prev_wp_map: dict[int, int] = {}
+            for ch in triggered_settle:
+                popped = self._inspecting_workpiece.pop(ch, None)
+                prev_wp_map[ch] = popped or prev_entries[ch].get("wp_id")
 
         # 用新码起新窗口
         now_ts = time.time()
@@ -974,7 +1235,7 @@ class MESHookManager:
             self._arm_scan_pair_timer(ch)
         print(
             f"[ScanPair] open new window (start_code={serial_no}, wp#{wp_id}, "
-            f"channels={broadcast_chs})",
+            f"channels={broadcast_chs}, new_first={new_first})",
             flush=True,
         )
         if debug_center.is_on("backend.mes"):
@@ -982,6 +1243,23 @@ class MESHookManager:
 
         # 主 ch 自己也要 promote pending → inspecting (兄弟 ch 各自已 promote)
         self._scan_pair_promote_pending(db, channel_id, wp_id, serial_no)
+
+        if new_first and triggered_settle:
+            # ② 新码已上屏 (promote 完成, 前端 get_current_workpiece 立即可见),
+            #    先把本 worker session 的扫码写盘 (ScanLog/mark_inspecting) 落库,
+            #    再做旧窗口结算——结算身份全部显式传参, 不回头读共享 dict。
+            try:
+                db.commit()
+            except Exception as e:
+                print(f"[ScanPair] pre-settle commit failed ch={channel_id}: {e}",
+                      flush=True)
+            for ch in triggered_settle:
+                self._dispatch_scan_pair_settle(
+                    ch, force_ng=False,
+                    reason=f"scan_pair_next_code:{serial_no}",
+                    prev_wp_id=prev_wp_map.get(ch),
+                    prev_scanned_at=prev_entries[ch].get("scanned_at"),
+                )
 
     def _scan_pair_promote_pending(self, db, channel_id: int, wp_id: int,
                                     serial_no: str):
@@ -1578,11 +1856,8 @@ class MESHookManager:
             )
 
             if not skip_cycle_push:
-                # B1②: 开关开 → 甩到每工位执行器(慢 MES 不堵 worker); 默认关 → 内联(字节级一致)
-                if self._async_dispatch_enabled:
-                    self._submit_gateway_dispatch("cycle_end", ctx, channel_id)
-                else:
-                    gw.dispatch("cycle_end", ctx, channel_id)
+                # B1②: 默认开 → 甩到每工位执行器(慢 MES 不堵 worker); 显式关 → 内联(字节级一致)
+                self.dispatch_gateway("cycle_end", ctx, channel_id)
             if debug_center.is_on("backend.mes"):
                 debug_center.dbg("backend.mes", "_handle_cycle_end 完成", f"channel={channel_id} cycle={cycle_id} wp={wp_id or '-'} skip_cycle_push={skip_cycle_push}")
         except Exception as e:
@@ -1679,14 +1954,27 @@ class MESHookManager:
                 if not master_url:
                     print("[Cluster/Dispatch] slave skip report: master_url empty", flush=True)
                     return False
-                result = collector.report_to_master(
-                    cycle_context=cycle_context,
-                    box_serial=box_serial,
-                    station_id=station_id,
-                    master_url=master_url,
-                    is_good=is_good,
-                    event_name=event_name,
-                )
+                # v3.49: 默认异步上报 (独立发送线程 + 失败落盘重放),
+                # 主机慢/断网不再把 mes-hook-worker 拖住 10s/箱;
+                # report_async=0 退回旧同步内联路径。
+                if config.get("report_async", 1):
+                    result = collector.enqueue_report(
+                        cycle_context=cycle_context,
+                        box_serial=box_serial,
+                        station_id=station_id,
+                        master_url=master_url,
+                        is_good=is_good,
+                        event_name=event_name,
+                    )
+                else:
+                    result = collector.report_to_master(
+                        cycle_context=cycle_context,
+                        box_serial=box_serial,
+                        station_id=station_id,
+                        master_url=master_url,
+                        is_good=is_good,
+                        event_name=event_name,
+                    )
                 print(f"[Cluster/Dispatch] slave report to {master_url} result: {result}", flush=True)
                 return sync_mode == "wait_all"
             else:
@@ -1774,7 +2062,8 @@ class MESHookManager:
             from backend.services.mes_gateway import get_mes_gateway
             gw = get_mes_gateway()
             ctx = gw.build_context_from_session(db, session_id)
-            gw.dispatch("session_end", ctx, channel_id)
+            # v3.49: session_end 外推同样走异步入口, 不堵 worker
+            self.dispatch_gateway("session_end", ctx, channel_id)
         except Exception as e:
             import traceback
             print(f"[MES] external push (session_end) failed: {e}\n{traceback.format_exc()}",

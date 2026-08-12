@@ -30,6 +30,7 @@ BACKEND_CATEGORIES = {
     "backend.session":    {"label": "数据记录 (Session/Cycle/Step 写库)", "group": "检测核心"},
     "backend.hik":        {"label": "海康 SDK (NVR/工业相机详细日志)", "group": "检测核心"},
     "backend.mes":        {"label": "MES Hook (周期联动/工单/工件/缺陷)", "group": "MES"},
+    "backend.timing":     {"label": "结算耗时刨析 (hook队列滞留/handler耗时/结算/外推/上报, v3.49)", "group": "MES"},
     "backend.scanner":    {"label": "扫码器 (连接/收码/注入/LON-WMax)", "group": "MES"},
     "backend.gateway":    {"label": "MES 推送网关 (payload/重试/失败)", "group": "MES"},
     "backend.pull":       {"label": "工单拉取 (主动查询/HTTP/解析/入库)", "group": "MES"},

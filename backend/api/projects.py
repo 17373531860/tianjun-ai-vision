@@ -253,18 +253,41 @@ def _channels_bound_to_other(channel_manager, sources: dict, project: Project) -
     "全局启用"就是用户眼里的唯一真相; 残留的旧绑定只会让重启后 auto_load_active_project
     悄悄恢复另一个项目+另一个模型, 造成"项目页显示启用 A, 工位实际跑 B"。
     多工位 (>=2) 保持原语义: 各工位自己绑定的项目优先, 全局激活不跨越。
+
+    v3.49: 绑定指向**已删除项目**的通道不算"绑定其它项目"——否则删掉某工位
+    绑定的项目后, 残留绑定让该工位从此吃不到任何 activate 配置同步,
+    mgr.project_config 永远停在已删项目上: SQLite 下悄悄产出孤儿 session,
+    PostgreSQL 下 FK 直接拒绝、session 建不出来 (db-matrix PG 扩容实锤)。
     """
     if len(channel_manager.channels) <= 1:
         return set()
-    bound = set()
+    bound_pids: dict[int, int] = {}
     for ch_str, ch_cfg in sources.items():
         pid = ch_cfg.get("project_id")
         if pid and pid != project.id:
             try:
-                bound.add(int(ch_str))
+                bound_pids[int(ch_str)] = int(pid)
             except (TypeError, ValueError):
                 continue
-    return bound
+    if not bound_pids:
+        return set()
+    # 校验绑定的项目还存在: 已删项目的残留绑定视为无效, 不阻挡配置同步
+    try:
+        from backend.db.database import SessionLocal
+        db = SessionLocal()
+        try:
+            alive = {row[0] for row in db.query(Project.id).filter(
+                Project.id.in_(set(bound_pids.values()))).all()}
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[激活项目] 绑定项目存在性校验失败 (按全部有效处理): {e}")
+        alive = set(bound_pids.values())
+    stale = {ch for ch, pid in bound_pids.items() if pid not in alive}
+    if stale:
+        print(f"[激活项目] 通道 {sorted(stale)} 的绑定指向已删项目, "
+              f"视为未绑定并参与本次配置同步")
+    return {ch for ch, pid in bound_pids.items() if pid in alive}
 
 
 def _sync_project_config_to_channels(project: Project) -> None:

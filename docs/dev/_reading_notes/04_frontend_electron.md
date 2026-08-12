@@ -28,6 +28,14 @@
 > - `api/data.js`：`getSessionCycles` 加第 4 参 `result`
 > - Electron：`main.js` `finishShutdown` 的 stopBackend race 3s→8s + `app.exit(0)` 前必调 `forceKillSync`；`backend-manager.js`（→806 行）新增 `forceKillSync()` 同步强杀兜底（win32 `taskkill /f /t` / POSIX 杀进程组）——治"退出留僵尸 python 占 GPU 显存、每次启动清残留"
 
+> **v3.49 补账（2026-08-12，捷昌整改批次）**：
+> - `views/Settings/index.vue`：①显示设置页新增两只开关——「MES 外推并发派发」（`data-testid="mes-async-dispatch-switch"` → `GET/PUT /mes/gateway/async-dispatch`）与「扫码新码先上屏」（`data-testid="scan-pair-new-first-switch"` → `GET/PUT /scanner/scan-pair/new-code-first`），均默认开、即时生效；②性能设置页新增**数据库卡片**（`data-testid="db-info-card"` / dialect 标签 `db-dialect-tag`）——展示 dialect/位置/服务端版本/连接池，数据源 `GET /system/db-info`，带刷新按钮
+> - `views/MES/ClusterPanel.vue`：①集群配置面加「上报超时 report_timeout_sec」「异步上报 report_async」两项（写 `/cluster/config`）；②新增「上报链路状态」区（`data-testid="cluster-report-status"`）——内存队列/落盘积压/已补发三数字，轮询 `GET /cluster/report-status`
+> - `views/MES/GatewayPanel.vue`：连接弹窗新增「重试预算(秒)」输入框（`data-testid="gw-retry-budget"`）——值存进连接 **config JSON** 的 `retry_budget_sec`（非顶层字段），0=不限
+> - `views/Monitor/index.vue`：当前条码 override 适配 scan_pair 新码先上屏时序（新码顶替即上屏，不等旧窗口结算返回）
+> - `api/cluster.js`：新增 `getReportStatus()` 封装
+> - Electron：`backend-manager.js` 后端 spawn 环境注入 **`DATABASE_URL`**（进程环境变量优先，其次数据目录 `db_config.json`；都没有=SQLite 零差异）；`build/installer.iss` 新增 **PostgreSQL 可选组件**（默认不勾选，选装才铺 PG 运行时）
+
 > v3.41 复核（2026-07-17）：基线 a23a8d2（v3.32/v3.33 之交）→ v3.41.0 的前端/Electron 增量已回写本文——各条目下的「v3.3x 起」引用块即补账内容，行号锚点已整体刷新为当前快照。逐版动机详见 `docs/changelog/`（v3.33.0 ~ v3.41.0 各版 md）。
 
 > **v3.44 补账（2026-07-22）**：NG 处置整改批次四文件——

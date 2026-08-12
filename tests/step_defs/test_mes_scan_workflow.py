@@ -197,6 +197,9 @@ def when_call_handle_cycle_end_no_wp(client, ctx, app):
     def _spy(event_type, context, channel_id=None):
         dispatched["events"].append(event_type)
     gw.dispatch = _spy
+    # v3.49 起异步派发默认开; 本用例验证的是"不早退", 钉回内联路径让 spy 同步可见
+    orig_async = hook._async_dispatch_enabled
+    hook._async_dispatch_enabled = False
     try:
         db2 = SessionLocal()
         try:
@@ -210,6 +213,7 @@ def when_call_handle_cycle_end_no_wp(client, ctx, app):
             db2.close()
     finally:
         gw.dispatch = orig_dispatch
+        hook._async_dispatch_enabled = orig_async
     ctx["_dispatched"] = dispatched["events"]
 
 

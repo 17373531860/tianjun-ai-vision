@@ -17,7 +17,7 @@
 | 性质 | **商业项目，客户已在用** — 工厂工控机部署 |
 | 客户场景 | 装配线视觉检测 / 包装线 / MES 数据回传 / 多工位集群 |
 | 部署模式 | Windows 工控机本地安装（Inno Setup 一键包，约 1.5 GB），Electron 桌面壳套 FastAPI 后端 + Vue3 前端 |
-| 当前线上版本 | **v3.48.1**（2026-08-11）— 体验修复补丁版：多工位监控视频加载/卡顿治本（MJPEG 连接饿死 + WebKit 快照轮询降级 + 自适应取帧节奏）+ 数据中心录像播放失败治本（转码缓存原子落位 `_h264v2` + 超时 300s）+ NG 录像回看三件套（仅NG筛选/倍速/下载）+ Electron 退出僵尸后端 forceKillSync 兜底 + alembic PG 基线迁移补模型 import。上一版 v3.48.0（2026-08-10）三分支汇合发版：RFC 13 通用 PLC 连接器（`/api/v1/plc/*`，8 驱动 + 点位/规则全可配，默认无连接零开销）+ RFC 14 统一触发中心（`/api/v1/triggers/*`，6 触发源 × 全局动作注册表）+ 计数组合判定表（combo_table 判型 + positional 位置去重口径）+ 上银 SY9 记账精度（槽位完整性门/去重 IoU 阈值可配/放工单只认收尾后，迁移 m0009）+ Modbus 完成脉冲外设协议（per_item 联动）+ 短信汇总发送形态（合并分列/逐工位 + 工位筛选）。**逐版变更详见 `docs/changelog/`，本文件不再记版本流水账** |
+| 当前线上版本 | **v3.49.0**（2026-08-12）— 捷昌整改批次：扫码/结算全链路去延迟（MES 外推并发派发 + `gateway_spool` 落盘补发 + 集群副机上报异步化 `cluster_report_spool` 重放 + scan_pair 新码先上屏显式 `prev_wp_id` 结算，三开关默认开可回退）+ PostgreSQL 数据库支持（`sql_compat` 方言助手 + pg_dump 备份 + Electron `DATABASE_URL` 注入 + Settings 数据库卡片 + 安装器 PG 可选组件 + `sqlite_to_pg.py --verify` 迁移工具；不配 PG 零差异）+ 结算耗时埋点 `backend.timing` + 广播兄弟通道结算串身份修复。上一版 v3.48.1（2026-08-11）体验修复补丁版：多工位监控视频加载/卡顿治本 + 数据中心录像播放失败治本 + NG 录像回看三件套 + Electron forceKillSync + alembic PG 基线补 import。**逐版变更详见 `docs/changelog/`，本文件不再记版本流水账** |
 | 主仓库 | `17373531860/tianjun-ai-vision`（**PRIVATE**） |
 | 中转仓库 | `xu-yanzhi32/tianjun-releases` + `tianjun-releases-2`（Gitee 公开 release，给客户下载用） |
 | 母语 | **中文**（用户和注释主语言；技术术语保留英文） |
@@ -328,6 +328,7 @@
 
 | 版本 | 日期 | 一句话 |
 |---|---|---|
+| v3.49.0 | 2026-08-12 | 捷昌整改批次：MES 外推并发派发（连接级执行器 + gateway_spool 落盘补发 + 重试预算可配）+ 集群副机上报异步化（独立线程 + cluster_report_spool 断网重放 + report-status 可观测）+ scan_pair 新码先上屏（显式 prev_wp_id 异步结算旧窗口，上屏与结算解耦；广播兄弟通道结算串身份修复）+ 结算耗时埋点 backend.timing + PostgreSQL 支持（sql_compat 方言收编 + pg_dump 备份 + DATABASE_URL 注入 + 数据库卡片 + 安装器 PG 组件 + sqlite_to_pg --verify；幽灵项目绑定 stale 忽略）+ 双方言 db-matrix 扩容与双后端可见 UAT |
 | v3.48.1 | 2026-08-11 | 体验修复补丁版：多工位监控（>4 工位）视频加载不出/WebKit 黑屏治本（MJPEG 超 6 连接上限改快照轮询 + 零帧断流自动降级 + 取帧节奏按工位数自适应）+ 数据中心录像「视频加载失败」治本（转码 .tmp 原子落位 + 缓存 `_h264v2` + 超时 300s）+ NG 录像回看三件套（周期 仅OK/仅NG 筛选 + 0.5x~4x 倍速 + 下载录像）+ Electron 退出僵尸 python 兜底（race 8s + forceKillSync）+ alembic env 补 5 组模型 import（修 PG 基线迁移 CI） |
 | v3.48.0 | 2026-08-10 | 三分支汇合发版：RFC 13 通用 PLC 连接器（8 协议驱动 + 点位引擎 + bind_sn 绑码/结果码写回 + s7_db_handshake 模板，默认无连接零开销）+ RFC 14 统一触发中心（虚拟按钮/脚踏板/HTTP/串口/定时 6 源 × 全局动作注册表，channel 裁撤第 5 处清理）+ 计数组合判定表（纯视觉判型 + positional 位置去重六参数）+ 上银 SY9（槽位完整性门 + 物品/托盘去重 IoU 可配 + 放工单只认收尾后，m0009；与 v3.47 五开关归一化桥接零差异）+ Modbus 完成脉冲外设协议（逐件覆盖 all_covered/cycle_ok 联动，台达 ES3 文档）+ 短信汇总合并分列/逐工位 + 工位筛选 |
 | v3.47.0 | 2026-08-07 | 多分支汇合发版：多工位监控布局重构（三工位横排+网格分页总览+放大详情，工位上限 4→64）+ YoloVision 训练平台互连（模型双向分发+现场帧采样回流自学习闭环，默认关，m0008）+ 开机首启提速/授权激活治本六项（Defender 排除+startup-heavy-init 后台化+machineId 快路径，m0007）+ LG 工时看板插件 v1.5.2（F8 插件导出字段落地）+ custom_mix 记账五开关 + NG 汇总数字口径可选 + macOS MPS 并发串行锁 |
@@ -374,6 +375,6 @@
 
 ---
 
-**本文件最后更新**：2026-08-11（发版 v3.48.1：体验修复补丁版——多工位监控视频快照轮询回退 + 数据中心录像转码缓存原子化 + NG 录像回看三件套 + Electron forceKillSync + alembic env 模型补 import；第一节版本号 + 第十一节里程碑同步。上一版 v3.48.0：三分支汇合——RFC 13 PLC 连接器 + RFC 14 触发中心 + 计数组合判定表 + SY9 记账精度 + Modbus 完成脉冲 + 短信汇总形态；第一节版本号 + 第八节不变量 4 改 5 处清理 + 第十一节里程碑同步。路由表 `/plc` `/triggers` 与触发表 `debug-plc` `debug-triggers` 已随分支合入时同步）
+**本文件最后更新**：2026-08-12（发版 v3.49.0：捷昌整改批次——MES 外推并发派发 + 集群上报异步化 + scan_pair 新码先上屏 + 结算耗时埋点 + PostgreSQL 支持（方言兼容/备份/迁移工具/安装器组件/数据库卡片）；第一节版本号 + 第十一节里程碑同步。上一版 v3.48.1：体验修复补丁版——多工位监控视频快照轮询回退 + 数据中心录像转码缓存原子化 + NG 录像回看三件套 + Electron forceKillSync + alembic env 模型补 import）
 **维护者**：项目主作者 + AI agents
 **维护铁律**：本文件只放"地图 + 守则 + 不变量"。模块细节进 skill，版本变更进 `docs/changelog/`，扩展点/技术债进 `docs/plugin-system/inventory/`。**发版时务必同步更新本文件第一节版本号 + 文件尾日期**（详见 `update-release` skill）。

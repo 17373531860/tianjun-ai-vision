@@ -63,7 +63,9 @@ def test_grid_overview_pagination_and_zoom(page, base_url, channel_count_guard):
 
     # —— 总览 (默认 auto → 6 工位取 3x3, 单页) ——
     assert page.locator("text=多工位总览").count() == 1
-    assert page.locator("text=/^工位\\d+$/").count() == 6
+    # 卡片左上角标签是"工位N"+可选项目名后缀 (激活项目会同步到各通道并上角标),
+    # 不能用 ^工位\d+$ 精确匹配 —— 用前缀正则数卡片数
+    assert page.locator("text=/^工位\\d+/").count() == 6
 
     # —— 切 2x2 → 2 页 ——
     page.get_by_role("button", name="2×2", exact=True).click()

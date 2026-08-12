@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.49.0 (2026-08-12)
+
+> 主题：**捷昌整改批次**——扫码/结算全链路去延迟（MES 外推并发派发 + 集群上报异步化 + scan_pair 新码先上屏）+ PostgreSQL 数据库支持落地 + 双方言测试体系扩容与双后端可见 UAT。
+
+- [FEAT-001] 新增: MES 网关外推并发派发——按连接独立执行器，慢/挂的客户 MES 不再堵结算热路径；积压落盘 gateway_spool.jsonl 补发；每连接重试预算可配；开关默认开可回退
+- [FEAT-002] 新增: 集群副机上报异步化——独立线程+内存队列，失败落盘 cluster_report_spool.jsonl 断网恢复重放；超时/异步可配；/cluster/report-status + ClusterPanel 状态区
+- [FEAT-003] 新增: scan_pair 新码先上屏——新码先顶替上屏再用显式 prev_wp_id 异步结算旧窗口，上屏延迟与结算耗时解耦；开关默认开可回退（治捷昌第一工位条码上屏慢）
+- [FEAT-004] 新增: 结算耗时埋点 backend.timing 类目——扫码/结算/外推分段耗时进调试日志中心
+- [FEAT-005] 新增: PostgreSQL 数据库支持——sql_compat 方言助手收编存量 SQL + pg_dump 备份 + Electron DATABASE_URL 注入 + Settings 数据库卡片 + 安装器 PG 可选组件 + sqlite_to_pg 迁移工具（--verify 逐表校验/孤儿 FK 扫描）；不配 PG 时与旧版零差异
+- [BUG-001] 修复: scan_pair 双通道广播下兄弟通道结算串身份——按通道取各自 _inspecting_workpiece，不再借主通道工件 ID 记账
+- [BUG-002] 修复: 幽灵项目绑定拦住项目激活——已删项目的工位绑定视为 stale 忽略（PG 外键暴露的历史脏数据路径）
+- [TEST-001] 测试: 双方言 db-matrix 扩容 + 真 SQLite→PG 迁移用例 + e2e 六用例 + 双后端可见 UAT（SQLite 20/20 + PG 12/12）
+
 ## v3.48.1 (2026-08-11)
 
 > 主题：**体验修复补丁版**——多工位监控视频加载/卡顿治本 + 数据中心录像播放失败治本 + NG 录像回看三件套 + Electron 退出僵尸后端兜底 + PG 基线迁移 CI 修复。

@@ -6,6 +6,13 @@
 > 2026-07-17 v3.41 复核：补账 v3.33~v3.41 变更（db 迁移域）——新增迁移 runner / m0001 / requirements.txt 三个条目，m0000 条目行号刷新。
 >
 > **短信补账（2026-08-03）**：新增短信服务族（见下方「短信通知」节）；路由 API 条目在 `01_backend_core.md` 的 `sms.py`。
+>
+> **v3.49 补账（2026-08-12，捷昌整改批次）**：
+> - `core/debug_center.py`：新增 **`backend.timing`** 调试类目（WS4）——扫码处理/窗口结算/MES 外推的分段耗时埋点走此类目进调试日志中心，与既有调试开关联动、默认无常驻开销。回归 `tests/test_timing_probe_ws4.py`。
+> - `db/sql_compat.py`（27→47 行）：新增三个方言助手——`hour_minute(col)`（PG `to_char(HH24:MI)` / SQLite `strftime('%H:%M')`）、`date_str(col)`（PG `to_char(YYYY-MM-DD)` / SQLite `date()`）、`sum_bool(expr)`（`sum(case when ...)` 双方言通用）。存量 SQLite 特有 SQL 的收编出口，消费方：export_context / reports 域。双方言回归 `tests/test_sql_compat_ws5.py`。
+> - `services/external_alarm.py`：原生 `json_extract` 裸 SQL 改 SQLAlchemy JSON 索引表达式（双方言可用）。
+> - `services/sms_offline_queue.py` / `services/interconnect/sample_queue.py`：文件头补**旁路队列决策注释**——两队列独立本地 SQLite，**不随 DATABASE_URL 迁 PG**（离线暂存语义本来就要求本地可用，主库断连时仍能落盘）。
+> - `scripts/db/sqlite_to_pg.py`：迁移工具扩能——`--dry-run`（只探不写）/ `--verify`（逐表行数比对）/ JSON 列解码后直写（防 PG 存成转义字符串）/ 孤儿外键扫描报告（SQLite 不强制 FK 的历史遗留）/ 迁移期 `session_replication_role=replica` 关 FK + 序列重置。真迁移回归 `tests/test_sqlite_to_pg_migration.py`（需 PG 服务，SQLite 环境自动 skip）。
 
 ---
 
