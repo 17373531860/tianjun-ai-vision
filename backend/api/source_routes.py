@@ -1936,6 +1936,15 @@ def get_detection_results(
     except Exception:
         pass
 
+    # v3.50: resume_on='ok_only' 下 NG 保持灭灯时置 True, 前端监控页据此
+    # 露出"恢复扫码"按钮 (人工出口).
+    try:
+        from backend.services.scanner import get_scanner_service as _get_scan_svc
+        if _get_scan_svc().is_resume_blocked(mgr.channel_id):
+            mes_data['scanner_resume_blocked'] = True
+    except Exception:
+        pass
+
     if mes_data:
         result['mes'] = mes_data
 

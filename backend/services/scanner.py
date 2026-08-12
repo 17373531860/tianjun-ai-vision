@@ -188,6 +188,15 @@ class ScannerConnection:
     scan_d_zone: Optional[list] = None
     scan_d_gone_confirm_frames: int = 30
 
+    # v3.50 扫码器生命周期 (捷昌二期"码-合格-码"闭环), 默认值 = 现状行为:
+    #   resume_on: 周期结束后重新亮灯时机 ('cycle_end'=OK/NG 都亮 / 'ok_only'=仅
+    #              OK 自动亮, NG 保持灭灯等人工恢复)
+    #   rearm_forget_last: 重新亮灯时作废未绑定旧码 + 重置物理去重缓存
+    #   strict_ok_dedup: 已判 OK 的条码永久拒绝 (mes_hooks 侧读取)
+    resume_on: str = "cycle_end"
+    rearm_forget_last: bool = False
+    strict_ok_dedup: bool = False
+
     status: str = "disconnected"
     device_type: str = "text_lon"  # "text_lon"(默认), "auto", "text", "wmax"
     last_scan: str = ""
@@ -203,6 +212,9 @@ class ScannerConnection:
     _wait_cycle_resume: bool = False
     # v2.7.16 throttled 模式: 下一次允许续 LON 的时间戳 (time.monotonic()), 0 = 立即.
     _next_lon_after: float = 0.0
+    # v3.50 resume_on='ok_only': NG 结算后 resume 被拦下时置 True, 供前端露出
+    # "恢复扫码"按钮; 任何真正 resume (OK/手动/重新开始检测) 都清掉.
+    _resume_blocked: bool = False
 
 
 class ScannerService:
@@ -588,6 +600,10 @@ class ScannerService:
             mgr = cm.channels.get(cid)
             if mgr is None or not getattr(mgr, 'is_detecting', False):
                 continue
+            # v3.50: ok_only 拦停中 (NG 等人工恢复) 不做 catch-up 亮灯,
+            # 否则断线重连会把"NG 灭灯等人工"状态偷偷解掉.
+            if getattr(conn, '_resume_blocked', False):
+                continue
             # 同步本端 _scanning 标志 (start_scanning 的等价副作用), 这样
             # listen loop 主循环和 _emit 续 LON 路径都会工作.
             conn._scanning = True
@@ -628,6 +644,7 @@ class ScannerService:
             if disabled:
                 conn._scanning = False
                 conn._wait_cycle_resume = False
+                conn._resume_blocked = False
                 conn._next_lon_after = 0.0
                 conn._lon_sent = False
                 if conn.device_type == "text_lon":
@@ -708,6 +725,8 @@ class ScannerService:
                 # 本次会话的 ERROR 续 LON, 导致扫码器 LON 5s → LOFF → 永不再亮
                 # 的死锁. once_per_cycle / D 模式都依赖这个清理.
                 conn._wait_cycle_resume = False
+                # v3.50: 用户主动"开始检测" = 人工意志, 清掉 ok_only NG 拦停
+                conn._resume_blocked = False
                 conn._next_lon_after = 0.0
                 # 各 scan_mode (含 D) 开始检测都先发首次 LON, 灯立即亮.
                 # 后续 ERROR 由 listen loop 自动续 LON 维持工作.
@@ -755,6 +774,10 @@ class ScannerService:
             if _mh is not None and any(
                 _mh.is_channel_scan_disabled(_b) for _b in bound
             ):
+                continue
+            # v3.50: ok_only 拦停中 (NG 等人工恢复), 新 box 跨线也不亮灯,
+            # 出口只有人工恢复 (监控页按钮/触发中心/开始检测).
+            if getattr(conn, '_resume_blocked', False):
                 continue
             if self._text_lon_send(conn, b"LON\r\n",
                                     f"LON [scan_d {reason}]"):
@@ -847,6 +870,7 @@ class ScannerService:
                 # 时被上一轮状态污染 (上一轮扫到码 → _wait_cycle_resume=True,
                 # stop 不清 → 下次 start ERROR 续 LON 被拦 → 永久灭灯).
                 conn._wait_cycle_resume = False
+                conn._resume_blocked = False
                 conn._next_lon_after = 0.0
             else:
                 self._wmax_trigger(conn, on=False)
@@ -947,7 +971,8 @@ class ScannerService:
                 }
         return None
 
-    def resume_after_cycle(self, channel_id: int) -> list[str]:
+    def resume_after_cycle(self, channel_id: int, is_good: bool = None,
+                           manual: bool = False) -> list[str]:
         """v2.7.16: cycle_end 时调用, 让"扫到码后停灯"模式 (once_per_cycle / D)
         的扫码器恢复扫描.
 
@@ -958,6 +983,17 @@ class ScannerService:
         信号源是"box gone-confirm 完成", 由 _scan_d_update 调本方法. 之前漏了
         D 模式 → 调用无效, _wait_cycle_resume 死锁导致灯永熄, 这是 D 模式
         "扫到码后再也不亮"的根因.
+
+        v3.50 扫码器生命周期 (resume_on 分流):
+          - is_good: 本次周期结算结果. None = 调用方不知道结果 (cycle_start
+            死锁兜底 / D 模式 box gone 等), 视同"非 OK 确认".
+          - manual: True = 人工恢复 (监控页按钮 / API / 触发中心 resume_scanner),
+            无条件放行.
+          - conn.resume_on == 'ok_only' 时: 仅 is_good=True 或 manual=True 才恢复,
+            NG/未知结果保持灭灯并置 _resume_blocked=True (前端露出恢复按钮).
+          - conn.resume_on == 'cycle_end' (默认): 行为与历史完全一致, 全部恢复.
+          - conn.rearm_forget_last: 真正恢复时作废未绑定旧码 (mes_hooks
+            clear_pending_scan) + 重置物理去重缓存, 保证旧码不自动挂新周期.
 
         返回被恢复的扫码器名列表.
         """
@@ -972,14 +1008,69 @@ class ScannerService:
                 continue
             if not getattr(conn, '_wait_cycle_resume', False):
                 continue
+            # v3.50: ok_only 分流 — NG/未知结果不自动恢复, 等人工出口
+            if (not manual
+                    and (getattr(conn, 'resume_on', 'cycle_end') or 'cycle_end') == 'ok_only'
+                    and is_good is not True):
+                if not getattr(conn, '_resume_blocked', False):
+                    conn._resume_blocked = True
+                    print(f"[Scanner] resume_after_cycle(ch={channel_id}) "
+                          f"{conn.name}: resume_on=ok_only 且结果"
+                          f"{'为 NG' if is_good is False else '未知'} → 保持灭灯, "
+                          f"等人工恢复 (监控页按钮/触发中心 resume_scanner)",
+                          flush=True)
+                continue
             conn._wait_cycle_resume = False
+            conn._resume_blocked = False
             conn._lon_sent = False
             conn._next_lon_after = 0.0
             resumed.append(conn.name)
+            # v3.50: 重新亮灯时作废旧码 + 重置物理去重缓存
+            if getattr(conn, 'rearm_forget_last', False):
+                self._rearm_forget(conn, channel_id)
         if resumed:
             print(f"[Scanner] resume_after_cycle(ch={channel_id}) → {resumed} "
-                  f"(once_per_cycle/D 模式, 周期或 box 结束恢复扫描)", flush=True)
+                  f"(once_per_cycle/D 模式, 周期或 box 结束恢复扫描"
+                  f"{', 人工恢复' if manual else ''})", flush=True)
         return resumed
+
+    def _rearm_forget(self, conn: "ScannerConnection", channel_id: int):
+        """v3.50 rearm_forget_last: 重新亮灯时作废未绑定旧码 + 重置物理去重.
+
+        - 物理去重缓存: conn.last_scan/last_scan_time 归零, 让工人有意重扫同码
+          不被 dedup_interval_sec 吞掉.
+        - 未绑定旧码: mes_hooks.clear_pending_scan(force=False) 清 pending
+          工件/队列/last_scan_event, 已绑入周期的不动.
+        """
+        conn.last_scan = ""
+        conn.last_scan_time = 0
+        try:
+            if self._mes_hook is not None:
+                cleared = self._mes_hook.clear_pending_scan(channel_id, force=False)
+                if cleared.get("pending_workpiece_id") or cleared.get("pending_queue"):
+                    print(f"[Scanner] rearm_forget_last: {conn.name} ch{channel_id} "
+                          f"作废旧码 {cleared}", flush=True)
+        except Exception as e:
+            print(f"[Scanner] rearm_forget_last error ({conn.name} ch{channel_id}): {e}",
+                  flush=True)
+
+    def resume_scanning_manual(self, channel_id: int) -> list[str]:
+        """v3.50 人工恢复扫码 (resume_on='ok_only' 下 NG 的出口).
+
+        监控页按钮 / POST /scanner/resume / 触发中心 resume_scanner 动作共用.
+        """
+        return self.resume_after_cycle(channel_id, manual=True)
+
+    def is_resume_blocked(self, channel_id: int) -> bool:
+        """v3.50: 该工位是否有扫码器因 resume_on='ok_only' + NG 被拦在灭灯态."""
+        for conn in self._connections.values():
+            if conn.device_type != "text_lon":
+                continue
+            if not getattr(conn, '_resume_blocked', False):
+                continue
+            if channel_id in self._resolve_bound_channels(conn):
+                return True
+        return False
 
     def notify_cycle_settled(self, channel_id: int) -> list[int]:
         """v3.1.2: 某工位刚完成结算 → 检查是否要带动其他广播工位强制结算.
@@ -1296,6 +1387,9 @@ class ScannerService:
                 ok_rescan_cooldown_sec=int(getattr(dev, 'ok_rescan_cooldown_sec', 0) or 0),
                 late_scan_bind_window_sec=int(getattr(dev, 'late_scan_bind_window_sec', 3) or 0),
                 scan_pair_max_wait_sec=int(getattr(dev, 'scan_pair_max_wait_sec', 0) or 0),
+                # v3.50: USB 键盘枪无灯控, resume_on/rearm 不适用, 但强制去重
+                # 由 mes_hooks 按连接配置判定, USB 枪同样生效
+                strict_ok_dedup=bool(getattr(dev, 'strict_ok_dedup', False)),
                 status='usb',
                 device_type='usb_hid',
             )
@@ -1348,6 +1442,9 @@ class ScannerService:
             scan_d_line=getattr(dev, 'scan_d_line', None),
             scan_d_zone=getattr(dev, 'scan_d_zone', None),
             scan_d_gone_confirm_frames=int(getattr(dev, 'scan_d_gone_confirm_frames', 30) or 30),
+            resume_on=(getattr(dev, 'resume_on', None) or 'cycle_end'),
+            rearm_forget_last=bool(getattr(dev, 'rearm_forget_last', False)),
+            strict_ok_dedup=bool(getattr(dev, 'strict_ok_dedup', False)),
         )
         conn.device_type = db_device_type
         conn.parse_config["parse_mode"] = dev.parse_mode or "direct"

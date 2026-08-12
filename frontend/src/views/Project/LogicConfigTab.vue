@@ -838,6 +838,33 @@
               <el-input-number v-model="project.tracking_gone_confirm_frames" :min="0" :step="5" :precision="2" size="small" class="!w-28" />
             </div>
 
+            <!-- v3.50: 齐件即结算 (仅 ROI离开 / 容器模式) -->
+            <div v-if="['roi_exit', 'container'].includes(project.tracking_cycle_strategy)"
+              class="flex items-start gap-3 text-xs bg-slate-800/60 rounded p-2.5 border border-slate-700">
+              <div class="flex items-center gap-1.5 shrink-0">
+                <el-tooltip placement="top">
+                  <template #content>
+                    <div style="max-width:320px;line-height:1.5">
+                      <b>全部合格立即结算</b>：物品账本凑齐（每类都达到期望数量）的当帧立即判 OK 结算，
+                      不再等物品消失确认。<br/>
+                      · <b>ROI离开</b>：凑齐即结算整个周期；结算时仍在画面里的物品会被豁免，
+                      离开前不会重复计入下一周期。<br/>
+                      · <b>容器模式</b>：凑齐即结算该箱；箱子转入"已结算等离开"状态，
+                      离开前不再入账、不会被二次结算。<br/>
+                      · 开启后可在「步骤设置」为每个物品配置<b>确认放入帧数</b>（连续 N 帧看见才入账，
+                      抑制误检瞬时凑数）。<br/>
+                      · 与扫码器"扫码配对"绑定时机<b>互斥</b>：扫码配对通道本开关不生效。
+                    </div>
+                  </template>
+                  <span class="text-gray-400 cursor-help border-b border-dashed border-gray-500">全部合格立即结算</span>
+                </el-tooltip>
+                <el-switch v-model="project.tracking_settle_on_complete" size="small" data-testid="settle-on-complete-switch" />
+              </div>
+              <span v-if="project.tracking_settle_on_complete" class="text-[10px] text-amber-400/90 leading-relaxed">
+                已开启：账本凑齐当帧立即判 OK，不等消失确认。物品入账门槛可在「步骤设置 → 确认放入帧数」按物品调整（默认 1 帧）。与"扫码配对"互斥，扫码配对通道此开关不生效。
+              </span>
+            </div>
+
             <!-- Row 3: switches in one line -->
             <div class="flex items-center gap-5 text-xs flex-wrap">
               <div class="flex items-center gap-1.5">

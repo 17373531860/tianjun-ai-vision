@@ -15,6 +15,15 @@
 > **v3.49 补账（2026-08-12，捷昌整改批次）**：
 > - `api/system_display.py`：新增 **`GET /system/db-info`**（WS5）——返回 dialect / 脱敏 DSN 位置（密码恒不下发）/ 连接状态 / 服务端版本 / 连接池水位（SQLite 回 pool=null + 文件大小），Settings 性能设置页数据库卡片的数据源。
 >
+> **v3.50 补账（2026-08-12，捷昌二期：齐件即结算）**：
+> - `source_tracking_mixin.py`（→约 1210 行）：①`_tracking_load_step_config` 增解析步骤级 `settle_confirm_frames`（仅 >1 时进 `entry_confirm_frames` dict）；②`_tracking_phase2_id_match` 加两道守门——`_settle_complete_exempt` 豁免名单（已结算仍在场目标不再入账，ID 漂移按 IoU 合并转移豁免身份）+ `_tracking_entry_pending` N 帧确认缓冲（连续在场满 N 帧才入 `_tracking_objects`，当帧未见即回退）；③`_update_tracking_stats` 尾部齐件即结算分支——`tracking_settle_on_complete=true` 且策略 roi_exit 且非 scan_pair 通道且非 force_settling 时，凑齐（`_all_met_now`）当帧调 `_finish_tracking_cycle`，在场目标全体登记豁免名单；每帧尾清 stale pending/exempt。
+> - `source_container_grouping_mixin.py`（→约 875 行）：容器版同款三件——`_container_entry_pending` 箱内物品 N 帧确认；`_box_settled_waiting_exit`「已结算等离开」箱状态机（收箱循环遇已登记 box_track_id 直接跳过不重建 ledger，ID 漂移 IoU 转移，`gone_frames` 连续未见满阈值清除）；整箱凑齐即 `_settle_box` 并登记等离开。
+> - `source_state_init.py`：新增 4 个 dict 初始化（`_tracking_entry_pending` / `_settle_complete_exempt` / `_box_settled_waiting_exit` / `_container_entry_pending`）。
+> - `source.py` `_reset_counting_cycle`：清两个 pending 缓冲；**豁免名单/等离开状态刻意不清**（跨周期防二次入账是其存在意义）。
+> - `source_project_config_apply.py`：项目配置应用时重置豁免名单/等离开状态（换项目才是二者的清理时机）。
+> - `source_session_lifecycle_mixin.py` `end_cycle`：`resume_after_cycle` 改传 `is_good=bool(final_is_good)`（扫码器生命周期 resume_on 分流的数据源，见 02 册 scanner.py）。
+> - `source_routes.py` `get_detection_status`：mes payload 增 `scanner_resume_blocked`（`ScannerService.is_resume_blocked(ch)` 为 True 时置位，监控页"恢复扫码"按钮显示依据），try/except 全兜底。
+>
 > **v3.41 增量复核（2026-07-17）**：source/检测核心域按 `git diff a23a8d2..HEAD` 补账 v3.33~v3.41 九个版本变更。各条目内新增「v3.3x 变更」行；1.4 / 1.5 表下补增量清单；新建 `source_persist_worker.py`（v3.38）完整条目并补录 `source_region_events.py` / `source_region_events_mixin.py`（v3.32 落地时漏收）。受影响文件的行数标注与漂移行号已按当前代码刷新。
 >
 > **v3.44 补账（2026-07-22）**：NG 处置整改批次，source 族 10 文件——

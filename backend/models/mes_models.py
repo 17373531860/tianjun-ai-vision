@@ -344,6 +344,20 @@ class ScannerDevice(Base):
     # 0 表示沿用项目 pipeline_config.gone_confirm_frames.
     scan_d_gone_confirm_frames = Column(Integer, default=30)
 
+    # v3.50 扫码器生命周期 (捷昌二期"码-合格-码"闭环), 三项默认值 = 现状行为:
+    # resume_on: 周期结束后何时重新亮灯 (仅 scan_mode='once_per_cycle'/'D' 等
+    #   "扫到码灭灯"的模式有意义):
+    #   cycle_end = 默认现状, OK/NG 都重新亮灯
+    #   ok_only   = 仅 OK 结算后自动亮灯; NG 保持灭灯, 等人工恢复
+    #               (监控页按钮 / POST /scanner/{id}/resume / 触发中心 resume_scanner)
+    resume_on = Column(String(16), default="cycle_end")
+    # 重新亮灯时作废旧码: 清掉未绑定的 pending 码 + 重置物理去重缓存,
+    # 保证上一周期的旧码不会自动挂到新周期. 默认关 = 现状.
+    rearm_forget_last = Column(Boolean, default=False)
+    # 强制去重: 已判 OK 的条码永久拒绝再次绑定 (ok_rescan_cooldown_sec 的无限版).
+    # 默认关 = 现状.
+    strict_ok_dedup = Column(Boolean, default=False)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

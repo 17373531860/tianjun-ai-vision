@@ -198,8 +198,23 @@ v3.4.2 promote 均为此修过补丁）。
 - 4 种 `bind_timing`：`mid_cycle`（默认）/ `pre_cycle` / `post_cycle` / `scan_pair`（v3.3.0 见下）
 - `broadcast_channels`（JSON list）：一台扫码器服务多工位；空 → 仅 `channel_id`
 - `broadcast_settle_mode=independent|primary` + `primary_settle_channel`：同一扫码器服务的多工位是否跟随主工位结算
-- `ok_rescan_cooldown_sec`（v2.7.12）：A 扫完 OK，距完成 < N 秒再扫到 A → 静默丢弃；NG 不受冷却
+- `ok_rescan_cooldown_sec`（v2.7.12）：A 扫完 OK，距完成 < N 秒再扫到 A → 拒绝；NG 不受冷却
 - `late_scan_bind_window_sec`（默认 3）：cycle 已结但晚到的扫码事件 ≤N 秒可补绑
+- **v3.50 生命周期三配置**（仅 `text_lon` 且 `scan_mode=once_per_cycle/D` 有意义，面板按此置灰）：
+  - `resume_on`：周期结束亮灯时机。`cycle_end`（默认，OK/NG 都续 LON）/ `ok_only`
+    （仅 OK 自动亮；NG/未知置 `conn._resume_blocked` 保持灭灯，出口三条：监控页
+    "恢复扫码"按钮（`source_routes` 把 `is_resume_blocked` 写进 `mes.scanner_resume_blocked`
+    驱动显示）、`POST /api/v1/scanner/resume`、触发中心 `resume_scanner` 动作。
+    `end_cycle` 现在把结算结果 `is_good` 传给 `resume_after_cycle`；人工恢复
+    `resume_scanning_manual` → `manual=True` 无条件放行）
+  - `rearm_forget_last`：恢复亮灯时 `_rearm_forget` 清 `conn.last_scan`（物理去重缓存）
+    + `mes_hook.clear_pending_scan(force=False)` 作废未绑定旧码，防旧码挂新周期
+  - `strict_ok_dedup`：`_handle_scan` 入口查库，该条码已有 status='ok' 工件 → 永久拒绝
+    （= ok_rescan_cooldown 的无限版）
+- **v3.50 拒绝路径统一警告 toast**：强制去重拒绝 / OK 冷却拒绝 / duplicate_scan_action=reject
+  三条路径不再静默丢码，走 `_emit_scan_warning(ch, sn, reason)` → `_last_scan_event`
+  带 `scan_warning=True + warn_reason` → 前端 `handleScanToast` 弹警告；scan_pair 重复码
+  警告并入同一字段体系（旧 `scan_pair_dup_warning` 字段保留兼容）
 
 ### 4.2 WMax 三端口逆向协议（55266 CMD / 55276 IMG / 55286 RPT）
 

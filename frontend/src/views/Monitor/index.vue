@@ -1203,7 +1203,9 @@
       </div>
 
       <!-- MES 信息条 -->
-      <div v-if="displayWorkpiece || mesData?.order || mesData?.warn_no_barcode || workpieceOverride === null || isScanDisabledFor(selectedChannel) || systemStore.display.monitor.showBypassSn" class="bg-slate-900 border border-cyan-800/50 rounded-lg px-3 py-2 flex items-center gap-6 text-sm">
+      <!-- v3.50: scanner_resume_blocked 必须算进显示条件, 否则 NG 后无工件/工单时
+           整条信息条不渲染, "恢复扫码"人工出口按钮出不来 -->
+      <div v-if="displayWorkpiece || mesData?.order || mesData?.warn_no_barcode || mesData?.scanner_resume_blocked || workpieceOverride === null || isScanDisabledFor(selectedChannel) || systemStore.display.monitor.showBypassSn" class="bg-slate-900 border border-cyan-800/50 rounded-lg px-3 py-2 flex items-center gap-6 text-sm">
         <!-- 扫码器旁路当前 SN (系统设置 showBypassSn 打开后才显示; 无 SN 时 placeholder 等待扫码) -->
         <div v-if="systemStore.display.monitor.showBypassSn" class="flex items-center gap-2">
           <span class="text-cyan-400 font-bold">旁路SN:</span>
@@ -1277,6 +1279,21 @@
               @click="clearPendingScan(selectedChannel)"
             >
               清除本次扫码
+            </el-button>
+          </el-tooltip>
+          <!-- v3.50: resume_on='ok_only' 下 NG 保持灭灯, 人工恢复出口 -->
+          <el-tooltip
+            v-if="mesData?.scanner_resume_blocked"
+            content="扫码器因 NG 结算保持灭灯（重新亮灯时机=仅合格），点击人工恢复扫码"
+            placement="top"
+          >
+            <el-button
+              size="small"
+              type="success"
+              data-testid="resume-scanner-btn"
+              @click="resumeScannerFor(selectedChannel)"
+            >
+              恢复扫码
             </el-button>
           </el-tooltip>
           <el-tooltip
@@ -5677,11 +5694,14 @@ const shownEventIds = ref(new Set());
 // 扫码提示去重 — 按通道独立记录时间戳
 const lastScanToastTs = {};
 const handleScanToast = (scanEvent, ch = 0) => {
-  // v3.3.0 码-码闭环: 同码二次扫的软警告 (后端在 _last_scan_event 里写 scan_pair_dup_warning=true)
-  if (scanEvent.scan_pair_dup_warning) {
+  // v3.50 拒绝路径统一警告 (强制去重/OK冷却/重复拒绝/scan_pair 重复码):
+  // 后端在 _last_scan_event 里写 scan_warning=true + warn_reason。
+  // v3.3.0 的 scan_pair_dup_warning 老字段一并兼容 (老后端只有该字段)。
+  if (scanEvent.scan_warning || scanEvent.scan_pair_dup_warning) {
     if (scanEvent.timestamp <= (lastScanToastTs[ch] || 0)) return;
     lastScanToastTs[ch] = scanEvent.timestamp;
-    const msg = `重复扫码: ${scanEvent.serial_no} - 等待新码`;
+    const reason = scanEvent.warn_reason || '重复扫码，等待新码';
+    const msg = `${scanEvent.serial_no}: ${reason}`;
     if (channelCount.value > 1) {
       ElMessage.warning(`工位 ${ch + 1} ${msg}`);
     } else {
@@ -5788,6 +5808,21 @@ const clearPendingScan = async (ch) => {
     if (workpieceHideTimers[idx]) { clearTimeout(workpieceHideTimers[idx]); workpieceHideTimers[idx] = null; }
   } catch (e) {
     ElMessage.error('清除失败: ' + (e.response?.data?.detail || e.message || '未知错误'));
+  }
+};
+
+// v3.50 人工恢复扫码 — resume_on='ok_only' 下 NG 保持灭灯的人工出口
+const resumeScannerFor = async (ch) => {
+  try {
+    const res = await api.post('/scanner/resume', null, { params: { channel_id: ch } });
+    const resumed = res.data?.resumed || [];
+    if (resumed.length) {
+      ElMessage.success(`已恢复扫码: ${resumed.join(', ')}`);
+    } else {
+      ElMessage.info(res.data?.message || '该工位没有等待恢复的扫码器');
+    }
+  } catch (e) {
+    ElMessage.error('恢复扫码失败: ' + (e.response?.data?.detail || e.message || '未知错误'));
   }
 };
 

@@ -389,5 +389,6 @@ JSON 子键链: <set_project_config + 视图 + Navbar 默认值> （仅 JSON）
 | v3.38.0 | `step_records.cycle_id` + `video_clips.related_id` 加索引（热路径查询，迁移 `m0001_hot_path_indexes.py`——版本化迁移体系第一号，新迁移照它抄）|
 | v3.43.0 | `packaging_flow_configs` 加 4 列（重扫拦截 m0002 + 缺工单判定 m0003）|
 | v3.45.0 | `packaging_flow_configs` 加 10 列（箱标签扫码授权 9 列 m0004 + 工单同步开关 m0005，后者默认开 NULL 视为开）|
+| v3.50.0 | `ScannerDevice` 加生命周期 3 列（迁移 m0010）：`resume_on VARCHAR(16) DEFAULT 'cycle_end'`（周期结束亮灯时机，'ok_only'=NG 灭灯等人工恢复）、`rearm_forget_last BOOLEAN DEFAULT 0`（亮灯作废旧码）、`strict_ok_dedup BOOLEAN DEFAULT 0`（已 OK 条码永久拒绝）；PG 布尔默认值分道 `FALSE` |
 
 > 完整 changelog 在 `docs/changelog/` 下，每个 .md 都标了 BUG/FEAT/HOTFIX。

@@ -35,6 +35,15 @@
 > - `cluster_collector.py`（→1428 行）：**WS2 副机上报异步化**——`report_to_master` 改独立发送线程+内存队列（结算路径只入队即返回），失败落盘 **`cluster_report_spool.jsonl`** 恢复后按序重放；`report_timeout_sec`/`report_async` 进 ClusterConfig 可配（默认异步开/10s）；新增 `get_report_queue_status()`（queued/spooled/spool_replayed_total）。
 > - api 层：`mes_gateway.py` 新增 `GET/PUT /async-dispatch`；`scanner.py` 新增 `GET/PUT /scan-pair/new-code-first`；`cluster.py` 新增 `GET /report-status` + `/config` 面扩 `report_timeout_sec`/`report_async`。
 > - 回归：`test_mes_async_dispatch_b1b.py`（扩）/ `test_mes_gateway_dispatch_isolation.py`（扩）/ `test_cluster_report_async.py`（新）/ `test_scan_pair_new_first.py`（新）/ `test_scan_pair_three_window_gold.py`（新，三窗金标准含双通道广播）/ `test_timing_probe_ws4.py`（新）。
+>
+> **v3.50 补账（2026-08-12，捷昌二期：扫码器生命周期"码-合格-码"闭环）**：
+> - `services/scanner.py`（→约 2100 行）：①`ScannerConnection` 加 4 字段——配置面 `resume_on`（'cycle_end' 默认 / 'ok_only'）/ `rearm_forget_last` / `strict_ok_dedup` + 运行时 `_resume_blocked`；`_start_device` 从 ORM 装填。②`resume_after_cycle(channel_id, is_good=None, manual=False)` 重构——ok_only 且非人工且 `is_good is not True`（NG/未知一视同仁）→ 置 `_resume_blocked` 保持灭灯 continue；成功恢复清 `_resume_blocked` 并按 `rearm_forget_last` 调 `_rearm_forget`。③`_rearm_forget`：清 `conn.last_scan/last_scan_time`（物理去重缓存）+ `mes_hook.clear_pending_scan(ch, force=False)` 作废未绑定旧码。④新增 `resume_scanning_manual(ch)`（= manual=True 转发）与 `is_resume_blocked(ch)`（工位级查询，source_routes 的数据源）。⑤`_resume_blocked` 与 `_wait_cycle_resume` 同步清理点：`_catch_up_lons` / `apply_channel_disable_change` / `start_scanning` / `stop_scanning`。
+> - `services/mes_hooks.py`：①`_get_strict_ok_dedup(ch)` 从扫码器连接取配置；②`_emit_scan_warning(ch, sn, reason)` 统一警告事件（`_last_scan_event` 带 `scan_warning=True + warn_reason`）；③`_handle_scan` 三条拒绝路径改发警告不再静默——strict_ok_dedup 查库已 OK 永久拒（新增，含 ScanLog 落账）/ OK 冷却拒 / duplicate_scan_action=reject 拒；④scan_pair 重复码 toast 并入统一字段（旧 `scan_pair_dup_warning` 保留兼容）。
+> - `models/mes_models.py`：`ScannerDevice` 加 `resume_on / rearm_forget_last / strict_ok_dedup` 三列（迁移 **m0010**，SQLite 默认 0 / PG FALSE 分道，默认值=现状零差异）。
+> - `api/scanner.py`：Create/Update Schema + `_serialize_device` 透出三字段；新增 **`POST /scanner/resume?channel_id=N`**（人工恢复，无条件解除灭灯锁）。
+> - `services/triggers/actions.py`：全局动作注册表加 **`resume_scanner`**（= `resume_scanning_manual`，脚踏板/PLC 的 NG 灭灯出口，见 05 册动作表）。
+> - 上游联动：`end_cycle` 传 `is_good`、`source_routes` 透出 `scanner_resume_blocked`（见 01 册 v3.50 补账）；前端 ScannerPanel/Monitor 见 04 册。
+> - 回归：`test_scanner_lifecycle.py`（新 16 用例）/ `test_settle_on_complete.py`（新 21 用例）/ BDD `settle_scan_lifecycle.feature`（8 场景）/ e2e `test_settle_scan_lifecycle.py`（6 用例）。
 
 ## 一、逐文件档案
 

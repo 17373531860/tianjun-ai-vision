@@ -1300,6 +1300,9 @@ class MESHookManager:
             "workpiece_id": None,
             "timestamp": time.time(),
             "scan_pair_dup_warning": True,
+            # v3.50: 统一警告通道字段 (前端新版走 scan_warning, 老字段保留兼容)
+            "scan_warning": True,
+            "warn_reason": "重复扫码，等待新码",
         }
 
     def _get_current_cycle_id(self, channel_id: int) -> Optional[int]:
@@ -1343,6 +1346,33 @@ class MESHookManager:
         except Exception:
             pass  # 高频路径：连接未就绪/字段缺失时回退默认
         return 0
+
+    def _get_strict_ok_dedup(self, channel_id: int) -> bool:
+        """v3.50: 该工位是否开启"强制去重"(已判 OK 的条码永久拒绝)。默认关。"""
+        try:
+            from backend.services.scanner import get_scanner_service
+            svc = get_scanner_service()
+            for conn in self._iter_scan_configs(svc):
+                if self._conn_serves_channel(conn, channel_id):
+                    return bool(getattr(conn, "strict_ok_dedup", False))
+        except Exception:
+            pass  # 高频路径：连接未就绪/字段缺失时回退默认
+        return False
+
+    def _emit_scan_warning(self, channel_id: int, serial_no: str, reason: str):
+        """v3.50: 拒绝路径统一警告提示 — 从静默丢弃改为通知前端弹警告 toast.
+
+        复用 _last_scan_event 通道 (前端轮询 detection results 读 mes.scan_event),
+        scan_warning=True + warn_reason 由 Monitor handleScanToast 弹黄色警告.
+        成功提示 (绿色扫码成功 toast) 仅真正入账的新码触发, 两者互不干扰.
+        """
+        self._last_scan_event[channel_id] = {
+            "serial_no": serial_no,
+            "workpiece_id": None,
+            "timestamp": time.time(),
+            "scan_warning": True,
+            "warn_reason": reason,
+        }
 
     def _get_late_bind_window(self, channel_id: int) -> int:
         """获取该工位的"迟到扫码补绑窗口秒数"配置。0 = 关闭兜底。
@@ -1510,8 +1540,27 @@ class MESHookManager:
         except Exception as _e_wfc_scan:
             print(f"[WorkpieceFlow] on_scan_received error (isolated, fallback to scan_pair): {_e_wfc_scan}")
 
-        # 同码二次扫抑制：上次检测合格 & 距完成时间 < 冷却秒数 → 静默丢弃
+        # v3.50 强制去重: 已判 OK 的条码永久拒绝 (ok_rescan_cooldown 的无限版).
+        # 拒绝时发警告 toast (不再静默丢), 让操作员知道"这码已经合格过了".
+        if self._get_strict_ok_dedup(channel_id):
+            existing = self._workpiece_svc.find_by_serial(db, serial_no, project_id)
+            if existing and existing.status == "ok":
+                scan_log = ScanLog(
+                    device_id=device_id, channel_id=channel_id,
+                    raw_data=raw_data, parsed_serial=serial_no,
+                    workpiece_id=existing.id, success=False,
+                    error_msg="强制去重: 该条码已判合格, 永久拒绝",
+                )
+                db.add(scan_log)
+                self._emit_scan_warning(
+                    channel_id, serial_no, "该条码已判合格，已拒绝（强制去重）")
+                print(f"[MES] strict_ok_dedup reject: {serial_no} "
+                      f"workpiece#{existing.id} 已 OK (ch{channel_id})", flush=True)
+                return
+
+        # 同码二次扫抑制：上次检测合格 & 距完成时间 < 冷却秒数 → 丢弃
         # 用于过滤搬运过程中扫码器误扫到已合格工件的情况，避免脏数据。
+        # v3.50: 从静默丢弃改为发警告 toast, 提示只认新码。
         cooldown = self._get_ok_rescan_cooldown(channel_id)
         if cooldown > 0:
             existing = self._workpiece_svc.find_by_serial(db, serial_no, project_id)
@@ -1526,6 +1575,9 @@ class MESHookManager:
                         error_msg=f"OK冷却期内重复扫码忽略 ({elapsed:.1f}s/{cooldown}s)",
                     )
                     db.add(scan_log)
+                    self._emit_scan_warning(
+                        channel_id, serial_no,
+                        f"该条码刚判合格 {elapsed:.0f} 秒，冷却期内已忽略")
                     print(f"[MES] scan cooldown filter: {serial_no} workpiece#{existing.id} "
                           f"{elapsed:.1f}s after OK (cooldown {cooldown}s, ch{channel_id})",
                           flush=True)
@@ -1541,6 +1593,9 @@ class MESHookManager:
                 success=False, error_msg="已有待检工件，扫码被拒绝",
             )
             db.add(scan_log)
+            # v3.50: 拒绝路径发警告 toast (不再静默丢)
+            self._emit_scan_warning(
+                channel_id, serial_no, "已有待检工件，本次扫码被拒绝")
             return
 
         wp = self._workpiece_svc.register(

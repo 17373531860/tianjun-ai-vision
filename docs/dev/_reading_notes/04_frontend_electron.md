@@ -22,6 +22,13 @@
 > - `views/MES/ExternalDevicePanel.vue` + `api/external_device.js`（dev-qing）：`modbus_pulse` 协议配置区（线圈地址/pulse_ms/cooldown_ms/trigger_mode）+ 手动试发按钮
 > - `views/Alarm/index.vue`（dev-qing）：短信汇总「发送形态」单选（merged_detail 一条内分列多工位=默认 / per_channel 逐工位逐条）+ `summary_channel_ids` 参与工位多选
 
+> **v3.50 补账（2026-08-12，捷昌二期：齐件即结算 + 扫码器生命周期）**：
+> - `views/Project/LogicConfigTab.vue`：跟踪配置卡新增「全部合格立即结算」开关（`data-testid=settle-on-complete-switch`），**仅 `tracking_cycle_strategy` 为 roi_exit/container 时渲染**（v-if 条件），tooltip 说明语义 + 与 scan_pair 互斥警示；开启时下方警示文案提醒确认帧数配置。
+> - `views/Project/StepsConfigTab.vue`：物品设置表（tracking 模式）新增「确认放入帧数」列（`settle_confirm_frames`，el-input-number min=1，`data-testid=settle-confirm-frames-input`），**仅 `settleOnCompleteActive` computed 为真时渲染**（开关开 + 策略支持），count_mode≠track 行置灰。
+> - `views/Project/index.vue`：`initProjectDefaults` 回读 `pipeline_config.tracking_settle_on_complete` + 步骤 `settle_confirm_frames` 默认 1；保存映射仅 roi_exit/container 策略写 true（其他策略强制 false，防脏配置）。
+> - `views/MES/ScannerPanel.vue`：新「扫码器生命周期」选项区——「重新亮灯时机」下拉（cycle_end/ok_only）+「亮灯作废旧码」+「强制去重」开关；前两项 `lifecycleApplicable` computed 守门（device_type=text_lon 且 scan_mode ∈ once_per_cycle/D，USB 键盘枪无灯控置灰 + 提示文案）；强制去重任何设备可用；defaultForm 三字段默认=现状；scan_pair 提示文案补与齐件即结算互斥说明。
+> - `views/Monitor/index.vue`：①MES 信息条新增「恢复扫码」按钮（`data-testid=resume-scanner-btn`，`mesData.scanner_resume_blocked` 为真时显示，点击 `POST /scanner/resume?channel_id=` + 成功/无枪/失败三态 toast）；**信息条外层 v-if 补 `scanner_resume_blocked` 条件**——否则 NG 后无工件/工单时整条不渲染按钮出不来（开发中实测踩的坑）；②`handleScanToast` 统一警告分支：`scan_warning || scan_pair_dup_warning` 走 `warn_reason` 文案的 warning toast（多工位带工位号前缀），时间戳去重沿用。
+>
 > **v3.48.1 补账（2026-08-11，体验修复补丁版）**：
 > - `views/Monitor/index.vue`（→6942 行）：**快照轮询回退**——`syncMultiStreams` 在可见工位 > `MAX_MJPEG_STREAMS`(4) 时掐掉全部 MJPEG 长连接改 `/snapshot?channel=N` 单帧轮询（浏览器同 host HTTP/1.1 仅 6 条并发连接，九路 MJPEG + 数据轮询互踢饿死）；新增 `mjpegZeroFrameFails`/`_registerMjpegDeath`：任一工位 MJPEG 连续 2 次零帧断流（WebKit fetch 不支持 multipart/x-mixed-replace）单独降级快照；`startSnapshotPolling` 定时器 40ms 基础节拍 + `_snapshotIntervalMs()` 按并发工位数自适应取帧间隔（≤2 路 80ms / ≤4 路 120ms / ≤9 路 200ms / 更多 300ms），`snapshotInFlight` 背压跳 tick，`stopMultiStreams` 清零帧计数
 > - `views/Data/index.vue`：周期列表「全部/仅OK/仅NG」筛选（`cycleResultFilter` → cycles 端点 `result` 参数，换筛选重置分页/展开态）；播放弹窗 0.5x~4x 倍速（`videoPlaybackRate` + `applyPlaybackRate`，`@loadedmetadata` 时套用、换视频不重置）+「下载录像」按钮（a[download] 指向同 `/data/videos/{id}`）；视频报错文案引导下载兜底

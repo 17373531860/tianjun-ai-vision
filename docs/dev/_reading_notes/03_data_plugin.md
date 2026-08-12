@@ -25,6 +25,10 @@
 > - `services/export_context.py`：SQLite 特有 `func.strftime`/`func.date` 聚合改走 `sql_compat.hour_minute/date_str/sum_bool` 方言助手（见 05 册 sql_compat 条）。
 > - `plugins-examples/sensor-clean/backend/hooks.py`：插件建表 DDL 方言化示范——`INTEGER PRIMARY KEY AUTOINCREMENT`（SQLite 专有）改方言安全 identity 写法，插件平台 PG 兼容样板。
 > - `database.py` 生态补充：官方 PG 建库路径定论 **`create_all + apply_pending`**（alembic 仅做 CI 基线校验），决策记录在 `backend/db/migrations/__init__.py` 模块 docstring；短信离线队列/互连采样队列保持**本地 SQLite** 不随 DATABASE_URL 走（旁路解耦决策，见各文件头注释）。
+>
+> **v3.50 补账（2026-08-12，捷昌二期）**：
+> - 迁移 **`m0010_scanner_lifecycle`**：`scanner_devices` 加 3 列——`resume_on VARCHAR(16) DEFAULT 'cycle_end'` / `rearm_forget_last BOOLEAN DEFAULT 0` / `strict_ok_dedup BOOLEAN DEFAULT 0`（PG 布尔默认值分道 FALSE；三列默认=现状零差异）。列语义与运行时行为见 02 册 v3.50 补账（scanner.py / mes_hooks.py）。
+> - `pipeline_config` 新键 `tracking_settle_on_complete`（bool，默认缺省=关）+ `steps_config[]` 新键 `settle_confirm_frames`（int 默认 1）——JSON 配置扩展无 schema 迁移，config-dict 生成物已刷新。
 
 ---
 

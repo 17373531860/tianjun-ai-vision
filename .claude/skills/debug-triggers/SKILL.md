@@ -96,6 +96,8 @@ TriggerHubManager (单例, backend/services/triggers/manager.py)
 - `trigger_event`：需工位有**激活项目**（events_config 里的事件 id）；`_pending_ack` 阻塞态被丢弃是既有守门
 - `clear_reset`：= 界面清零（end_session + reset_stats）
 - `ack_alarm`：清在途报警（默认本工位，`all_channels: true` 清全部），clear_source=trigger_hub
+- `resume_scanner`（v3.50）：人工恢复扫码 = `ScannerService.resume_scanning_manual`，
+  `resume_on='ok_only'` 下 NG 灭灯的脚踏板/PLC 出口；该工位没有等待恢复的枪时 resumed 为空不算失败
 - `write_points`：非 PLC 引擎要 `connection` 指定目标 PLC 连接（id 或名称；只有一条在跑时可省）
 - 动作失败不阻断后续动作（错误隔离），失败原因在实例日志（`GET /channels/{id}/logs`）
 

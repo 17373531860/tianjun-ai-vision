@@ -37,6 +37,10 @@ class ContainerGroupingMixin:
         pcfg = (self.project_config or {}).get('pipeline_config', {}) if self.project_config else {}
         single_box_mode = (pcfg.get('container_box_mode', 'single') or 'single') == 'single'
 
+        # v3.50 齐件即结算 (默认关): 箱内账本"曾齐过"当帧立即结算该箱,
+        # 箱子转入"已结算等离开"状态 (离场前禁止重建/再入账)
+        settle_on_complete = bool(pcfg.get('tracking_settle_on_complete', False))
+
         # v3.2.0: ID 漂移合并阈值. 0 = 关闭(默认, 兼容老项目). 0.5 推荐.
         # 当一个新 box did 即将进入 _box_objects 时, 先扫已存在的 gone-confirm 中的老
         # did, 如果同位置 IoU >= 此阈值, 视为同一物理箱继续累计装件 (复用老 did,
@@ -76,6 +80,27 @@ class ContainerGroupingMixin:
         except Exception:
             pass
 
+        # v3.50 齐件即结算: 每个物品的"确认放入帧数" (仅开关开启时生效, 默认 1 = 现状)
+        entry_confirm_frames: dict = {}
+        if settle_on_complete:
+            try:
+                for step in (self.project_config or {}).get('steps_config', []):
+                    if not step.get('enabled', True):
+                        continue
+                    if step.get('count_mode', 'track') != 'track':
+                        continue
+                    lbl = step.get('label', '')
+                    if not lbl:
+                        continue
+                    try:
+                        scf = int(step.get('settle_confirm_frames', 1) or 1)
+                        if scf > 1:
+                            entry_confirm_frames[lbl] = scf
+                    except (TypeError, ValueError):
+                        pass
+            except Exception:
+                pass
+
         # Collect active boxes and items from _tracking_objects
         active_box_dids = set()
         box_bboxes = {}  # {display_id: bbox}
@@ -84,6 +109,29 @@ class ContainerGroupingMixin:
         for tid, obj in self._tracking_objects.items():
             if obj['class_name'] == container_label:
                 did = obj['display_id']
+
+                # v3.50 齐件即结算: "已结算等离开"的箱子 — 只刷新在场状态,
+                # 不重建 ledger / 不进 box_bboxes (落进它的物品不再分组入账).
+                # 按 track_id 键控 + IoU 兜底接管 ByteTrack 换 ID.
+                if getattr(self, '_box_settled_waiting_exit', None):
+                    _w = self._box_settled_waiting_exit.get(tid)
+                    if _w is None:
+                        for _wtid, _ws in list(self._box_settled_waiting_exit.items()):
+                            try:
+                                if self._bbox_iou(_ws.get('bbox') or {}, obj['bbox']) >= 0.5:
+                                    _w = self._box_settled_waiting_exit.pop(_wtid)
+                                    self._box_settled_waiting_exit[tid] = _w
+                                    print(f"[Container] 等待离场箱 ID 漂移接管: "
+                                          f"tid {_wtid} → {tid}")
+                                    break
+                            except Exception:
+                                continue
+                    if _w is not None:
+                        _w['ts'] = current_time
+                        _w['bbox'] = dict(obj['bbox'])
+                        _w['seen_this_frame'] = True
+                        continue
+
                 if did not in self._box_objects:
                     # v3.2.0 ID 漂移合并: 在新建 _box_objects 条目前, 看老条目里
                     # 有没有 gone-confirm 中且同位置 IoU >= 阈值的, 找到就复用老 did.
@@ -223,6 +271,22 @@ class ContainerGroupingMixin:
                             break
                     continue
 
+                # v3.50 齐件即结算: 确认放入帧数 — 物品连续 N 帧在同一箱内才入账
+                _need_frames = entry_confirm_frames.get(item_label, 1)
+                if settle_on_complete and _need_frames > 1:
+                    _pkey = (best_box_did, item_tid)
+                    _pend = self._container_entry_pending.get(_pkey)
+                    if _pend is None:
+                        self._container_entry_pending[_pkey] = {
+                            'frames': 1, 'ts': current_time,
+                        }
+                        continue
+                    _pend['frames'] += 1
+                    _pend['ts'] = current_time
+                    if _pend['frames'] < _need_frames:
+                        continue
+                    self._container_entry_pending.pop(_pkey, None)
+
                 box_state['items_ever_seen'][item_tid] = {
                     'label': item_label,
                     'display_id': item_did,
@@ -231,6 +295,13 @@ class ContainerGroupingMixin:
                 }
                 box_state['item_class_counts'][item_label] = \
                     box_state['item_class_counts'].get(item_label, 0) + 1
+
+        # v3.50 齐件即结算: 待入账缓冲要求"连续"帧 — 本帧没刷新的条目作废
+        if getattr(self, '_container_entry_pending', None):
+            for _pk in [k for k, p in self._container_entry_pending.items()
+                        if p.get('ts', 0) < current_time]:
+                self._container_entry_pending.pop(_pk, None)
+
         
         # v3.3.0 scan_pair (码-码闭环结算) 模式判定: 由 mes_hooks 在扫码事件里
         # 维护 cycle 节奏, 这里关掉 gone-confirm 触发的自动 _settle_box. 仅维护
@@ -261,6 +332,37 @@ class ContainerGroupingMixin:
                            'w': bs['bbox']['w'], 'h': bs['bbox']['h']}
                     if self._is_in_roi(det):
                         bs['had_roi'] = True
+
+                # v3.50 齐件即结算: 箱内账本"曾齐过"即刻结算该箱, 箱子转入
+                # "已结算等离开"状态 (照抄 scan_d "已扫码等离场"思路).
+                # 守门: 扫码配对互斥 / force_settle 并发保护 / 期望清单为空不触发
+                # (空清单 is_complete 恒 True, 会在建箱当帧误结算).
+                if (settle_on_complete and bs['was_complete']
+                        and expected_no_container
+                        and not scan_pair_active
+                        and not getattr(self, '_force_settling_in_progress', False)):
+                    _box_tid = None
+                    for _t, _o in self._tracking_objects.items():
+                        if (_o.get('class_name') == container_label
+                                and _o.get('display_id') == box_did):
+                            _box_tid = _t
+                            break
+                    _box_bbox = dict(bs.get('bbox') or {})
+                    print(f"[Container] 齐件即结算: {box_did} 凑齐 "
+                          f"{bs['item_class_counts']} → 立即结算 (转入等待离场)",
+                          flush=True)
+                    _sd = pcfg.get('settle_dedup', False)
+                    if _sd and not self.current_cycle_uuid:
+                        self.start_cycle()
+                    self._settle_box(box_did, expected_items)
+                    if _box_tid is not None:
+                        self._box_settled_waiting_exit[_box_tid] = {
+                            'ts': current_time,
+                            'bbox': _box_bbox,
+                            'gone_frames': 0,
+                            'seen_this_frame': True,
+                        }
+                    continue
 
         # Per-box gone confirmation (same pattern as cycle-level settlement)
         # 注意: _settle_box 会调 _end_cycle, _end_cycle 会清空 _box_objects,
@@ -298,6 +400,24 @@ class ContainerGroupingMixin:
                 if bs.get('gone_frames', 0) > 0:
                     print(f"[Container] {box_did} reappeared, reset ({bs['gone_frames']}/{gone_confirm_frames})")
                 bs['gone_frames'] = 0
+
+        # v3.50 齐件即结算: "已结算等离开"箱子的离场确认 — 连续 gone_confirm_frames
+        # 帧没再看见即清除状态 (之后同位置再出现的箱子按全新箱子入账). gone 确认后
+        # 只清状态, **不**二次结算 (结算已在凑齐当帧做完).
+        if getattr(self, '_box_settled_waiting_exit', None):
+            _gcf = max(1, int(gone_confirm_frames or 30))
+            for _wtid in list(self._box_settled_waiting_exit.keys()):
+                _ws = self._box_settled_waiting_exit.get(_wtid)
+                if _ws is None:
+                    continue
+                if _ws.pop('seen_this_frame', False):
+                    _ws['gone_frames'] = 0
+                else:
+                    _ws['gone_frames'] = _ws.get('gone_frames', 0) + 1
+                    if _ws['gone_frames'] >= _gcf:
+                        self._box_settled_waiting_exit.pop(_wtid, None)
+                        print(f"[Container] 已结算箱 (tid={_wtid}) 确认离场, "
+                              f"清除等待状态", flush=True)
 
     def _settle_box(self, box_display_id: str, expected_items: dict, *,
                     via_scan_pair: bool = False,

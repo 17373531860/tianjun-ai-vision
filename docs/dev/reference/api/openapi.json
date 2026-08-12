@@ -9539,9 +9539,19 @@
       "title": "Primary Settle Min Items",
       "type": "integer"
      },
+     "rearm_forget_last": {
+      "default": false,
+      "title": "Rearm Forget Last",
+      "type": "boolean"
+     },
      "rebind_mode": {
       "default": "rescan",
       "title": "Rebind Mode",
+      "type": "string"
+     },
+     "resume_on": {
+      "default": "cycle_end",
+      "title": "Resume On",
       "type": "string"
      },
      "scan_d_geometry": {
@@ -9591,6 +9601,11 @@
      "scan_required": {
       "default": false,
       "title": "Scan Required",
+      "type": "boolean"
+     },
+     "strict_ok_dedup": {
+      "default": false,
+      "title": "Strict Ok Dedup",
       "type": "boolean"
      },
      "throttle_idle_ms": {
@@ -9909,6 +9924,17 @@
       ],
       "title": "Primary Settle Min Items"
      },
+     "rearm_forget_last": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Rearm Forget Last"
+     },
      "rebind_mode": {
       "anyOf": [
        {
@@ -9919,6 +9945,17 @@
        }
       ],
       "title": "Rebind Mode"
+     },
+     "resume_on": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Resume On"
      },
      "scan_d_geometry": {
       "anyOf": [
@@ -9998,6 +10035,17 @@
        }
       ],
       "title": "Scan Required"
+     },
+     "strict_ok_dedup": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Strict Ok Dedup"
      },
      "throttle_idle_ms": {
       "anyOf": [
@@ -26195,6 +26243,51 @@
      }
     },
     "summary": "List Scan Logs",
+    "tags": [
+     "Scanner",
+     "Scanner"
+    ]
+   }
+  },
+  "/api/v1/scanner/resume": {
+   "post": {
+    "description": "v3.50 人工恢复扫码 — `resume_on='ok_only'` 下 NG 保持灭灯的人工出口。\n\n对绑定该工位、处于\"扫到码等恢复\"状态 (once_per_cycle / D 模式) 的\ntext_lon 扫码器无条件解除灭灯锁, 让 listen loop 重新续 LON。\n监控页\"恢复扫码\"按钮与触发中心 `resume_scanner` 动作共用本语义。",
+    "operationId": "resume_scanner_api_v1_scanner_resume_post",
+    "parameters": [
+     {
+      "description": "工位号",
+      "in": "query",
+      "name": "channel_id",
+      "required": false,
+      "schema": {
+       "default": 0,
+       "description": "工位号",
+       "title": "Channel Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "人工恢复扫码 (重新亮灯)",
     "tags": [
      "Scanner",
      "Scanner"

@@ -975,9 +975,11 @@ class SessionLifecycleMixin:
                         print(f"[PackagingFlow] on_cycle_settled error (isolated, non-fatal): {_e}")
 
                     # v2.7.16: once_per_cycle 模式下, 周期结束都让扫码器恢复扫描.
+                    # v3.50: 带上结算结果, resume_on='ok_only' 的扫码器 NG 不恢复.
                     try:
                         from backend.services.scanner import get_scanner_service
-                        get_scanner_service().resume_after_cycle(_channel_id)
+                        get_scanner_service().resume_after_cycle(
+                            _channel_id, is_good=bool(final_is_good))
                     except Exception as e:
                         print(f"[Scanner] resume_after_cycle error (ch={_channel_id}): {e}",
                               flush=True)

@@ -50,7 +50,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `/sms/*` | `sms.py` | `sms.js` | 系统级统一短信通道 + NG 汇总通知（config/ports/test；通道五选一 at_modem/generic_http/wxpusher/aliyun/tencent，日报共用此配置，默认关） |
 | `/sms-report/*` | `sms_report.py` | `smsReport.js` | v3.46 每日短信日报（规则 CRUD/试发/预览/日志 + `/providers` 只读通道信息；通道配置走 `/sms/config`） |
 | `/workstations/*` | `channel_manager.py` | `detection.js`（混在其中） | 多工位 + GPU 分配 |
-| `/scanner/*` | `scanner.py` | `scanner.js` | 扫码器 CRUD + scan_pair + disable-toggle |
+| `/scanner/*` | `scanner.py` | `scanner.js` | 扫码器 CRUD + scan_pair + disable-toggle + resume（v3.50 人工恢复） |
 | `/scanner/wmax/*` | `wmax.py` | `wmax.js` | WMax 三端口协议（35+ 端点） |
 | `/external-devices/*` | `external_device.py` | `external_device.js` | 称重器/串口外设（list/create **要尾斜杠**） |
 | `/cluster/*` | `cluster.py` | `cluster.js` | 集群主从 + 心跳 + box 聚合 |
@@ -239,6 +239,7 @@ export function getBackendHost() {
 ### 4.3 scanner / wmax / mes / gateway
 
 - 所有 scanner 状态查询（`/status` `/latest/{ch}` `/logs` `/check-container-mode` `/scan-pair/*` `/disable-*`）都在静态路径区；具体设备 CRUD 走 `/devices/{id}`。
+- `POST /scanner/resume?channel_id=N`（v3.50）— 人工恢复扫码（`resume_on='ok_only'` 下 NG 灭灯的出口）。前端在 `Monitor/index.vue` 直接 `api.post` 调用（未进 `scanner.js` 封装）；同能力还有触发中心 `resume_scanner` 动作。设备三个新字段 `resume_on / rearm_forget_last / strict_ok_dedup` 走既有 `/devices` CRUD。
 - `/mes/gateway/connections/by-channel?channel=N` 是 v2.6.0 新增，按通道查绑定的连接。
 - `/mes/orders/{id}/extra-data`（PUT）— 工单自定义字段，前端 `mes.js::updateOrderExtraData`。
 

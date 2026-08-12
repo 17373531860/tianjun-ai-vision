@@ -206,6 +206,7 @@ _db_backup/
 tests/uat/*.png
 tests/uat/*.webm
 tests/uat/evidence_*/
+tests/uat/settle_scan_*/
 
 # 测试临时输出
 tests/_ar_*.txt

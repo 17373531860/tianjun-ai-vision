@@ -297,6 +297,16 @@ def _init_tracking_state(h):
     h._tracking_registered_positions = {}
     h._custom_tracker_yaml = None
 
+    # v3.50 齐件即结算 (pipeline_config.tracking_settle_on_complete, 默认关):
+    # _tracking_entry_pending: {track_id: {'label','frames','ts'}} 新物品"确认放入帧数"
+    #   待入账缓冲 — 连续 N 帧被看见才真正分配 display_id / 计数 (_reset_counting_cycle 清).
+    # _settle_complete_exempt: {track_id: {'ts','bbox'}} 凑齐即结算时在场物品的豁免名单,
+    #   离场前不计入下一周期 (防"结算后同帧连环开假周期"). 注意: 故意**不**在
+    #   _reset_counting_cycle 里清 — 结算本身就会触发 reset, 清了豁免就失效;
+    #   过期由 _update_tracking_stats 按 max_lost_sec 自然回收.
+    h._tracking_entry_pending = {}
+    h._settle_complete_exempt = {}
+
 
 def _init_event_counter_state(h):
     """Event counting 模式 (动作计数) 状态"""
@@ -328,6 +338,13 @@ def _init_container_state(h):
     h._box_objects = {}
     h._box_counter = 0
     h._box_settled_results = []
+    # v3.50 齐件即结算 (容器): "已结算等离开"的箱子 {box_track_id: {'ts','bbox','gone_frames'}}
+    # — 凑齐即结算后箱子还在画面里, 离场前禁止重建 ledger / 再入账 (照抄 scan_d
+    # "已扫码等离场"思路, 但按 track_id 键控, 防止 display_id 跨周期复用串台).
+    # _container_entry_pending: {(box_did, item_tid): {'frames','ts'}} 箱内物品
+    # "确认放入帧数"待入账缓冲.
+    h._box_settled_waiting_exit = {}
+    h._container_entry_pending = {}
     # v3.1.2: 多工位广播结算联动 - 标识当前是否处于"被联动强制结算"中,
     # 用于阻断 _settle_box → end_cycle → notify_cycle_settled → 又回到本工位的循环.
     h._force_settling_in_progress = False

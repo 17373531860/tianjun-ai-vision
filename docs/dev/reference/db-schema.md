@@ -895,6 +895,9 @@ ORM 类 `ScannerDevice`，定义于 `backend/models/mes_models.py`。
 | `scan_d_line` | JSON |  |  |
 | `scan_d_zone` | JSON |  |  |
 | `scan_d_gone_confirm_frames` | INTEGER |  | 30 |
+| `resume_on` | VARCHAR(16) |  | 'cycle_end' |
+| `rearm_forget_last` | BOOLEAN |  | False |
+| `strict_ok_dedup` | BOOLEAN |  | False |
 | `created_at` | DATETIME |  | server |
 | `updated_at` | DATETIME |  | server |
 

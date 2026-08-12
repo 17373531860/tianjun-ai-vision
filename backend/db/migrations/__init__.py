@@ -46,6 +46,7 @@ _MIGRATION_MODULES = [
     # SY9 分支原编号 m0006 与主线 sms 迁移撞号, 合入时重编号 m0009
     # (apply 幂等补列, 上银现场老库若已按旧 ID 记账, 重跑也零影响)
     "m0009_pkg_tail_paper_only_after_awaiting",
+    "m0010_scanner_lifecycle",
 ]
 
 # m0000 不看记账、每次启动都幂等跑（老库任意版本起跳的安全网）

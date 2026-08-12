@@ -47,6 +47,10 @@ class ScannerCreate(BaseModel):
     scan_d_line: Optional[dict] = None
     scan_d_zone: Optional[list] = None
     scan_d_gone_confirm_frames: int = 30
+    # v3.50 扫码器生命周期 (默认值 = 现状行为)
+    resume_on: str = "cycle_end"
+    rearm_forget_last: bool = False
+    strict_ok_dedup: bool = False
 
 
 class ScannerUpdate(BaseModel):
@@ -81,6 +85,10 @@ class ScannerUpdate(BaseModel):
     scan_d_line: Optional[dict] = None
     scan_d_zone: Optional[list] = None
     scan_d_gone_confirm_frames: Optional[int] = None
+    # v3.50 扫码器生命周期
+    resume_on: Optional[str] = None
+    rearm_forget_last: Optional[bool] = None
+    strict_ok_dedup: Optional[bool] = None
 
 
 class ScannerSimulate(BaseModel):
@@ -120,6 +128,10 @@ def _serialize_device(d):
         "scan_d_line": getattr(d, 'scan_d_line', None),
         "scan_d_zone": getattr(d, 'scan_d_zone', None),
         "scan_d_gone_confirm_frames": int(getattr(d, 'scan_d_gone_confirm_frames', 30) or 30),
+        # v3.50 扫码器生命周期
+        "resume_on": getattr(d, 'resume_on', 'cycle_end') or 'cycle_end',
+        "rearm_forget_last": bool(getattr(d, 'rearm_forget_last', False)),
+        "strict_ok_dedup": bool(getattr(d, 'strict_ok_dedup', False)),
     }
 
 
@@ -336,6 +348,24 @@ def simulate_scan(body: ScannerSimulate):
     finally:
         db.close()
     return result
+
+
+@router.post("/resume", summary="人工恢复扫码 (重新亮灯)")
+def resume_scanner(channel_id: int = Query(0, description="工位号")):
+    """v3.50 人工恢复扫码 — `resume_on='ok_only'` 下 NG 保持灭灯的人工出口。
+
+    对绑定该工位、处于"扫到码等恢复"状态 (once_per_cycle / D 模式) 的
+    text_lon 扫码器无条件解除灭灯锁, 让 listen loop 重新续 LON。
+    监控页"恢复扫码"按钮与触发中心 `resume_scanner` 动作共用本语义。
+    """
+    svc = get_scanner_service()
+    resumed = svc.resume_scanning_manual(channel_id)
+    return {
+        "success": True,
+        "resumed": resumed,
+        "message": (f"已恢复 {len(resumed)} 台扫码器: {', '.join(resumed)}"
+                    if resumed else "该工位没有等待恢复的扫码器"),
+    }
 
 
 @router.get("/status")

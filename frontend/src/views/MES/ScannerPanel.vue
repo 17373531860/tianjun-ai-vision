@@ -229,7 +229,9 @@
           <div v-if="form.bind_timing === 'scan_pair'" class="text-xs text-amber-300 mt-1">
             码-码闭环模式: 系统强制 <b>先扫后检 (开)</b>、<b>扫描模式 ≠ C 单次/周期</b>、
             <b>迟到补绑 = 0 秒</b>。下面相关字段已自动锁定。判 OK/NG 依据"窗口内是否曾齐过"
-            而非物理消失。
+            而非物理消失。<br/>
+            与项目逻辑设置的<b>"全部合格立即结算"（齐件即结算）互斥</b>：
+            该通道走码-码闭环时齐件即结算不生效，周期节奏由扫码事件主导。
           </div>
         </el-form-item>
         <el-form-item v-if="form.bind_timing === 'scan_pair'" label="超时秒数">
@@ -328,13 +330,56 @@
             填 <b>0</b> 等同于 A 模式；推荐 300–800 ms。
           </div>
         </el-form-item>
+        <!-- v3.50 扫码器生命周期 (捷昌二期"码-合格-码"闭环) -->
+        <el-form-item label="重新亮灯时机">
+          <el-select v-model="form.resume_on" class="w-full" :disabled="!lifecycleApplicable">
+            <el-option label="周期结束（默认，OK / NG 都重新亮灯）" value="cycle_end" />
+            <el-option label="仅合格（OK 才自动亮灯，NG 保持灭灯等人工恢复）" value="ok_only" />
+          </el-select>
+          <div class="text-xs text-gray-500 mt-1">
+            <template v-if="lifecycleApplicable">
+              仅"扫到码灭灯"的模式（C 单次/周期、D 容器跨线）生效。
+              <b>仅合格</b>：NG 结算后扫码器保持灭灯，出口为监控页"恢复扫码"按钮、
+              触发中心 <code>resume_scanner</code> 动作（脚踏板 / PLC）或重新开始检测；
+              节拍优先的现场建议保持<b>周期结束</b>并配合下方"强制去重"挡旧码。
+            </template>
+            <span v-else class="text-amber-400">
+              {{ form.device_type === 'usb_hid'
+                  ? 'USB 键盘扫码枪无灯控，本项不适用'
+                  : '仅 LON/LOFF 协议且扫描模式为 C / D 时生效' }}
+            </span>
+          </div>
+        </el-form-item>
+        <el-form-item label="亮灯作废旧码">
+          <el-switch v-model="form.rearm_forget_last" :disabled="!lifecycleApplicable" />
+          <div class="text-xs text-gray-500 mt-1">
+            <template v-if="lifecycleApplicable">
+              重新亮灯（恢复扫描）时清掉<b>未绑定</b>的旧码并重置同码去重缓存，
+              保证上一周期残留的旧码不会自动挂到新周期，工人有意重扫同码也不被去重吞掉。
+              默认关 = 现状行为。
+            </template>
+            <span v-else class="text-amber-400">
+              {{ form.device_type === 'usb_hid'
+                  ? 'USB 键盘扫码枪无灯控，本项不适用'
+                  : '仅 LON/LOFF 协议且扫描模式为 C / D 时生效' }}
+            </span>
+          </div>
+        </el-form-item>
+        <el-form-item label="强制去重">
+          <el-switch v-model="form.strict_ok_dedup" />
+          <div class="text-xs text-gray-500 mt-1">
+            已判<span class="text-green-400">合格</span>的条码<b>永久拒绝</b>再次绑定
+            （下方"OK 后同码冷却"的无限版），拒绝时弹警告提示。适用于"一码一件、
+            绝不返扫"的强校验产线。默认关；NG 工件不受限制，可重扫复检。
+          </div>
+        </el-form-item>
         <el-form-item label="OK 后同码冷却">
           <el-input-number v-model="form.ok_rescan_cooldown_sec" :min="0" :max="600" :precision="0" class="w-full" controls-position="right">
             <template #append>秒</template>
           </el-input-number>
           <div class="text-xs text-gray-500 mt-1">
             同条码对应的工件上次检测<span class="text-green-400">合格</span>后、
-            这么多秒内再次扫到将被静默忽略（避免搬运抖动产生脏数据）。
+            这么多秒内再次扫到将被忽略并弹警告提示（避免搬运抖动产生脏数据）。
             设 <b>0</b> 关闭；NG 工件不受此限制，可立即重扫复检。建议填满一个节拍时间。
           </div>
         </el-form-item>
@@ -678,8 +723,21 @@ const defaultForm = () => ({
   scan_d_line: null,
   scan_d_zone: null,
   scan_d_gone_confirm_frames: 30,
+  // v3.50 扫码器生命周期 (捷昌二期): 默认值 = 现状行为
+  //   resume_on: 'cycle_end' (OK/NG 都重新亮灯) | 'ok_only' (仅 OK, NG 等人工恢复)
+  //   rearm_forget_last: 重新亮灯时作废未绑定旧码 + 重置去重缓存
+  //   strict_ok_dedup: 已判 OK 的条码永久拒绝
+  resume_on: 'cycle_end',
+  rearm_forget_last: false,
+  strict_ok_dedup: false,
 })
 const form = ref(defaultForm())
+
+// v3.50: 重新亮灯时机/作废旧码 仅对"扫到码灭灯"的模式有意义
+// (text_lon 协议 + 扫描模式 C 单次/周期 或 D 容器跨线); USB 键盘枪无灯控.
+const lifecycleApplicable = computed(() =>
+  form.value.device_type === 'text_lon'
+  && ['once_per_cycle', 'D'].includes(form.value.scan_mode))
 
 // v3.4.0 切到 D (容器跨线触发) 时校验绑定工位是否容器模式项目
 const lastNonDScanMode = ref('continuous')

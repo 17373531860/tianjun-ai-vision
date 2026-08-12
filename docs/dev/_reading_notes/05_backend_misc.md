@@ -64,7 +64,7 @@
 |---|---|---|
 | `manager.py` | 196 | 触发源管理单例：每启用源一实例；`on_channel_removed` 挂 channel_manager 裁撤清理（第 5 处配套清理） |
 | `engine.py` | 229 | 规则评估：防抖 debounce / min_interval / 生效时间窗拦截 → 动作链执行 |
-| `actions.py` | 347 | **全局动作注册表**（PLC 规则与触发中心共用）：manual_settle / trigger_event / ack_alarm / start_detection 等 |
+| `actions.py` | 369 | **全局动作注册表**（PLC 规则与触发中心共用）：manual_settle / trigger_event / ack_alarm / start_detection 等；v3.50 加 `resume_scanner`（= `ScannerService.resume_scanning_manual`，`resume_on='ok_only'` 下 NG 灭灯的脚踏板/PLC 人工出口） |
 | `presets.py` | 126 | 触发源模板（虚拟按钮遮挡结算等） |
 | `sources/`（8 文件） | ~900 | `base.py` 抽象 + pixel_region（画面像素区域亮度/遮挡，参考帧缓漂 ref_drift）/ hid_key（脚踏板/USB 键）/ http_source（带 IP 白名单+变量提取）/ serial_pattern（串口报文正则）/ timer_source（间隔+每日定点）/ mock |
 

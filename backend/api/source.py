@@ -962,6 +962,15 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         self._box_objects.clear()
         self._box_counter = 0
         self._box_settled_results = []
+
+        # v3.50 齐件即结算: 待入账缓冲清空 (新周期重新确认帧数);
+        # 豁免名单 _settle_complete_exempt / 等待离场 _box_settled_waiting_exit
+        # 故意**不**清 — 结算路径会调本函数, 清了防二次入账就失效,
+        # 过期回收在 _update_tracking_stats / _update_container_grouping 里做.
+        if getattr(self, '_tracking_entry_pending', None):
+            self._tracking_entry_pending.clear()
+        if getattr(self, '_container_entry_pending', None):
+            self._container_entry_pending.clear()
     
     def _is_in_roi(self, det: dict) -> bool:
         """Check if detection center falls within the configured ROI polygon (ray-casting)."""

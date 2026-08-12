@@ -434,6 +434,11 @@
                   <span class="cursor-help border-b border-dashed border-gray-500">最大识别数</span>
                 </el-tooltip>
               </th>
+              <th v-if="settleOnCompleteActive" class="p-2 w-24">
+                <el-tooltip content="齐件即结算模式下，新物品需连续被看见多少帧才计入账本（默认1=看见即入账；调大可抑制误检/叠放瞬时凑数导致的提前结算）。仅跟踪计数模式生效" placement="top">
+                  <span class="cursor-help border-b border-dashed border-gray-500">确认放入帧数</span>
+                </el-tooltip>
+              </th>
               </template>
               <template v-if="project.logic_mode !== 'tracking'">
               <th class="p-2 w-28">
@@ -653,6 +658,20 @@
                   :controls="false"
                   :disabled="step.count_mode !== 'track'"
                   placeholder="无上限"
+                  class="w-full"
+                />
+              </td>
+              <td v-if="settleOnCompleteActive" class="p-2">
+                <el-input-number
+                  v-model="step.settle_confirm_frames"
+                  data-testid="settle-confirm-frames-input"
+                  size="small"
+                  :min="1"
+                  :step="1"
+                  :precision="0"
+                  :controls="false"
+                  :disabled="step.count_mode !== 'track'"
+                  placeholder="1"
                   class="w-full"
                 />
               </td>
@@ -1163,6 +1182,14 @@ const onDetectRoleChange = (step, val) => {
   step.detect_role = val;
   if (val === 'item') ensureMixItemDefaults(props.project, step);
 };
+
+// v3.50 齐件即结算: 仅逻辑设置开了"全部合格立即结算"且策略为 ROI离开/容器时,
+// 步骤表才露出"确认放入帧数"列
+const settleOnCompleteActive = computed(() => {
+  const p = props.project;
+  return !!(p && p.tracking_settle_on_complete
+    && ['roi_exit', 'container'].includes(p.tracking_cycle_strategy));
+});
 
 // ==================== v3.35 步骤外设门控（融合模式：视觉 SOP + 秤门控） ====================
 // 顺序类模式专属；启用任一门控 → 注入 pipeline_config.weighing（drive_mode='step_gate'），
