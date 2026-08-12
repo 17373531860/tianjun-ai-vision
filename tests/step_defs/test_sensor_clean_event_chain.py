@@ -82,6 +82,23 @@ def _box(label, x, y, conf=0.9, w=0.04, h=0.04):
 # 背景: 真工位管理 + 真 PluginHost + 监听报警路由
 # ============================================================
 
+@pytest.fixture(scope="module", autouse=True)
+def _restore_channel_count():
+    """v3.50 修污染: 本模块把全局 ChannelManager 单例改成 2 工位且给
+    mgr0/mgr1 硬灌 901/902 项目配置, 之前跑完不还原 —— 后续模块的项目
+    激活会走多工位绑定语义, 状态跨几十个模块累积, 最终让
+    test_simultaneous_groups_v38 的顺序结算测试在 CI 门里踩空
+    (cycle_times=[])。用完必须恢复原工位数 (set_channel_count 自带
+    5 处配套清理, 见 AGENTS.md 不变量第 4 条)。"""
+    from backend.api.channel_manager import channel_manager
+    original = channel_manager.channel_count
+    yield
+    try:
+        channel_manager.set_channel_count(original)
+    except Exception as e:
+        print(f"[BDD-cleanup] restore channel_count failed: {e}")
+
+
 @given("工位1(计件)与工位2(换棉签)已挂含合格OK和不良NG事件的项目")
 def given_two_channels_with_events(ctx):
     from backend.api.channel_manager import channel_manager
