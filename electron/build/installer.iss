@@ -331,8 +331,9 @@ begin
   DeleteFile(PwFile);
 
   // 端口钉到 5433 (追加到 postgresql.conf 尾部, 后写覆盖先写).
-  SaveStringToFile(PgData + '\postgresql.conf',
-    #13#10 + 'port = 5433' + #13#10 + 'listen_addresses = ''127.0.0.1''' + #13#10, True);
+  { 注意: 续行不能以 #13#10 开头 — ISPP 会把行首 # 当预处理指令直接编译失败 }
+  SaveStringToFile(PgData + '\postgresql.conf', #13#10 +
+    'port = 5433' + #13#10 + 'listen_addresses = ''127.0.0.1''' + #13#10, True);
 
   // 注册 Windows 服务 (开机自启) 并启动.
   Exec(PgBin + '\pg_ctl.exe',
