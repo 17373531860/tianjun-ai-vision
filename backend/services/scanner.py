@@ -1037,11 +1037,16 @@ class ScannerService:
             if (not manual
                     and self._effective_resume_on(conn) == 'ok_only'
                     and is_good is not True):
-                if not getattr(conn, '_resume_blocked', False):
+                # v3.50.1: 只有"明确 NG 结算"才标 _resume_blocked (前端弹"恢复
+                # 扫码"). is_good=None 只是"这次调用不知道结果", 不等于 NG —
+                # 来源有 start_cycle 的 v2.7.17 死锁兜底 (每开一个周期都调一次)
+                # 和 D 模式 box gone. 之前一律标 blocked, 导致 E 枪扫码开周期
+                # 当场就挂出"恢复扫码"按钮 (现场实测), 操作员一点就在本单还没
+                # 结算时放行下一码, 闭环破掉. 未知结果只保持灭灯, 不惊动人。
+                if is_good is False and not getattr(conn, '_resume_blocked', False):
                     conn._resume_blocked = True
                     print(f"[Scanner] resume_after_cycle(ch={channel_id}) "
-                          f"{conn.name}: resume_on=ok_only 且结果"
-                          f"{'为 NG' if is_good is False else '未知'} → 保持灭灯, "
+                          f"{conn.name}: resume_on=ok_only 且结果为 NG → 保持灭灯, "
                           f"等人工恢复 (监控页按钮/触发中心 resume_scanner)",
                           flush=True)
                 continue

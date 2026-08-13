@@ -1767,10 +1767,19 @@ class MESHookManager:
             if q:
                 self._pending_workpiece[channel_id] = q[0]
 
-        self._workpiece_svc.mark_inspecting(db, wp_id)
-        self._workpiece_svc.link_to_cycle(
-            db, wp_id, cycle_id, session_id=session_id, channel_id=channel_id
-        )
+        # 落库失败也必须登记 inspecting: pending 上面已经 pop 掉了, 这里再抛出去
+        # 工件就两头都不在 (不变量 14), 前端永远显示未绑码, 开了"扫码后才计数"
+        # 更是直接一件不记。DB 记录可以补, 在检身份不能丢。
+        try:
+            self._workpiece_svc.mark_inspecting(db, wp_id)
+            self._workpiece_svc.link_to_cycle(
+                db, wp_id, cycle_id, session_id=session_id, channel_id=channel_id
+            )
+        except Exception as e:
+            self._inspecting_workpiece[channel_id] = wp_id
+            print(f"[MES] Cycle#{cycle_id} 工件#{wp_id} 落库关联失败 "
+                  f"(在检身份已保留): {e}", flush=True)
+            raise
 
         self._inspecting_workpiece[channel_id] = wp_id
 

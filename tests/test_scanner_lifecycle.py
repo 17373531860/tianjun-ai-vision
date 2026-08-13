@@ -60,10 +60,26 @@ def test_ok_only_blocks_ng():
 
 
 def test_ok_only_blocks_unknown():
-    """ok_only 下结果未知 (None) 视同非 OK, 不自动恢复。"""
+    """ok_only 下结果未知 (None) 不自动恢复, 但也不算"需要人工恢复"。
+
+    None 的来源是 start_cycle 的 v2.7.17 死锁兜底 (每开一个周期都调一次) 和
+    D 模式 box gone, 不是 NG 结算。现场实测: 之前一律标 blocked, E 枪一扫码
+    开周期就挂出"恢复扫码"按钮, 操作员一点就在本单未结算时放行下一码。
+    """
     svc, conn = _mk_service(resume_on="ok_only")
     assert svc.resume_after_cycle(0, is_good=None) == []
-    assert conn._resume_blocked is True
+    assert conn._wait_cycle_resume is True, "结果未知仍保持灭灯"
+    assert conn._resume_blocked is False, "未知结果不得弹恢复按钮"
+
+
+def test_ok_only_cycle_start_fallback_does_not_block():
+    """模拟 start_cycle 死锁兜底: 扫码灭灯 → 开周期 (兜底不传结果) → 不弹按钮。"""
+    svc, conn = _mk_service(resume_on="ok_only", scan_mode="E")
+    svc.resume_after_cycle(0)           # start_cycle 兜底, 无 is_good
+    assert conn._wait_cycle_resume is True
+    assert svc.is_resume_blocked(0) is False
+    # 本单结算 OK → 正常亮灯
+    assert svc.resume_after_cycle(0, is_good=True) == ["枪1"]
 
 
 def test_ok_only_resumes_on_ok():
