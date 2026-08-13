@@ -739,6 +739,10 @@ class ScannerService:
                 # v3.50: 用户主动"开始检测" = 人工意志, 清掉 ok_only NG 拦停
                 conn._resume_blocked = False
                 conn._next_lon_after = 0.0
+                # v3.50.1: 广播全 OK 门控的已 OK 集合跨会话作废 — 停止后重开
+                # 并重扫同一箱码时, 上一轮某工位的 OK 不得残留计入本轮
+                conn._ok_ready_marker = None
+                conn._ok_ready_channels = set()
                 # 各 scan_mode (含 D) 开始检测都先发首次 LON, 灯立即亮.
                 # 后续 ERROR 由 listen loop 自动续 LON 维持工作.
                 if self._text_lon_send(conn, b"LON\r\n", "LON (开始扫码)"):
@@ -889,6 +893,9 @@ class ScannerService:
                 conn._wait_cycle_resume = False
                 conn._resume_blocked = False
                 conn._next_lon_after = 0.0
+                # v3.50.1: 同 start_scanning — 已 OK 集合不跨会话
+                conn._ok_ready_marker = None
+                conn._ok_ready_channels = set()
             else:
                 self._wmax_trigger(conn, on=False)
         if targets:

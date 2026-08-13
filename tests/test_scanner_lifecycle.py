@@ -272,6 +272,32 @@ def test_e_mode_broadcast_waits_all_ok(monkeypatch):
     assert svc.resume_after_cycle(1, is_good=True) == ["枪1"]
 
 
+def test_broadcast_ok_set_not_leaked_across_sessions(monkeypatch):
+    """v3.50.1 边角: 广播枪某工位 OK 后停止检测 → 重开 → 重扫同一箱码,
+    上一轮的已 OK 集合必须作废, 不得残留计入本轮。"""
+    from backend.services.scanner import ScannerService
+    monkeypatch.setattr(ScannerService, "_known_channel_count",
+                        classmethod(lambda cls: 2))
+    svc, conn = _mk_service(scan_mode="E")
+    conn.broadcast_channels = [0, 1]
+    conn.last_scan = "SN-SAME-BOX"
+    conn.status = "connected"
+    monkeypatch.setattr(svc, "_detecting_channels", lambda bound: {0, 1})
+    svc._text_lon_send = lambda c, cmd, tag="": True
+
+    # 第一轮: ch0 先 OK (集合 = {0}), 然后停止/重开会话
+    assert svc.resume_after_cycle(0, is_good=True) == []
+    assert conn._ok_ready_channels == {0}
+    svc.stop_scanning(0)
+    svc.start_scanning(0)
+    assert conn._ok_ready_marker is None and conn._ok_ready_channels == set()
+
+    # 第二轮重扫同一码: 只有 ch1 OK 不够 (ch0 的旧 OK 不能算), 灯不亮
+    conn._wait_cycle_resume = True
+    assert svc.resume_after_cycle(1, is_good=True) == []
+    assert svc.resume_after_cycle(0, is_good=True) == ["枪1"]
+
+
 # ==================== rearm_forget_last ====================
 
 def test_rearm_forget_resets_dedup_and_clears_pending():
