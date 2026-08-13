@@ -220,6 +220,49 @@ def _apply_exposure_setting(cap, auto_exposure: bool, exposure_value: float,
         }
 
 
+# device_index → 上次成功打开它的 cv2 后端常量 (进程内, 机器级资源所以不挂实例)。
+_LAST_OK_CAMERA_BACKEND: dict = {}
+
+
+def _open_camera_capture(device_index: int, max_rounds: int = 3):
+    """按"后端候选 × 退避重试"打开相机, 返回 (capture, backend_id)。
+
+    打不开返回 (None, None), 由调用方决定怎么报错。
+
+    Windows 上原来只试 DirectShow 且三次重试挤在 1.5s 内, 现场因此丢过源:
+    相机被"项目二次激活"停掉后马上重开, DSHOW 偶发拿不到 index
+    (VIDEOIO(DSHOW): can't be used to capture by index) 就三连失败,
+    视频源恢复直接放弃 → 监控页黑屏只能人工重选输入源。同一台相机 MSMF
+    能开, 所以候选里兜一发 MSMF, 并记住上次成功的后端优先试。
+    """
+    if platform.system() == "Windows":
+        candidates = [cv2.CAP_DSHOW, cv2.CAP_MSMF]
+        last_ok = _LAST_OK_CAMERA_BACKEND.get(device_index)
+        if last_ok in candidates:
+            candidates.remove(last_ok)
+            candidates.insert(0, last_ok)
+    else:
+        candidates = [None]
+
+    for rnd in range(max_rounds):
+        for backend in candidates:
+            cap = (cv2.VideoCapture(device_index) if backend is None
+                   else cv2.VideoCapture(device_index, backend))
+            if cap.isOpened():
+                if backend is not None:
+                    _LAST_OK_CAMERA_BACKEND[device_index] = backend
+                return cap, backend
+            cap.release()
+        if rnd < max_rounds - 1:
+            # 递增退避: Windows 释放 UVC 句柄要时间, 固定 0.5s 常常还没放开
+            wait = 0.5 * (rnd + 1)
+            print(f"[Camera] 打开摄像头 {device_index} 失败 (候选后端"
+                  f" {len(candidates)} 个都试过), {wait:.1f}s 后重试"
+                  f" {rnd + 2}/{max_rounds}...")
+            time.sleep(wait)
+    return None, None
+
+
 class CameraStartMixin:
     def start_camera(self, device_index: int = 0, width: int = 1280, height: int = 720, fps: int = 60,
                      auto_exposure: bool = True, exposure_value: float = -6.0):
@@ -234,24 +277,10 @@ class CameraStartMixin:
         # 等待一小段时间确保之前的资源已释放
         time.sleep(0.2)
         
-        # 尝试打开摄像头（支持重试）
-        max_retries = 3
-        for attempt in range(max_retries):
-            # Windows 上使用 DirectShow，Linux 上使用 V4L2
-            import platform
-            if platform.system() == "Windows":
-                self.capture = cv2.VideoCapture(device_index, cv2.CAP_DSHOW)
-            else:
-                self.capture = cv2.VideoCapture(device_index)
-            
-            if self.capture.isOpened():
-                break
-            
-            if attempt < max_retries - 1:
-                print(f"[Camera] 打开摄像头失败，重试 {attempt + 2}/{max_retries}...")
-                time.sleep(0.5)
-        
-        if not self.capture.isOpened():
+        # 尝试打开摄像头（后端候选 + 退避重试）
+        self.capture, opened_backend = _open_camera_capture(device_index)
+        if self.capture is None or not self.capture.isOpened():
+            self.capture = None
             raise Exception(f"无法打开摄像头 {device_index}，请检查设备是否被其他程序占用")
         
         fourcc_mjpg = cv2.VideoWriter_fourcc('M', 'J', 'P', 'G')
@@ -296,8 +325,10 @@ class CameraStartMixin:
         print(f"[Camera] 首次实测: {cc_str} @ {initial_bench_fps:.0f}fps (阈值 {bench_fps_threshold:.0f}fps)")
 
         # Strategy 2: 格式非 MJPG 或 实测 FPS 低于阈值, 实测对比各后端选最快
+        # 只有 DirectShow 开成功时才做"DSHOW vs MSMF"选优: 走到 MSMF 兜底说明
+        # DSHOW 这会儿根本开不了, 再按老流程释放去比一轮会把唯一能用的句柄丢掉。
         need_backend_probe = (cc_str != 'MJPG') or (initial_bench_fps < bench_fps_threshold)
-        if need_backend_probe and platform.system() == "Windows":
+        if need_backend_probe and opened_backend == cv2.CAP_DSHOW:
             dshow_fps = initial_bench_fps
             print(f"[Camera] DirectShow({cc_str}) 采用首次实测 {dshow_fps:.0f}fps")
 
@@ -327,8 +358,12 @@ class CameraStartMixin:
             else:
                 if msmf_cap.isOpened():
                     msmf_cap.release()
-                # 重新打开 DirectShow
-                self.capture = cv2.VideoCapture(device_index, cv2.CAP_DSHOW)
+                # 重新打开 DirectShow (刚才成功过, 但释放后偶发抢不回来 —
+                # 走候选兜底而不是拿一个没打开的 capture 往下跑成黑屏)
+                self.capture, opened_backend = _open_camera_capture(device_index)
+                if self.capture is None:
+                    raise Exception(
+                        f"无法重新打开摄像头 {device_index}，请检查设备是否被其他程序占用")
                 self.capture.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)
                 self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
                 self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)

@@ -625,6 +625,49 @@ if not os.environ.get("BACKEND_SKIP_INIT"):
         print(f"[启动] PackagingFlowCoordinator 加载失败 (隔离, 不影响主流程): {_e}")
 
 
+def _restore_one_video_source(ch_id: int, ch_cfg: dict, mgr) -> None:
+    """按配置把一个通道的视频源开起来 (抛异常由调用方处理)。"""
+    import os
+    src_type = ch_cfg.get("source_type")
+    if src_type == "camera":
+        dev_idx = ch_cfg.get("device_index", 0)
+        if isinstance(dev_idx, str):
+            parts = dev_idx.split("_")
+            dev_idx = int(parts[-1]) if parts[-1].isdigit() else 0
+        res = ch_cfg.get("resolution", "1280x720")
+        w, h = (int(x) for x in res.split("x")) if "x" in str(res) else (1280, 720)
+        fps = ch_cfg.get("fps", 60)
+        auto_exp = ch_cfg.get("auto_exposure", True)
+        exp_val = ch_cfg.get("exposure_value", -6.0)
+        mgr.start_camera(dev_idx, w, h, fps,
+                         auto_exposure=auto_exp,
+                         exposure_value=exp_val)
+        print(f"[启动] ch{ch_id} 自动恢复摄像头: device={dev_idx}, "
+              f"auto_exposure={auto_exp}, exposure={exp_val}")
+    elif src_type == "rtsp":
+        url = ch_cfg.get("url", "")
+        if url:
+            fps = ch_cfg.get("rtsp_fps", 25)
+            mgr.start_rtsp(url, fps)
+            print(f"[启动] ch{ch_id} 自动恢复RTSP: {url}")
+    elif src_type == "hcnetsdk":
+        ip = ch_cfg.get("hcnet_ip")
+        if ip:
+            port = ch_cfg.get("hcnet_port", 8000)
+            user = ch_cfg.get("hcnet_username", "admin")
+            pwd = ch_cfg.get("hcnet_password", "")
+            ch_no = ch_cfg.get("hcnet_channel", 1)
+            stream = ch_cfg.get("hcnet_stream_type", 1)
+            hc_fps = ch_cfg.get("hcnet_fps", 25)
+            mgr.start_hcnetsdk(ip, port, user, pwd, ch_no, stream, hc_fps)
+            print(f"[启动] ch{ch_id} 自动恢复海康SDK: {ip}")
+    elif src_type == "video":
+        vf = ch_cfg.get("video_file", "")
+        if vf and os.path.isfile(vf):
+            mgr.start_video(vf)
+            print(f"[启动] ch{ch_id} 自动恢复视频: {vf}")
+
+
 def auto_restore_video_sources():
     """后端启动时根据 workstation_config.json 自动恢复视频流 + GPU分配 + 检测状态"""
     from backend.api.channel_manager import channel_manager
@@ -633,6 +676,7 @@ def auto_restore_video_sources():
         sources = channel_manager.get_channel_sources()
         if not sources:
             return
+        failed: list = []   # 首轮起不来的通道, 整轮结束后隔几秒再补一次
         for ch_str, ch_cfg in sources.items():
             ch_id = int(ch_str)
             src_type = ch_cfg.get("source_type")
@@ -650,45 +694,26 @@ def auto_restore_video_sources():
             if mgr.is_running:
                 continue
             try:
-                if src_type == "camera":
-                    dev_idx = ch_cfg.get("device_index", 0)
-                    if isinstance(dev_idx, str):
-                        parts = dev_idx.split("_")
-                        dev_idx = int(parts[-1]) if parts[-1].isdigit() else 0
-                    res = ch_cfg.get("resolution", "1280x720")
-                    w, h = (int(x) for x in res.split("x")) if "x" in str(res) else (1280, 720)
-                    fps = ch_cfg.get("fps", 60)
-                    auto_exp = ch_cfg.get("auto_exposure", True)
-                    exp_val = ch_cfg.get("exposure_value", -6.0)
-                    mgr.start_camera(dev_idx, w, h, fps,
-                                     auto_exposure=auto_exp,
-                                     exposure_value=exp_val)
-                    print(f"[启动] ch{ch_id} 自动恢复摄像头: device={dev_idx}, "
-                          f"auto_exposure={auto_exp}, exposure={exp_val}")
-                elif src_type == "rtsp":
-                    url = ch_cfg.get("url", "")
-                    if url:
-                        fps = ch_cfg.get("rtsp_fps", 25)
-                        mgr.start_rtsp(url, fps)
-                        print(f"[启动] ch{ch_id} 自动恢复RTSP: {url}")
-                elif src_type == "hcnetsdk":
-                    ip = ch_cfg.get("hcnet_ip")
-                    if ip:
-                        port = ch_cfg.get("hcnet_port", 8000)
-                        user = ch_cfg.get("hcnet_username", "admin")
-                        pwd = ch_cfg.get("hcnet_password", "")
-                        ch_no = ch_cfg.get("hcnet_channel", 1)
-                        stream = ch_cfg.get("hcnet_stream_type", 1)
-                        hc_fps = ch_cfg.get("hcnet_fps", 25)
-                        mgr.start_hcnetsdk(ip, port, user, pwd, ch_no, stream, hc_fps)
-                        print(f"[启动] ch{ch_id} 自动恢复海康SDK: {ip}")
-                elif src_type == "video":
-                    vf = ch_cfg.get("video_file", "")
-                    if vf and os.path.isfile(vf):
-                        mgr.start_video(vf)
-                        print(f"[启动] ch{ch_id} 自动恢复视频: {vf}")
+                _restore_one_video_source(ch_id, ch_cfg, mgr)
             except Exception as e:
+                failed.append(ch_id)
                 print(f"[启动] ch{ch_id} 视频源恢复失败: {e}")
+
+        # 首轮失败的隔几秒补一次: 前端首屏这会儿也在激活绑定项目, 激活会停输入源,
+        # 跟本函数抢同一台相机, 抢输了原来就直接放弃 → 监控页黑屏要人工重选源。
+        if failed:
+            import time as _t
+            _t.sleep(4)
+            for ch_id in failed:
+                mgr = channel_manager.channels.get(ch_id)
+                ch_cfg = sources.get(str(ch_id)) or {}
+                if not mgr or mgr.is_running or not ch_cfg.get("source_type"):
+                    continue
+                try:
+                    _restore_one_video_source(ch_id, ch_cfg, mgr)
+                    print(f"[启动] ch{ch_id} 视频源二次恢复成功")
+                except Exception as e:
+                    print(f"[启动] ch{ch_id} 视频源二次恢复仍失败: {e}")
 
         # v3.22.x: 开机自动恢复检测开关 (默认 true). 关掉时只恢复项目+视频源,
         # 停在待机, 由工人手动点开始 — 项目/源恢复不受影响。
