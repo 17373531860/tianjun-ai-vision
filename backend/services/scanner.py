@@ -215,6 +215,12 @@ class ScannerConnection:
     # v3.50 resume_on='ok_only': NG 结算后 resume 被拦下时置 True, 供前端露出
     # "恢复扫码"按钮; 任何真正 resume (OK/手动/重新开始检测) 都清掉.
     _resume_blocked: bool = False
+    # v3.50.0a ok_only + 广播多工位: "仅合格"= 这把枪覆盖的所有工位都 OK 才亮灯
+    # (捷昌 B 站: 一把枪广播大件+小件双通道清点同一箱, 不能先 OK 的通道抢跑亮灯).
+    # 已 OK 工位集合按 _ok_ready_marker (= 本轮箱码 last_scan) 锚定, 换码自动作废,
+    # 防上一轮的部分 OK 残留导致下一轮提前亮灯. 单通道枪不走此路径, 零差异.
+    _ok_ready_marker: Optional[str] = field(default=None, repr=False)
+    _ok_ready_channels: set = field(default_factory=set, repr=False)
 
 
 class ScannerService:
@@ -1020,6 +1026,31 @@ class ScannerService:
                           f"等人工恢复 (监控页按钮/触发中心 resume_scanner)",
                           flush=True)
                 continue
+            # v3.50.0a: ok_only + 广播多工位 — "仅合格"的正确语义是这把枪覆盖的
+            # 所有工位都 OK 才恢复亮灯 (捷昌 B 站: 大件+小件双通道清点同一箱,
+            # 先凑齐的通道不能抢跑亮灯). 已 OK 集合按本轮箱码 (last_scan) 锚定,
+            # 换码自动作废. 单通道枪 len(bound)<=1 不进此分支, 行为零差异.
+            # 任一通道 NG 走上面的 blocked 分支 → 集合永远集不齐 → 等人工恢复.
+            if (not manual
+                    and (getattr(conn, 'resume_on', 'cycle_end') or 'cycle_end') == 'ok_only'
+                    and len(set(bound)) > 1):
+                # 分母 = 广播工位里"当前正在检测"的那些; 没在检测的工位永远不会
+                # 出 OK, 不过滤会把灯锁死 (B 站只开一个通道跑时的现场陷阱).
+                _required = self._detecting_channels(bound)
+                _marker = conn.last_scan or ""
+                if getattr(conn, '_ok_ready_marker', None) != _marker:
+                    conn._ok_ready_marker = _marker
+                    conn._ok_ready_channels = set()
+                conn._ok_ready_channels.add(channel_id)
+                _missing = _required - conn._ok_ready_channels
+                if _missing:
+                    print(f"[Scanner] resume_after_cycle(ch={channel_id}) "
+                          f"{conn.name}: resume_on=ok_only 广播枪, 本工位 OK "
+                          f"但工位 {sorted(_missing)} 还没 OK → 继续灭灯等全 OK",
+                          flush=True)
+                    continue
+            conn._ok_ready_marker = None
+            conn._ok_ready_channels = set()
             conn._wait_cycle_resume = False
             conn._resume_blocked = False
             conn._lon_sent = False
@@ -1033,6 +1064,25 @@ class ScannerService:
                   f"(once_per_cycle/D 模式, 周期或 box 结束恢复扫描"
                   f"{', 人工恢复' if manual else ''})", flush=True)
         return resumed
+
+    def _detecting_channels(self, bound) -> set:
+        """v3.50.0a: 广播工位里当前正在检测的子集 (全 OK 亮灯门控的分母).
+
+        ChannelManager 拿不到时退化为全部 bound (宁可多等不可漏等).
+        """
+        try:
+            from backend.api.channel_manager import get_channel_manager
+            cm = get_channel_manager()
+            out = set()
+            for b in bound:
+                mgr = cm.get(b)
+                if mgr is not None and getattr(mgr, 'is_detecting', False):
+                    out.add(b)
+            # 全都没在检测 (理论上到不了这, cycle_end 只会来自 detecting 通道):
+            # 退化为全部 bound, 避免空分母直接放行.
+            return out or set(bound)
+        except Exception:
+            return set(bound)
 
     def _rearm_forget(self, conn: "ScannerConnection", channel_id: int):
         """v3.50 rearm_forget_last: 重新亮灯时作废未绑定旧码 + 重置物理去重.

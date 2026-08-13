@@ -103,6 +103,86 @@ def test_resume_skips_other_channel():
     assert resumed == ["枪1"]
 
 
+# ==================== v3.50.0a ok_only 广播枪全 OK 门控 ====================
+# "仅合格"在广播多工位枪上的正确语义: 这把枪覆盖的所有 (正在检测的) 工位
+# 都 OK 才恢复亮灯 (捷昌 B 站: 大件+小件双通道清点同一箱, 先 OK 的不能抢跑).
+
+def _mk_broadcast(monkeypatch, **conn_kw):
+    from backend.services.scanner import ScannerService
+    monkeypatch.setattr(ScannerService, "_known_channel_count",
+                        classmethod(lambda cls: 2))
+    svc, conn = _mk_service(resume_on="ok_only", **conn_kw)
+    conn.broadcast_channels = [0, 1]
+    conn.last_scan = "SN-BOX-A"
+    return svc, conn
+
+
+def test_broadcast_ok_only_waits_for_all_channels(monkeypatch):
+    """先 OK 的工位不抢跑亮灯; 两个工位都 OK 才恢复。"""
+    svc, conn = _mk_broadcast(monkeypatch)
+    monkeypatch.setattr(svc, "_detecting_channels", lambda bound: {0, 1})
+
+    assert svc.resume_after_cycle(0, is_good=True) == [], "只有 ch0 OK, 不能亮灯"
+    assert conn._wait_cycle_resume is True
+    assert conn._resume_blocked is False, "等兄弟工位不是 NG 拦停, 不该弹恢复按钮"
+    assert conn._ok_ready_channels == {0}
+
+    assert svc.resume_after_cycle(1, is_good=True) == ["枪1"], "两边都 OK 才恢复"
+    assert conn._wait_cycle_resume is False
+    assert conn._ok_ready_channels == set(), "恢复后集合清零"
+
+
+def test_broadcast_ok_then_ng_blocks_until_manual(monkeypatch):
+    """一边 OK 一边 NG: 灯保持灭 + 拦停, 人工恢复放行并清空集合。"""
+    svc, conn = _mk_broadcast(monkeypatch)
+    monkeypatch.setattr(svc, "_detecting_channels", lambda bound: {0, 1})
+
+    assert svc.resume_after_cycle(0, is_good=True) == []
+    assert svc.resume_after_cycle(1, is_good=False) == []
+    assert conn._wait_cycle_resume is True
+    assert conn._resume_blocked is True, "NG 走拦停, 前端露恢复按钮"
+
+    assert svc.resume_scanning_manual(0) == ["枪1"]
+    assert conn._wait_cycle_resume is False
+    assert conn._resume_blocked is False
+    assert conn._ok_ready_channels == set()
+
+
+def test_broadcast_partial_ok_invalidated_by_new_scan(monkeypatch):
+    """部分 OK 按本轮箱码锚定: 换码后旧集合作废, 不会残留到下一轮提前亮灯。"""
+    svc, conn = _mk_broadcast(monkeypatch)
+    monkeypatch.setattr(svc, "_detecting_channels", lambda bound: {0, 1})
+
+    assert svc.resume_after_cycle(0, is_good=True) == []
+    assert conn._ok_ready_channels == {0}
+
+    conn.last_scan = "SN-BOX-B"  # 新一轮箱码
+    assert svc.resume_after_cycle(1, is_good=True) == [], "旧轮的 ch0 OK 已作废"
+    assert conn._ok_ready_channels == {1}
+
+    assert svc.resume_after_cycle(0, is_good=True) == ["枪1"]
+
+
+def test_broadcast_denominator_excludes_idle_channel(monkeypatch):
+    """广播里没在检测的工位不进分母, 否则灯被锁死 (只开一个通道跑的现场)。"""
+    svc, conn = _mk_broadcast(monkeypatch)
+    monkeypatch.setattr(svc, "_detecting_channels", lambda bound: {0})
+
+    assert svc.resume_after_cycle(0, is_good=True) == ["枪1"], \
+        "ch1 没在检测, 只等 ch0"
+
+
+def test_broadcast_cycle_end_mode_untouched(monkeypatch):
+    """默认 resume_on=cycle_end 的广播枪不走全 OK 门控, 行为零差异。"""
+    from backend.services.scanner import ScannerService
+    monkeypatch.setattr(ScannerService, "_known_channel_count",
+                        classmethod(lambda cls: 2))
+    svc, conn = _mk_service()  # cycle_end
+    conn.broadcast_channels = [0, 1]
+    assert svc.resume_after_cycle(0, is_good=True) == ["枪1"], \
+        "cycle_end 单工位结束即恢复 = 老行为"
+
+
 # ==================== rearm_forget_last ====================
 
 def test_rearm_forget_resets_dedup_and_clears_pending():
