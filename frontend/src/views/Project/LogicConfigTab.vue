@@ -868,6 +868,31 @@
               </span>
             </div>
 
+            <!-- v3.50.1: 扫码后才计数 (跟踪模式通用) -->
+            <div class="flex items-start gap-3 text-xs bg-slate-800/60 rounded p-2.5 border border-slate-700">
+              <div class="flex items-center gap-1.5 shrink-0">
+                <el-tooltip placement="top">
+                  <template #content>
+                    <div style="max-width:320px;line-height:1.5">
+                      <b>扫码后才计数</b>：开启后，工位上<b>没有码在位</b>（上一单已结算、
+                      下一个码还没扫）期间检测到的东西<b>一律不入账</b>——不计数、不开周期、
+                      不进任何账本；扫到码后从当前画面重新开始看（此刻仍在画面/箱内的物品
+                      会当帧重新入账，不会丢件）。<br/>
+                      · 关闭（默认）＝现状：扫码前检测到的物品先记内存账，扫码后并入周期。<br/>
+                      · 仅在该工位扫码器开了<b>「先扫后检」</b>时生效（没有扫码器或没开先扫后检时
+                      本开关不起作用）。<br/>
+                      · 容器模式下箱子本身照常跟踪（D 模式跨线亮灯不受影响），只拦物品入账。
+                    </div>
+                  </template>
+                  <span class="text-gray-400 cursor-help border-b border-dashed border-gray-500">扫码后才计数</span>
+                </el-tooltip>
+                <el-switch v-model="project.tracking_scan_gate" size="small" data-testid="scan-gate-switch" />
+              </div>
+              <span v-if="project.tracking_scan_gate" class="text-[10px] text-amber-400/90 leading-relaxed">
+                已开启：结算后到下一个码之间检测到什么都不算数，只有扫码之后的检测才入账。需该工位扫码器开启「先扫后检」；容器模式下箱子跟踪与跨线亮灯照常。
+              </span>
+            </div>
+
             <!-- Row 3: switches in one line -->
             <div class="flex items-center gap-5 text-xs flex-wrap">
               <div class="flex items-center gap-1.5">

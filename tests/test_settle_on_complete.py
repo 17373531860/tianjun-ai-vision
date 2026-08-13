@@ -568,3 +568,132 @@ def test_stale_settle_scan_pair_mutex(monkeypatch):
     run, calls = _mk_stale_env(monkeypatch, bind_timing='scan_pair')
     run()
     assert calls == []
+
+
+# ==================== v3.50.1 扫码后才计数 (tracking_scan_gate) ====================
+
+class _FakeHook:
+    """假 MESHookManager: 只提供守门要用的两个查询。"""
+
+    def __init__(self, required=True, in_flight=False):
+        self.required = required
+        self.in_flight = in_flight
+
+    def is_scan_required(self, channel_id):
+        return self.required
+
+    def has_workpiece_in_flight(self, channel_id):
+        return self.in_flight
+
+
+def _mk_gated_vsm(*, gate=True, required=True, in_flight=False, expected=None):
+    steps = [{'label': 'screw', 'enabled': True, 'count_mode': 'track'}]
+    vsm = FakeVSM({
+        'tracking_scan_gate': gate,
+        'tracking_cycle_strategy': 'roi_exit',
+        'counting_expected_items': expected or {'screw': 2},
+    }, steps)
+    vsm._mes_hook = _FakeHook(required=required, in_flight=in_flight)
+    return vsm
+
+
+def test_scan_gate_blocks_all_accounting_without_code():
+    """码不在位: 整帧不入账 — 不计数 / 不开周期 / 不建跟踪对象。"""
+    vsm = _mk_gated_vsm()
+    for _ in range(5):
+        vsm._update_tracking_stats([_det(1), _det(2, x=0.5)], None)
+    assert vsm._tracking_class_counters == {}
+    assert vsm._tracking_objects == {}
+    assert vsm.start_cycle_calls == 0
+    assert vsm.settle_calls == []
+
+
+def test_scan_gate_resumes_and_counts_current_frame_on_scan():
+    """扫到码后从当前画面重新开始看: 此刻在场的物品当帧重新入账, 不丢件。"""
+    vsm = _mk_gated_vsm()
+    vsm._update_tracking_stats([_det(1), _det(2, x=0.5)], None)
+    assert vsm._tracking_class_counters == {}
+
+    vsm._mes_hook.in_flight = True          # 扫码, 工件在位
+    vsm._update_tracking_stats([_det(1), _det(2, x=0.5)], None)
+    assert vsm._tracking_class_counters == {'screw': 2}
+    assert vsm.start_cycle_calls == 1
+
+
+def test_scan_gate_reengages_after_settlement():
+    """结算后 (工件离位) 守门重新合上: 之后的检测又不算数。"""
+    vsm = _mk_gated_vsm(in_flight=True)
+    vsm.project_config['pipeline_config']['tracking_settle_on_complete'] = True
+    vsm._update_tracking_stats([_det(1), _det(2, x=0.5)], None)
+    assert len(vsm.settle_calls) == 1        # 凑齐当帧结算
+
+    vsm._mes_hook.in_flight = False          # 结算后码离位
+    for _ in range(3):
+        vsm._update_tracking_stats([_det(7, y=0.6), _det(8, x=0.5, y=0.6)], None)
+    assert vsm._tracking_class_counters == {}
+    assert len(vsm.settle_calls) == 1
+    assert vsm.start_cycle_calls == 1
+
+
+def test_scan_gate_inert_without_scan_required():
+    """该工位没开"先扫后检" → 守门无锚点, 不拦 (照常计数)。"""
+    vsm = _mk_gated_vsm(required=False)
+    vsm._update_tracking_stats([_det(1)], None)
+    assert vsm._tracking_class_counters == {'screw': 1}
+
+
+def test_scan_gate_off_default_unchanged():
+    """开关关闭 (默认): 码不在位也照常入账 (现状行为)。"""
+    vsm = _mk_gated_vsm(gate=False)
+    vsm._update_tracking_stats([_det(1)], None)
+    assert vsm._tracking_class_counters == {'screw': 1}
+
+
+def test_scan_gate_container_keeps_box_tracking():
+    """容器模式守门: 只滤物品, 箱子照常跟踪, 容器分组/D 模式跨线照常驱动。"""
+
+    class FakeContainerHost(FakeVSM):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self._container_mode = True
+            self._container_label = 'box'
+            self.container_calls = 0
+            self.scan_d_calls = 0
+
+        def _update_container_grouping(self, *a, **kw):
+            self.container_calls += 1
+
+        def _scan_d_update(self):
+            self.scan_d_calls += 1
+
+    steps = [{'label': 'screw', 'enabled': True, 'count_mode': 'track'}]
+    vsm = FakeContainerHost({
+        'tracking_scan_gate': True,
+        'tracking_cycle_strategy': 'container',
+        'counting_expected_items': {'screw': 2},
+    }, steps)
+    vsm._mes_hook = _FakeHook(required=True, in_flight=False)
+
+    for _ in range(3):
+        vsm._update_tracking_stats(
+            [_det(1), _det(50, x=0.4, w=0.5, h=0.5, label='box')], None)
+
+    # 物品被滤掉, 箱子照常跟踪
+    assert vsm._tracking_class_counters.get('screw', 0) == 0
+    box_labels = {o.get('class_name') for o in vsm._tracking_objects.values()}
+    assert box_labels == {'box'}
+    # 容器分组与 D 模式跨线更新照常每帧驱动
+    assert vsm.container_calls == 3
+    assert vsm.scan_d_calls == 3
+
+
+def test_scan_gate_hook_error_fails_open():
+    """mes_hook 查询抛异常 → 守门放行 (fail-open), 不影响检测主线。"""
+    vsm = _mk_gated_vsm()
+
+    def _boom(_ch):
+        raise RuntimeError("scanner service down")
+
+    vsm._mes_hook.is_scan_required = _boom
+    vsm._update_tracking_stats([_det(1)], None)
+    assert vsm._tracking_class_counters == {'screw': 1}

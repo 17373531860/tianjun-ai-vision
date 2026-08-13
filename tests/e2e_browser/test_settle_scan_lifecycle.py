@@ -123,6 +123,44 @@ def test_开关关闭_步骤表无确认帧数列(page, base_url, api_url):
     assert "确认放入帧数" not in body, "默认关时步骤表不应出现该列 (现状零差异)"
 
 
+SCAN_GATE_SWITCH = "[data-testid='scan-gate-switch']"
+
+
+def test_扫码后才计数_开关渲染并落库(page, base_url, api_url):
+    """v3.50.1: 跟踪模式通用开关 — 任何策略下都渲染, 开启保存后落 pipeline_config。"""
+    pid, name = _mk_tracking_project(api_url, strategy="roi_exit")
+    _open_project(page, base_url, name, tab="逻辑设置")
+
+    assert page.locator(SCAN_GATE_SWITCH).count() > 0, "扫码后才计数开关应渲染"
+    body = page.evaluate("document.body.innerText")
+    assert "扫码后才计数" in body
+
+    # 切到"全部消失"策略 → 开关仍在 (跟踪模式通用, 不随策略隐藏)
+    page.locator("label:has-text('全部消失')").first.click()
+    time.sleep(0.5)
+    assert page.locator(SCAN_GATE_SWITCH).count() > 0, "全部消失策略下开关也应渲染"
+
+    page.locator(SCAN_GATE_SWITCH).click()
+    time.sleep(0.5)
+    page.locator("button:has-text('保存配置')").click()
+    time.sleep(2.0)
+    pc = requests.get(f"{api_url}/api/v1/projects/{pid}",
+                      timeout=5).json().get("pipeline_config") or {}
+    assert pc.get("tracking_scan_gate") is True, \
+        f"扫码后才计数应落库 True: {pc.get('tracking_scan_gate')}"
+
+
+def test_扫码后才计数_默认关落库false(page, base_url, api_url):
+    pid, name = _mk_tracking_project(api_url, strategy="container")
+    _open_project(page, base_url, name, tab="逻辑设置")
+    page.locator("button:has-text('保存配置')").click()
+    time.sleep(2.0)
+    pc = requests.get(f"{api_url}/api/v1/projects/{pid}",
+                      timeout=5).json().get("pipeline_config") or {}
+    assert pc.get("tracking_scan_gate") in (False, None), \
+        f"默认应为关: {pc.get('tracking_scan_gate')}"
+
+
 # ==================== 4/5: 扫码器面板 ====================
 
 def _open_scanner_dialog(page, base_url):

@@ -1635,6 +1635,10 @@ const initProjectDefaults = (project) => {
   if (project.tracking_settle_on_complete === undefined) {
     project.tracking_settle_on_complete = pipelineConfig.tracking_settle_on_complete === true;
   }
+  // v3.50.1 扫码后才计数 (默认关, 老项目零差异)
+  if (project.tracking_scan_gate === undefined) {
+    project.tracking_scan_gate = pipelineConfig.tracking_scan_gate === true;
+  }
   if (project.tracking_max_lost_seconds === undefined) {
     project.tracking_max_lost_seconds = 5.0;
   }
@@ -2175,6 +2179,8 @@ const handleSaveProject = async () => {
         tracking_settle_on_complete: ['roi_exit', 'container'].includes(activeProject.value.tracking_cycle_strategy)
           ? (activeProject.value.tracking_settle_on_complete === true)
           : false,
+        // v3.50.1 扫码后才计数 (跟踪模式通用, 默认关)
+        tracking_scan_gate: activeProject.value.tracking_scan_gate === true,
         tracking_max_lost_seconds: Math.max(5, ...(activeProject.value.steps_config || []).filter(s => s.enabled && s.tracking_max_lost_seconds).map(s => s.tracking_max_lost_seconds)),
         tracking_gone_threshold: 0,
         tracking_check_order: activeProject.value.tracking_check_order || false,

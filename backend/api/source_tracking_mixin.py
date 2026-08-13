@@ -1060,6 +1060,32 @@ class TrackingMixin:
             and cycle_strategy in ('roi_exit', 'container')
         )
 
+        # v3.50.1 扫码后才计数 (默认关): 码不在位 (没有待检/在检工件) 时不入账 —
+        # 结算后到下一个码之间检测到什么都不算数, 扫到码后从当前画面重新开始看。
+        # 仅在该工位"先扫后检"生效时才有锚点; 容器模式下保留容器标签的检测
+        # (箱子跟踪 + D 模式跨线亮灯不能停), 只滤掉物品; 其余策略整帧跳过。
+        if (bool(pcfg.get('tracking_scan_gate', False))
+                and getattr(self, '_mes_hook', None) is not None):
+            try:
+                _gate = (self._mes_hook.is_scan_required(self.channel_id)
+                         and not self._mes_hook.has_workpiece_in_flight(self.channel_id))
+            except Exception:
+                _gate = False
+            if _gate:
+                if not getattr(self, '_scan_gate_holding', False):
+                    self._scan_gate_holding = True
+                    print(f"[Tracking] ch{self.channel_id} 扫码后才计数: "
+                          f"码不在位, 入账挂起 (等扫码)", flush=True)
+                if self._container_mode and self._container_label:
+                    detections = [d for d in detections
+                                  if d.get('label', '') == self._container_label]
+                else:
+                    return
+            elif getattr(self, '_scan_gate_holding', False):
+                self._scan_gate_holding = False
+                print(f"[Tracking] ch{self.channel_id} 扫码后才计数: "
+                      f"码已在位, 恢复入账", flush=True)
+
         # 1) 解析 steps_config (会把 event/stack 期望数注入 expected_items)
         cfg = self._tracking_load_step_config(expected_items)
 

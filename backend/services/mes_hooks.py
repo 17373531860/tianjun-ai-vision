@@ -820,6 +820,18 @@ class MESHookManager:
             return True
         return channel_id in self._pending_workpiece
 
+    def has_workpiece_in_flight(self, channel_id: int) -> bool:
+        """v3.50.1 扫码后才计数: 该工位当前是否有"码在位"(待检或在检工件).
+
+        供跟踪层入账守门用 — 与 has_pending_workpiece 的区别: 周期开始后
+        _pending 会被 promote 到 _inspecting, 检测进行中也算"码在位",
+        不能只看 pending 否则周期一开守门就误关。工位禁用 → 视为总在位。
+        """
+        if self.is_channel_scan_disabled(channel_id):
+            return True
+        return (channel_id in self._pending_workpiece
+                or channel_id in self._inspecting_workpiece)
+
     def _conn_serves_channel(self, conn, channel_id: int) -> bool:
         """判断一个扫码器连接是否服务于指定通道（含 broadcast）"""
         channels = conn.broadcast_channels if conn.broadcast_channels else [conn.channel_id]
