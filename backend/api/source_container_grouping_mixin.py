@@ -371,6 +371,25 @@ class ContainerGroupingMixin:
             if box_did not in self._box_objects:
                 continue
             bs = self._box_objects[box_did]
+
+            # v3.50.1 齐件即结算: 周期超时兜底 — 箱账从建账 (first_seen) 起算超过
+            # 逻辑设置"周期超时"仍未凑齐, 强制结算 (未凑齐判 NG), 防账本永久挂死.
+            # 默认 0 = 关. 凑齐的箱早在上面当帧结算了, 走到这的必然是未凑齐箱.
+            if (settle_on_complete and not scan_pair_active
+                    and expected_no_container
+                    and not getattr(self, '_force_settling_in_progress', False)):
+                _cmax = float(getattr(self, 'cycle_max_duration', 0) or 0)
+                _age = current_time - bs.get('first_seen', current_time)
+                if _cmax > 0 and _age > _cmax:
+                    print(f"[Container] 齐件即结算: {box_did} 周期超时 "
+                          f"({_age:.1f}s > {_cmax}s) → 强制结算 (未凑齐判 NG)",
+                          flush=True)
+                    _sd = pcfg.get('settle_dedup', False)
+                    if _sd and not self.current_cycle_uuid:
+                        self.start_cycle()
+                    self._settle_box(box_did, expected_items)
+                    continue
+
             box_visible = box_did in active_box_dids
             
             should_count_gone = False
@@ -384,10 +403,19 @@ class ContainerGroupingMixin:
                 if bs['gone_frames'] == 1:
                     print(f"[Container] {box_did} gone, confirming: {gone_confirm_frames} frames")
                 if bs['gone_frames'] >= gone_confirm_frames:
-                    if scan_pair_active:
+                    if scan_pair_active or settle_on_complete:
                         # v3.3.0: 扫码闭环模式下, 物理消失不结算, 由下一码事件触发.
                         # 这里只刷 last_seen / 保留 was_complete, 并把 gone_frames 卡在阈值
                         # 防止反复打印日志. (重新出现还能 reset 到 0)
+                        # v3.50.1 齐件即结算同理: 开关开启 = 取消原"箱子离开判 NG"
+                        # 路径, 未凑齐的箱账挂起等待 (不 OK 不 NG); 收场出口只剩
+                        # 新码强制收旧账 / 周期超时 (下面) / 人工结算.
+                        if settle_on_complete and not scan_pair_active \
+                                and not bs.get('_soc_hang_logged'):
+                            bs['_soc_hang_logged'] = True
+                            print(f"[Container] 齐件即结算: {box_did} 未凑齐即离场 "
+                                  f"({bs['item_class_counts']}) → 账本挂起, "
+                                  f"等新码/超时/人工收账", flush=True)
                         bs['gone_frames'] = gone_confirm_frames
                     else:
                         print(f"[Container] {box_did} confirmed gone ({bs['gone_frames']}/{gone_confirm_frames})")

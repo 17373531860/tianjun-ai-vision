@@ -1374,6 +1374,38 @@ class MESHookManager:
             "warn_reason": reason,
         }
 
+    def _settle_stale_on_new_scan(self, channel_id: int):
+        """v3.50.1 齐件即结算模式: 新码 = 强制收旧账.
+
+        该模式取消了原有的"离开/消失结算"路径 — 上一箱/上一批没凑齐就物理离开时,
+        账本只挂起等待 (不 OK 不 NG). 三个收场出口之一就是"下一个码到来":
+        操作员扫新码意味着要开始下一件, 旧账未凑齐 → 强制结算判 NG, 让旧码
+        在 MES 里有始有终, 之后新码正常开新周期.
+
+        走 VideoSourceManager.force_settle_pending_cycle (min_items=1):
+          - 容器模式: 装件数 >= 1 的挂起箱账全部结算; 空箱跳过 (幽灵箱不冤判)
+          - ROI离开: 账本内已入账 >= 1 件时整盘结算
+        scan_pair (码-码闭环) 有自己的收账节奏, 互斥不走这里.
+        """
+        if self._get_bind_timing(channel_id) == "scan_pair":
+            return
+        from backend.api.channel_manager import channel_manager
+        mgr = channel_manager.get(channel_id)
+        if mgr is None or not getattr(mgr, 'project_config', None):
+            return
+        pcfg = (mgr.project_config or {}).get('pipeline_config', {}) or {}
+        if not pcfg.get('tracking_settle_on_complete', False):
+            return
+        if pcfg.get('tracking_cycle_strategy', 'all_gone') not in ('roi_exit', 'container'):
+            return
+        force_fn = getattr(mgr, 'force_settle_pending_cycle', None)
+        if not callable(force_fn):
+            return
+        settled = force_fn(min_items=1, reason="新码强制收旧账(齐件即结算)")
+        if settled:
+            print(f"[MES] 齐件即结算: 新码到来, 旧账未凑齐 → 强制结算 "
+                  f"{settled} 笔 NG (ch{channel_id})", flush=True)
+
     def _get_late_bind_window(self, channel_id: int) -> int:
         """获取该工位的"迟到扫码补绑窗口秒数"配置。0 = 关闭兜底。
 
@@ -1582,6 +1614,15 @@ class MESHookManager:
                           f"{elapsed:.1f}s after OK (cooldown {cooldown}s, ch{channel_id})",
                           flush=True)
                     return
+
+        # v3.50.1 齐件即结算: 新码强制收旧账 — 必须在重复扫码判定之前跑,
+        # 强制结算会把旧周期收掉 (释放 inspecting/pending 状态), 新码才能正常入位;
+        # 放在后面会被 "reject 已有待检工件" 先拦掉, 闭环节奏断裂.
+        try:
+            self._settle_stale_on_new_scan(channel_id)
+        except Exception as _e_stale:
+            print(f"[MES] settle_stale_on_new_scan error ch{channel_id}: "
+                  f"{_e_stale}", flush=True)
 
         action = self._get_duplicate_scan_action(channel_id)
 

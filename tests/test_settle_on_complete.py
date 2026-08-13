@@ -10,7 +10,14 @@
      接管/gone 确认只清状态不二次结算)
   6. 扫码配对互斥: scan_pair 激活时齐件即结不触发, 只保留 sticky was_complete
   7. 开关关闭 (默认) = 现状行为零差异
+
+v3.50.1 追加 (开关开启 = 取消原有全部结算路径):
+  8. ROI离开: 没凑齐时原"消失确认结算"路径被取消, 账本挂起不出账
+  9. ROI离开: 周期超时兜底强制 NG (配了秒数才生效; 0 = 永久挂起等码/人工)
+  10. 容器模式: 未凑齐箱离开只挂账不判 NG; 箱龄超时兜底强制 NG
+  11. mes_hooks 新码强制收旧账: 开关+策略守门 / scan_pair 互斥
 """
+import time
 import types
 
 import pytest
@@ -421,3 +428,143 @@ def test_container_switch_off_zero_diff():
     assert host.settle_calls == []
     assert host._box_objects['箱子1']['was_complete'] is True
     assert host._box_settled_waiting_exit == {}
+
+
+# ============ v3.50.1: 开关开启 = 取消原有全部结算路径 ============
+
+def test_roi_incomplete_original_settle_path_cancelled():
+    """开关开: 没凑齐时物品离开画面不出账 — 原消失确认结算路径整段跳过。
+
+    把 _tracking_check_settlement 桩成恒 True (老语义下必然出账),
+    开关开时仍不得结算; 开关关的对照组必须结算, 证明取消的确实是这条路径。
+    """
+    vsm = _mk_vsm()                       # expected screw:2
+    vsm._tracking_check_settlement = lambda *a, **kw: True
+    vsm._update_tracking_stats([_det(1)], None)   # 只凑到 1/2
+    assert vsm._tracking_cycle_active is True
+    # 物品离开, 跑很多帧: 老路径判定说"该结了", 新语义下依然挂起
+    for _ in range(10):
+        vsm._update_tracking_stats([], None)
+    assert vsm.settle_calls == [], "齐件即结算开启时原结算路径必须整段取消"
+    assert vsm._tracking_cycle_active is True, "账本应挂起继续等, 不得收周期"
+
+    # 对照组: 开关关, 同样桩 → 老路径照常出账 (零差异)
+    ctrl = _mk_vsm(settle_on_complete=False)
+    ctrl._tracking_check_settlement = lambda *a, **kw: True
+    ctrl._update_tracking_stats([_det(1)], None)
+    assert len(ctrl.settle_calls) == 1
+
+
+def test_roi_timeout_forces_settle():
+    """开关开 + 配了周期超时: 到点强制结算 (未凑齐判 NG), 防账本永久挂死。"""
+    vsm = _mk_vsm()
+    vsm.cycle_max_duration = 5
+    vsm._update_tracking_stats([_det(1)], None)   # 1/2, 周期激活
+    assert vsm.settle_calls == []
+    # 把周期起点拨回 100 秒前 → 超时
+    vsm.cycle_start_time = time.time() - 100
+    vsm._update_tracking_stats([_det(1)], None)
+    assert len(vsm.settle_calls) == 1, "周期超时应强制结算"
+
+
+def test_roi_no_timeout_hangs_indefinitely():
+    """开关开 + 周期超时 0 (默认): 永久挂起, 只能等新码/人工收账。"""
+    vsm = _mk_vsm()
+    vsm.cycle_max_duration = 0
+    vsm._update_tracking_stats([_det(1)], None)
+    vsm.cycle_start_time = time.time() - 3600     # 挂了一小时也不动
+    vsm._update_tracking_stats([_det(1)], None)
+    assert vsm.settle_calls == []
+    assert vsm._tracking_cycle_active is True
+
+
+def test_container_incomplete_gone_hangs_not_ng():
+    """开关开: 未凑齐的箱子离开画面只挂账 (不 OK 不 NG), 账本保留。"""
+    host = FakeBoxHost()
+    _put_box(host)
+    _put_item(host, 1, x=0.2)                     # 只装 1/2
+    host._update_container_grouping(EXPECTED, 10.0, gone_confirm_frames=3)
+    assert host.settle_calls == []
+    # 箱子带着物品彻底离场, 跑超过 gone_confirm 的帧数
+    host._tracking_objects.clear()
+    for t in (11.0, 12.0, 13.0, 14.0, 15.0):
+        host._update_container_grouping(EXPECTED, t, gone_confirm_frames=3)
+    assert host.settle_calls == [], "未凑齐箱离开不得判 NG"
+    assert '箱子1' in host._box_objects, "箱账应挂起保留, 等新码/超时/人工"
+
+
+def test_container_switch_off_gone_still_settles():
+    """对照组: 开关关时未凑齐箱离开照旧 gone-confirm 后结算 (现状零差异)。"""
+    host = FakeBoxHost(pipeline_extra={'tracking_settle_on_complete': False})
+    _put_box(host)
+    _put_item(host, 1, x=0.2)
+    host._update_container_grouping(EXPECTED, 10.0, gone_confirm_frames=3)
+    host._tracking_objects.clear()
+    for t in (11.0, 12.0, 13.0, 14.0):
+        host._update_container_grouping(EXPECTED, t, gone_confirm_frames=3)
+    assert host.settle_calls == ['箱子1'], "开关关时原离开结算路径必须保留"
+
+
+def test_container_timeout_forces_settle():
+    """开关开 + 配了周期超时: 箱龄 (first_seen 起算) 超时强制结算判 NG。"""
+    host = FakeBoxHost()
+    host.cycle_max_duration = 5
+    _put_box(host)
+    _put_item(host, 1, x=0.2)
+    # 箱账 first_seen 继承跟踪对象的 1.0 → 4.0 时箱龄 3s < 5s, 不结
+    host._update_container_grouping(EXPECTED, 4.0, gone_confirm_frames=3)
+    assert host.settle_calls == []
+    # 拨到 100.0 → 箱龄 99s > 5s
+    host._update_container_grouping(EXPECTED, 100.0, gone_confirm_frames=3)
+    assert host.settle_calls == ['箱子1'], "箱龄超时应强制结算"
+
+
+# ---------- mes_hooks._settle_stale_on_new_scan (新码强制收旧账) ----------
+
+def _mk_stale_env(monkeypatch, *, switch=True, strategy='roi_exit',
+                  bind_timing='scan_gate'):
+    """搭最小假环境: fake mgr + fake channel_manager, 返回 (fake_self, calls)。"""
+    from backend.services.mes_hooks import MESHookManager
+    calls = []
+
+    def force_fn(min_items=1, reason=""):
+        calls.append({'min_items': min_items, 'reason': reason})
+        return 1
+
+    mgr = types.SimpleNamespace(
+        project_config={'pipeline_config': {
+            'tracking_settle_on_complete': switch,
+            'tracking_cycle_strategy': strategy,
+        }},
+        force_settle_pending_cycle=force_fn,
+    )
+    import backend.api.channel_manager as cm
+    monkeypatch.setattr(cm, 'channel_manager',
+                        types.SimpleNamespace(get=lambda ch: mgr))
+    fake_self = types.SimpleNamespace(
+        _get_bind_timing=lambda ch: bind_timing)
+    return (lambda: MESHookManager._settle_stale_on_new_scan(fake_self, 0)), calls
+
+
+def test_stale_settle_fires_when_switch_on(monkeypatch):
+    run, calls = _mk_stale_env(monkeypatch)
+    run()
+    assert len(calls) == 1 and calls[0]['min_items'] == 1
+
+
+def test_stale_settle_skips_when_switch_off(monkeypatch):
+    run, calls = _mk_stale_env(monkeypatch, switch=False)
+    run()
+    assert calls == []
+
+
+def test_stale_settle_skips_unsupported_strategy(monkeypatch):
+    run, calls = _mk_stale_env(monkeypatch, strategy='all_gone')
+    run()
+    assert calls == []
+
+
+def test_stale_settle_scan_pair_mutex(monkeypatch):
+    run, calls = _mk_stale_env(monkeypatch, bind_timing='scan_pair')
+    run()
+    assert calls == []

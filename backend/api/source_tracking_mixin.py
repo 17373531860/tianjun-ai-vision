@@ -1158,9 +1158,10 @@ class TrackingMixin:
         # v3.50 齐件即结算 (ROI离开, 非容器): 账本凑齐当帧立即结算, 不等消失确认.
         # 容器模式的齐件即结在 _update_container_grouping 里按箱处理, 不走这里.
         # 与扫码配对 (scan_pair) 互斥: 该模式下周期节奏由扫码事件主导, 直接跳过.
-        if (settle_on_complete and cycle_strategy == 'roi_exit'
-                and not self._container_mode and _all_met_now):
-            _scan_pair_active = False
+        _soc_roi = (settle_on_complete and cycle_strategy == 'roi_exit'
+                    and not self._container_mode)
+        _scan_pair_active = False
+        if _soc_roi:
             try:
                 from backend.services.mes_hooks import get_mes_hook
                 _mes_mgr = get_mes_hook()
@@ -1169,6 +1170,7 @@ class TrackingMixin:
                         getattr(self, 'channel_id', 0))
             except Exception:
                 _scan_pair_active = False
+        if _soc_roi and _all_met_now:
             if (not _scan_pair_active
                     and not getattr(self, '_force_settling_in_progress', False)):
                 # 在场物品全部登记豁免名单: 离场前不计入下一周期
@@ -1184,6 +1186,22 @@ class TrackingMixin:
                 return
 
         if not self._tracking_cycle_active:
+            return
+
+        # v3.50.1 齐件即结算: 开关开启 = 取消原 ROI 离开结算路径, 账本挂起等待.
+        # 没凑齐时物品离开画面不出账 (不 OK 不 NG), 周期保持 active 继续等;
+        # 自动出账口只剩三个: 上面的"凑齐即 OK" / 下面的"周期超时兜底 NG" /
+        # 扫到新码强制收旧账 (mes_hooks._settle_stale_on_new_scan → force_settle).
+        # 人工结算 / 触发中心 manual_settle 照常可用.
+        if _soc_roi and not _scan_pair_active:
+            _cmax = float(getattr(self, 'cycle_max_duration', 0) or 0)
+            if (_cmax > 0 and self.cycle_start_time is not None
+                    and current_time - self.cycle_start_time > _cmax
+                    and not getattr(self, '_force_settling_in_progress', False)):
+                print(f"[Tracking] 齐件即结算: 周期超时 "
+                      f"({current_time - self.cycle_start_time:.1f}s > {_cmax}s) "
+                      f"→ 强制结算 (未凑齐判 NG)", flush=True)
+                self._settle_counting_cycle(expected_items, check_order, expected_order)
             return
 
         # 12) 结算判定 → 触发 _settle_counting_cycle
