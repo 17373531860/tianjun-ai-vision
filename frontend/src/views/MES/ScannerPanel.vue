@@ -227,7 +227,7 @@
             <el-option label="码-码闭环（扫码 A 开周期，扫码 B 结算 A 并开新周期）" value="scan_pair" />
           </el-select>
           <div v-if="form.bind_timing === 'scan_pair'" class="text-xs text-amber-300 mt-1">
-            码-码闭环模式: 系统强制 <b>先扫后检 (开)</b>、<b>扫描模式 ≠ C 单次/周期</b>、
+            码-码闭环模式: 系统强制 <b>先扫后检 (开)</b>、<b>扫描模式 ≠ C 单次/周期 且 ≠ E 码-合格-码</b>、
             <b>迟到补绑 = 0 秒</b>。下面相关字段已自动锁定。判 OK/NG 依据"窗口内是否曾齐过"
             而非物理消失。<br/>
             与项目逻辑设置的<b>"全部合格立即结算"（齐件即结算）互斥</b>：
@@ -267,6 +267,9 @@
                        :disabled="form.bind_timing === 'scan_pair'" />
             <el-option label="D 容器跨线/区域触发（容器模式专用，箱子跨线发 LON，扫到码 LOFF）"
                        value="D" />
+            <el-option label="E 码-合格-码（扫到码灭灯，全部合格结算才亮灯放行下一码）"
+                       value="E"
+                       :disabled="form.bind_timing === 'scan_pair'" />
           </el-select>
           <div class="text-xs text-gray-500 mt-1">
             <b>A 持续</b>：扫码器是单次触发型时，后端每收到一个 ERROR / 条码立刻续发 LON，
@@ -276,7 +279,11 @@
             后端自动恢复扫描——一个工件只扫一次，符合"先扫后检"的强校验工位流程。<br>
             <b>D 容器跨线触发</b>（仅容器模式项目）：箱子跨过画面里画的线 / 进入区域 → 后端发 LON
             让扫码器开扫，扫到码立即 LOFF。每个箱子各自一次 LON-扫码-LOFF 循环，
-            <span class="text-amber-400">绑定工位必须是容器模式项目，否则切到此模式会被拒绝</span>。
+            <span class="text-amber-400">绑定工位必须是容器模式项目，否则切到此模式会被拒绝</span>。<br>
+            <b>E 码-合格-码</b>（v3.50.1 闭环模式）：开始检测亮灯等第一个码 → 扫到码灭灯 →
+            <b>只有全部合格判 OK 的当场</b>自动重新亮灯放行下一码（广播多工位 = 所有在检工位
+            <b>都 OK</b> 才亮）；NG 保持灭灯等人工「恢复扫码」。跨线等几何触发一律不点灯，
+            重新亮灯时机固定为"仅合格"。建议搭配下方"亮灯作废旧码"+"强制去重"。
           </div>
         </el-form-item>
 
@@ -332,13 +339,19 @@
         </el-form-item>
         <!-- v3.50 扫码器生命周期 (捷昌二期"码-合格-码"闭环) -->
         <el-form-item label="重新亮灯时机">
-          <el-select v-model="form.resume_on" class="w-full" :disabled="!lifecycleApplicable">
+          <el-select v-model="form.resume_on" class="w-full"
+                     :disabled="!lifecycleApplicable || form.scan_mode === 'E'">
             <el-option label="周期结束（默认，OK / NG 都重新亮灯）" value="cycle_end" />
             <el-option label="仅合格（OK 才自动亮灯，NG 保持灭灯等人工恢复）" value="ok_only" />
           </el-select>
           <div class="text-xs text-gray-500 mt-1">
-            <template v-if="lifecycleApplicable">
-              仅"扫到码灭灯"的模式（C 单次/周期、D 容器跨线）生效。
+            <template v-if="form.scan_mode === 'E'">
+              <span class="text-amber-400">E 码-合格-码模式固定为「仅合格」，不可更改。</span>
+              NG 结算后保持灭灯，出口为监控页"恢复扫码"按钮、触发中心
+              <code>resume_scanner</code> 动作（脚踏板 / PLC）或重新开始检测。
+            </template>
+            <template v-else-if="lifecycleApplicable">
+              仅"扫到码灭灯"的模式（C 单次/周期、D 容器跨线、E 码-合格-码）生效。
               <b>仅合格</b>：NG 结算后扫码器保持灭灯，出口为监控页"恢复扫码"按钮、
               触发中心 <code>resume_scanner</code> 动作（脚踏板 / PLC）或重新开始检测；
               <b>广播多工位时</b>，"仅合格"= 这把枪覆盖的所有正在检测的工位<b>都 OK</b>
@@ -348,7 +361,7 @@
             <span v-else class="text-amber-400">
               {{ form.device_type === 'usb_hid'
                   ? 'USB 键盘扫码枪无灯控，本项不适用'
-                  : '仅 LON/LOFF 协议且扫描模式为 C / D 时生效' }}
+                  : '仅 LON/LOFF 协议且扫描模式为 C / D / E 时生效' }}
             </span>
           </div>
         </el-form-item>
@@ -363,7 +376,7 @@
             <span v-else class="text-amber-400">
               {{ form.device_type === 'usb_hid'
                   ? 'USB 键盘扫码枪无灯控，本项不适用'
-                  : '仅 LON/LOFF 协议且扫描模式为 C / D 时生效' }}
+                  : '仅 LON/LOFF 协议且扫描模式为 C / D / E 时生效' }}
             </span>
           </div>
         </el-form-item>
@@ -736,14 +749,19 @@ const defaultForm = () => ({
 const form = ref(defaultForm())
 
 // v3.50: 重新亮灯时机/作废旧码 仅对"扫到码灭灯"的模式有意义
-// (text_lon 协议 + 扫描模式 C 单次/周期 或 D 容器跨线); USB 键盘枪无灯控.
+// (text_lon 协议 + 扫描模式 C 单次/周期 / D 容器跨线 / E 码-合格-码);
+// USB 键盘枪无灯控.
 const lifecycleApplicable = computed(() =>
   form.value.device_type === 'text_lon'
-  && ['once_per_cycle', 'D'].includes(form.value.scan_mode))
+  && ['once_per_cycle', 'D', 'E'].includes(form.value.scan_mode))
 
 // v3.4.0 切到 D (容器跨线触发) 时校验绑定工位是否容器模式项目
 const lastNonDScanMode = ref('continuous')
 const onScanModeChange = async (val) => {
+  // v3.50.1 E 码-合格-码: 重新亮灯时机固定"仅合格" (后端也强制, 这里同步表单显示)
+  if (val === 'E') {
+    form.value.resume_on = 'ok_only'
+  }
   if (val !== 'D') {
     lastNonDScanMode.value = val
     return
@@ -1076,7 +1094,8 @@ const triggerGeoSave = () => {
 const onBindTimingChange = (val) => {
   if (val !== 'scan_pair') return
   if (!form.value.scan_required) form.value.scan_required = true
-  if (form.value.scan_mode === 'once_per_cycle') form.value.scan_mode = 'continuous'
+  // C / E 都是"扫到码灭灯等恢复"的节奏, 与码-码闭环 (扫下一码收上一单) 冲突
+  if (['once_per_cycle', 'E'].includes(form.value.scan_mode)) form.value.scan_mode = 'continuous'
   if (form.value.late_scan_bind_window_sec > 0) form.value.late_scan_bind_window_sec = 0
   ElMessage.info('已切换为码-码闭环结算; 已自动启用先扫后检, 关闭迟到补绑')
 }

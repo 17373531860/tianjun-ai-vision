@@ -164,6 +164,11 @@ class ScannerConnection:
     #   "continuous"     : 默认, 持续 LON 续发, 灯一直闪等下一码
     #   "throttled"      : 同 continuous 但每次续 LON 等 throttle_idle_ms 毫秒
     #   "once_per_cycle" : 扫到码 LOFF 灯灭, 等周期结束 (cycle_end) 再续 LON
+    #   "D"              : v3.4.0 容器跨线/区域触发 (几何驱动 LON)
+    #   "E"              : v3.50.1 码-合格-码闭环 — 扫到码 LOFF, 只有全部合格
+    #                      结算 (广播枪 = 所有在检工位都 OK) / 人工恢复才重新
+    #                      亮灯; 重新亮灯时机强制按 ok_only 处理 (无视 resume_on
+    #                      存的值), 跨线等几何触发一律不点灯
     scan_mode: str = "continuous"
     throttle_idle_ms: int = 500
 
@@ -785,6 +790,12 @@ class ScannerService:
             # 出口只有人工恢复 (监控页按钮/触发中心/开始检测).
             if getattr(conn, '_resume_blocked', False):
                 continue
+            # v3.50.1: "仅合格"枪 (含 E 码-合格-码模式) 的亮灯权独占给 OK 结算 /
+            # 人工恢复 — 跨线一律不点灯不解锁. 否则上一箱还没结算时新箱提前跨线
+            # 会抢跑亮灯, 破坏"码-合格-码"闭环. OK 后 resume_after_cycle 解锁,
+            # listen loop 80ms 内自动续 LON, 不需要跨线补灯; cycle_end 行为不变.
+            if self._effective_resume_on(conn) == 'ok_only':
+                continue
             if self._text_lon_send(conn, b"LON\r\n",
                                     f"LON [scan_d {reason}]"):
                 conn._lon_sent = True
@@ -1007,7 +1018,7 @@ class ScannerService:
         for conn in self._connections.values():
             if conn.device_type != "text_lon":
                 continue
-            if (conn.scan_mode or "continuous") not in ("once_per_cycle", "D"):
+            if (conn.scan_mode or "continuous") not in ("once_per_cycle", "D", "E"):
                 continue
             bound = self._resolve_bound_channels(conn)
             if channel_id not in bound:
@@ -1015,8 +1026,9 @@ class ScannerService:
             if not getattr(conn, '_wait_cycle_resume', False):
                 continue
             # v3.50: ok_only 分流 — NG/未知结果不自动恢复, 等人工出口
+            # (E 码-合格-码模式强制 ok_only, 见 _effective_resume_on)
             if (not manual
-                    and (getattr(conn, 'resume_on', 'cycle_end') or 'cycle_end') == 'ok_only'
+                    and self._effective_resume_on(conn) == 'ok_only'
                     and is_good is not True):
                 if not getattr(conn, '_resume_blocked', False):
                     conn._resume_blocked = True
@@ -1032,7 +1044,7 @@ class ScannerService:
             # 换码自动作废. 单通道枪 len(bound)<=1 不进此分支, 行为零差异.
             # 任一通道 NG 走上面的 blocked 分支 → 集合永远集不齐 → 等人工恢复.
             if (not manual
-                    and (getattr(conn, 'resume_on', 'cycle_end') or 'cycle_end') == 'ok_only'
+                    and self._effective_resume_on(conn) == 'ok_only'
                     and len(set(bound)) > 1):
                 # 分母 = 广播工位里"当前正在检测"的那些; 没在检测的工位永远不会
                 # 出 OK, 不过滤会把灯锁死 (B 站只开一个通道跑时的现场陷阱).
@@ -1064,6 +1076,14 @@ class ScannerService:
                   f"(once_per_cycle/D 模式, 周期或 box 结束恢复扫描"
                   f"{', 人工恢复' if manual else ''})", flush=True)
         return resumed
+
+    @staticmethod
+    def _effective_resume_on(conn) -> str:
+        """v3.50.1: E 码-合格-码模式重新亮灯时机强制 ok_only (无视存的 resume_on);
+        其余模式按配置, 缺省 cycle_end。"""
+        if (conn.scan_mode or "") == "E":
+            return "ok_only"
+        return getattr(conn, 'resume_on', 'cycle_end') or 'cycle_end'
 
     def _detecting_channels(self, bound) -> set:
         """v3.50.0a: 广播工位里当前正在检测的子集 (全 OK 亮灯门控的分母).
@@ -1669,8 +1689,9 @@ class ScannerService:
             # v3.4.2: D 模式扫到码后行为同 once_per_cycle (LOFF + 等 cycle_end
             # 由 resume_after_cycle 解锁). 容器模式下还会有 source._scan_d_update
             # 的 box 跨线 send_lon_for_channel 在 cycle 之外提前触发 LON.
-            if mode in ("once_per_cycle", "D"):
-                tag = "once_per_cycle" if mode == "once_per_cycle" else "D 模式"
+            if mode in ("once_per_cycle", "D", "E"):
+                tag = {"once_per_cycle": "once_per_cycle",
+                       "D": "D 模式", "E": "E 码-合格-码"}[mode]
                 try:
                     sock.sendall(b"LOFF\r\n")
                     print(f"[Scanner/text_lon] {conn.name} {tag}: "

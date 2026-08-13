@@ -184,6 +184,14 @@ def _select_option(page, select_locator, option_text):
     time.sleep(0.4)
 
 
+def _form_item(dlg, label):
+    """按表单 label 精确匹配定位 el-form-item。
+    不能用 :has-text(label) 模糊匹配 — 帮助文案里出现同词 (如扫描模式 E 档
+    说明含"重新亮灯时机") 会误配到别的表单项。"""
+    return dlg.locator(
+        f".el-form-item:has(.el-form-item__label:text-is('{label}'))").first
+
+
 def test_扫码器面板生命周期选项渲染与置灰(page, base_url, api_url):
     dlg = _open_scanner_dialog(page, base_url)
     body = dlg.inner_text()
@@ -191,26 +199,26 @@ def test_扫码器面板生命周期选项渲染与置灰(page, base_url, api_ur
         "三个生命周期选项应渲染"
 
     # 默认 A 持续模式: 重新亮灯时机/作废旧码 置灰 + 提示文案
-    resume_item = dlg.locator(".el-form-item:has-text('重新亮灯时机')").first
+    resume_item = _form_item(dlg, "重新亮灯时机")
     assert resume_item.locator(".el-select .is-disabled, .el-select--disabled") \
         .count() > 0 or "is-disabled" in (
             resume_item.locator(".el-select .el-select__wrapper").first
             .get_attribute("class") or ""), "A 模式下重新亮灯时机应置灰"
-    assert "仅 LON/LOFF 协议且扫描模式为 C / D 时生效" in body
+    assert "仅 LON/LOFF 协议且扫描模式为 C / D / E 时生效" in body
 
-    rearm_item = dlg.locator(".el-form-item:has-text('亮灯作废旧码')").first
+    rearm_item = _form_item(dlg, "亮灯作废旧码")
     assert "is-disabled" in (
         rearm_item.locator(".el-switch").first.get_attribute("class") or ""), \
         "A 模式下亮灯作废旧码应置灰"
     # 强制去重不依赖灯控, 任何模式都可用
-    strict_item = dlg.locator(".el-form-item:has-text('强制去重')").first
+    strict_item = _form_item(dlg, "强制去重")
     assert "is-disabled" not in (
         strict_item.locator(".el-switch").first.get_attribute("class") or ""), \
         "强制去重不应置灰"
 
     # 切扫描模式 C → 解锁
-    _select_option(page, dlg.locator(
-        ".el-form-item:has-text('扫描模式') .el-select").first, "C 单次/周期")
+    _select_option(page, _form_item(dlg, "扫描模式").locator(".el-select").first,
+                   "C 单次/周期")
     resume_wrapper_cls = (
         resume_item.locator(".el-select .el-select__wrapper").first
         .get_attribute("class") or "")
@@ -220,19 +228,53 @@ def test_扫码器面板生命周期选项渲染与置灰(page, base_url, api_ur
         "C 模式下亮灯作废旧码应解锁"
 
 
+def test_扫描模式E码合格码_锁定仅合格并落库(page, base_url, api_url):
+    """v3.50.1: 选 E 码-合格-码 → 重新亮灯时机自动置 ok_only 且置灰不可改,
+    保存后 scan_mode=E + resume_on=ok_only 落库。"""
+    dev_name = f"{E2E_PREFIX}E枪_{uuid.uuid4().hex[:6]}"
+    dlg = _open_scanner_dialog(page, base_url)
+    dlg.locator(".el-form-item:has-text('名称') input").first.fill(dev_name)
+    dlg.locator(".el-form-item:has-text('IP 地址') input").first.fill("127.0.0.1")
+
+    _select_option(page, _form_item(dlg, "扫描模式").locator(".el-select").first,
+                   "E 码-合格-码")
+
+    body = dlg.inner_text()
+    assert "E 码-合格-码模式固定为「仅合格」" in body, "E 模式提示应出现"
+    resume_item = _form_item(dlg, "重新亮灯时机")
+    assert "is-disabled" in (
+        resume_item.locator(".el-select .el-select__wrapper").first
+        .get_attribute("class") or ""), "E 模式下重新亮灯时机应置灰锁定"
+    assert "仅合格" in resume_item.inner_text(), "应自动切到仅合格"
+
+    dlg.locator("button:has-text('确定'), button:has-text('保存')").last.click()
+    time.sleep(2.0)
+
+    devices = requests.get(f"{api_url}/api/v1/scanner/devices", timeout=5).json()
+    dev = next((d for d in devices if d.get("name") == dev_name), None)
+    try:
+        assert dev is not None, f"设备应落库: {dev_name}"
+        assert dev["scan_mode"] == "E", f"scan_mode 应为 E: {dev}"
+        assert dev["resume_on"] == "ok_only", f"resume_on 应强制 ok_only: {dev}"
+    finally:
+        if dev is not None:
+            requests.delete(
+                f"{api_url}/api/v1/scanner/devices/{dev['id']}", timeout=5)
+
+
 def test_扫码器生命周期字段UI保存落库(page, base_url, api_url):
     dev_name = f"{E2E_PREFIX}枪_{uuid.uuid4().hex[:6]}"
     dlg = _open_scanner_dialog(page, base_url)
     dlg.locator(".el-form-item:has-text('名称') input").first.fill(dev_name)
     dlg.locator(".el-form-item:has-text('IP 地址') input").first.fill("127.0.0.1")
 
-    _select_option(page, dlg.locator(
-        ".el-form-item:has-text('扫描模式') .el-select").first, "C 单次/周期")
-    _select_option(page, dlg.locator(
-        ".el-form-item:has-text('重新亮灯时机') .el-select").first, "仅合格")
-    dlg.locator(".el-form-item:has-text('亮灯作废旧码') .el-switch").first.click()
+    _select_option(page, _form_item(dlg, "扫描模式").locator(".el-select").first,
+                   "C 单次/周期")
+    _select_option(page, _form_item(dlg, "重新亮灯时机").locator(".el-select").first,
+                   "仅合格")
+    _form_item(dlg, "亮灯作废旧码").locator(".el-switch").first.click()
     time.sleep(0.3)
-    dlg.locator(".el-form-item:has-text('强制去重') .el-switch").first.click()
+    _form_item(dlg, "强制去重").locator(".el-switch").first.click()
     time.sleep(0.3)
 
     dlg.locator("button:has-text('确定'), button:has-text('保存')").last.click()

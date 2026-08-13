@@ -183,6 +183,95 @@ def test_broadcast_cycle_end_mode_untouched(monkeypatch):
         "cycle_end 单工位结束即恢复 = 老行为"
 
 
+# ==================== v3.50.1 ok_only 枪跨线不点灯 ====================
+# "仅合格"枪的亮灯权独占给 OK 结算 / 人工恢复: D 模式新箱跨线不再发 LON,
+# 否则上一箱没结算时新箱提前跨线会抢跑亮灯, 破坏"码-合格-码"闭环。
+
+def _mk_scan_d(**conn_kw):
+    svc, conn = _mk_service(scan_mode="D", **conn_kw)
+    conn.status = "connected"
+    sent = []
+    svc._text_lon_send = lambda c, cmd, tag="": sent.append((c.name, cmd)) or True
+    return svc, conn, sent
+
+
+def test_scan_d_crossing_lights_default_gun():
+    """默认 cycle_end 枪: 跨线照常点灯 + 清等待 = 老行为零差异。"""
+    svc, conn, sent = _mk_scan_d()
+    assert svc.send_lon_for_channel(0, reason="box-cross") == 1
+    assert sent and sent[0][1] == b"LON\r\n"
+    assert conn._wait_cycle_resume is False
+    assert conn._lon_sent is True
+
+
+def test_scan_d_crossing_skips_ok_only_gun():
+    """仅合格枪: 跨线不点灯不解锁, 灯只归 OK 结算 / 人工恢复管。"""
+    svc, conn, sent = _mk_scan_d(resume_on="ok_only")
+    assert svc.send_lon_for_channel(0, reason="box-cross") == 0
+    assert sent == [], "不该发 LON"
+    assert conn._wait_cycle_resume is True, "等待态不能被跨线解锁"
+
+
+def test_ok_only_resume_arms_listen_loop_relight():
+    """OK 恢复后具备 listen loop 80ms 续亮的全部前置条件 (灯当场亮的机制)。"""
+    svc, conn = _mk_service(resume_on="ok_only", scan_mode="D")
+    conn._lon_sent = True          # 残留亮态标记
+    conn._next_lon_after = 9e9     # 残留节流
+    assert svc.resume_after_cycle(0, is_good=True) == ["枪1"]
+    assert conn._wait_cycle_resume is False
+    assert conn._lon_sent is False
+    assert conn._next_lon_after == 0.0
+
+
+# ==================== v3.50.1 扫描模式 E 码-合格-码 ====================
+# E = 一档到位的闭环模式: 扫到码灭灯; 重新亮灯时机强制 ok_only (无视存的
+# resume_on); 跨线等几何触发一律不点灯。
+
+def test_e_mode_forces_ok_only_even_if_resume_on_cycle_end():
+    """E 模式无视存的 resume_on=cycle_end, NG 一律灭灯拦停。"""
+    svc, conn = _mk_service(scan_mode="E", resume_on="cycle_end")
+    assert svc.resume_after_cycle(0, is_good=False) == []
+    assert conn._wait_cycle_resume is True
+    assert conn._resume_blocked is True
+
+
+def test_e_mode_resumes_on_ok():
+    svc, conn = _mk_service(scan_mode="E")
+    assert svc.resume_after_cycle(0, is_good=True) == ["枪1"]
+    assert conn._wait_cycle_resume is False
+    assert conn._lon_sent is False, "解锁后 listen loop 才能续亮"
+
+
+def test_e_mode_manual_resume():
+    svc, conn = _mk_service(scan_mode="E")
+    assert svc.resume_after_cycle(0, is_good=False) == []
+    assert svc.resume_scanning_manual(0) == ["枪1"]
+    assert conn._resume_blocked is False
+
+
+def test_e_mode_crossing_never_lights():
+    """E 枪即使存的 resume_on=cycle_end, 跨线也不点灯 (亮灯权只归 OK/人工)。"""
+    svc, conn, sent = _mk_scan_d(resume_on="cycle_end")
+    conn.scan_mode = "E"
+    assert svc.send_lon_for_channel(0, reason="box-cross") == 0
+    assert sent == []
+    assert conn._wait_cycle_resume is True
+
+
+def test_e_mode_broadcast_waits_all_ok(monkeypatch):
+    """E 模式广播枪: 所有在检工位都 OK 才亮灯 (复用全 OK 门控)。"""
+    from backend.services.scanner import ScannerService
+    monkeypatch.setattr(ScannerService, "_known_channel_count",
+                        classmethod(lambda cls: 2))
+    svc, conn = _mk_service(scan_mode="E", resume_on="cycle_end")
+    conn.broadcast_channels = [0, 1]
+    conn.last_scan = "SN-BOX-E"
+    monkeypatch.setattr(svc, "_detecting_channels", lambda bound: {0, 1})
+
+    assert svc.resume_after_cycle(0, is_good=True) == []
+    assert svc.resume_after_cycle(1, is_good=True) == ["枪1"]
+
+
 # ==================== rearm_forget_last ====================
 
 def test_rearm_forget_resets_dedup_and_clears_pending():
