@@ -1697,15 +1697,9 @@ class ScannerService:
             # 由 resume_after_cycle 解锁). 容器模式下还会有 source._scan_d_update
             # 的 box 跨线 send_lon_for_channel 在 cycle 之外提前触发 LON.
             if mode in ("once_per_cycle", "D", "E"):
-                tag = {"once_per_cycle": "once_per_cycle",
-                       "D": "D 模式", "E": "E 码-合格-码"}[mode]
-                try:
-                    sock.sendall(b"LOFF\r\n")
-                    print(f"[Scanner/text_lon] {conn.name} {tag}: "
-                          f"扫到码后已 LOFF, 等周期结束再开扫", flush=True)
-                except OSError as e:
-                    print(f"[Scanner/text_lon] {conn.name} {tag} LOFF failed: {e}",
-                          flush=True)
+                # 灭灯动作统一走 service 方法 (幂等): _on_data_received 已灭过灯,
+                # 这里只是兜底, 不会重复发 LOFF.
+                self._loff_on_code_received(conn)
                 conn._lon_sent = False
                 conn._wait_cycle_resume = True
                 return
@@ -1949,6 +1943,29 @@ class ScannerService:
         logger.info("[Scanner] %s WMax 监听退出，总收 %d 字节，扫码 %d 次",
                     conn.name, recv_total, code_count)
 
+    def _loff_on_code_received(self, conn: "ScannerConnection") -> bool:
+        """v3.50.1: 扫到真码 → 灭灯 + 锁住续 LON ("扫到码灭灯"的 C/D/E 三模式)。
+
+        幂等: 已在"等恢复"态直接返回, 重复调用不重发 LOFF.
+
+        为什么放在 service 方法而不是 listen loop 的闭包里: 监听线程在
+        _init_mes_services 阶段就启动了 (远早于热补丁应用), 已进入循环的线程
+        用的是旧闭包, 重绑 _text_lon_listen_loop 救不到它 — 而本方法由
+        _on_data_received 按实例查找调用, 重绑后当场生效.
+        """
+        if conn.device_type != "text_lon":
+            return False
+        mode = getattr(conn, 'scan_mode', 'continuous') or 'continuous'
+        if mode not in ("once_per_cycle", "D", "E"):
+            return False
+        if getattr(conn, '_wait_cycle_resume', False):
+            return False
+        ok = self._text_lon_send(conn, b"LOFF\r\n",
+                                 f"LOFF (扫到码灭灯, mode={mode})")
+        conn._lon_sent = False
+        conn._wait_cycle_resume = True
+        return ok
+
     def _on_data_received(self, conn: ScannerConnection, raw_data: str):
         """收到扫码数据的处理"""
         now = time.time()
@@ -1965,6 +1982,9 @@ class ScannerService:
                 print(f"[Scanner/recv] {conn.name} during test, ignored (not into MES)",
                       flush=True)
                 return
+        # v3.50.1: 物理层面"扫到码就灭灯", 与去重/绑定结果无关 (与 listen loop
+        # 原语义一致). 提到 dedup 判定之前, 否则去重命中直接 return 就漏灭灯.
+        self._loff_on_code_received(conn)
         if (raw_data == conn.last_scan
                 and (now - conn.last_scan_time) < conn.dedup_interval_sec):
             # v2.7.16: dedup 命中时打印日志, 让用户能区分"扫码器没扫到"和

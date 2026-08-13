@@ -11,6 +11,7 @@
   6. m0010 迁移: scanner_devices 三列可加, 幂等
   7. POST /scanner/resume 端点
 """
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -270,6 +271,50 @@ def test_e_mode_broadcast_waits_all_ok(monkeypatch):
 
     assert svc.resume_after_cycle(0, is_good=True) == []
     assert svc.resume_after_cycle(1, is_good=True) == ["枪1"]
+
+
+def _mk_recv(scan_mode):
+    """连上的枪 + 拦住 LOFF 发送, 用于测 _on_data_received 的灭灯动作。"""
+    svc, conn = _mk_service(scan_mode=scan_mode)
+    conn.status = "connected"
+    conn._wait_cycle_resume = False
+    conn._lon_sent = True
+    sent = []
+    svc._text_lon_send = lambda c, payload, label="": sent.append(payload) or True
+    # 让 dedup 当场命中提前 return, 单测不进 MES 绑码逻辑
+    conn.last_scan = "SN-1"
+    conn.last_scan_time = time.time()
+    conn.dedup_interval_sec = 999
+    return svc, conn, sent
+
+
+def test_e_mode_loff_at_service_level_on_code_received():
+    """v3.50.1 治本: 扫到码灭灯由 _on_data_received 触发 (不靠监听线程闭包)。
+
+    现场症状: 打补丁的机器 E 模式扫到码不灭灯 — 监听线程在热补丁应用前就
+    进了旧循环, 闭包只认 C/D. 灭灯动作下移到 service 方法后当场生效。
+    """
+    svc, conn, sent = _mk_recv("E")
+    svc._on_data_received(conn, "SN-1")
+    assert sent == [b"LOFF\r\n"], f"E 模式扫到码应灭灯: {sent}"
+    assert conn._wait_cycle_resume is True, "应锁住续 LON 等恢复"
+    assert conn._lon_sent is False
+
+
+def test_loff_on_code_received_idempotent():
+    """已在等恢复态重复收码不重发 LOFF (闭包兜底调用不会打第二枪)。"""
+    svc, conn, sent = _mk_recv("E")
+    assert svc._loff_on_code_received(conn) is True
+    assert svc._loff_on_code_received(conn) is False
+    assert sent == [b"LOFF\r\n"]
+
+
+def test_continuous_mode_not_loff_on_code_received():
+    """A 持续模式扫到码不灭灯 = 老行为零差异。"""
+    svc, conn, sent = _mk_recv("continuous")
+    svc._on_data_received(conn, "SN-1")
+    assert sent == [], "持续模式不该发 LOFF"
+    assert conn._wait_cycle_resume is False
 
 
 def test_broadcast_ok_set_not_leaked_across_sessions(monkeypatch):
