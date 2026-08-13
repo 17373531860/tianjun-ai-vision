@@ -29,6 +29,12 @@
 > **v3.50 补账（2026-08-12，捷昌二期）**：
 > - 迁移 **`m0010_scanner_lifecycle`**：`scanner_devices` 加 3 列——`resume_on VARCHAR(16) DEFAULT 'cycle_end'` / `rearm_forget_last BOOLEAN DEFAULT 0` / `strict_ok_dedup BOOLEAN DEFAULT 0`（PG 布尔默认值分道 FALSE；三列默认=现状零差异）。列语义与运行时行为见 02 册 v3.50 补账（scanner.py / mes_hooks.py）。
 > - `pipeline_config` 新键 `tracking_settle_on_complete`（bool，默认缺省=关）+ `steps_config[]` 新键 `settle_confirm_frames`（int 默认 1）——JSON 配置扩展无 schema 迁移，config-dict 生成物已刷新。
+>
+> **v3.51 补账（2026-08-14，捷昌 B 站双工位整改；无 schema 迁移）**：
+> - `api/projects.py`：激活收养开关 `activate.adopt_unbound`（SystemConfig KV，默认 '1'）+ `GET/PUT /projects/activate-config`——详见 02 册 v3.51 补账。
+> - `api/sessions_maintenance.py`：clear/all、clear/range 联动 `_unlock_ok_workpieces` 解封 ok 工件回 registered——详见 02 册 v3.51 补账。
+> - `channel_groups.plugin_data` 新用途：`unified_ok_report`（bool，工位组统一播报开关，v3.51 FEAT-009）——存 JSON 命名空间不动主 schema。
+> - `pipeline_config` 新键（v3.50.0a 收编）：`tracking_scan_gate`（bool 默认关，「扫码后才计数」——码不在位不计数/不开周期/不进账本，仅工位扫码器先扫后检生效）。
 
 ---
 

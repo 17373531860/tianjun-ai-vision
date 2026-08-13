@@ -48,6 +48,9 @@ class ChannelGroupBase(BaseModel):
     timeout_ms: int = 5000
     timeout_action: str = "fallback_independent"
     enabled: bool = True
+    # v3.51: 统一播报 — synchronized_all_ok 组聚齐全 OK 才播一次合格
+    # (个体 OK 的灯/语音/toast 抑制)。存 plugin_data, 不动主 schema。默认关。
+    unified_ok_report: bool = False
 
 
 class ChannelGroupCreate(ChannelGroupBase):
@@ -61,6 +64,7 @@ class ChannelGroupUpdate(BaseModel):
     timeout_ms: Optional[int] = None
     timeout_action: Optional[str] = None
     enabled: Optional[bool] = None
+    unified_ok_report: Optional[bool] = None
 
 
 class ChannelGroupResponse(ChannelGroupBase):
@@ -157,6 +161,7 @@ def _reload_coordinator(db: Session) -> None:
 
 
 def _serialize(g: ChannelGroup) -> ChannelGroupResponse:
+    _pd = g.plugin_data if isinstance(g.plugin_data, dict) else {}
     return ChannelGroupResponse(
         id=g.id,
         name=g.name,
@@ -165,6 +170,7 @@ def _serialize(g: ChannelGroup) -> ChannelGroupResponse:
         timeout_ms=int(g.timeout_ms or 5000),
         timeout_action=g.timeout_action or "fallback_independent",
         enabled=bool(g.enabled),
+        unified_ok_report=bool(_pd.get("unified_ok_report", False)),
     )
 
 
@@ -221,6 +227,7 @@ def create_channel_group(
         timeout_ms=payload.timeout_ms,
         timeout_action=payload.timeout_action,
         enabled=payload.enabled,
+        plugin_data={"unified_ok_report": bool(payload.unified_ok_report)},
     )
     db.add(row)
     db.commit()
@@ -267,6 +274,13 @@ def update_channel_group(
     )
     if final_enabled and members_or_enabled_changed:
         _check_member_uniqueness(db, list(new_members), exclude_group_id=group_id)
+
+    # v3.51: unified_ok_report 落 plugin_data (不是主 schema 列)
+    if "unified_ok_report" in update_data:
+        _uor = bool(update_data.pop("unified_ok_report"))
+        _pd = dict(row.plugin_data) if isinstance(row.plugin_data, dict) else {}
+        _pd["unified_ok_report"] = _uor
+        row.plugin_data = _pd
 
     for k, v in update_data.items():
         setattr(row, k, v)

@@ -857,8 +857,13 @@ class MESHookManager:
         try:
             from backend.services.scanner import get_scanner_service
             svc = get_scanner_service()
+            # v3.50.1: E 码-合格-码模式天然是"扫到码才开工", 由 scanner 侧的
+            # _effective_scan_required 统一判定 (出厂版没有该方法时退回读字段)
+            _eff = getattr(svc, '_effective_scan_required', None)
             for conn in self._iter_scan_configs(svc):
-                if self._conn_serves_channel(conn, channel_id) and conn.scan_required:
+                if not self._conn_serves_channel(conn, channel_id):
+                    continue
+                if _eff(conn) if _eff is not None else conn.scan_required:
                     return True
         except Exception as e:
             print(f"[MES] is_scan_required error: {e}", flush=True)

@@ -40,7 +40,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 |---|---|---|---|
 | `/source/*` | `source.py`（router 容器）+ `source_routes.py` | `detection.js` | 视频源采集 + 推理状态机核心 API（⚠ 没有 source.js） |
 | `/data/*` | `sessions.py` + `sessions_export.py` + `sessions_stats.py` + `sessions_maintenance.py`（+ `showcase_stats.py` 只读统计共用前缀） | `data.js` | session/cycle/step + CSV 导出 + 数据维护 |
-| `/projects/*` | `projects.py` | `project.js` | 项目 CRUD + 激活 + `/active/current` |
+| `/projects/*` | `projects.py` | `project.js` | 项目 CRUD + 激活 + `/active/current`；v3.51 加 `GET/PUT /activate-config`（激活收养开关 adopt_unbound，声明在 `/{project_id}` 之前防路由吞噬） |
 | `/models/*` | `models.py` | `model.js` | 模型上传/转换/标签解析 |
 | `/tasks/*` | `tasks.py` | 无（`task.js` 已删） | 离线推理任务（前端无入口，仅 API 在线） |
 | `/reports/*` | `reports.py` | 无（`report.js` 已删） | 趋势/日报/导出（报表展示由 Data 页接管） |
@@ -63,7 +63,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `/roles/*` | `roles.py` | `auth.js`（同文件封装） | v3.10.0 角色 CRUD + 权限编辑 |
 | `/api-keys/*` | `api_keys.py` | `auth.js`（同文件封装） | v3.10.0 M2M API Key（SHA256 + scope） |
 | `/export/*` | `export_custom.py` + `export_realtime.py` + `export_scheduled.py`（**三文件共用前缀**） | `export.js` | v3.5.0 自定义导出 + 实时规则 + v3.8 定时导出 |
-| `/channel-groups/*` | `channel_groups.py` | `channel_group.js` | v3.13.1 工位组（RFC 10 并行联动） |
+| `/channel-groups/*` | `channel_groups.py` | `channel_group.js` | v3.13.1 工位组（RFC 10 并行联动）；v3.51 Schema 加 `unified_ok_report`（存 plugin_data，synchronized_all_ok 组统一播报） |
 | `/workpiece-flows/*` | `workpiece_flows.py` | —（Project 视图直调） | v3.14 串行流水线结算（RFC 11） |
 | `/packaging-flows/*` | `packaging_flows.py` | `packaging_flow.js` | v3.21+ 包装箱结算（上银包装线） |
 | `/weighing/*` | `weighing.py` | `weighing.js` | ★ v3.31 称重投料模式（前置选择/扫码/去皮/记录查询/虚拟喂重）；v3.45 加 `/weighing/operators`（作业员名单下拉取数，只暴露启用账号显示名，不挂用户管理权限） |

@@ -21,6 +21,7 @@
       <el-table-column label="联动策略" min-width="150">
         <template #default="{ row }">
           <el-tag size="small" :type="strategyColor(row.settle_strategy)">{{ strategyLabel(row.settle_strategy) }}</el-tag>
+          <el-tag v-if="row.unified_ok_report" size="small" class="ml-1" type="warning">统一播报</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="超时(ms)" width="100" prop="timeout_ms" />
@@ -81,6 +82,14 @@
           </el-select>
         </el-form-item>
 
+        <el-form-item v-if="form.settle_strategy === 'synchronized_all_ok'" label="统一播报">
+          <el-switch v-model="form.unified_ok_report" />
+          <div class="text-xs text-gray-400 mt-1">
+            开启后各工位合格时<b>不单独</b>亮灯/语音/弹合格提示，等组内工位<b>全部合格</b>后统一报一次合格。
+            任一工位 NG 仍然立即播报（安全优先）。关闭时各工位照旧各报各的。
+          </div>
+        </el-form-item>
+
         <el-form-item label="启用">
           <el-switch v-model="form.enabled" />
         </el-form-item>
@@ -115,6 +124,7 @@ const _newForm = () => ({
   timeout_ms: 5000,
   timeout_action: 'fallback_independent',
   enabled: false,
+  unified_ok_report: false,
 });
 
 const form = reactive(_newForm());

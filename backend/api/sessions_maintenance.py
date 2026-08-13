@@ -679,6 +679,42 @@ def _backup_postgres(timestamp: str):
     )
 
 
+def _unlock_ok_workpieces(db: Session, cycle_ids) -> int:
+    """v3.51: 数据清理联动解封条码.
+
+    把被删周期关联的、status='ok' 的工件重置回 'registered', 让
+    strict_ok_dedup (按工件表 status=ok 永久拒码) 与"删记录"的用户心智
+    一致: 记录删了 = 这个码可以重扫重测。
+
+    cycle_ids=None 表示全量清理 (所有 ok 工件都解封);
+    否则只解封与这些 cycle 有 WorkpieceInspection 关联的工件。
+    失败只打日志不阻断清理主流程 (老库无 MES 表时静默跳过)。
+    """
+    try:
+        from backend.models.mes_models import Workpiece, WorkpieceInspection
+        if cycle_ids is None:
+            q = db.query(Workpiece).filter(Workpiece.status == "ok")
+        else:
+            if not cycle_ids:
+                return 0
+            wp_ids = [row[0] for row in db.query(
+                WorkpieceInspection.workpiece_id).filter(
+                WorkpieceInspection.cycle_id.in_(cycle_ids)).distinct().all()]
+            if not wp_ids:
+                return 0
+            q = db.query(Workpiece).filter(
+                Workpiece.id.in_(wp_ids), Workpiece.status == "ok")
+        count = q.update({Workpiece.status: "registered"},
+                         synchronize_session=False)
+        if count:
+            print(f"[数据清理] 联动解封 {count} 个已 OK 工件 (status → registered), "
+                  f"strict_ok_dedup 不再拒绝这些条码")
+        return int(count or 0)
+    except Exception as e:
+        print(f"[数据清理] 工件解封联动失败 (忽略, 不阻断清理): {e}")
+        return 0
+
+
 @router.delete("/clear/all",
                 dependencies=[Depends(require_perm("data.cleanup"))])
 def clear_all_data(db: Session = Depends(get_db)):
@@ -721,6 +757,11 @@ def clear_all_data(db: Session = Depends(get_db)):
                 except Exception as e:
                     print(f"删除上传视频失败: {fp}, {e}")
 
+        # v3.51: 删记录联动解封条码 — 清掉全部周期时, 把已判 OK 的工件重置回
+        # registered, 否则 strict_ok_dedup (查工件表 status=ok) 仍会永久拒绝该码,
+        # 现场感知为"记录都删了, 码还是扫不进"(2026-08-14 捷昌实报)。
+        unlocked = _unlock_ok_workpieces(db, cycle_ids=None)
+
         step_count = db.query(StepRecord).delete(synchronize_session=False)
         video_count = db.query(VideoClip).delete(synchronize_session=False)
         cycle_count = db.query(DetectionCycle).delete(synchronize_session=False)
@@ -735,6 +776,7 @@ def clear_all_data(db: Session = Depends(get_db)):
                 "sessions": session_count, "cycles": cycle_count,
                 "steps": step_count, "videos": video_count,
                 "files": deleted_files, "upload_videos": upload_deleted,
+                "workpieces_unlocked": unlocked,
             },
         }
     except Exception as e:
@@ -784,6 +826,9 @@ def clear_data_by_range(req: DateRangeCleanup, db: Session = Depends(get_db)):
                 except Exception as e:
                     print(f"删除视频文件失败: {v.file_path}, {e}")
 
+        # v3.51: 删记录联动解封条码 (语义同 clear/all, 仅限本范围涉及的周期)
+        unlocked = _unlock_ok_workpieces(db, cycle_ids=cids)
+
         step_count = 0
         if cids:
             step_count = db.query(StepRecord).filter(
@@ -810,6 +855,7 @@ def clear_data_by_range(req: DateRangeCleanup, db: Session = Depends(get_db)):
                 "sessions": session_count, "cycles": cycle_count,
                 "steps": step_count, "videos": video_count,
                 "files": deleted_files,
+                "workpieces_unlocked": unlocked,
             },
         }
     except HTTPException:

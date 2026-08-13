@@ -1097,6 +1097,16 @@ class ScannerService:
             return "ok_only"
         return getattr(conn, 'resume_on', 'cycle_end') or 'cycle_end'
 
+    @staticmethod
+    def _effective_scan_required(conn) -> bool:
+        """v3.50.1: E 码-合格-码模式强制按"先扫后检"处理 (无视设备存的
+        scan_required)。E 的语义本来就是"扫到码才开工、合格才放行下一码",
+        灯也只在扫码后才灭 — 没有码在位却开周期计数是自相矛盾的。
+        其余模式按设备配置, 保持零差异。"""
+        if (conn.scan_mode or "") == "E":
+            return True
+        return bool(getattr(conn, 'scan_required', False))
+
     def _detecting_channels(self, bound) -> set:
         """v3.50.0a: 广播工位里当前正在检测的子集 (全 OK 亮灯门控的分母).
 

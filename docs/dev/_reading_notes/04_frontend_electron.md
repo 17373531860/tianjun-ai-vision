@@ -29,6 +29,12 @@
 > - `views/MES/ScannerPanel.vue`：新「扫码器生命周期」选项区——「重新亮灯时机」下拉（cycle_end/ok_only）+「亮灯作废旧码」+「强制去重」开关；前两项 `lifecycleApplicable` computed 守门（device_type=text_lon 且 scan_mode ∈ once_per_cycle/D，USB 键盘枪无灯控置灰 + 提示文案）；强制去重任何设备可用；defaultForm 三字段默认=现状；scan_pair 提示文案补与齐件即结算互斥说明。
 > - `views/Monitor/index.vue`：①MES 信息条新增「恢复扫码」按钮（`data-testid=resume-scanner-btn`，`mesData.scanner_resume_blocked` 为真时显示，点击 `POST /scanner/resume?channel_id=` + 成功/无枪/失败三态 toast）；**信息条外层 v-if 补 `scanner_resume_blocked` 条件**——否则 NG 后无工件/工单时整条不渲染按钮出不来（开发中实测踩的坑）；②`handleScanToast` 统一警告分支：`scan_warning || scan_pair_dup_warning` 走 `warn_reason` 文案的 warning toast（多工位带工位号前缀），时间戳去重沿用。
 >
+> **v3.51 补账（2026-08-14，捷昌 B 站双工位整改）**：
+> - `views/Settings/index.vue`：显示设置页「开机自动恢复检测」卡片后新增**「启用项目时自动接管未绑定工位」卡片**（`data-testid="adopt-unbound-switch"`，`GET/PUT /projects/activate-config`，默认开=存量收养行为；说明文案标注"多工位多项目部署建议关闭"）；`loadAdoptUnboundConfig`/`onAdoptUnboundChange` + onMounted 装载；新 import `Connection` 图标。
+> - `views/Settings/ChannelGroupPanel.vue`：创建/编辑对话框在 `settle_strategy === 'synchronized_all_ok'` 时渲染**「统一播报」开关**（`form.unified_ok_report`，说明文案"全部合格后统一报一次合格，NG 仍立即播报"）；列表「联动策略」列 `row.unified_ok_report` 为真时追加橙色 `统一播报` tag；`_newForm` 默认 false。
+> - 回归：e2e `tests/e2e_browser/test_v3_51_switches.py`（4 用例：activate-config API 默认值 / adopt 开关点击-落库-刷新回填 / unified_ok_report API 往返 / 面板 tag 可见）。
+> - `views/Project/LogicConfigTab.vue`（v3.50.0a 收编）：跟踪配置卡「扫码后才计数」开关（`tracking_scan_gate`）+ 齐件即结算 tooltip 新语义文案（含"配周期超时兜底"提醒）。
+>
 > **v3.48.1 补账（2026-08-11，体验修复补丁版）**：
 > - `views/Monitor/index.vue`（→6942 行）：**快照轮询回退**——`syncMultiStreams` 在可见工位 > `MAX_MJPEG_STREAMS`(4) 时掐掉全部 MJPEG 长连接改 `/snapshot?channel=N` 单帧轮询（浏览器同 host HTTP/1.1 仅 6 条并发连接，九路 MJPEG + 数据轮询互踢饿死）；新增 `mjpegZeroFrameFails`/`_registerMjpegDeath`：任一工位 MJPEG 连续 2 次零帧断流（WebKit fetch 不支持 multipart/x-mixed-replace）单独降级快照；`startSnapshotPolling` 定时器 40ms 基础节拍 + `_snapshotIntervalMs()` 按并发工位数自适应取帧间隔（≤2 路 80ms / ≤4 路 120ms / ≤9 路 200ms / 更多 300ms），`snapshotInFlight` 背压跳 tick，`stopMultiStreams` 清零帧计数
 > - `views/Data/index.vue`：周期列表「全部/仅OK/仅NG」筛选（`cycleResultFilter` → cycles 端点 `result` 参数，换筛选重置分页/展开态）；播放弹窗 0.5x~4x 倍速（`videoPlaybackRate` + `applyPlaybackRate`，`@loadedmetadata` 时套用、换视频不重置）+「下载录像」按钮（a[download] 指向同 `/data/videos/{id}`）；视频报错文案引导下载兜底

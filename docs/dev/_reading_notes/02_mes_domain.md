@@ -44,6 +44,15 @@
 > - `services/triggers/actions.py`：全局动作注册表加 **`resume_scanner`**（= `resume_scanning_manual`，脚踏板/PLC 的 NG 灭灯出口，见 05 册动作表）。
 > - 上游联动：`end_cycle` 传 `is_good`、`source_routes` 透出 `scanner_resume_blocked`（见 01 册 v3.50 补账）；前端 ScannerPanel/Monitor 见 04 册。
 > - 回归：`test_scanner_lifecycle.py`（新 16 用例）/ `test_settle_on_complete.py`（新 21 用例）/ BDD `settle_scan_lifecycle.feature`（8 场景）/ e2e `test_settle_scan_lifecycle.py`（6 用例）。
+>
+> **v3.51 补账（2026-08-14，捷昌 B 站双工位整改；含 v3.50.0a 热补丁收编）**：
+> - `services/scanner.py`（v3.50.0a FEAT-004/005 + BUG-003~006 收编）：①扫描模式 **E「码-合格-码」**——`_effective_resume_on`（E 强制 ok_only 无视存的 resume_on）+ `_effective_scan_required`（E 强制先扫后检，其余读设备字段；`mes_hooks.is_scan_required` 走它，取不到方法退回读字段）；②`_loff_on_code_received`——灭灯动作从 listen loop 闭包下移为 service 方法，`_on_data_received` 在去重判定**之前**调（物理扫到码就灭灯，幂等，治打补丁机器 E 模式扫码不灭灯：监听线程早于 hotfix 启动持有出厂闭包）；③广播多工位 `resume_after_cycle`——这把枪覆盖的**所有在检工位都 OK** 才亮灯，已 OK 集合按本轮箱码锚定防跨轮残留，没在检测的工位不进分母；④ok_only 枪跨线/新箱一律不点灯（`send_lon_for_channel` 守门），亮灯权独占给 OK 结算/人工恢复；⑤`resume_after_cycle` 只有明确 NG 才标 `_resume_blocked`（结果未知只灭灯不惊动人，治"一扫码就挂恢复按钮"）。
+> - `services/mes_hooks.py`（v3.50.0a FEAT-001/003 收编）：`_settle_stale_on_new_scan` 在重复扫码判定前跑——齐件即结算通道扫到新码把挂起旧账（≥1 件）强制 NG 收场；`has_workpiece_in_flight(ch)`（待检或在检都算码在位，「扫码后才计数」tracking_scan_gate 的数据源）。
+> - `services/workpiece.py`（v3.50.0a BUG-007）：`link_to_cycle` 同工件+周期**幂等**（查到已有记录复用不抛 UNIQUE），`_handle_cycle_start` 落库失败也先保住在检身份再抛（不变量 14）。
+> - `services/channel_group_coordinator.py`（v3.51 FEAT-009）：`_install_group` 读 `plugin_data.unified_ok_report` 进内存组配置；新增 `should_unify_ok_report(channel_id)`（组员×synchronized_all_ok×开关三条件）+ `_fire_unified_report(group, channel_ids, reason)`（对成员逐个 `mgr.fire_external_event_response(1, remind_only=True)` 复用各通道事件1 配置的灯/语音/toast，不重复计数）；`_finalize_aggregation`：complete 且组 OK → 全员统一播报；timeout fallback → 只补播已 OK 成员（防"永远没反馈"）；异常隔离。个体抑制侧见 01 册 `source_event_trigger_mixin`。回归 `tests/channel_group/test_unified_ok_report_v3_51.py`。
+> - `api/channel_groups.py`（v3.51 FEAT-009）：`ChannelGroupBase`/`Update` Schema 加 `unified_ok_report`（存取均走 `plugin_data`，不动主 schema 无迁移）；`_serialize` 透出。
+> - `api/projects.py`（v3.51 FEAT-008）：SystemConfig KV **`activate.adopt_unbound`**（默认 '1'=存量收养行为）+ `_get_adopt_unbound()`；关闭时 `_sync_project_config_to_channels` / `_reload_model_for_active_project` 只同步"已显式绑定本项目"的通道（无绑定通道不收养/不改绑）；新端点 `GET/PUT /projects/activate-config`（**声明在 `/{project_id}` 之前**防路由吞噬）。回归 `tests/test_activate_adopt_unbound_v3_51.py`。
+> - `api/sessions_maintenance.py`（v3.51 BUG-014）：`_unlock_ok_workpieces(db, cycle_ids)`——clear/all（cycle_ids=None 解封全部）与 clear/range（经 WorkpieceInspection 关联被删周期）把 status='ok' 工件重置回 'registered'，响应带 `workpieces_unlocked`；失败只打日志不阻断清理。治 strict_ok_dedup"删记录仍永久拒码"。回归 `tests/test_clear_data_unlock_workpiece_v3_51.py`。
 
 ## 一、逐文件档案
 

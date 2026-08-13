@@ -853,6 +853,11 @@
       "default": 5000,
       "title": "Timeout Ms",
       "type": "integer"
+     },
+     "unified_ok_report": {
+      "default": false,
+      "title": "Unified Ok Report",
+      "type": "boolean"
      }
     },
     "required": [
@@ -898,6 +903,11 @@
       "default": 5000,
       "title": "Timeout Ms",
       "type": "integer"
+     },
+     "unified_ok_report": {
+      "default": false,
+      "title": "Unified Ok Report",
+      "type": "boolean"
      }
     },
     "required": [
@@ -978,6 +988,17 @@
        }
       ],
       "title": "Timeout Ms"
+     },
+     "unified_ok_report": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Unified Ok Report"
      }
     },
     "title": "ChannelGroupUpdate",
@@ -24632,6 +24653,66 @@
      }
     },
     "summary": "Create Project",
+    "tags": [
+     "projects"
+    ]
+   }
+  },
+  "/api/v1/projects/activate-config": {
+   "get": {
+    "description": "读激活项目行为配置 (v3.51)",
+    "operationId": "get_activate_config_api_v1_projects_activate_config_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Get Activate Config",
+    "tags": [
+     "projects"
+    ]
+   },
+   "put": {
+    "description": "写激活项目行为配置 (v3.51). body: {\"adopt_unbound\": bool}",
+    "operationId": "put_activate_config_api_v1_projects_activate_config_put",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "additionalProperties": true,
+        "title": "Payload",
+        "type": "object"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Put Activate Config",
     "tags": [
      "projects"
     ]

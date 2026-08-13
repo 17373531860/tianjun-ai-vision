@@ -223,6 +223,22 @@ def _apply_exposure_setting(cap, auto_exposure: bool, exposure_value: float,
 # device_index → 上次成功打开它的 cv2 后端常量 (进程内, 机器级资源所以不挂实例)。
 _LAST_OK_CAMERA_BACKEND: dict = {}
 
+# channel_id → 输入源启停互斥锁 (可重入: start_* 内部会先 stop)。
+# 放模块级而不是 VideoSourceManager.__init__ 的实例字段, 是因为 source.py
+# 出厂是编译过的 .pyd, 热补丁替不掉它的 __init__；本文件是源码出厂。
+_LIFECYCLE_LOCKS: dict = {}
+_LIFECYCLE_LOCKS_GUARD = threading.Lock()
+
+
+def get_lifecycle_lock(channel_id: int):
+    """取某通道的输入源启停锁 (没有就建)。"""
+    with _LIFECYCLE_LOCKS_GUARD:
+        lock = _LIFECYCLE_LOCKS.get(channel_id)
+        if lock is None:
+            lock = threading.RLock()
+            _LIFECYCLE_LOCKS[channel_id] = lock
+        return lock
+
 
 def _open_camera_capture(device_index: int, max_rounds: int = 3):
     """按"后端候选 × 退避重试"打开相机, 返回 (capture, backend_id)。
@@ -264,6 +280,11 @@ def _open_camera_capture(device_index: int, max_rounds: int = 3):
 
 
 class CameraStartMixin:
+    @property
+    def _source_lifecycle_lock(self):
+        """本通道的输入源启停锁 (stop / start_camera 共用)。"""
+        return get_lifecycle_lock(self.channel_id)
+
     def start_camera(self, device_index: int = 0, width: int = 1280, height: int = 720, fps: int = 60,
                      auto_exposure: bool = True, exposure_value: float = -6.0):
         """启动摄像头.
@@ -271,7 +292,19 @@ class CameraStartMixin:
         v3.1.2 新增 auto_exposure / exposure_value: 关掉自动曝光防止 UVC 摄像头
         在光线变暗时把帧率从 30fps 自驱降到 10fps. 默认 auto_exposure=True
         保持向后兼容, 只有客户在 UI 显式关闭时才生效.
+
+        整段持 _source_lifecycle_lock: 打开过程里有 release + 换后端重开
+        (DirectShow/MSMF 实测选优), 中途被别的线程 stop 会抽走句柄。
         """
+        with self._source_lifecycle_lock:
+            return self._start_camera_locked(
+                device_index=device_index, width=width, height=height, fps=fps,
+                auto_exposure=auto_exposure, exposure_value=exposure_value,
+            )
+
+    def _start_camera_locked(self, device_index: int = 0, width: int = 1280, height: int = 720, fps: int = 60,
+                             auto_exposure: bool = True, exposure_value: float = -6.0):
+        """start_camera 的实现体（调用方必须已持 _source_lifecycle_lock）。"""
         self.stop(release_model=False)
         
         # 等待一小段时间确保之前的资源已释放

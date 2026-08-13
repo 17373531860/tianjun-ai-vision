@@ -1030,6 +1030,32 @@ class TrackingMixin:
 
         return should_settle
 
+    def _soc_ensure_db_cycle(self, current_time: float) -> bool:
+        """齐件即结算前确保 DB 周期已开 (v3.50.2).
+
+        cycle_uuid 为空说明 start_cycle 从未成功 — 最常见原因: 工位要求先扫码
+        (E 模式 / 先扫后检), 码未到时 start_cycle 被 ScanBind 拦掉, 但内存
+        tracking 周期与账本照跑. 此时若照常结算, 结果挂不到任何周期/工件上:
+        扫码器 resume_after_cycle 拿到"结果未知"保持灭灯, 结算后另开的新周期
+        又把 pending 工件占走 (2026-08-14 捷昌 B 工位现场实录). 处理:
+        先尝试补开周期 (码已扫则能开); 开不出来返回 False, 调用方挂账等待,
+        扫码后下一帧即可正常结算.
+        """
+        if getattr(self, 'current_cycle_uuid', None):
+            return True
+        try:
+            self.start_cycle()
+        except Exception as e:
+            print(f"[Tracking] 齐件即结算: 补开周期失败: {e}", flush=True)
+        if getattr(self, 'current_cycle_uuid', None):
+            return True
+        last = getattr(self, '_soc_wait_cycle_log_ts', 0.0)
+        if current_time - last > 5.0:
+            self._soc_wait_cycle_log_ts = current_time
+            print("[Tracking] 齐件即结算: 已凑齐但周期未开 (等扫码绑定), "
+                  "账本挂起等待, 扫码后自动结算", flush=True)
+        return False
+
     def _update_tracking_stats(self, detections: list, original_frame: np.ndarray):
         """Process detections in tracking mode (物品清点, v2.7.16 P5b 拆分版)。
 
@@ -1199,6 +1225,11 @@ class TrackingMixin:
         if _soc_roi and _all_met_now:
             if (not _scan_pair_active
                     and not getattr(self, '_force_settling_in_progress', False)):
+                # v3.50.2 DB 周期守门: cycle_uuid 为空 = start_cycle 从未成功
+                # (最常见: 工位要求先扫码, 码未到被 ScanBind 拦掉). 此时结算出的
+                # 结果挂不到任何周期/工件上 — 先补开周期, 开不出来就挂账等码.
+                if not self._soc_ensure_db_cycle(current_time):
+                    return
                 # 在场物品全部登记豁免名单: 离场前不计入下一周期
                 for _tid, _obj in self._tracking_objects.items():
                     self._settle_complete_exempt[_tid] = {
@@ -1224,6 +1255,10 @@ class TrackingMixin:
             if (_cmax > 0 and self.cycle_start_time is not None
                     and current_time - self.cycle_start_time > _cmax
                     and not getattr(self, '_force_settling_in_progress', False)):
+                # v3.50.2: 超时兜底同样要求 DB 周期已开 — 码没扫周期开不了时,
+                # 超时 NG 同样挂不到工件上, 不出账继续等码 (E 闭环语义).
+                if not self._soc_ensure_db_cycle(current_time):
+                    return
                 print(f"[Tracking] 齐件即结算: 周期超时 "
                       f"({current_time - self.cycle_start_time:.1f}s > {_cmax}s) "
                       f"→ 强制结算 (未凑齐判 NG)", flush=True)

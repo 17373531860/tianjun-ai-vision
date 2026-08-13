@@ -24,6 +24,14 @@
 > - `source_session_lifecycle_mixin.py` `end_cycle`：`resume_after_cycle` 改传 `is_good=bool(final_is_good)`（扫码器生命周期 resume_on 分流的数据源，见 02 册 scanner.py）。
 > - `source_routes.py` `get_detection_status`：mes payload 增 `scanner_resume_blocked`（`ScannerService.is_resume_blocked(ch)` 为 True 时置位，监控页"恢复扫码"按钮显示依据），try/except 全兜底。
 >
+> **v3.51 补账（2026-08-14，捷昌 B 站双工位整改；含 v3.50.0a 热补丁收编）**：
+> - `main.py` `auto_restore_video_sources`：①失败工位延迟补开（`_restore_one_video_source` 抽出复用，v3.50.0a BUG-008）；②尾部**收尾兜底轮**（v3.51 BUG-013）——整个恢复流程走完再 sleep 5s，把"已配源但 `mgr.is_running=False`"的通道最后拉一次 + `_restore_detection_pass("收尾兜底")` 补开检测；幂等，全在跑零动作。动机：前端首屏激活项目会停输入源，与 ~18s 恢复窗口竞争，原 4s 二次恢复兜不住。
+> - `source_camera_start_mixin.py`（v3.50.0a BUG-008/009 收编）：`_open_camera_capture` 后端候选（DSHOW→MSMF 记住上次成功）× 递增退避；模块级**按通道可重入锁** `_source_lifecycle_lock`（锁表挂模块级 + mixin property——`source.py` 在 CI 编译白名单，实例字段热补丁替不掉 `__init__`），`start_camera` 全程持锁。
+> - `source_lifecycle_mixin.py` / `source_capture_loop_mixin.py`（v3.50.0a BUG-009）：新增 `_release_capture()` 在 `capture_lock` 内原子取出并置空再 release；stop/pause/capture_loop 重连全走它，治启动期三方并发 double-free（0xC0000374 堆损坏杀进程）。回归 `tests/test_source_lifecycle_concurrency.py`。
+> - `source_tracking_mixin.py`（v3.50.0a BUG-001/012）：齐件即结算开启时原"消失确认结算"路径整段跳过 + 周期超时强制结算兜底；两处出账口前 `_soc_ensure_db_cycle` 周期守门——`current_cycle_uuid` 为空先补开正式周期，开不出来（码未到）挂起不出账。回归 `tests/test_settle_on_complete.py`。
+> - `source_event_trigger_mixin.py`（v3.51 FEAT-009）：`_trigger_event` 里 `is_good` 事件先问 `channel_group_coordinator.should_unify_ok_report(channel_id)`——组开统一播报时个体 OK 的 `show_notification` 置 False、`_dispatch_event_alarm` 跳过（`if not suppress_alarm and not _unify_ok_suppress`）；结算/计数/落库/MES 照旧，NG 永不抑制。静态守护测试 `test_returnable_hook_consumption_M1_2c.py` 的 regex 已放宽允许附加条件。
+> - `channel_manager.py`（v3.50.0a BUG-011）：`save_channel_config` merge=False 时对归属别段的 key（`project_id`/`was_detecting`）body 缺失或 null 从旧配置继承——治 Source 页保存输入源把工位-项目绑定顺手抹掉（不变量 17）。回归 `tests/test_channel_manager_multi.py` 三例。
+>
 > **v3.41 增量复核（2026-07-17）**：source/检测核心域按 `git diff a23a8d2..HEAD` 补账 v3.33~v3.41 九个版本变更。各条目内新增「v3.3x 变更」行；1.4 / 1.5 表下补增量清单；新建 `source_persist_worker.py`（v3.38）完整条目并补录 `source_region_events.py` / `source_region_events_mixin.py`（v3.32 落地时漏收）。受影响文件的行数标注与漂移行号已按当前代码刷新。
 >
 > **v3.44 补账（2026-07-22）**：NG 处置整改批次，source 族 10 文件——

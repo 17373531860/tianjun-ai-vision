@@ -112,6 +112,8 @@ class ChannelGroupCoordinator:
                 members = row.member_channel_ids or []
                 if not isinstance(members, list):
                     continue
+                # v3.51 统一播报开关: 挂在 plugin_data (M3 风格, 不动主 schema)
+                _pd = row.plugin_data if isinstance(row.plugin_data, dict) else {}
                 self._groups[row.id] = {
                     "id": row.id,
                     "name": row.name,
@@ -119,6 +121,7 @@ class ChannelGroupCoordinator:
                     "settle_strategy": row.settle_strategy or "synchronized_any_ng",
                     "timeout_ms": int(row.timeout_ms or 5000),
                     "timeout_action": row.timeout_action or "fallback_independent",
+                    "unified_ok_report": bool(_pd.get("unified_ok_report", False)),
                 }
                 for cid in members:
                     try:
@@ -159,6 +162,48 @@ class ChannelGroupCoordinator:
     # =============================================================
     # 运行时入口
     # =============================================================
+
+    def should_unify_ok_report(self, channel_id: int) -> bool:
+        """v3.51 工位组统一播报: 该通道的个体 OK 播报是否应被抑制.
+
+        True 条件: 通道属于某 enabled 组 + 策略 synchronized_all_ok +
+        组开了 unified_ok_report。此时个体 OK 结算照常落库/计数/推 MES,
+        但灯/语音/前端 toast 不播 — 等组聚齐全 OK 后统一播一次
+        (_finalize_aggregation)。默认关, 零差异。
+        """
+        with self._lock:
+            group_id = self._channel_to_group.get(channel_id)
+            if group_id is None:
+                return False
+            group = self._groups.get(group_id)
+            if not group:
+                return False
+            return (group["settle_strategy"] == "synchronized_all_ok"
+                    and bool(group.get("unified_ok_report", False)))
+
+    def _fire_unified_report(self, group: Dict[str, Any], channel_ids: List[int],
+                             reason: str) -> None:
+        """v3.51: 对组内通道统一补一次"合格"事件响应面 (灯/语音/toast).
+
+        复用 fire_external_event_response — 不 end_cycle、不动周期统计、不计数
+        (成员各自结算时计数已 +1, remind_only=True 跳过计数器联动防双计)。
+        错误隔离: 任一通道失败不影响其它通道。
+        """
+        try:
+            from backend.api.channel_manager import channel_manager
+        except Exception as e:
+            print(f"[ChannelGroup] 统一播报 import channel_manager 失败 (隔离): {e}")
+            return
+        for cid in channel_ids:
+            try:
+                mgr = channel_manager.channels.get(cid)
+                if mgr is None:
+                    continue
+                mgr.fire_external_event_response(
+                    1, reason, source="channel_group", remind_only=True)
+            except Exception as e:
+                print(f"[ChannelGroup] 统一播报 ch{cid} 异常 (隔离): {e}")
+        print(f"[ChannelGroup][{group['name']}] 统一播报: {reason} → ch{channel_ids}")
 
     def get_pending_override(self, channel_id: int) -> Optional[str]:
         """VSM end_cycle 调: 看本次结算是否被组级联动覆盖.
@@ -382,6 +427,27 @@ class ChannelGroupCoordinator:
             f"reason={reason} result={group_result} arrived={list(members_arrived.keys())} "
             f"expected={members_expected}"
         )
+
+        # v3.51 统一播报 (unified_ok_report 开时):
+        #   - 聚齐且全 OK → 组内所有成员统一播一次"合格" (个体 OK 播报在
+        #     _trigger_event 被抑制过, 这里是唯一的用户感知出口)
+        #   - 超时 (fallback_independent) → 已到且 OK 的成员补播个体合格,
+        #     否则这些工位的工人永远看不到任何 OK 反馈
+        #   - 组内出 NG → 不播 OK; NG 个体播报从未被抑制 + any_ng/all_ok 的
+        #     NG 广播照旧, 已有完整反馈
+        if bool(group.get("unified_ok_report", False)):
+            try:
+                ok_members = [ch for ch, m in members_arrived.items() if m["is_good"]]
+                if reason == "complete" and group_result == "OK":
+                    self._fire_unified_report(
+                        group, members_expected,
+                        f"工位组[{group['name']}]全部合格")
+                elif reason == "timeout" and ok_members:
+                    self._fire_unified_report(
+                        group, ok_members,
+                        f"工位组[{group['name']}]等待超时, 本工位已合格")
+            except Exception as e:
+                print(f"[ChannelGroup] 统一播报调度异常 (隔离): {e}")
 
     def _write_cycle_group_fields(
         self,

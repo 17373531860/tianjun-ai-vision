@@ -209,7 +209,7 @@ v3.4.2 promote 均为此修过补丁）。
     `resume_scanning_manual` → `manual=True` 无条件放行）
   - `rearm_forget_last`：恢复亮灯时 `_rearm_forget` 清 `conn.last_scan`（物理去重缓存）
     + `mes_hook.clear_pending_scan(force=False)` 作废未绑定旧码，防旧码挂新周期
-  - `strict_ok_dedup`：`_handle_scan` 入口查库，该条码已有 status='ok' 工件 → 永久拒绝
+  - `strict_ok_dedup`：`_handle_scan` 入口查库，该条码已有 status='ok' 工件 → 永久拒绝。v3.51 起数据中心 clear/all、clear/range 会联动 `_unlock_ok_workpieces`（`sessions_maintenance.py`）把被删周期关联的 ok 工件重置回 registered——客户"删了记录还拒码"先确认版本 ≥3.51 且删的确实是该码关联周期
     （= ok_rescan_cooldown 的无限版）
 - **v3.50 拒绝路径统一警告 toast**：强制去重拒绝 / OK 冷却拒绝 / duplicate_scan_action=reject
   三条路径不再静默丢码，走 `_emit_scan_warning(ch, sn, reason)` → `_last_scan_event`

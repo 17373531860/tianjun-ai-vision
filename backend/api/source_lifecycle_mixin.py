@@ -161,12 +161,7 @@ class LifecycleMixin:
         # Camera/Hikvision: release the device so it's not locked
         # (current_frame is kept for frozen display, model stays loaded for fast resume)
         if self.source_type == 'camera' and self.capture:
-            try:
-                self.capture.release()
-            except Exception as e:
-                print(f"[pause] release camera failed: {e}")
-                debug_center.dbg("backend.source", "pause 释放摄像头异常", f"channel={self.channel_id} err={e}")
-            self.capture = None
+            self._release_capture("pause")
             print("[Pause] camera released, keeping model and frame")
         elif self.source_type == 'hikvision':
             self._release_hik_camera()
@@ -421,73 +416,94 @@ class LifecycleMixin:
         print("[resume_inference] resumed inference from standby")
         self._fire_source_status_change(_before_running, _before_detecting, "resume_inference")
     
+    def _release_capture(self, context: str = "stop") -> None:
+        """原子地取出并释放 capture 句柄。
+
+        同一个 VideoCapture 被两个线程各自 release 一次, 在 Windows 上是
+        0xC0000374 堆损坏 → 后端整进程崩掉 (现场实测: 启动那几秒里前端首屏
+        激活项目、待机、后台视频源恢复三方同时动同一个通道, 各自都跑到
+        `if self.capture: self.capture.release()`)。取引用与置空必须在
+        capture_lock 内一起做, 保证只有一个线程拿到句柄去 release。
+        """
+        with self.capture_lock:
+            cap, self.capture = self.capture, None
+        if cap is None:
+            return
+        try:
+            cap.release()
+        except Exception as e:
+            print(f"[WARN] {context} release camera failed: {e}")
+            debug_center.dbg("backend.source", "释放摄像头异常",
+                             f"channel={self.channel_id} context={context} err={e}")
+
     def stop(self, release_model: bool = True):
         """停止当前输入源（完全停止并释放资源）
-        
+
         Args:
             release_model: If False, keep the YOLO model in memory for reuse
                            after switching input sources.
+
+        全程持 _source_lifecycle_lock, 与 start_camera 互斥: 启停交错会把刚开好
+        的相机当场停掉 (监控页黑屏要人工重选源), 交错到句柄释放上更是直接堆
+        损坏崩后端。
         """
         _before_running, _before_detecting = self.is_running, self.is_detecting
-        debug_center.dbg("backend.source", "stop 入口", f"channel={self.channel_id} source_type={self.source_type} release_model={release_model} running={_before_running}→False")
-        self.is_running = False
-        self.is_detecting = False
-        
-        # 停止推理线程
-        self._stop_inference_thread()
-        
-        # 关闭推理线程池
-        self._shutdown_inference_executor()
-        
-        # 停止录制线程
-        self._stop_recording_thread()
-        
-        # 等待捕获线程结束（多次尝试）
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=2.0)
-            # 如果线程还在运行，再等待一次
-            if self._thread.is_alive():
-                print("[WARN] capture thread first timeout, waiting again...")
-                self._thread.join(timeout=2.0)
-            # 如果还是没有结束，记录警告
-            if self._thread.is_alive():
-                print("[错误] 捕获线程未能结束，可能存在死锁，强制继续")
-        
-        # Release HCNetSDK
-        if self.source_type == 'hcnetsdk':
-            self._release_hcnet_session()
-        
-        # 释放海康相机资源
-        if self.source_type == 'hikvision':
-            self._release_hik_camera()
-        
-        # 释放摄像头/视频资源
-        if self.capture:
-            try:
-                self.capture.release()
-            except Exception as e:
-                print(f"[WARN] error releasing camera: {e}")
-            self.capture = None
-        
-        if release_model:
-            self._release_model()
-        else:
+        with self._source_lifecycle_lock:
+            debug_center.dbg("backend.source", "stop 入口", f"channel={self.channel_id} source_type={self.source_type} release_model={release_model} running={_before_running}→False")
+            self.is_running = False
+            self.is_detecting = False
+
+            # 停止推理线程
+            self._stop_inference_thread()
+
+            # 关闭推理线程池
             self._shutdown_inference_executor()
-            print("[VideoManager] keeping model, only stopping input source")
-        
-        # 等待一小段时间确保资源被系统释放
-        time.sleep(0.3)
-        
-        self.source_type = None
-        self.current_frame = None
-        self._thread = None
-        with self.detection_lock:
-            self.current_detections = []
-        
-        # 清理所有内存缓存
-        self._clear_all_caches()
-        
-        print("[VideoManager] fully stopped and released resources")
+
+            # 停止录制线程
+            self._stop_recording_thread()
+
+            # 等待捕获线程结束（多次尝试）
+            if self._thread and self._thread.is_alive():
+                self._thread.join(timeout=2.0)
+                # 如果线程还在运行，再等待一次
+                if self._thread.is_alive():
+                    print("[WARN] capture thread first timeout, waiting again...")
+                    self._thread.join(timeout=2.0)
+                # 如果还是没有结束，记录警告
+                if self._thread.is_alive():
+                    print("[错误] 捕获线程未能结束，可能存在死锁，强制继续")
+
+            # Release HCNetSDK
+            if self.source_type == 'hcnetsdk':
+                self._release_hcnet_session()
+
+            # 释放海康相机资源
+            if self.source_type == 'hikvision':
+                self._release_hik_camera()
+
+            # 释放摄像头/视频资源
+            self._release_capture("stop")
+
+            if release_model:
+                self._release_model()
+            else:
+                self._shutdown_inference_executor()
+                print("[VideoManager] keeping model, only stopping input source")
+
+            # 等待一小段时间确保资源被系统释放
+            time.sleep(0.3)
+
+            self.source_type = None
+            self.current_frame = None
+            self._thread = None
+            with self.detection_lock:
+                self.current_detections = []
+
+            # 清理所有内存缓存
+            self._clear_all_caches()
+
+            print("[VideoManager] fully stopped and released resources")
+
         self._fire_source_status_change(_before_running, _before_detecting, "stop")
     
     def _clear_all_caches(self):

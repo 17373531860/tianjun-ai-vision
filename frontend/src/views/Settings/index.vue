@@ -301,6 +301,35 @@
             </div>
           </el-card>
 
+          <!-- v3.51: 激活项目收养策略 (多工位多项目部署建议关) -->
+          <el-card shadow="never" class="bg-slate-800 border-slate-700">
+            <template #header>
+              <div class="flex items-center gap-2">
+                <el-icon class="text-cyan-400"><Connection /></el-icon>
+                <span class="font-bold text-white">启用项目时自动接管未绑定工位</span>
+              </div>
+            </template>
+            <div class="mb-3 text-xs text-gray-500">
+              在项目管理页「启用」一个项目时，未绑定任何项目的工位如何处理。<br>
+              开启（默认）= 未绑定工位被自动接管进该项目，并<b>写死绑定</b>（单项目部署方便）；<br>
+              关闭 = 启用项目只影响<b>已绑定该项目</b>的工位，未绑定工位不动 —— <b>多工位跑不同项目/不同模型时强烈建议关闭</b>，
+              防止在某个项目里改配置后另一个工位的项目被顶掉。
+            </div>
+            <div class="space-y-2">
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="flex flex-col">
+                  <span class="text-gray-300">自动接管未绑定工位</span>
+                  <span class="text-[10px] text-gray-500">多工位多项目部署建议关闭</span>
+                </div>
+                <el-switch
+                  v-model="adoptUnboundEnabled"
+                  data-testid="adopt-unbound-switch"
+                  @change="onAdoptUnboundChange"
+                />
+              </div>
+            </div>
+          </el-card>
+
           <!-- v3.23.x: 加深启动就绪门槛 (默认关) -->
           <el-card shadow="never" class="bg-slate-800 border-slate-700">
             <template #header>
@@ -1935,7 +1964,7 @@ import { useSystemStore } from '@/store/useSystemStore';
 import { useProjectStore } from '@/store/useProjectStore';
 import { usePluginStore } from '@/store/usePluginStore';
 import { usePluginThemeStore } from '@/store/usePluginThemeStore';
-import { Top, Monitor, Box, Bell, Edit, VideoCamera, Cpu, Refresh, DataLine, Lightning, Aim, User, Plus, Close, Minus, Loading, Coin } from '@element-plus/icons-vue';
+import { Top, Monitor, Box, Bell, Edit, VideoCamera, Cpu, Refresh, DataLine, Lightning, Aim, User, Plus, Close, Minus, Loading, Coin, Connection } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { getProjectDetail } from '@/api/project';
 import api from '@/api/index';
@@ -2594,6 +2623,32 @@ async function onAutoResumeChange(val) {
   }
 }
 
+// ========== v3.51: 激活项目收养未绑定工位开关 ==========
+// 存 SystemConfig KV activate.adopt_unbound。默认开 (存量行为)。
+const adoptUnboundEnabled = ref(true);
+
+async function loadAdoptUnboundConfig() {
+  try {
+    const res = await api.get('/projects/activate-config');
+    adoptUnboundEnabled.value = res?.data?.adopt_unbound !== false;
+  } catch (e) {
+    console.warn('加载激活收养配置失败:', e?.message);
+  }
+}
+
+async function onAdoptUnboundChange(val) {
+  dbg('settings.ops', '切换激活收养未绑定工位', `adopt_unbound=${!!val}`);
+  try {
+    await api.put('/projects/activate-config', { adopt_unbound: !!val });
+    ElMessage.success(val
+      ? '已开启: 启用项目时自动接管未绑定工位'
+      : '已关闭: 启用项目只影响已绑定该项目的工位');
+  } catch (e) {
+    ElMessage.error('保存失败: ' + (e?.response?.data?.detail || e?.message || ''));
+    adoptUnboundEnabled.value = !val;
+  }
+}
+
 // ========== v3.23.x: 加深启动就绪门槛开关 ==========
 // 落盘 workstation_config.json 顶层 startup_ready_gate 段, 下次开机由 Electron 读。
 const startupReadyGateEnabled = ref(false);   // 默认关 (首屏失败自动重试已是保底)
@@ -2817,6 +2872,7 @@ onMounted(async () => {
   loadSplashCameraConfig();
   loadWindowConfig();   // v3.10.x: 主窗口模式
   loadAutoResumeConfig();  // v3.22.x: 开机自动恢复检测开关
+  loadAdoptUnboundConfig();  // v3.51: 激活收养未绑定工位开关
   loadStartupReadyGateConfig();  // v3.23.x: 加深启动就绪门槛开关
   loadPolling();  // B3: 各管理面板轮询间隔
   loadMesAsyncDispatchConfig();  // B1②: MES 外推并发派发开关

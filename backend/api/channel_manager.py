@@ -724,6 +724,19 @@ def set_workstation_mode(req: WorkstationModeRequest):
 def save_channel_config(body: dict):
     """持久化单个工位的视频源配置（接受任意字段）"""
     ch_id = body.pop("channel_id", 0)
+    # v3.50.2: merge=False 整体重写曾把归属"别段"的 key 一并抹掉 — Source 页
+    # 保存输入源时项目下拉为空 → project_id=null 落盘 → 该工位失去"绑定其它
+    # 项目的通道激活时不动"保护 → 全局激活跨工位串项目/串模型/清计数
+    # (2026-08-14 捷昌 B 工位现场实录). 源配置段整体重写语义保留;
+    # 别段的 key 在 body 缺失或为 null 时从旧配置继承, 不允许被顺手抹掉.
+    _PRESERVE_KEYS = ("project_id", "was_detecting")
+    try:
+        old_cfg = channel_manager.get_channel_sources().get(str(ch_id)) or {}
+    except Exception:
+        old_cfg = {}
+    for _k in _PRESERVE_KEYS:
+        if body.get(_k) is None and old_cfg.get(_k) is not None:
+            body[_k] = old_cfg[_k]
     channel_manager.save_channel_source(ch_id, body, merge=False)
     return {"status": "success", "channel_id": ch_id, "config": body}
 

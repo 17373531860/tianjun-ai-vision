@@ -1,0 +1,77 @@
+{
+  "version": "3.51.0",
+  "date": "2026-08-14",
+  "previous_version": "3.50.0",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-013",
+      "title": "开机第一时间黑屏 — 视频源恢复被前端首屏激活打断后无兜底",
+      "symptom": "双工位开机监控页黑屏; ch0 自动恢复被打断后再也不起, 要人工重选输入源",
+      "root_cause": "后台恢复线程 ~18s 恢复窗口内, 前端首屏激活绑定项目会停输入源, 与恢复线程抢同一台相机; 原 4s 二次恢复窗口远小于竞争窗口",
+      "fix": "auto_restore_video_sources 尾部收尾兜底轮: 全部恢复完成后再等 5s, 把已配源但没在跑的通道最后拉一次 + 补一轮自动开始检测; 幂等",
+      "files": ["backend/main.py"],
+      "keywords": ["黑屏", "black screen", "开机", "启动恢复", "视频源", "抢相机", "race", "auto_restore_video_sources", "收尾兜底"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-014",
+      "title": "删了条码所有记录后强制去重仍永久拒码 — 数据清理联动解封工件",
+      "symptom": "数据页删除某码全部记录后重扫, 仍被'该条码已判合格已拒绝'拦下; 双工位广播同码一边已登记一边被拒",
+      "root_cause": "strict_ok_dedup 查 MES 工件表 status=ok, 数据中心 clear/all 与 clear/range 只删 session/cycle/step 从不动工件状态",
+      "fix": "清理端点联动 _unlock_ok_workpieces: 被删周期经 WorkpieceInspection 关联的 ok 工件重置回 registered; 全量清理解封全部 ok 工件; 响应返回 workpieces_unlocked",
+      "files": ["backend/api/sessions_maintenance.py"],
+      "keywords": ["strict_ok_dedup", "强制去重", "删记录", "解封", "条码", "工件", "registered", "clear/all", "clear/range"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-008",
+      "title": "启用项目时自动接管未绑定工位 — 可配置开关 activate.adopt_unbound",
+      "symptom": "多工位下某通道绑定被历史 bug 抹掉后, 任何一次启用项目都把该工位收养进当前项目并写死绑定, 现场感知为'两个工位的项目又都变成小件了'",
+      "root_cause": "v3.32.1 起激活项目对无绑定通道做收养+持久化改绑, 单项目部署合理, 多工位多项目部署会互踩",
+      "fix": "SystemConfig KV activate.adopt_unbound 默认 '1' 保持存量; 关闭后激活只同步已显式绑定本项目的通道; 新端点 GET/PUT /api/v1/projects/activate-config; 设置页新卡片开关",
+      "files": ["backend/api/projects.py", "frontend/src/views/Settings/index.vue"],
+      "keywords": ["激活项目", "activate", "adopt_unbound", "收养", "绑定", "project_id", "多工位", "项目重置", "切项目"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-009",
+      "title": "工位组统一播报 unified_ok_report — 组内全部合格才一起报 OK",
+      "symptom": "广播枪双工位场景要求两工位都合格才报合格放行, 现状 OK 事件/灯/语音/toast 各报各的",
+      "root_cause": "synchronized_all_ok 聚合状态机 v3.13.1 只写数据字段+插件 hook, 无用户感知层",
+      "fix": "开关存 ChannelGroup.plugin_data 无迁移; _trigger_event 抑制个体 OK 感知面(toast/alarm), 结算计数落库 MES 照旧; 聚齐全 OK 后 _finalize_aggregation 对全员 fire_external_event_response(1, remind_only=True) 统一播一次; 超时 fallback 补播已 OK 成员; NG 永不抑制",
+      "files": ["backend/services/channel_group_coordinator.py", "backend/api/channel_groups.py", "backend/api/source_event_trigger_mixin.py", "frontend/src/views/Settings/ChannelGroupPanel.vue"],
+      "keywords": ["工位组", "channel group", "unified_ok_report", "统一播报", "都合格", "synchronized_all_ok", "联动结算", "广播", "一起报OK"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-010",
+      "title": "收编 v3.50.0a 现场热补丁全部 17 条进正式版",
+      "symptom": "现场依赖 hotfix.py 运行时重绑 + *_v3500a.py 独立文件, 补丁分发链路多次出问题(杀软闪退/旧包误用/copy 失败)",
+      "root_cause": "补丁机制适合应急不适合长期; 客户要求发正式版",
+      "fix": "堆损坏 0xC0000374 治本(原子释放+通道生命周期锁)/E 码-合格-码/tracking_scan_gate/广播全 OK 亮灯/channel-config 绑定保护/齐件即结算周期守门/link_to_cycle 幂等/相机候选后端×退避 等全部随 v3.51.0 出厂",
+      "files": ["backend/api/source_lifecycle_mixin.py", "backend/api/source_capture_loop_mixin.py", "backend/api/source_camera_start_mixin.py", "backend/api/source_tracking_mixin.py", "backend/api/channel_manager.py", "backend/services/scanner.py", "backend/services/mes_hooks.py", "backend/services/workpiece.py"],
+      "keywords": ["hotfix", "热补丁", "收编", "v3.50.0a", "堆损坏", "0xC0000374", "E模式", "码-合格-码", "扫码后才计数"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["api-sync", "debug-mes"],
+  "files_changed": [
+    "backend/main.py",
+    "backend/api/projects.py",
+    "backend/api/channel_groups.py",
+    "backend/api/sessions_maintenance.py",
+    "backend/api/source_event_trigger_mixin.py",
+    "backend/services/channel_group_coordinator.py",
+    "frontend/src/views/Settings/index.vue",
+    "frontend/src/views/Settings/ChannelGroupPanel.vue",
+    "tests/channel_group/test_unified_ok_report_v3_51.py",
+    "tests/test_activate_adopt_unbound_v3_51.py",
+    "tests/test_clear_data_unlock_workpiece_v3_51.py",
+    "tests/plugin_system/test_returnable_hook_consumption_M1_2c.py"
+  ]
+}

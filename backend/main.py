@@ -746,6 +746,24 @@ def auto_restore_video_sources():
         time.sleep(3.0)
         _restore_detection_pass("重试")
 
+        # v3.51: 收尾兜底 — 前端首屏"激活项目"会停输入源, 与本恢复线程抢同一台
+        # 相机, 竞争窗口 = 整个恢复过程 (现场实测 18s), 上面的 4s 二次恢复兜不住
+        # (2026-08-14 捷昌 B 站: ch0 恢复被打断后再没起来, 开机监控页黑屏)。
+        # 恢复流程全部走完后再等几秒, 把"已配源但没在跑"的通道最后拉一次,
+        # 检测同理。幂等: 都在跑时本段零动作。
+        time.sleep(5.0)
+        for ch_str, ch_cfg in sources.items():
+            ch_id = int(ch_str)
+            mgr = channel_manager.channels.get(ch_id)
+            if not mgr or mgr.is_running or not ch_cfg.get("source_type"):
+                continue
+            try:
+                _restore_one_video_source(ch_id, ch_cfg, mgr)
+                print(f"[启动] ch{ch_id} 视频源收尾兜底恢复成功")
+            except Exception as e:
+                print(f"[启动] ch{ch_id} 视频源收尾兜底恢复失败: {e}")
+        _restore_detection_pass("收尾兜底")
+
     except Exception as e:
         print(f"[启动] 视频源自动恢复整体失败: {e}")
 

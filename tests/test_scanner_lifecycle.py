@@ -266,6 +266,40 @@ def test_e_mode_manual_resume():
     assert conn._resume_blocked is False
 
 
+def test_e_mode_forces_scan_required():
+    """E 模式天然"扫到码才开工": 不必再单独去勾设备的"先扫后检"。
+
+    现场诉求: 上一箱结算后到下一个码之间, 检测到什么都不算数。该行为由
+    项目开关「扫码后才计数」+ 工位"要求先扫码"共同生效, E 枪自动满足后者。
+    """
+    from backend.services.scanner import ScannerService
+    _, conn = _mk_service(scan_mode="E")          # scan_required 默认 False
+    assert ScannerService._effective_scan_required(conn) is True
+
+
+def test_non_e_mode_scan_required_follows_device_config():
+    from backend.services.scanner import ScannerService
+    _, conn = _mk_service(scan_mode="once_per_cycle")
+    assert ScannerService._effective_scan_required(conn) is False, "其余模式零差异"
+    conn.scan_required = True
+    assert ScannerService._effective_scan_required(conn) is True
+
+
+def test_e_mode_makes_hook_require_scan(monkeypatch):
+    """E 枪 → MESHookManager.is_scan_required 为真（跟踪层扫码守门的锚点）。"""
+    from backend.services import mes_hooks as mh
+    svc, conn = _mk_service(scan_mode="E")
+    conn.status = "connected"
+    monkeypatch.setattr("backend.services.scanner.get_scanner_service", lambda: svc)
+
+    hook = mh.MESHookManager()
+    try:
+        assert hook.is_scan_required(0) is True
+        assert hook.is_scan_required(3) is False, "没绑到的工位不受影响"
+    finally:
+        hook.stop()
+
+
 def test_e_mode_crossing_never_lights():
     """E 枪即使存的 resume_on=cycle_end, 跨线也不点灯 (亮灯权只归 OK/人工)。"""
     svc, conn, sent = _mk_scan_d(resume_on="cycle_end")

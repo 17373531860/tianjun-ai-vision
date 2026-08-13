@@ -87,6 +87,10 @@ class FakeVSM(TrackingMixin):
     # --- 宿主桩 ---
     def start_cycle(self):
         self.start_cycle_calls += 1
+        # v3.50.2 周期守门联动: 默认模拟 start_cycle 成功 (无扫码门槛);
+        # 置 scan_blocks_cycle=True 模拟 ScanBind "先扫码"拦截 (周期开不出来).
+        if not getattr(self, 'scan_blocks_cycle', False):
+            self.current_cycle_uuid = f"fake-cycle-{self.start_cycle_calls}"
 
     def _video_frame_pos(self):
         return 0
@@ -127,6 +131,8 @@ class FakeVSM(TrackingMixin):
         self._tracking_lost_frames = {}
         self._tracking_class_counters = {}
         self._tracking_entry_pending = {}
+        # 真实结算走 cycle end, 周期进行中标记清空
+        self.current_cycle_uuid = None
 
 
 def _mk_vsm(*, settle_on_complete=True, confirm_frames=None, expected=None):
@@ -476,6 +482,34 @@ def test_roi_no_timeout_hangs_indefinitely():
     vsm._update_tracking_stats([_det(1)], None)
     assert vsm.settle_calls == []
     assert vsm._tracking_cycle_active is True
+
+
+def test_soc_defers_until_db_cycle_opens():
+    """v3.50.2 周期守门: 要扫码但码未到 (start_cycle 被 ScanBind 拦) 时凑齐
+    不结算不登记豁免; 码到后 (start_cycle 放行) 下一帧补开周期并结算。"""
+    vsm = _mk_vsm()
+    vsm.scan_blocks_cycle = True                       # 模拟"先扫码, 码未到"
+    vsm._update_tracking_stats([_det(1), _det(2, x=0.5)], None)
+    assert vsm.settle_calls == [], "周期未开不许结算 (结果挂不到工件)"
+    assert vsm._settle_complete_exempt == {}, "挂起时不得登记豁免名单"
+    assert vsm.start_cycle_calls >= 1, "应尝试补开周期"
+
+    vsm.scan_blocks_cycle = False                      # 模拟扫到码
+    vsm._update_tracking_stats([_det(1), _det(2, x=0.5)], None)
+    assert len(vsm.settle_calls) == 1, "码到后下一帧应补开周期并结算"
+    assert vsm.current_cycle_uuid is None, "结算后周期标记应已清"
+
+
+def test_soc_timeout_also_gated_by_db_cycle():
+    """v3.50.2: 码未到时周期超时兜底同样不出账 (NG 挂不到工件), 继续等码。"""
+    vsm = _mk_vsm()
+    vsm.cycle_max_duration = 5
+    vsm.scan_blocks_cycle = True
+    vsm._update_tracking_stats([_det(1)], None)        # 1/2, 内存周期激活
+    vsm.cycle_start_time = time.time() - 100           # 远超超时
+    vsm._update_tracking_stats([_det(1)], None)
+    assert vsm.settle_calls == [], "码未到, 超时兜底不得出账"
+    assert vsm._tracking_cycle_active is True, "账本挂起继续等码"
 
 
 def test_container_incomplete_gone_hangs_not_ng():
