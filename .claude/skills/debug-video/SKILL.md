@@ -116,6 +116,15 @@ class FFmpegRecorder:
 3. 检查 `self.current_frame` 是否为 None
 4. RTSP: 检查 `hotfix.py` 是否正确替换了 `start_rtsp`
 5. HCNetSDK: 检查 `HCNetSession.login()` 是否成功
+6. **启动"成功"但永远 No Source 的僵尸态**（v3.51.2 BUG-001）：接口 200、
+   `is_running=True`、心跳照跳，但快照恒 ~10KB 占位图 → 开
+   `backend.capture` 调试 flag 看采集摘要——若"采集=0.0fps 读帧均耗=0.0ms"
+   说明句柄是死的（`isOpened()=False` 但 `capture is not None`，采集循环
+   `read()` 立即 False 空转）。历史成因：格式探测 Strategy 3 在 macOS 误入
+   V4L2 重开（守门已收紧仅 Linux）；v3.51.2 起启动尾部有终检，死句柄会
+   显式抛"打开后句柄失效"而不是静默僵尸。真机回归剧本
+   `tests/uat/mac_camera_sim/`。注意心跳日志的 `FPS=` 是 `fps_actual`
+   旧值残留（只在成功读帧时刷新），不能当读帧活着的证据
 
 ### 画面卡顿 / 帧率低
 1. 检查采集FPS vs 显示FPS（`device_config.json` 的 `target_stream_fps`）

@@ -38,6 +38,9 @@
 > - `source_event_trigger_mixin.py`（BUG-006）：`fire_external_event_response` 事件日志 `toast_id` 默认值按事件类型取（id=1 合格 → 'ok'，其余保持 'ng'；显式配置照旧优先）——治统一播报"全部合格"弹红色不合格 Toast。回归 `tests/test_fire_external_event.py` 新增三例。
 > - `source_inference_loop_mixin.py`（FEAT-001）：synthetic 取帧后按项目 `logic_mode` 决定 `is_tracking`——tracking 项目走 `_update_tracking_stats` 真实管线（剧本 detections 自带 track_id），其余模式行为不变；跟踪类配置（齐件即结算/扫码门/工位组）从此可虚拟回归（`tests/uat/virtual_dual_station/`）。
 >
+> **v3.51.2 补账（2026-08-14，Mac 摄像头仿真战役修复）**：
+> - `source_camera_start_mixin.py`（BUG-001）：`_start_camera_locked` 格式探测 Strategy 3（fourcc 非 MJPG 时 V4L2 重开）守门 `platform.system() != "Windows"` → `== "Linux"`——macOS 误命中会把正常出帧的 AVFoundation 句柄 release 后用 mac 不存在的 CAP_V4L2 重开（必失败且原无兜底），死句柄僵尸态：接口成功/is_running=True/心跳照跳但 `read()` 永远 False、`current_frame` 永不更新 → 监控页永远 "No Source"。同时补 V4L2 重开失败走 `_open_camera_capture` 候选兜底，并新增**终检**：任何策略分支走完 `self.capture` 必须 `isOpened()`，否则显式抛"打开后句柄失效"（全平台堵僵尸态出口）。回归 `tests/test_camera_open_fallback.py` 新增 2 条守门断言；真机仿真 `tests/uat/mac_camera_sim/` 67 断言。
+>
 > **v3.41 增量复核（2026-07-17）**：source/检测核心域按 `git diff a23a8d2..HEAD` 补账 v3.33~v3.41 九个版本变更。各条目内新增「v3.3x 变更」行；1.4 / 1.5 表下补增量清单；新建 `source_persist_worker.py`（v3.38）完整条目并补录 `source_region_events.py` / `source_region_events_mixin.py`（v3.32 落地时漏收）。受影响文件的行数标注与漂移行号已按当前代码刷新。
 >
 > **v3.44 补账（2026-07-22）**：NG 处置整改批次，source 族 10 文件——

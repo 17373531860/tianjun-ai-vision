@@ -445,8 +445,13 @@ class CameraStartMixin:
 
                 _v4l2_safe_bufsize_1(self.capture)
         
-        # Strategy 3: If still not MJPG on Linux, try without explicit backend
-        if cc_str != 'MJPG' and platform.system() != "Windows":
+        # Strategy 3: If still not MJPG on Linux, try reopening via V4L2.
+        # v3.51.2: 守门从"非 Windows"收紧为"仅 Linux" — macOS 会误入此分支:
+        # AVFoundation 句柄好端端 30fps 出帧, 却因 fourcc 非 MJPG 被 release,
+        # 再用 mac 上不存在的 CAP_V4L2 重开必失败, 留下 isOpened()=False 的
+        # 死句柄继续往下走 → 接口全报成功/is_running=True, 但 read() 永远
+        # False, 监控页永远 "No Source"(检测在跑画面出不来的同款症状).
+        if cc_str != 'MJPG' and platform.system() == "Linux":
             print(f"[Camera] V4L2 返回 {cc_str}，尝试重新打开...")
             self.capture.release()
             self.capture = cv2.VideoCapture(device_index, cv2.CAP_V4L2)
@@ -456,6 +461,21 @@ class CameraStartMixin:
                 self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
                 self.capture.set(cv2.CAP_PROP_FPS, fps)
                 cc_str = _get_fourcc_str(self.capture)
+            else:
+                # 重开失败不能揣着死句柄往下跑黑屏 — 走候选兜底拿回摄像头
+                self.capture, opened_backend = _open_camera_capture(device_index)
+                if self.capture is None:
+                    raise Exception(
+                        f"无法重新打开摄像头 {device_index}，请检查设备是否被其他程序占用")
+                cc_str = _get_fourcc_str(self.capture)
+
+        # v3.51.2 终检: 任何策略分支走完, 句柄必须活着且能出一帧 —
+        # 否则宁可明确报错, 也不进入"接口成功但永远 No Source"的僵尸态.
+        if self.capture is None or not self.capture.isOpened():
+            self.capture = None
+            raise Exception(
+                f"摄像头 {device_index} 打开后句柄失效（格式探测阶段被释放且重开失败），"
+                f"请检查设备是否被其他程序占用")
         
         actual_fps = self.capture.get(cv2.CAP_PROP_FPS)
         actual_w = int(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH))

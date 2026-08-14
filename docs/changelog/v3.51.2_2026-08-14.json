@@ -1,0 +1,40 @@
+{
+  "version": "3.51.2",
+  "date": "2026-08-14",
+  "previous_version": "3.51.1",
+  "summary": "摄像头生命周期仿真战役补丁版：Mac 真机 67 断言仿真复现并修复相机格式探测 Strategy 3 的死句柄僵尸态（启动成功但监控页永远 No Source），终检堵住所有平台僵尸态出口；双工位关软件重开全自动恢复链真机验证通过；仿真剧本归档 tests/uat/mac_camera_sim/。",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "相机格式探测 Strategy 3 在 macOS 误入 V4L2 重开，留死句柄致永久 No Source",
+      "symptom": "启动输入源接口返回成功、is_running=True、采集心跳照跳、检测状态正常，但监控页画面永远是黑底 ChN - No Source 占位图，快照恒为 ~10KB 占位 JPEG；与哈金森现场'检测界面加载不出画面但能检测到步骤'同款表现",
+      "root_cause": "_start_camera_locked 格式探测 Strategy 3 守门写的是 platform.system() != 'Windows'，macOS 误命中：AVFoundation 正常出帧的句柄仅因 fourcc 非 MJPG 被 release，再用 macOS 不存在的 CAP_V4L2 重开必失败，失败分支无兜底，揣着 isOpened()=False 的死句柄走完启动流程，采集循环 read() 永远 False、current_frame 永不更新",
+      "fix": "守门收紧为仅 Linux；V4L2 重开失败走 _open_camera_capture 候选兜底，拿不回来显式抛错；新增终检——任何策略分支走完句柄必须 isOpened()，否则显式抛'打开后句柄失效'异常，杜绝僵尸态",
+      "files": ["backend/api/source_camera_start_mixin.py"],
+      "keywords": ["No Source", "黑屏", "摄像头", "camera", "V4L2", "AVFoundation", "macOS", "死句柄", "僵尸态", "isOpened", "fourcc", "MJPG", "格式探测", "Strategy 3", "画面加载不出", "检测在跑", "哈金森", "占位图", "read返回False", "终检"],
+      "breaking": false
+    },
+    {
+      "type": "test",
+      "id": "TEST-001",
+      "title": "Mac 真实摄像头生命周期仿真 UAT 归档（S1~S8 共 67 断言）",
+      "symptom": "哈金森一拖三反馈：三个摄像头轮着出问题、提示摄像头被占用、检测界面加载不出画面但能检测到步骤（v3.48）",
+      "root_cause": "相机生命周期路径（占用/调参重开/并发开停/强杀重启恢复/双工位异模型恢复）此前缺真机级回归手段",
+      "fix": "tests/uat/mac_camera_sim/ 归档四个剧本：S1 正常开/S2 外部占用/S3 双通道抢相机/S4 调参重开/S5 快速开停竞态/S6 强杀重启恢复(含前端竞态干扰)/S7 双工位真模型三件套恢复/S8 异模型不串+停开改参不重置；真实 YOLO 模型 MPS 推理验证",
+      "files": ["tests/uat/mac_camera_sim/README.md", "tests/uat/mac_camera_sim/vcam_case.py", "tests/uat/mac_camera_sim/vcam_s6.py", "tests/uat/mac_camera_sim/vcam_s7_dual_recover.py", "tests/uat/mac_camera_sim/vcam_s8_no_reset.py", "tests/test_camera_open_fallback.py"],
+      "keywords": ["UAT", "仿真", "摄像头", "自动恢复", "双工位", "模型不串", "停止再开始", "改参数", "kill -9", "强杀重启", "收尾兜底", "was_detecting", "开机自动开始检测"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-video"],
+  "files_changed": [
+    "backend/api/source_camera_start_mixin.py",
+    "tests/test_camera_open_fallback.py",
+    "tests/uat/mac_camera_sim/README.md",
+    "tests/uat/mac_camera_sim/vcam_case.py",
+    "tests/uat/mac_camera_sim/vcam_s6.py",
+    "tests/uat/mac_camera_sim/vcam_s7_dual_recover.py",
+    "tests/uat/mac_camera_sim/vcam_s8_no_reset.py"
+  ]
+}

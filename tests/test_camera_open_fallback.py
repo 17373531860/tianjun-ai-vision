@@ -100,6 +100,32 @@ def test_non_windows_uses_default_backend(monkeypatch):
     assert not cam._LAST_OK_CAMERA_BACKEND, "非 Windows 不记后端"
 
 
+def test_strategy3_v4l2_reopen_guard_is_linux_only():
+    """v3.51.2: 格式探测 Strategy 3 的守门必须是"仅 Linux"。
+
+    旧守门 `platform.system() != "Windows"` 在 macOS 上误命中: AVFoundation
+    正常出帧的句柄被 release 后用 mac 上不存在的 CAP_V4L2 重开必失败, 留下
+    isOpened()=False 的死句柄 → 接口全报成功但监控页永远 "No Source"。
+    """
+    import inspect
+    src = inspect.getsource(cam)
+    assert 'platform.system() == "Linux"' in src, \
+        "Strategy 3 V4L2 重开必须只在 Linux 触发"
+    assert '!= "Windows"' not in src.split("Strategy 3")[1].split("终检")[0], \
+        "Strategy 3 分支不允许再出现 '非 Windows' 宽守门"
+
+
+def test_final_sanity_check_rejects_dead_capture():
+    """v3.51.2: 策略走完必须终检句柄活着, 否则显式抛错而不是僵尸态。"""
+    import inspect
+    src = inspect.getsource(cam)
+    tail = src.split("终检", 1)
+    assert len(tail) == 2, "缺少终检段"
+    seg = tail[1][:600]
+    assert "not self.capture.isOpened()" in seg and "raise Exception" in seg, \
+        "终检必须校验 isOpened 并显式抛错"
+
+
 def test_failed_channel_gets_second_attempt(monkeypatch):
     """启动恢复: 首轮被前端激活抢掉的通道, 隔几秒必须再补开一次。"""
     from backend import main as backend_main
