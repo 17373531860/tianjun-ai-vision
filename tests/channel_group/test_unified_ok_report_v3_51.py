@@ -217,3 +217,28 @@ def test_reload_groups_plugin_data为None默认关(coord):
     coord.reload_groups(db)
 
     assert coord._groups[8]["unified_ok_report"] is False
+
+
+# ==================== v3.51.1 pending_override TTL (防跨轮污染) ====================
+
+def test_pending_override_expired_discarded(coord):
+    """过期的组级 NG 覆盖不得污染后续无关周期."""
+    coord._pending_override[3] = "NG"
+    coord._pending_override_deadline[3] = time.monotonic() - 1.0
+    assert coord.get_pending_override(3) is None
+    assert 3 not in coord._pending_override
+    assert 3 not in coord._pending_override_deadline
+
+
+def test_pending_override_valid_within_ttl(coord):
+    coord._pending_override[3] = "NG"
+    coord._pending_override_deadline[3] = time.monotonic() + 60.0
+    assert coord.get_pending_override(3) == "NG"
+    # take-once: 取走即清空
+    assert coord.get_pending_override(3) is None
+
+
+def test_pending_override_without_deadline_still_works(coord):
+    """无 deadline 的老条目 (兼容) 照常生效."""
+    coord._pending_override[3] = "OK"
+    assert coord.get_pending_override(3) == "OK"

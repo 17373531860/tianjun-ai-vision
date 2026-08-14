@@ -731,3 +731,89 @@ def test_scan_gate_hook_error_fails_open():
     vsm._mes_hook.is_scan_required = _boom
     vsm._update_tracking_stats([_det(1)], None)
     assert vsm._tracking_class_counters == {'screw': 1}
+
+
+# ==================== v3.51.1 虚拟战役修复回归 ====================
+
+def test_exempt_id_drift_requires_same_label():
+    """v3.51.1: 豁免漂移兜底只认同标签.
+
+    现场场景: 结算后的 A 品被拿走, 几秒内同一位置摆上下一箱的 B 品 (label
+    不同) — 老逻辑 IoU>=0.6 直接吞成"A 换了 track_id", B 品永不入账, 账永远
+    凑不齐 → 下一次扫码整箱被强制 NG. 修复后不同标签不转移, 正常入账.
+    """
+    vsm = FakeVSM({
+        'tracking_settle_on_complete': True,
+        'tracking_cycle_strategy': 'roi_exit',
+        'counting_expected_items': {'screw': 1, 'nut': 1},
+    }, [
+        {'label': 'screw', 'enabled': True, 'count_mode': 'track'},
+        {'label': 'nut', 'enabled': True, 'count_mode': 'track'},
+    ])
+    vsm._update_tracking_stats(
+        [_det(1), _det(2, x=0.5, label='nut')], None)
+    assert len(vsm.settle_calls) == 1
+    assert set(vsm._settle_complete_exempt.keys()) == {1, 2}
+    # 豁免条目登记了 label
+    assert vsm._settle_complete_exempt[1].get('label') == 'screw'
+
+    # screw(1) 拿走, 同位置放 label 不同的新品 nut(99) → 必须入账, 不得被吞
+    vsm._update_tracking_stats(
+        [_det(99, label='nut'), _det(2, x=0.5, label='nut')], None)
+    assert 99 not in vsm._settle_complete_exempt, "不同标签不得漂移转移"
+    assert vsm._tracking_class_counters.get('nut') == 1
+
+
+def test_exempt_id_drift_same_label_still_transfers():
+    """同标签同位置漂移照旧转移 (原兜底语义零差异)."""
+    vsm = _mk_vsm()
+    vsm._update_tracking_stats([_det(1), _det(2, x=0.5)], None)
+    vsm._update_tracking_stats([_det(99), _det(2, x=0.5)], None)
+    assert 99 in vsm._settle_complete_exempt
+    assert vsm._tracking_class_counters == {}
+
+
+class _ForceSettleHost(object):
+    """force_settle_pending_cycle 最小宿主 (v3.51.1 挂账周期守门修复)."""
+
+    def __init__(self, cycle_active, objs=None):
+        from backend.api.source_session_lifecycle_mixin import SessionLifecycleMixin
+        self.force_settle_pending_cycle = (
+            SessionLifecycleMixin.force_settle_pending_cycle.__get__(self))
+        self.project_config = {
+            'pipeline_config': {'counting_expected_items': {'screw': 2}},
+        }
+        self.channel_id = 0
+        self._container_mode = False
+        self._container_label = ''
+        self._force_settling_in_progress = False
+        self._tracking_cycle_active = cycle_active
+        self.current_cycle_uuid = None  # 挂账周期懒开, uuid 常为 None
+        self._tracking_objects = objs or {}
+        self.settled = []
+
+    def _settle_counting_cycle(self, expected, check_order, expected_order):
+        self.settled.append(dict(expected))
+
+
+def test_force_settle_works_for_lazy_pending_cycle():
+    """v3.51.1: 挂账周期 (current_cycle_uuid=None) 也能被新码强制收账.
+
+    v3.50.0a 周期守门把 DB cycle 推迟到结算时才建, 等待中的账本 uuid 恒为
+    None — 旧的 uuid 守门静默跳过, "新码强制收旧账"完全失效.
+    """
+    host = _ForceSettleHost(cycle_active=True, objs={
+        1: {'class_name': 'screw'},
+    })
+    n = host.force_settle_pending_cycle(min_items=1, reason="新码强制收旧账")
+    assert n == 1
+    assert host.settled == [{'screw': 2}]
+
+
+def test_force_settle_skips_when_no_active_ledger():
+    """账本不活跃 (没扫码/没入账) → 不结算, 不误伤."""
+    host = _ForceSettleHost(cycle_active=False, objs={
+        1: {'class_name': 'screw'},
+    })
+    assert host.force_settle_pending_cycle(min_items=1) == 0
+    assert host.settled == []

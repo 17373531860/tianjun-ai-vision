@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.51.1 (2026-08-14)
+
+> 主题：**捷昌 B 站双工位虚拟战役补丁版**——发 v3.51.0 后搭全虚拟双工位环境（synthetic 剧本源跑真实 tracking 管线 + 假 TCP 扫码器跑真实 E 模式协议），60 项断言复现全部现场场景，揪出并修复 6 个产品 bug。全部为 v3.50/v3.51 新功能路径上的修复，未开启相关功能的客户零差异。
+
+- [BUG-001] 修复: 「新码强制收旧账」对齐件即结算的挂账周期完全失效——`force_settle_pending_cycle` 的 `current_cycle_uuid` 守门对懒开周期（uuid 恒为 None）静默跳过；改认 `_tracking_cycle_active`
+- [BUG-002] 修复: 扫码器拒码后灯不回亮产线卡死——mes_hooks 三条拒绝路径（strict_ok_dedup / 冷却 / 在检）新增 `_notify_scan_rejected`，scanner 全部派发通道都拒绝才 `_rearm_after_full_reject` 重发 LON
+- [BUG-003] 修复: 工位组绑死档（force_ng）超时仍播"本工位已合格"——超时改为全组统一播整体 NG（event_id=2）+ 已到成员回写 NG_BY_TIMEOUT
+- [BUG-004] 修复: 组级 NG 覆盖（pending_override）无过期跨轮污染——配 60s TTL，过期作废打日志
+- [BUG-005] 修复: 豁免名单 ID 漂移兜底不看标签——原位换新品种（IoU≥0.6）被吞永不入账、账凑不齐下箱被强制 NG；豁免条目登记 label，转移只认同标签
+- [BUG-006] 修复: 统一播报"全部合格"弹红色不合格 Toast——`fire_external_event_response` 的 toast_id 默认按事件类型取（合格→ok）
+- [FEAT-001] 新增: synthetic 剧本源支持 tracking 逻辑模式（跟踪类配置从此可虚拟回归）
+- [FEAT-002] 归档: 虚拟双工位 UAT 剧本 `tests/uat/virtual_dual_station/`（假扫码器 + 4 剧本 60 断言 + 覆盖矩阵）
+- [TEST] 单测 +10（豁免同标签 / 挂账强制收账 / toast_id 默认 / override TTL），全量后端回归绿
+
 ## v3.51.0 (2026-08-14)
 
 > 主题：**捷昌 B 站双工位整改批次**——v3.50.0a 现场热补丁全部 17 条收编进正式版（堆损坏崩溃治本 / E 码-合格-码 / 扫码后才计数 / 广播全 OK 亮灯 / 绑定保护 / 周期守门等，明细见下方 v3.50.0a 段），并新增四项现场闭环修复。新增项全部默认关或保持存量行为，不配置零差异。

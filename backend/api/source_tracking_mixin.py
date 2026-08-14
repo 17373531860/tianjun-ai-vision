@@ -501,6 +501,12 @@ class TrackingMixin:
                     _hit_tid = None
                     for _etid, _ex in self._settle_complete_exempt.items():
                         try:
+                            # v3.51.1: 漂移转移只认同标签 — 旧件拿走后几秒内
+                            # 同位置放上"另一种"新物品, 不能被吞成旧件豁免
+                            # (老条目无 label 视为兼容匹配)
+                            _elbl = _ex.get('label')
+                            if _elbl is not None and _elbl != label:
+                                continue
                             if self._bbox_iou(_ex.get('bbox') or {}, new_bbox) >= 0.6:
                                 _hit_tid = _etid
                                 break
@@ -509,7 +515,7 @@ class TrackingMixin:
                     if _hit_tid is not None:
                         self._settle_complete_exempt.pop(_hit_tid, None)
                         self._settle_complete_exempt[track_id] = {
-                            'ts': current_time, 'bbox': new_bbox,
+                            'ts': current_time, 'bbox': new_bbox, 'label': label,
                         }
                         continue
 
@@ -1235,6 +1241,7 @@ class TrackingMixin:
                     self._settle_complete_exempt[_tid] = {
                         'ts': current_time,
                         'bbox': dict(_obj.get('bbox') or {}),
+                        'label': _obj.get('class_name'),
                     }
                 print(f"[Tracking] 齐件即结算: expected={expected_items} 全部凑齐 "
                       f"→ 立即结算 (豁免在场 {len(self._tracking_objects)} 件)",

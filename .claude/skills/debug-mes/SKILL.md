@@ -215,6 +215,13 @@ v3.4.2 promote 均为此修过补丁）。
   三条路径不再静默丢码，走 `_emit_scan_warning(ch, sn, reason)` → `_last_scan_event`
   带 `scan_warning=True + warn_reason` → 前端 `handleScanToast` 弹警告；scan_pair 重复码
   警告并入同一字段体系（旧 `scan_pair_dup_warning` 字段保留兼容）
+- **v3.51.1 拒码后重亮灯闭环**（治"扫了已 OK 码后灯永灭产线卡死"）：上面三条拒绝
+  路径除弹警告外还调 `mes_hooks._notify_scan_rejected(device_id, ch, sn)` →
+  `scanner.notify_scan_rejected` 按本次派发通道集合（`_last_dispatch`）聚合，
+  **全部**派发通道都拒绝该码 → `_rearm_after_full_reject` 清 `_wait_cycle_resume`
+  / `_ok_ready_marker` / `_lon_sent` 等等待态并置 `_rearm_after_reject_serial`，
+  `_schedule_next_lon` 据此跳过周期等待立刻重发 LON；只要有任一通道接受了码就
+  不 rearm（不干扰正常在检流程）。排查"拒码后灯不亮"先 grep `全通道拒绝` 日志
 
 ### 4.2 WMax 三端口逆向协议（55266 CMD / 55276 IMG / 55286 RPT）
 

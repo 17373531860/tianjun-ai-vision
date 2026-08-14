@@ -17,7 +17,7 @@
 | 性质 | **商业项目，客户已在用** — 工厂工控机部署 |
 | 客户场景 | 装配线视觉检测 / 包装线 / MES 数据回传 / 多工位集群 |
 | 部署模式 | Windows 工控机本地安装（Inno Setup 一键包，约 1.5 GB），Electron 桌面壳套 FastAPI 后端 + Vue3 前端 |
-| 当前线上版本 | **v3.51.0**（2026-08-14）— 捷昌 B 站双工位整改批次：v3.50.0a 现场热补丁 17 条全量收编（堆损坏 0xC0000374 治本原子释放+通道生命周期锁 / 扫描模式 E 码-合格-码 / 「扫码后才计数」tracking_scan_gate / 广播枪全 OK 才亮灯 / channel-config merge 不抹 project_id 绑定 / 齐件即结算周期守门）+ 四项新修：开机黑屏收尾兜底恢复轮 + 「启用项目时自动接管未绑定工位」开关（`activate.adopt_unbound` 默认开=存量）+ 工位组统一播报 `unified_ok_report`（synchronized_all_ok 组全员合格才统一报 OK，NG 永不抑制，默认关）+ 数据清理联动解封 ok 工件（治 strict_ok_dedup 删记录仍拒码）。上一版 v3.50.0（2026-08-12）捷昌二期批次：齐件即结算 + 扫码器生命周期闭环。**逐版变更详见 `docs/changelog/`，本文件不再记版本流水账** |
+| 当前线上版本 | **v3.51.1**（2026-08-14）— 捷昌 B 站双工位虚拟战役补丁版：全虚拟双工位环境（synthetic 剧本源 + 假 TCP 扫码器）60 项断言复现现场场景，修复 6 个 v3.50/v3.51 新功能路径 bug（新码强制收旧账对挂账周期失效 / 拒码后扫码器灯不回亮 / 绑死档超时误播已合格 / 组级 NG 覆盖跨轮污染 / 豁免漂移吞新品种 / 统一播报弹错 Toast），未开启相关功能零差异；剧本归档 tests/uat/virtual_dual_station/。上一版 v3.51.0（2026-08-14）— 捷昌 B 站双工位整改批次：v3.50.0a 现场热补丁 17 条全量收编（堆损坏 0xC0000374 治本原子释放+通道生命周期锁 / 扫描模式 E 码-合格-码 / 「扫码后才计数」tracking_scan_gate / 广播枪全 OK 才亮灯 / channel-config merge 不抹 project_id 绑定 / 齐件即结算周期守门）+ 四项新修：开机黑屏收尾兜底恢复轮 + 「启用项目时自动接管未绑定工位」开关（`activate.adopt_unbound` 默认开=存量）+ 工位组统一播报 `unified_ok_report`（synchronized_all_ok 组全员合格才统一报 OK，NG 永不抑制，默认关）+ 数据清理联动解封 ok 工件（治 strict_ok_dedup 删记录仍拒码）。上一版 v3.50.0（2026-08-12）捷昌二期批次：齐件即结算 + 扫码器生命周期闭环。**逐版变更详见 `docs/changelog/`，本文件不再记版本流水账** |
 | 主仓库 | `17373531860/tianjun-ai-vision`（**PRIVATE**） |
 | 中转仓库 | `xu-yanzhi32/tianjun-releases` + `tianjun-releases-2`（Gitee 公开 release，给客户下载用） |
 | 母语 | **中文**（用户和注释主语言；技术术语保留英文） |
@@ -328,6 +328,7 @@
 
 | 版本 | 日期 | 一句话 |
 |---|---|---|
+| v3.51.1 | 2026-08-14 | 捷昌 B 站双工位虚拟战役补丁版：虚拟双工位环境（synthetic 剧本源 + 假 TCP 扫码器）60 断言复现现场，修 6 个新功能路径 bug（新码强制收旧账对挂账周期失效 / 拒码后扫码器灯不回亮 / force_ng 超时误播已合格 / 组级 NG 覆盖跨轮污染 / 豁免漂移吞新品种 / 统一播报弹错 Toast）+ synthetic 支持 tracking 模式 + UAT 剧本归档 tests/uat/virtual_dual_station/ |
 | v3.51.0 | 2026-08-14 | 捷昌 B 站双工位整改批次：v3.50.0a 热补丁 17 条全量收编（堆损坏 0xC0000374 治本/E 码-合格-码/扫码后才计数/广播全 OK 亮灯/绑定保护/齐件即结算周期守门）+ 开机黑屏收尾兜底恢复轮 + 激活收养开关 activate.adopt_unbound（默认开=存量）+ 工位组统一播报 unified_ok_report（全员合格才一起报 OK，NG 永不抑制，默认关）+ 数据清理联动解封 ok 工件；新增项默认关或保持存量零差异 |
 | v3.50.0 | 2026-08-12 | 捷昌二期批次：跟踪模式齐件即结算（仅 ROI离开/容器策略，凑齐并稳定 N 帧立即出结果 + 步骤级"确认放入帧数" + ROI 豁免名单/容器"已结算等离开"状态机防二次入账 + scan_pair 互斥守门）+ 扫码器生命周期码-合格-码闭环（resume_on 仅 OK 亮灯 NG 灭灯等人工恢复：监控页按钮/POST /scanner/resume/触发中心 resume_scanner 三出口 + rearm_forget_last 亮灯作废旧码 + strict_ok_dedup 强制去重 + 拒绝路径统一警告 toast，m0010）；全部默认关零差异 |
 | v3.49.0 | 2026-08-12 | 捷昌整改批次：MES 外推并发派发（连接级执行器 + gateway_spool 落盘补发 + 重试预算可配）+ 集群副机上报异步化（独立线程 + cluster_report_spool 断网重放 + report-status 可观测）+ scan_pair 新码先上屏（显式 prev_wp_id 异步结算旧窗口，上屏与结算解耦；广播兄弟通道结算串身份修复）+ 结算耗时埋点 backend.timing + PostgreSQL 支持（sql_compat 方言收编 + pg_dump 备份 + DATABASE_URL 注入 + 数据库卡片 + 安装器 PG 组件 + sqlite_to_pg --verify；幽灵项目绑定 stale 忽略）+ 双方言 db-matrix 扩容与双后端可见 UAT |
@@ -377,6 +378,6 @@
 
 ---
 
-**本文件最后更新**：2026-08-14（发版 v3.51.0：捷昌 B 站双工位整改批次——v3.50.0a 热补丁 17 条全量收编 + 开机黑屏收尾兜底 + 激活收养开关 activate.adopt_unbound + 工位组统一播报 unified_ok_report + 数据清理联动解封工件；第一节版本号 + 第十一节里程碑同步。上一版 v3.50.0：捷昌二期批次——齐件即结算 + 扫码器生命周期码-合格-码闭环）
+**本文件最后更新**：2026-08-14（发版 v3.51.1：捷昌 B 站双工位虚拟战役补丁版——虚拟双工位 60 断言复现现场，修 6 个新功能路径 bug（强制收旧账失效 / 拒码灯不回亮 / force_ng 超时误播已合格 / override 跨轮污染 / 豁免漂移吞新品种 / 统一播报弹错 Toast）+ synthetic 支持 tracking + UAT 剧本归档；第一节版本号 + 第十一节里程碑同步。上一版 v3.51.0：捷昌 B 站双工位整改批次）
 **维护者**：项目主作者 + AI agents
 **维护铁律**：本文件只放"地图 + 守则 + 不变量"。模块细节进 skill，版本变更进 `docs/changelog/`，扩展点/技术债进 `docs/plugin-system/inventory/`。**发版时务必同步更新本文件第一节版本号 + 文件尾日期**（详见 `update-release` skill）。

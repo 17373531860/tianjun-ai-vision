@@ -1423,8 +1423,10 @@ class SessionLifecycleMixin:
                 return settled_count
 
             # ------- 非容器 -------
-            if not getattr(self, "current_cycle_uuid", None):
-                return 0
+            # v3.51.1: 只认内存账本活跃与否. 齐件即结算的挂账周期是懒开的
+            # (v3.50.0a 周期守门在结算时才建 DB cycle), 等待中的账本
+            # current_cycle_uuid 常为 None — 旧的 uuid 守门会静默跳过,
+            # 导致"新码强制收旧账"对挂账周期完全失效 (扫新码旧账永远不收).
             if not getattr(self, "_tracking_cycle_active", False):
                 return 0
 

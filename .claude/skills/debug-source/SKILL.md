@@ -1125,7 +1125,7 @@ if (self.project_config or {}).get('logic_mode') == 'per_item':
 | 状态变量 | 归属 | 语义 | 清理时机 |
 |---|---|---|---|
 | `_tracking_entry_pending` | roi_exit | 新目标连续在场帧计数，满 `settle_confirm_frames`（步骤级，默认 1）才入 `_tracking_objects` | 每周期 `_reset_counting_cycle` 清；当帧未见到即回退 |
-| `_settle_complete_exempt` | roi_exit | 已结算但仍在场目标的豁免名单（防残留二次入账/幽灵开周期），含 ID 漂移 IoU 合并转移 | **跨周期保留**，目标真离场删除；仅项目切换（`source_project_config_apply`）重置 |
+| `_settle_complete_exempt` | roi_exit | 已结算但仍在场目标的豁免名单（防残留二次入账/幽灵开周期），含 ID 漂移 IoU 合并转移。**v3.51.1 起条目带 `label`，漂移转移只认同标签**——旧件拿走后几秒内同位置放"另一种"新品不再被吞（老 bug：IoU≥0.6 直接吞成旧件、新品永不入账账凑不齐） | **跨周期保留**，目标真离场删除 + max_lost_sec 过期回收；项目切换（`source_project_config_apply`）重置 |
 | `_container_entry_pending` | container | 箱内物品 N 帧确认（同款缓冲） | 同 `_tracking_entry_pending` |
 | `_box_settled_waiting_exit` | container | "已结算等离开"箱状态机（对齐 scan_d 已扫等消失设计）：期间不重建 ledger 不入账，含 ID 漂移转移 + `gone_frames` 确认离场清除 | **跨周期保留**；离场确认/项目切换清 |
 
@@ -1133,4 +1133,8 @@ if (self.project_config or {}).get('logic_mode') == 'per_item':
 - 凑齐没立即结算 → 先看开关有没有进 pcfg（`/detection/results` 的 project_config），再看是不是 scan_pair 通道（运行时互斥直接 continue），最后查 `settle_confirm_frames` 是否过大（N 帧没满就被遮挡打断会重计）
 - 结算后残留物品又开新周期 → `_settle_complete_exempt` 是否被误清（只有项目切换才能清）、ID 漂移合并的 IoU 阈值是否没匹配上
 - 容器同一箱结算两次 → `_box_settled_waiting_exit` 是否漏登记 / gone 确认过早
-- 单测：`pytest tests/test_settle_on_complete.py`（21 用例）；BDD：`tests/features/settle_scan_lifecycle.feature`
+- 扫新码旧账不收（挂账一直"检测中"）→ v3.51.1 前 `force_settle_pending_cycle`
+  非容器分支用 `current_cycle_uuid` 守门，挂账周期懒开 uuid 恒 None 被静默跳过；
+  v3.51.1 起改认 `_tracking_cycle_active`。确认版本或 grep `[ForceSettle]` 日志
+- 单测：`pytest tests/test_settle_on_complete.py`（21 用例 + v3.51.1 追加 4 条：豁免同标签×2 / 挂账强制收账×2）；BDD：`tests/features/settle_scan_lifecycle.feature`
+- 全虚拟复现（无摄像头/无扫码枪跑真实 tracking 管线 + E 模式协议）：`tests/uat/virtual_dual_station/`（见其 README，60 断言覆盖扫码门/统一播报/残留/亮灯闭环）

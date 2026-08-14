@@ -1089,6 +1089,47 @@ class ScannerService:
                   f"{', 人工恢复' if manual else ''})", flush=True)
         return resumed
 
+    def notify_scan_rejected(self, device_id: int, channel_id: int,
+                             serial_no: str):
+        """v3.51.1: MES 侧扫码拒绝回调 (强制去重/OK冷却/无工位接收等).
+
+        等灯模式(once_per_cycle/D/E)物理层扫到码就灭灯; 若本次派发的**所有**
+        工位都拒绝了这个码 (且各工位无在途工件 — 由 mes_hooks 守门), 说明这
+        个码不会产生任何周期、永远等不来 cycle_end/全OK 闭环出口 → 自动重新
+        亮灯等下一个码. 修复现场"已合格的码重扫一下, 扫码器再也不亮"卡死.
+        """
+        for conn in list(self._connections.values()):
+            if conn.device_id != device_id:
+                continue
+            if (conn.scan_mode or "continuous") not in ("once_per_cycle", "D", "E"):
+                return
+            disp = getattr(conn, "_last_dispatch", None)
+            if not disp or disp.get("serial") != serial_no:
+                return
+            disp["rejected"].add(channel_id)
+            if disp["rejected"] >= disp["channels"]:
+                self._rearm_after_full_reject(conn, serial_no,
+                                              reason="所有工位均拒绝")
+            else:
+                _waiting = sorted(disp["channels"] - disp["rejected"])
+                print(f"[Scanner] {conn.name}: 码 '{serial_no}' 被 ch{channel_id} "
+                      f"拒绝, 还差工位 {_waiting} 表态 → 灯保持现状", flush=True)
+            return
+
+    def _rearm_after_full_reject(self, conn: "ScannerConnection",
+                                 serial_no: str, reason: str = ""):
+        """v3.51.1: 全拒绝 → 清等灯锁, 让 listen loop 自动续 LON."""
+        conn._last_dispatch = None
+        conn._rearm_after_reject_serial = serial_no
+        conn._ok_ready_marker = None
+        conn._ok_ready_channels = set()
+        conn._wait_cycle_resume = False
+        conn._resume_blocked = False
+        conn._lon_sent = False
+        conn._next_lon_after = 0.0
+        print(f"[Scanner] {conn.name}: 码 '{serial_no}' 被拒绝且无在途工件 "
+              f"({reason}) → 自动重新亮灯等下一码", flush=True)
+
     @staticmethod
     def _effective_resume_on(conn) -> str:
         """v3.50.1: E 码-合格-码模式重新亮灯时机强制 ok_only (无视存的 resume_on);
@@ -1712,6 +1753,14 @@ class ScannerService:
             # 由 resume_after_cycle 解锁). 容器模式下还会有 source._scan_d_update
             # 的 box 跨线 send_lon_for_channel 在 cycle 之外提前触发 LON.
             if mode in ("once_per_cycle", "D", "E"):
+                # v3.51.1: 本码在 _on_data_received 内已被同步判定"全拒绝复灯"
+                # (无任何工位接收) → 不再进入等灯锁, 消费标记后直接续 LON.
+                if (getattr(conn, '_rearm_after_reject_serial', None)
+                        and conn._rearm_after_reject_serial == conn.last_scan):
+                    conn._rearm_after_reject_serial = None
+                    conn._lon_sent = False
+                    conn._wait_cycle_resume = False
+                    return
                 # 灭灯动作统一走 service 方法 (幂等): _on_data_received 已灭过灯,
                 # 这里只是兜底, 不会重复发 LOFF.
                 self._loff_on_code_received(conn)
@@ -2039,6 +2088,7 @@ class ScannerService:
 
         channels = conn.broadcast_channels if conn.broadcast_channels else [conn.channel_id]
 
+        _dispatched = []  # v3.51.1: 真正送进 MES 的工位 (全拒绝自动复灯的分母)
         for ch_id in channels:
             project_id = None
             if self._project_id_getter:
@@ -2066,13 +2116,29 @@ class ScannerService:
                   flush=True)
             if debug_center.is_on("backend.scanner"):
                 debug_center.dbg("backend.scanner", "条码注入 MES", f"channel={ch_id} serial={result.serial_no or '-'} project={project_id} device={conn.device_id}")
-            self._mes_hook.on_scan_received(
+            _accepted = self._mes_hook.on_scan_received(
                 channel_id=ch_id,
                 serial_no=result.serial_no,
                 raw_data=raw_data,
                 project_id=project_id,
                 device_id=conn.device_id,
             )
+            if _accepted is not False:
+                _dispatched.append(ch_id)
+
+        # v3.51.1: 等灯模式记录本次派发面. MES 侧任何拒绝出口 (强制去重/OK冷却/
+        # 已有待检) 会回调 notify_scan_rejected; 全部派发工位都拒绝且无在途工件
+        # → 自动重新亮灯, 否则一个废码就把产线灯锁死.
+        if (conn.scan_mode or "continuous") in ("once_per_cycle", "D", "E"):
+            conn._rearm_after_reject_serial = None  # 新码清残留标记
+            conn._last_dispatch = {"serial": result.serial_no,
+                                   "channels": set(_dispatched),
+                                   "rejected": set()}
+            if not _dispatched:
+                # 一个工位都没送进 MES (项目未激活/工位禁扫等) → 永远等不来
+                # 闭环出口, 当场复灯.
+                self._rearm_after_full_reject(conn, result.serial_no,
+                                              reason="无任何工位接收")
 
         self._inject_barcode_to_external_devices(conn, result.serial_no)
 

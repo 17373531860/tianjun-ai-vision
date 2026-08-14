@@ -32,6 +32,12 @@
 > - `source_event_trigger_mixin.py`（v3.51 FEAT-009）：`_trigger_event` 里 `is_good` 事件先问 `channel_group_coordinator.should_unify_ok_report(channel_id)`——组开统一播报时个体 OK 的 `show_notification` 置 False、`_dispatch_event_alarm` 跳过（`if not suppress_alarm and not _unify_ok_suppress`）；结算/计数/落库/MES 照旧，NG 永不抑制。静态守护测试 `test_returnable_hook_consumption_M1_2c.py` 的 regex 已放宽允许附加条件。
 > - `channel_manager.py`（v3.50.0a BUG-011）：`save_channel_config` merge=False 时对归属别段的 key（`project_id`/`was_detecting`）body 缺失或 null 从旧配置继承——治 Source 页保存输入源把工位-项目绑定顺手抹掉（不变量 17）。回归 `tests/test_channel_manager_multi.py` 三例。
 >
+> **v3.51.1 补账（2026-08-14，虚拟双工位战役修复）**：
+> - `source_session_lifecycle_mixin.py`（BUG-001）：`force_settle_pending_cycle` 非容器分支守门 `current_cycle_uuid` → `_tracking_cycle_active`——挂账周期懒开（v3.50.0a 周期守门结算时才建 DB cycle）uuid 恒 None，旧守门静默跳过导致"新码强制收旧账"完全失效。回归 `tests/test_settle_on_complete.py` 新增 `_ForceSettleHost` 两例。
+> - `source_tracking_mixin.py`（BUG-005）：豁免名单条目登记 `label`（结算登记处 + 漂移转移处），ID 漂移兜底（IoU≥0.6）**只认同标签**转移——治原位换"另一种"新品被吞成旧件永不入账（老条目无 label 兼容匹配）。回归同文件新增两例。
+> - `source_event_trigger_mixin.py`（BUG-006）：`fire_external_event_response` 事件日志 `toast_id` 默认值按事件类型取（id=1 合格 → 'ok'，其余保持 'ng'；显式配置照旧优先）——治统一播报"全部合格"弹红色不合格 Toast。回归 `tests/test_fire_external_event.py` 新增三例。
+> - `source_inference_loop_mixin.py`（FEAT-001）：synthetic 取帧后按项目 `logic_mode` 决定 `is_tracking`——tracking 项目走 `_update_tracking_stats` 真实管线（剧本 detections 自带 track_id），其余模式行为不变；跟踪类配置（齐件即结算/扫码门/工位组）从此可虚拟回归（`tests/uat/virtual_dual_station/`）。
+>
 > **v3.41 增量复核（2026-07-17）**：source/检测核心域按 `git diff a23a8d2..HEAD` 补账 v3.33~v3.41 九个版本变更。各条目内新增「v3.3x 变更」行；1.4 / 1.5 表下补增量清单；新建 `source_persist_worker.py`（v3.38）完整条目并补录 `source_region_events.py` / `source_region_events_mixin.py`（v3.32 落地时漏收）。受影响文件的行数标注与漂移行号已按当前代码刷新。
 >
 > **v3.44 补账（2026-07-22）**：NG 处置整改批次，source 族 10 文件——

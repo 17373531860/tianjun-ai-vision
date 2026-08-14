@@ -518,7 +518,10 @@ class EventTriggerMixin:
             'reason': reason,
             'timestamp': time.time(),
             'show_notification': event.get('show_notification', False),
-            'toast_id': event.get('toast_id', 'ng'),
+            # v3.51.1: 合格事件默认走 ok Toast — 统一播报(工位组全员合格)借这条路,
+            # 原默认 'ng' 会让"全部合格"弹红色不合格 Toast (真机截图抓到的 bug)
+            'toast_id': event.get('toast_id',
+                                  'ok' if str(current_event_id) == '1' else 'ng'),
             'had_workpiece': False,
             'should_warn_no_barcode': False,
             'require_ack': require_ack and not remind_only,

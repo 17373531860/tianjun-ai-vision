@@ -738,11 +738,12 @@ class MESHookManager:
         if self.is_channel_scan_disabled(channel_id):
             print(f"[ScannerDisable] ch{channel_id} disabled, dropping scan "
                   f"(serial={serial_no})", flush=True)
-            return
+            return False
         self._enqueue(
             self._handle_scan, channel_id, serial_no, raw_data,
             project_id, device_id, critical=True
         )
+        return True
 
     def on_cycle_start(self, channel_id: int, cycle_id: int,
                        session_id: int, project_id: int):
@@ -1554,6 +1555,28 @@ class MESHookManager:
             finally:
                 db.close()
 
+    def _notify_scan_rejected(self, device_id: int, channel_id: int,
+                              serial_no: str):
+        """v3.51.1: 扫码被拒绝(强制去重/OK冷却/已有待检)时回调扫码器服务.
+
+        等灯模式(once_per_cycle/D/E)物理层扫到码就灭灯; 拒绝路径没有工件、
+        没有周期、永远等不来 cycle_end/全OK → 灯被一个废码锁死 (现场表现:
+        "已合格的码重扫一下, 扫码器就再也不亮了"). 该回调让扫码器服务统计
+        "本次派发的所有工位都拒绝了" 后自动重新亮灯.
+        本工位仍有在途工件(旧码周期未收)时不回调 — 灯该继续等原有闭环出口.
+        """
+        try:
+            if (channel_id in self._pending_workpiece
+                    or channel_id in self._inspecting_workpiece):
+                return
+            from backend.services.scanner import get_scanner_service
+            svc = get_scanner_service()
+            if svc:
+                svc.notify_scan_rejected(device_id, channel_id, serial_no)
+        except Exception as e:
+            print(f"[MES] notify_scan_rejected error ch{channel_id}: {e}",
+                  flush=True)
+
     def _handle_scan(self, db, channel_id: int, serial_no: str,
                      raw_data: str, project_id: int, device_id: int = None):
         """处理扫码事件"""
@@ -1605,6 +1628,7 @@ class MESHookManager:
                     channel_id, serial_no, "该条码已判合格，已拒绝（强制去重）")
                 print(f"[MES] strict_ok_dedup reject: {serial_no} "
                       f"workpiece#{existing.id} 已 OK (ch{channel_id})", flush=True)
+                self._notify_scan_rejected(device_id, channel_id, serial_no)
                 return
 
         # 同码二次扫抑制：上次检测合格 & 距完成时间 < 冷却秒数 → 丢弃
@@ -1630,6 +1654,7 @@ class MESHookManager:
                     print(f"[MES] scan cooldown filter: {serial_no} workpiece#{existing.id} "
                           f"{elapsed:.1f}s after OK (cooldown {cooldown}s, ch{channel_id})",
                           flush=True)
+                    self._notify_scan_rejected(device_id, channel_id, serial_no)
                     return
 
         # v3.50.1 齐件即结算: 新码强制收旧账 — 必须在重复扫码判定之前跑,
@@ -1654,6 +1679,9 @@ class MESHookManager:
             # v3.50: 拒绝路径发警告 toast (不再静默丢)
             self._emit_scan_warning(
                 channel_id, serial_no, "已有待检工件，本次扫码被拒绝")
+            # 本工位有在途工件 → helper 守门不会真复灯 (灯继续等在途周期闭环),
+            # 全拒绝复灯判定也因此集不齐 — 语义正确: 有在途就不该亮灯.
+            self._notify_scan_rejected(device_id, channel_id, serial_no)
             return
 
         wp = self._workpiece_svc.register(

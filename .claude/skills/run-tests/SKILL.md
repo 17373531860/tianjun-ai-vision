@@ -1204,6 +1204,13 @@ class BasePage:
             └─ 是 → **路径 G（本节）**
 ```
 
+> **v3.51.1**：synthetic 源已支持 **tracking 逻辑模式**（剧本 detections 自带
+> track_id，logic_mode=tracking 时走 `_update_tracking_stats` 真实管线）——
+> 齐件即结算 / 扫码门 / 工位组统一播报类配置从此可虚拟回归。
+> **现成的全套双工位虚拟环境（含假 TCP 扫码器跑真实 E 模式 LON/LOFF 协议）**：
+> `tests/uat/virtual_dual_station/`（README 有一键启动方法 + 4 剧本 60 断言
+> 覆盖矩阵），复现"一枪广播双工位"类现场问题优先复用它，别从零搭。
+
 ### G.1 这个 synthetic 源是什么（必读，给后续 AI/人）
 
 `backend/api/source_synthetic_mixin.py` 给 `VideoSourceManager` 加了一种新的 `source_type='synthetic'`：

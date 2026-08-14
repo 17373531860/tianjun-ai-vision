@@ -74,11 +74,14 @@ class InferenceLoopMixin:
                 debug_log(f"!!! synthetic 推理耗时: {detect_time:.1f}ms, 检测数={len(detections)}", "INFERENCE")
             if detections:
                 detections = self._map_detections_original_to_display(detections)
-            # 剧本注入固定走非跟踪 / 非分割路径（与 _update_step_stats 对齐）
             # v3.32: synthetic 也过标签区域拆分层 → 全链路可用剧本回归
             detections = self._apply_label_splits(detections)
             self._feed_combo_positional(detections)
-            return (detections, False, False, t_start)
+            # v3.51.1: 跟踪模式项目也能用剧本回归 —— 剧本 detections 自带 track_id,
+            # logic_mode=tracking 时走 _update_tracking_stats（历史上固定走非跟踪
+            # 路径, 导致捷昌类跟踪模式配置无法虚拟测试）。其余模式行为不变。
+            _synth_logic = (self.project_config or {}).get('logic_mode', 'sequential')
+            return (detections, _synth_logic == 'tracking', False, t_start)
 
         # 主模型的 task_type / logic_mode (对副模型不适用)
         _task_type = self.project_config.get('task_type', 'detection') if self.project_config else 'detection'

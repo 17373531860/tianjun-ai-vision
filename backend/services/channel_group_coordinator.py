@@ -84,6 +84,10 @@ class ChannelGroupCoordinator:
         self._channel_to_group: Dict[int, int] = {}
         # channel_id → "OK" | "NG" (pending override, 下次 end_cycle 强制采用)
         self._pending_override: Dict[int, str] = {}
+        # v3.51.1: override 截止时间 (channel_id → monotonic deadline).
+        # 挂账周期可能被停止检测/换班丢弃, override 若无限期挂着会污染
+        # 下一轮完全无关的周期 (B3b→B4 跨轮实测). 过期即作废.
+        self._pending_override_deadline: Dict[int, float] = {}
         # v3.13.1: synchronized_all_ok 聚合等齐状态机
         # group_id → { "members": {ch: {"cycle_id": int, "is_good": bool}},
         #              "started_at": float, "timer": threading.Timer | None }
@@ -139,6 +143,7 @@ class ChannelGroupCoordinator:
         with self._lock:
             self._channel_to_group.pop(channel_id, None)
             self._pending_override.pop(channel_id, None)
+            self._pending_override_deadline.pop(channel_id, None)
             # 把该 channel 从所有 pending aggregation 里移除. 如果导致某 agg 空了, 取消其 timer.
             for gid in list(self._pending_aggregations.keys()):
                 agg = self._pending_aggregations[gid]
@@ -182,9 +187,11 @@ class ChannelGroupCoordinator:
                     and bool(group.get("unified_ok_report", False)))
 
     def _fire_unified_report(self, group: Dict[str, Any], channel_ids: List[int],
-                             reason: str) -> None:
-        """v3.51: 对组内通道统一补一次"合格"事件响应面 (灯/语音/toast).
+                             reason: str, event_id: int = 1) -> None:
+        """v3.51: 对组内通道统一补一次事件响应面 (灯/语音/toast).
 
+        event_id: 1=合格 (聚齐全 OK / 超时补播), 2=不合格 (v3.51.1 绑死档
+        force_ng 超时的"整体 NG"播报)。
         复用 fire_external_event_response — 不 end_cycle、不动周期统计、不计数
         (成员各自结算时计数已 +1, remind_only=True 跳过计数器联动防双计)。
         错误隔离: 任一通道失败不影响其它通道。
@@ -200,10 +207,11 @@ class ChannelGroupCoordinator:
                 if mgr is None:
                     continue
                 mgr.fire_external_event_response(
-                    1, reason, source="channel_group", remind_only=True)
+                    event_id, reason, source="channel_group", remind_only=True)
             except Exception as e:
                 print(f"[ChannelGroup] 统一播报 ch{cid} 异常 (隔离): {e}")
-        print(f"[ChannelGroup][{group['name']}] 统一播报: {reason} → ch{channel_ids}")
+        print(f"[ChannelGroup][{group['name']}] 统一播报"
+              f"{'(NG)' if event_id == 2 else ''}: {reason} → ch{channel_ids}")
 
     def get_pending_override(self, channel_id: int) -> Optional[str]:
         """VSM end_cycle 调: 看本次结算是否被组级联动覆盖.
@@ -212,9 +220,16 @@ class ChannelGroupCoordinator:
         - 返回 None → 无 override, 按 cycle.is_good 决定 group_settle_result
 
         语义: take-once. 取走后 pending_override 清空, 下次 cycle 默认无 override.
+        v3.51.1: 带过期 — 超过截止时间的 override 作废 (防跨轮污染).
         """
         with self._lock:
-            return self._pending_override.pop(channel_id, None)
+            val = self._pending_override.pop(channel_id, None)
+            deadline = self._pending_override_deadline.pop(channel_id, None)
+            if val is not None and deadline is not None and time.monotonic() > deadline:
+                print(f"[ChannelGroup] ch{channel_id} pending_override={val} "
+                      f"已过期, 作废不生效")
+                return None
+            return val
 
     def on_cycle_settled(self, channel_id: int, cycle_id: int, is_good: bool, db) -> None:
         """VSM end_cycle 写库后调 — 工位组联动入口.
@@ -310,6 +325,8 @@ class ChannelGroupCoordinator:
         with self._lock:
             for cid in other_channels:
                 self._pending_override[cid] = "NG"
+                # any_ng 广播: 兄弟通道的在途周期马上要收, 60s 足够宽; 过期作废
+                self._pending_override_deadline[cid] = time.monotonic() + 60.0
 
         # v3.13.1: 报警链路联动 — 直接驱动 AlarmRouter 让 B 通道报警灯立刻亮 NG.
         # 跳过 _trigger_event 链路 (避免 event_fire 双触发, 也避开 events_config 里没有
@@ -397,11 +414,14 @@ class ChannelGroupCoordinator:
         else:  # timeout
             if timeout_action == "force_ng":
                 group_result = "NG_BY_TIMEOUT"
-                # 给没到的成员设 NG override
+                # 给没到的成员设 NG override (v3.51.1: 带 60s 过期, 防未到成员
+                # 的挂账被丢弃后 override 残留污染下一轮无关周期)
                 with self._lock:
                     for cid in members_expected:
                         if cid not in members_arrived:
                             self._pending_override[cid] = "NG"
+                            self._pending_override_deadline[cid] = (
+                                time.monotonic() + 60.0)
             else:
                 group_result = "PARTIAL"
 
@@ -442,12 +462,40 @@ class ChannelGroupCoordinator:
                     self._fire_unified_report(
                         group, members_expected,
                         f"工位组[{group['name']}]全部合格")
+                elif reason == "timeout" and timeout_action == "force_ng":
+                    # v3.51.1 绑死档: 超时未聚齐 = 整体 NG. 不给已合格工位播
+                    # "已合格" (自相矛盾), 而是全组统一播一次 NG, 让两边工人都
+                    # 知道这箱整体不放行.
+                    self._fire_unified_report(
+                        group, members_expected,
+                        f"工位组[{group['name']}]等待超时未聚齐, 整体判不合格",
+                        event_id=2)
                 elif reason == "timeout" and ok_members:
                     self._fire_unified_report(
                         group, ok_members,
                         f"工位组[{group['name']}]等待超时, 本工位已合格")
             except Exception as e:
                 print(f"[ChannelGroup] 统一播报调度异常 (隔离): {e}")
+
+        # v3.51.1 绑死档超时: 已到成员的 cycle 组结果回写为 NG_BY_TIMEOUT,
+        # 让数据页/导出看到的组级结论与"整体 NG"一致 (成员自身 is_good 不改,
+        # 个体判定的事实保留, 组级字段表达联动结论).
+        if reason == "timeout" and timeout_action == "force_ng" and members_arrived:
+            try:
+                from backend.db.database import SessionLocal
+                _db = SessionLocal()
+                try:
+                    for _ch, _m in members_arrived.items():
+                        self._write_cycle_group_fields(
+                            _db, _m["cycle_id"],
+                            channel_group_id=group["id"],
+                            group_settle_result="NG_BY_TIMEOUT",
+                            settled_with=None,
+                        )
+                finally:
+                    _db.close()
+            except Exception as e:
+                print(f"[ChannelGroup] 超时NG组结果回写异常 (隔离): {e}")
 
     def _write_cycle_group_fields(
         self,
