@@ -357,7 +357,10 @@ jobs:
           $extraMust = @(
             "$base\docs\plugin-system\plugin.schema.json",
             "$base\docs\plugin-system\customer-codes.md",
-            "$base\backend\main.py"
+            "$base\backend\main.py",
+            # v3.51.4: PG 组件的配套迁移工具 (v3.49~v3.51.3 从没进过包,
+            # 客户勾了 PG 也没法搬旧数据 — 解剖成品安装包才发现)
+            "$base\scripts\db\sqlite_to_pg.py"
           )
           foreach ($f in $extraMust) {
             if (Test-Path $f) { Write-Host "OK  extraResource: $f" }

@@ -323,8 +323,9 @@ img = np.zeros((100,100,3), dtype=np.uint8); cv2.resize(img,(50,50))
 ### CI 阶段（约 45-60 min）
 - [ ] `gh run list --limit 3` 确认 push main + push tag 各触发一条 run
 - [ ] `gh run view <id>` 各步骤全绿，特别是 Inno Setup 步的 tag/version 一致性校验
-- [ ] Artifact 下到本地，文件名前缀必须 `TianJun-AI-Vision-X.Y.Z-Setup.exe`，体积 ~3.75 GB
+- [ ] Artifact 下到本地，文件名前缀必须 `TianJun-AI-Vision-X.Y.Z-Setup.exe`，体积 ~3.75 GB（v3.51.3 起带 PG 约 4.1 GB）
 - [ ] Release：`gh release view vX.Y.Z --repo 17373531860/tianjun-releases` 应有 N 个 `.part` + `checksums.txt` + `merge_installer.bat`
+- [ ] **成品解剖清点（本版新增/改动了交付物时强制）**：分卷校验合并后用 innoextract `--list` 列包内清单，逐项确认本版新增能力的**完整链路文件**都在（组件本体/初始化/配套工具/文档）。Mac 上主线 innoextract 不支持 Inno 6.5+（报 loader revision: 2），用 PR#210 分支编（conda-forge 拿 cmake/boost-cpp/xz）；`--extract` 对 >2GB 包尾部报 "cannot change slices" 是工具限制非包损坏。血泪：v3.49~v3.51.2 PG 选项静默缺失三个版本、v3.51.3 迁移工具缺失，都是没做这步（详见 run-tests skill「捷昌 v3.51.3 交付审计逃逸复盘」）
 
 ### Gitee 同步（手动）
 - [ ] `gh workflow run gitee-upload.yml -f version=vX.Y.Z`，等绿
