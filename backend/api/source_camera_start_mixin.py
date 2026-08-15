@@ -279,6 +279,31 @@ def _open_camera_capture(device_index: int, max_rounds: int = 3):
     return None, None
 
 
+def _find_camera_index_conflict(device_index: int, self_channel_id: int):
+    """查其他工位是否正持有同一个摄像头 index。返回冲突的 channel_id 或 None。
+
+    v3.51.3: 双工位误选同一台相机时，老流程会走满 3 轮 DSHOW+MSMF 退避重试
+    + FPS 探测，最长逼近前端 60s 超时才报笼统的"被占用"。这里在打开前做
+    跨通道预检，秒级失败并明确指出被哪个工位占用。
+    """
+    try:
+        from backend.api.channel_manager import channel_manager
+        for cid, mgr in list(channel_manager.channels.items()):
+            if cid == self_channel_id:
+                continue
+            try:
+                if getattr(mgr, 'source_type', None) == 'camera' \
+                        and getattr(mgr, 'capture', None) is not None \
+                        and getattr(mgr, 'camera_index', None) == device_index:
+                    return cid
+            except Exception:
+                continue
+    except Exception:
+        # channel_manager 未初始化（单测/极早期）→ 不拦，交给原有打开流程
+        return None
+    return None
+
+
 class CameraStartMixin:
     @property
     def _source_lifecycle_lock(self):
@@ -305,6 +330,13 @@ class CameraStartMixin:
     def _start_camera_locked(self, device_index: int = 0, width: int = 1280, height: int = 720, fps: int = 60,
                              auto_exposure: bool = True, exposure_value: float = -6.0):
         """start_camera 的实现体（调用方必须已持 _source_lifecycle_lock）。"""
+        # v3.51.3: 跨工位同 index 预检——秒级失败, 不进重试循环
+        conflict_ch = _find_camera_index_conflict(device_index, self.channel_id)
+        if conflict_ch is not None:
+            raise Exception(
+                f"摄像头 {device_index} 正在被工位 {conflict_ch + 1} 使用，"
+                f"请先停止该工位或选择其他摄像头")
+
         self.stop(release_model=False)
         
         # 等待一小段时间确保之前的资源已释放

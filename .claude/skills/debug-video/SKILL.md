@@ -24,6 +24,9 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7, mcp__sentry"
   2. 如果 DirectShow 拿不到 MJPG → 实测 DirectShow vs MSMF 帧率，自动选快的
   3. Linux: V4L2 重试
 - **常见问题:** 部分 USB 摄像头通过 DirectShow 只能拿到 YUY2（未压缩），导致 1280x720 只有 ~10fps。MSMF 通常能正确协商 MJPG 达到 30fps
+- **枚举（v3.51.3 起）:** `_detect_cameras_windows`（source_routes.py）Windows 上优先用打包内 ffmpeg `-list_devices -f dshow` 列设备——快、带设备真名、不试开；再按 USB 设备路径解析出的 `(vid, pid, serial)` 去重同一物理机的重复 DirectShow filter（复合设备 IR 副摄/驱动重复注册会让一台机器占两个 index；两台同型号相机 serial 不同不会误合并）。ffmpeg 不可用/解析失败/非 Windows 自动回退老的逐 index 试开法。"使用中"标记看全部工位（`_camera_indexes_in_use`），不再只看 ch0
+- **跨工位抢相机（v3.51.3 起）:** `_start_camera_locked` 打开前先做跨通道占用预检（`_find_camera_index_conflict`），别的工位正持有同一 device_index 时毫秒级抛"摄像头 N 正在被工位 X 使用"，不进 3 轮 DSHOW/MSMF 重试循环；预检挡在 `self.stop()` 之前，不会误停本工位旧源
+- **诊断"枚举重复/双工位同选超时":** 列表出现同名或连续可开的可疑 index → 查后端日志 `[Camera] 枚举去重` / `[Camera] ffmpeg 列设备失败, 回退试开法枚举` 看走的是 ffmpeg 路径还是回退试开路径；回退路径无法物理去重是已知限制（ffmpeg 缺失才会发生）
 
 ### 2. 海康工业相机 (hikvision)
 - **启动:** `VideoSourceManager.start_hikvision(serial_number)`

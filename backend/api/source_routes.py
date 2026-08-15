@@ -328,15 +328,148 @@ def _detect_cameras_linux():
     return cameras
 
 
-def _detect_cameras_windows():
-    """Windows: DirectShow 探测前 5 个摄像头索引"""
-    cameras = []
-    current_camera_index = None
-    if video_manager.source_type == 'camera' and video_manager.capture is not None:
-        current_camera_index = video_manager.camera_index
+def _camera_indexes_in_use():
+    """所有工位当前占用的摄像头 index → channel_id 映射（含 ch0）。
 
+    v3.51.3: 老逻辑只看 video_manager（ch0），多工位下其他通道占用的
+    index 在枚举时会被再试开一次，可能干扰正在采集的相机。
+    """
+    in_use = {}
+    try:
+        from backend.api.channel_manager import channel_manager
+        for cid, mgr in list(channel_manager.channels.items()):
+            try:
+                if getattr(mgr, 'source_type', None) == 'camera' and getattr(mgr, 'capture', None) is not None:
+                    idx = getattr(mgr, 'camera_index', None)
+                    if idx is not None and idx not in in_use:
+                        in_use[idx] = cid
+            except Exception:
+                continue
+    except Exception:
+        # channel_manager 尚未初始化（测试/极早期启动）→ 回退只看 ch0
+        try:
+            if video_manager.source_type == 'camera' and video_manager.capture is not None:
+                in_use[video_manager.camera_index] = 0
+        except Exception:
+            pass
+    return in_use
+
+
+def _parse_dshow_device_list(ffmpeg_stderr: str):
+    """解析 `ffmpeg -list_devices true -f dshow -i dummy` 的 stderr。
+
+    返回 [{"name": 友好名, "path": 设备路径或 ""}, ...]，顺序即 DirectShow
+    枚举顺序（与 cv2.VideoCapture(i, CAP_DSHOW) 的 index 一一对应）。
+    兼容两代输出格式：
+      - ffmpeg 5+: 每行带 "(video)" / "(audio)" 后缀
+      - ffmpeg 4.x: 用 "DirectShow video devices" 段落头分节
+    """
+    import re
+    devices = []
+    section = None  # None / 'video' / 'audio'
+    line_re = re.compile(r'^\[dshow[^\]]*\]\s*(.*)$')
+    entry_re = re.compile(r'^"(.+)"(?:\s*\((video|audio)\))?\s*$')
+    alt_re = re.compile(r'^Alternative name\s+"(.+)"\s*$')
+    for raw in (ffmpeg_stderr or "").splitlines():
+        m = line_re.match(raw.strip())
+        if not m:
+            continue
+        body = m.group(1).strip()
+        if "DirectShow video devices" in body:
+            section = 'video'
+            continue
+        if "DirectShow audio devices" in body:
+            section = 'audio'
+            continue
+        am = alt_re.match(body)
+        if am:
+            if devices and devices[-1] is not None:
+                devices[-1]["path"] = am.group(1)
+            continue
+        em = entry_re.match(body)
+        if em:
+            name, kind = em.group(1), em.group(2)
+            effective = kind or section
+            if effective == 'video':
+                devices.append({"name": name, "path": ""})
+            elif kind == 'audio' or (kind is None and section == 'audio'):
+                # audio 条目占位: 防止其 Alternative name 误挂到上一个 video 上
+                devices.append(None)
+    return [d for d in devices if d is not None]
+
+
+def _dedup_dshow_devices(devices):
+    """按 USB 物理身份 (vid, pid, serial) 去重，保留每台物理机的第一个条目。
+
+    背景（v3.51.3 现场）：同一台 USB 相机在 DirectShow 里注册多个 filter
+    （常见于带 IR 副摄的复合设备/驱动重复注册），枚举出"两台"，双工位
+    同时选中就互相抢设备直到超时。同一复合设备的多个 filter 的设备路径
+    仅 &mi_xx 接口号不同，(vid, pid, serial) 相同 → 判定同一台物理机。
+    两台同型号相机 serial 不同，不会被误合并。
+
+    返回 [(原始 DirectShow index, device_dict), ...]。
+    """
+    import re
+    usb_re = re.compile(r'usb#vid_([0-9a-f]{4})&pid_([0-9a-f]{4})(?:&mi_[0-9a-f]{2})?#([^#]+)#', re.IGNORECASE)
+    kept, seen = [], set()
+    for i, dev in enumerate(devices):
+        m = usb_re.search(dev.get("path") or "")
+        key = (m.group(1).lower(), m.group(2).lower(), m.group(3).lower()) if m else ("__unique__", i)
+        if key in seen:
+            print(f"[Camera] 枚举去重: index {i} \"{dev.get('name')}\" 与已列设备同一物理机, 跳过")
+            continue
+        seen.add(key)
+        kept.append((i, dev))
+    return kept
+
+
+def _list_dshow_devices_ffmpeg():
+    """用打包内 ffmpeg 列 DirectShow 视频设备。失败返回 None（走兜底枚举）。"""
+    import subprocess
+    try:
+        from backend.api.source import get_cached_ffmpeg_path
+        ffmpeg = get_cached_ffmpeg_path()
+        if not ffmpeg:
+            return None
+        proc = subprocess.run(
+            [ffmpeg, "-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"],
+            capture_output=True, text=True, timeout=10,
+            errors="replace",
+        )
+        devices = _parse_dshow_device_list(proc.stderr)
+        return devices if devices else None
+    except Exception as e:
+        print(f"[Camera] ffmpeg 列设备失败, 回退试开法枚举: {e}")
+        return None
+
+
+def _detect_cameras_windows():
+    """Windows/macOS: 摄像头枚举。
+
+    v3.51.3 重做（治现场"2 台物理机列出 4 个 + 同选超时 + 枚举慢"）：
+      1. Windows 优先用打包内 ffmpeg 列 DirectShow 设备（快、带真名、
+         不试开设备 → 不会干扰其他工位正在采集的相机），再按 USB
+         (vid,pid,serial) 去重同一物理机的重复 filter。
+      2. ffmpeg 不可用/解析失败/非 Windows → 保持老的逐 index 试开法。
+    """
+    import platform
+    in_use = _camera_indexes_in_use()
+
+    if platform.system() == "Windows":
+        devices = _list_dshow_devices_ffmpeg()
+        if devices:
+            cameras = []
+            for idx, dev in _dedup_dshow_devices(devices):
+                label = f"{dev['name']} (索引 {idx})"
+                if idx in in_use:
+                    label += f" [工位{in_use[idx] + 1}使用中]"
+                cameras.append({"index": idx, "name": label})
+            return cameras
+
+    # 兜底: 逐 index 试开（老逻辑, macOS 及 ffmpeg 不可用时）
+    cameras = []
     for i in range(5):
-        if current_camera_index is not None and i == current_camera_index:
+        if i in in_use:
             cameras.append({
                 "index": i,
                 "name": f"摄像头 {i} (使用中)" if i > 0 else "默认摄像头 (索引 0, 使用中)"

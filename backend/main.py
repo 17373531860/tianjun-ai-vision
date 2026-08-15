@@ -76,7 +76,54 @@ if _DIALECT == "sqlite":
         print(f"[DIAG] main.py: DB file size: {os.path.getsize(_db_path)} bytes")
 
 # Create database tables
-Base.metadata.create_all(bind=engine)
+def _quarantine_sqlite_sidecars(db_path: str) -> list:
+    """把 SQLite 的 -wal/-shm 侧车文件挪到 .corrupt-<时间戳>（保留现场，不删）。
+
+    返回被隔离的文件路径列表。主库文件不动：它包含最后一次 checkpoint 前的
+    全部数据，只有 WAL 里未合并的最近几笔写入随隔离文件保留待人工救援。
+    """
+    import time as _time
+    moved = []
+    ts = _time.strftime("%Y%m%d_%H%M%S")
+    for suffix in ("-wal", "-shm"):
+        p = db_path + suffix
+        try:
+            if os.path.exists(p):
+                quarantine = f"{p}.corrupt-{ts}"
+                os.replace(p, quarantine)
+                moved.append(quarantine)
+        except Exception as _e:
+            print(f"[DIAG] 隔离 {p} 失败（继续）: {_e}")
+    return moved
+
+
+def _create_all_with_sqlite_selfheal():
+    """建表；SQLite 下带 disk I/O error 自愈重试。
+
+    现场强杀（taskkill /f）/断电后 -wal/-shm 可能半写入损坏，之后任何连接
+    一碰库就报 "disk I/O error"，后端 import 期在这里挂死，表现为"软件拉
+    不起来"。自愈：隔离侧车文件再试一次，起得来远好于起不来（v3.51.3）。
+    """
+    from sqlalchemy.exc import DBAPIError
+    # Windows 上侧车损坏报 "disk I/O error"（捷昌现场原文），POSIX 上同类
+    # 损坏（-wal 不可读等）映射为 "unable to open database file"，两种都收。
+    _HEALABLE = ("disk i/o error", "unable to open database file")
+    try:
+        Base.metadata.create_all(bind=engine)
+        return
+    except DBAPIError as e:
+        msg = str(e).lower()
+        if _DIALECT != "sqlite" or not any(h in msg for h in _HEALABLE):
+            raise
+        print(f"[DIAG] create_all 报可自愈的 SQLite I/O 故障，尝试 WAL 自愈: {e}")
+    engine.dispose()
+    moved = _quarantine_sqlite_sidecars(os.path.join(DATA_DIR, 'sql_app.db'))
+    print(f"[DIAG] 已隔离疑似损坏侧车文件: {moved or '（无侧车文件，可能是磁盘级故障）'}")
+    Base.metadata.create_all(bind=engine)
+    print("[DIAG] SQLite WAL 自愈成功，后端继续启动")
+
+
+_create_all_with_sqlite_selfheal()
 if _DIALECT == "sqlite":
     print(f"[DIAG] main.py: create_all done, DB file size: {os.path.getsize(_db_path) if os.path.exists(_db_path) else 'N/A'}")
 else:
@@ -1119,7 +1166,17 @@ def cleanup_on_exit():
         print(f"[退出钩子] 清理时出错: {e}")
         import traceback
         traceback.print_exc()
-    
+
+    # v3.51.3: SQLite 收尾 checkpoint——把 WAL 未合并写入落回主库并截断，
+    # 缩小之后被强杀（Electron 兜底 taskkill /f）/断电时留下损坏 WAL 的窗口。
+    try:
+        if _DIALECT == "sqlite":
+            with engine.connect() as _conn:
+                _conn.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE);")
+            print("[退出钩子] SQLite WAL checkpoint 完成")
+    except Exception as _e:
+        print(f"[退出钩子] WAL checkpoint 失败（已忽略）: {_e}")
+
     print("[退出钩子] 清理完成")
 
 # 注册退出钩子

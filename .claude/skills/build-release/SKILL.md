@@ -164,6 +164,7 @@ spawn(pythonPath, ['-m', 'uvicorn', 'backend.main:app',
 - 输出：`TianJun-AI-Vision-{#MyAppVersion}-Setup.exe`，64-bit + LZMA2 压缩，约 3.75 GB
 - 装机前自动备份 `license.lic`，装机后恢复（防升级丢激活）
 - 可选安装 CH340 驱动
+- **嵌入式 PostgreSQL 可选组件（v3.51.3 起真正带出）**：installer.iss 的 `#ifdef IncludePostgres` 组件（initdb → 注册 Windows 服务 → 建库 → 写 db_config.json）需要两个配套条件同时成立——① CI 先把 PG 16.15 官方便携包铺到 `electron\dist\pg-portable\`（build.yml "Stage PostgreSQL portable" 步骤：下载 3 次重试**失败硬红阻断发版**、裁掉 pgAdmin/StackBuilder/symbols/doc/include、校验 `bin\initdb.exe`）；② ISCC 编译传 `/DIncludePostgres`。**血泪教训（v3.49~v3.51.2）**：只写了 #ifdef、CI 从未传开关也从未铺过文件，三个大版本的安装包里根本没有 PG 选项且无人发现——`#ifdef` 型可选组件必须配 CI 侧存在性校验，不允许静默缺失。安装项默认不勾选，不勾=行为与历史版本完全一致
 
 ---
 
