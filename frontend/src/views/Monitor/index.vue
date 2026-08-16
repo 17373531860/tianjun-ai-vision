@@ -2726,6 +2726,20 @@ const stopMultiStreams = () => {
 
 const processChannelResult = (ch, d) => {
   const chData = multiChannelData.value[ch] || {};
+  // v3.51.5: 工位源"从停到跑"的瞬间强制重连该路视频流 — 开机恢复要 30s+ 的现场
+  // (捷昌 B 站), 页面挂载时源还没起来, MJPEG 零帧断流两次就永久降级快照、或旧连接
+  // 对着停掉的源干等; 源恢复后没人负责把流拉回来, 表现为"画面加载完还得切页
+  // 再切回来才有画面"。数据轮询本来就 150ms 一拍知道 is_running, 在这里补上闭环。
+  const wasRunning = chData.isRunning === true;
+  if (!wasRunning && d.is_running && multiStreamRunning) {
+    mjpegZeroFrameFails[ch] = 0;
+    if (multiStreamAborts[ch]) {
+      try { multiStreamAborts[ch].abort(); } catch {}
+      delete multiStreamAborts[ch];
+    }
+    syncMultiStreams();
+    console.log(`[MultiStream] ch${ch} 源已恢复运行, 重连视频流`);
+  }
   chData.isRunning = d.is_running;
   chData.isDetecting = d.is_detecting;
   chData.sourceType = d.source_type || '';
@@ -3614,6 +3628,12 @@ const fetchChannelCount = async () => {
     stopMultiPolling();
     stopMultiStreams();
     resetMultiRuntimeState(true);
+    // v3.51.5: 开机竞态 — 打包版页面加载常早于后端就绪 (CUDA 预热十几秒),
+    // 此时本函数失败会把页面锁死在单工位态, 双工位卡片根本不渲染, 直到用户
+    // 切页重进。失败后自动重试直到拿到真实工位数。
+    if (monitorMounted) {
+      setTimeout(() => { if (monitorMounted) fetchChannelCount(); }, 3000);
+    }
   }
 };
 
@@ -6535,6 +6555,20 @@ const autoRestoreSource = async () => {
       return true;
     }
   } catch { /* 后端不可达, 继续用 localStorage 兜底 */ }
+
+  // v3.51.5: localStorage 单工位兜底只允许在单工位模式跑 — 多工位开机时它会抢在
+  // 后端逐工位恢复之前, 把"最后一次单工位用过的相机"怼到 ch0 上: ch0 被占成错误
+  // 相机 (后端恢复见已在跑不纠正), 真正配这台相机的工位撞"使用中"快速失败,
+  // 现场表现为左工位显示右工位画面 + 右工位黑屏 (2026-08-15 捷昌 B 站双 USB 相机实录)。
+  // 多工位的开机恢复由后端 auto_restore_video_sources 按 workstation_config 逐工位
+  // 执行, 前端一律不插手; channel_count 以后端为准 (本地 ref 此刻可能还没加载完)。
+  try {
+    const ws = await api.get('/workstations');
+    if ((ws?.data?.channel_count || 1) > 1) {
+      console.log('[AutoRestore] 多工位模式, 跳过 localStorage 单工位兜底 (交给后端逐工位恢复)');
+      return false;
+    }
+  } catch { /* 拿不到工位数: 后端不可达, 下面的兜底 POST 同样会失败, 不额外拦 */ }
 
   sourceStore.loadConfig();
   if (!localStorage.getItem('source_config')) return false;

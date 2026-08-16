@@ -401,3 +401,31 @@ def test_channel_config_保存_旧配置无绑定_不凭空造(monkeypatch):
         body={'channel_id': 0, 'source_type': 'camera'},
         old_cfg={'source_type': 'video'})
     assert 'project_id' not in saved['cfg'] or saved['cfg']['project_id'] is None
+
+
+# ============================================================
+# v3.51.5 channel-config 只带 project_id 的部分更新不得整写抹掉相机配置
+# 背景: 不带 source_type 的调用 (如脚本/第三方只想改绑定) 走 merge=False
+# 会把 source_type/device_index/resolution 全抹 → 重启后该工位无源可恢复
+# → 检测中心黑屏 (2026-08-15 捷昌 B 站沙箱复现)。AGENTS.md 不变量 17。
+# ============================================================
+def test_channel_config_只带project_id_不抹相机配置(monkeypatch):
+    saved = _call_save_channel_config(
+        monkeypatch,
+        body={'channel_id': 0, 'project_id': 5},
+        old_cfg={'source_type': 'camera', 'device_index': 'usb_0',
+                 'resolution': '1280x720', 'fps': 30,
+                 'project_id': 4, 'was_detecting': True})
+    assert saved['merge'] is True, \
+        "body 无 source_type = 部分更新, 必须走 merge 保住相机配置"
+    assert saved['cfg']['project_id'] == 5, "换绑要生效"
+
+
+def test_channel_config_带source_type_保持整写语义(monkeypatch):
+    saved = _call_save_channel_config(
+        monkeypatch,
+        body={'channel_id': 0, 'source_type': 'rtsp', 'url': 'rtsp://x'},
+        old_cfg={'source_type': 'camera', 'device_index': 'usb_0',
+                 'resolution': '1280x720'})
+    assert saved['merge'] is False, "带 source_type 的真源配置写保持整段重写"
+    assert 'device_index' not in saved['cfg'], "切源类型后旧源字段不得残留"

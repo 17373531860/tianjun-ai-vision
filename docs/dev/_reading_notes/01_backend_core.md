@@ -46,6 +46,11 @@
 > - `source_camera_start_mixin.py`（BUG-002）：模块级 `_find_camera_index_conflict(device_index, self_channel_id)`——遍历 channel_manager 其他工位，`source_type=='camera' && is_running && camera_index 相同` 即冲突；`_start_camera_locked` 在 `self.stop()` **之前**预检（不为注定失败的打开误停本工位旧源），冲突立即抛"摄像头 N 正在被工位 X 使用"（真机实测 14ms，原来卡满 3 轮 DSHOW/MSMF 退避逼近 60s 前端超时）。
 > - `main.py`（BUG-003）：`create_all` 包进 `_create_all_with_sqlite_selfheal()`——捕获 DBAPIError 文案含 `disk i/o error`（Windows）/ `unable to open database file`（POSIX 同类损坏）且方言为 sqlite 时，`engine.dispose()` → `_quarantine_sqlite_sidecars()` 把 `-wal/-shm` 改名 `.corrupt-<时间戳>`（保留现场不删，主库不动）→ 重试一次，仍失败原样抛；`cleanup_on_exit` 报警串口段之后新增 `PRAGMA wal_checkpoint(TRUNCATE)`（sqlite 方言限定，异常忽略）——把 WAL 未合并写入落回主库并截断，缩小 Electron 兜底 taskkill /f 强杀留坏 WAL 的窗口。真库 E2E：坏 WAL 自愈启动 + 写库 201 + SIGTERM 退出 checkpoint 把 12KB WAL 清零。
 >
+> **v3.51.5 补账（2026-08-17，捷昌现场热补丁 a/b/c 收编）**：
+> - `main.py`（BUG-002/003）：①新增 `_resolve_startup_model_path(project, db)`——按 `project.model_format` 查 `ModelConversion` 表解析转换引擎路径（GPU 架构匹配才用，缺转换回退原始 `.pt`），`_load_channel_model_with_fallback` 引擎加载失败自动重试 `.pt`；`auto_load_active_project` 改走这两个函数，治"启动先载 .pt、项目激活又重载 TRT 引擎"双重加载慢启动。②`_restore_detection_pass` 用户否决——记录本函数自动拉起通道的 capture 线程 id（`auto_started`），下轮发现检测停了**而线程未变**（源没重启=人停的）记入 `user_vetoed` 不再拉起；线程换了（激活项目等重启源）照常恢复。③`auto_restore_video_sources` 对"通道已跑但相机 index 与落盘配置不符"打警告。单测 `tests/test_boot_restore_v3515.py` 7 条。
+> - `channel_manager.py`（BUG-004）：`save_channel_config` 按请求体**有无 `source_type`** 决定写盘语义——有=整写（merge=False 老语义），无=部分更新转 `merge=True` 只动给的键；治"绑定项目只发 {project_id} 把工位源配置整段抹掉→重启黑屏"。每次写盘打 `[ChannelCfg]` 日志（写入模式+键+整写丢弃的旧键）。回归 `tests/test_channel_manager_multi.py` 新增 2 条。
+> - `source_routes.py`（FEAT-001 可观测性）：`_list_dshow_devices_ffmpeg` 解析为空不再静默回退——打印 stderr 头部 8 行；`_detect_cameras_windows` 走老试开法兜底时明示日志（设备名"摄像头 N"式=兜底路径）。
+>
 > **v3.41 增量复核（2026-07-17）**：source/检测核心域按 `git diff a23a8d2..HEAD` 补账 v3.33~v3.41 九个版本变更。各条目内新增「v3.3x 变更」行；1.4 / 1.5 表下补增量清单；新建 `source_persist_worker.py`（v3.38）完整条目并补录 `source_region_events.py` / `source_region_events_mixin.py`（v3.32 落地时漏收）。受影响文件的行数标注与漂移行号已按当前代码刷新。
 >
 > **v3.44 补账（2026-07-22）**：NG 处置整改批次，source 族 10 文件——

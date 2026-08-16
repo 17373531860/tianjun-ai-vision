@@ -437,7 +437,13 @@ def _list_dshow_devices_ffmpeg():
             errors="replace",
         )
         devices = _parse_dshow_device_list(proc.stderr)
-        return devices if devices else None
+        if not devices:
+            # v3.51.5: 回退本来是静默的 — 捷昌现场枚举一直走的老试开法
+            # (下拉是"摄像头 N"式老命名) 却无从判断为什么。把 stderr 头部留痕。
+            head = "\n".join((proc.stderr or "").splitlines()[:8])
+            print(f"[Camera] ffmpeg -list_devices 输出解析为空, 回退试开法枚举。stderr 头部:\n{head}")
+            return None
+        return devices
     except Exception as e:
         print(f"[Camera] ffmpeg 列设备失败, 回退试开法枚举: {e}")
         return None
@@ -465,6 +471,7 @@ def _detect_cameras_windows():
                     label += f" [工位{in_use[idx] + 1}使用中]"
                 cameras.append({"index": idx, "name": label})
             return cameras
+        print("[Camera] ffmpeg dshow 枚举不可用, 走老试开法兜底 (设备名将是'摄像头 N'式, 无物理去重)")
 
     # 兜底: 逐 index 试开（老逻辑, macOS 及 ffmpeg 不可用时）
     cameras = []

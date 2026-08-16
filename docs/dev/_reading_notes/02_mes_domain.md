@@ -54,6 +54,9 @@
 > - `api/projects.py`（v3.51 FEAT-008）：SystemConfig KV **`activate.adopt_unbound`**（默认 '1'=存量收养行为）+ `_get_adopt_unbound()`；关闭时 `_sync_project_config_to_channels` / `_reload_model_for_active_project` 只同步"已显式绑定本项目"的通道（无绑定通道不收养/不改绑）；新端点 `GET/PUT /projects/activate-config`（**声明在 `/{project_id}` 之前**防路由吞噬）。回归 `tests/test_activate_adopt_unbound_v3_51.py`。
 > - `api/sessions_maintenance.py`（v3.51 BUG-014）：`_unlock_ok_workpieces(db, cycle_ids)`——clear/all（cycle_ids=None 解封全部）与 clear/range（经 WorkpieceInspection 关联被删周期）把 status='ok' 工件重置回 'registered'，响应带 `workpieces_unlocked`；失败只打日志不阻断清理。治 strict_ok_dedup"删记录仍永久拒码"。回归 `tests/test_clear_data_unlock_workpiece_v3_51.py`。
 >
+> **v3.51.5 补账（2026-08-17，捷昌现场热补丁收编）**：
+> - `services/mes_hooks.py`（FEAT-001 可观测性）：`strict_ok_dedup` 拒码日志升级为全量依据——`workpiece#id / channel / project_id / registered_at / last_inspect_at + 两条解除方法`（追溯页关"仅当前项目"删工件 / 数据中心清理联动解封）。动机：多工位下追溯页默认过滤藏其它项目 ok 工件，现场"全删了还拒码"没日志无从定位（配套前端修复见 04 册 WorkpiecePanel）。逻辑零变更，纯日志。
+>
 > **v3.51.1 补账（2026-08-14，虚拟双工位战役修复）**：
 > - `services/mes_hooks.py`（BUG-002）：三条拒码路径（strict_ok_dedup / OK 冷却 / duplicate_scan_action=reject）除弹警告外新增 `_notify_scan_rejected(device_id, ch, sn)` 通知扫码器服务（仅该通道无在检工件时才发，防误 rearm 正常流程）；`on_scan_received` 改带布尔返回（通道禁扫返 False）。
 > - `services/scanner.py`（BUG-002）：`_on_data_received` 记录本次真实派发的通道集合（`_last_dispatch`）；新增 `notify_scan_rejected` 按码聚合各通道拒绝状态，**全部**派发通道都拒绝 → `_rearm_after_full_reject` 清 `_wait_cycle_resume`/`_ok_ready_marker`/`_lon_sent` 等等待态并置 `_rearm_after_reject_serial`，`_schedule_next_lon` 据此跳过周期等待立即重发 LON——治"扫了已 OK 码后灯永灭产线卡死"；新码进入时清 `_rearm_after_reject_serial` 防竞态。回归 vcase1 A3（`tests/uat/virtual_dual_station/`）。

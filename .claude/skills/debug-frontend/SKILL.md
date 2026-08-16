@@ -343,3 +343,10 @@ v3.7.3 起 IoU / 优先级 / FP16 收进"高级参数 ▾"折叠区（默认收�
 **排查要点**：客户报"后端在跑前端没反应"先看这两处是否被绕过（如新加的启动路径没走 `getSourceStatus` 暴露 `is_running`）；回归护栏 `tests/e2e_browser/test_idle_watchdog_adopt.py` + UAT `tests/uat/uat_20260716_cn_idle_autostart_adopt.py`。
 **关联但独立**：末步结果列随余像闪烁回退是另一个修复（`_posDone` 权威 PT 锁定，UAT `uat_20260716_cn_last_step_flicker.py`），后端侧还有严格前缀守门（见 `debug-source` v3.40 节）。
 
+
+## v3.51.5 补充：多工位启动恢复三修（捷昌 B 站现场）
+
+1. **多工位禁用单工位 localStorage 兜底**：`Monitor/index.vue` `autoRestoreSource()` 先查后端 `channel_count`，>1 直接跳过 localStorage 恢复——旧缓存的 `device_index` 会与后端多通道恢复赛跑抢相机，酿成"左工位显示右工位的流+模型、右工位黑屏"串位事故。单工位行为不变。回归护栏 `tests/e2e_browser/test_monitor_autorestore_guard.py`。
+2. **is_running 跳变强制重连流**：`processChannelResult` 检测到某通道 `is_running` false→true（后端迟到恢复），重置 `mjpegZeroFrameFails`、断开旧 MJPEG、`syncMultiStreams()` 重连——治"视频源加载完还要切页才出画面"。
+3. **fetchChannelCount 失败重试**：进页时后端未就绪导致 `getWorkstations` 失败，3 秒后重试而不是锁死单工位模式。
+4. **WorkpiecePanel 多工位默认关"仅当前项目"**：多工位下"当前项目"只是最后激活的项目，默认过滤会藏其它工位项目的工件 → 操作员批量删除删不干净 → `strict_ok_dedup` 拒码找不到原因。`channel_count>1` 时 `onlyCurrentProject` 默认 false。回归 `tests/e2e_browser/test_workpiece_panel_multiws_v3515.py`。

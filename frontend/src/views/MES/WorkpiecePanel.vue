@@ -125,10 +125,15 @@
 import { ref, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getWorkpieces, getWorkpieceTrace, workpieceAction, deleteWorkpiece } from '@/api/mes'
+import { getWorkstations } from '@/api/detection'
 import { useProjectStore } from '@/store/useProjectStore'
 import { dbg, dbgErr } from '@/utils/debug'
 
 const projectStore = useProjectStore()
+// v3.51.5: 单工位默认只看当前项目; 多工位下"当前项目"只是最后激活的那个,
+// 各工位项目不同, 默认过滤会藏起其它工位项目的工件 → 操作员"全选批量删除"
+// 以为删干净, 其它项目的 ok 工件残留 → strict_ok_dedup 拒码但人找不到原因
+// (2026-08-15 捷昌 B 站现场实录: "记录全删了为什么还去重")。
 const onlyCurrentProject = ref(true)
 const items = ref([])
 const total = ref(0)
@@ -258,7 +263,22 @@ watch(() => projectStore.currentProjectId, () => {
   if (onlyCurrentProject.value) { currentPage.value = 1; loadList() }
 })
 
-onMounted(loadList)
+onMounted(async () => {
+  try {
+    const ws = await getWorkstations()
+    const n = ws?.data?.channel_count || 1
+    if (n > 1) {
+      onlyCurrentProject.value = false
+      dbg('mes.workpiece', '多工位默认关闭「仅当前项目」过滤',
+          `channel_count=${n} — 显示全部项目工件, 避免批量删除漏删其它工位项目的 ok 工件`)
+    } else {
+      dbg('mes.workpiece', '单工位保持「仅当前项目」默认开', `channel_count=${n}`)
+    }
+  } catch (e) {
+    dbgErr('mes.workpiece', '查询工位数失败, 保持单工位默认过滤', e)
+  }
+  loadList()
+})
 </script>
 
 <style scoped>

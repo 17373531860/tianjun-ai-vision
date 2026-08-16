@@ -737,7 +737,21 @@ def save_channel_config(body: dict):
     for _k in _PRESERVE_KEYS:
         if body.get(_k) is None and old_cfg.get(_k) is not None:
             body[_k] = old_cfg[_k]
-    channel_manager.save_channel_source(ch_id, body, merge=False)
+    # v3.51.5: body 不带 source_type = 部分更新 (如只改 project_id 绑定),
+    # 必须走 merge — 否则相机配置整段被抹, 重启后该工位无源可恢复、检测中心
+    # 黑屏 (AGENTS.md 不变量 17 旁路整写; 2026-08-15 捷昌 B 站沙箱复现)。
+    # 真源配置写 (带 source_type) 保持整段重写语义: 切源类型后旧源字段不残留。
+    is_full_source_write = "source_type" in body
+    # v3.51.5 详细诊断: 每次写盘把"写入模式 + 写入了哪些键 + 整写将丢弃哪些
+    # 旧键"落日志 — 相机配置被抹这类问题从日志一眼可见, 不用再对账 JSON。
+    if is_full_source_write:
+        dropped = sorted(k for k in old_cfg if k not in body)
+        print(f"[ChannelCfg] ch{ch_id} 整写 keys={sorted(body.keys())}"
+              + (f" 丢弃旧键={dropped}" if dropped else ""), flush=True)
+    else:
+        print(f"[ChannelCfg] ch{ch_id} 合并写 keys={sorted(body.keys())} "
+              f"(无 source_type, 部分更新不动相机配置)", flush=True)
+    channel_manager.save_channel_source(ch_id, body, merge=not is_full_source_write)
     return {"status": "success", "channel_id": ch_id, "config": body}
 
 

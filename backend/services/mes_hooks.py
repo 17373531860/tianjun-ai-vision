@@ -1626,8 +1626,16 @@ class MESHookManager:
                 db.add(scan_log)
                 self._emit_scan_warning(
                     channel_id, serial_no, "该条码已判合格，已拒绝（强制去重）")
+                # v3.51.5 详细诊断: 去重按 (serial_no, project_id) 查库 — 多工位
+                # 各项目独立, 常见困惑是"追溯页删干净了还拒": 默认"仅当前项目"
+                # 过滤藏了别的项目的 ok 工件 (捷昌 B 站 2026-08-15)。把拒码依据
+                # 全量落日志: 挡在哪个项目、哪个工件、何时登记、怎么解除。
                 print(f"[MES] strict_ok_dedup reject: {serial_no} "
-                      f"workpiece#{existing.id} 已 OK (ch{channel_id})", flush=True)
+                      f"workpiece#{existing.id} 已 OK (ch{channel_id}, "
+                      f"project={project_id}, 登记于 {existing.registered_at}, "
+                      f"最后检测 {existing.last_inspect_at}) | 解除方法: "
+                      f"MES→工件追溯 关闭\"仅当前项目\"后删除该工件, "
+                      f"或数据中心 clear 关联周期联动解封", flush=True)
                 self._notify_scan_rejected(device_id, channel_id, serial_no)
                 return
 

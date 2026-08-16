@@ -205,3 +205,8 @@ class FFmpegRecorder:
 - **OpenCV 4.11 ABI**: 打包环境中 `opencv-contrib-python>=4.11` 与 `numpy<2.0` 不兼容，必须限制 `<4.11`
 - **conda numpy ABI**: conda-pack 后 numpy 是 conda 编译的，与 pip opencv 不兼容。CI 必须 `--force-reinstall` numpy。客户端修复必须物理删除再重装
 - 实际采集帧率比 benchmark 低 ~30%（benchmark 只做 `cap.read()`，实际还有 MJPEG 编码 + 帧拷贝 + 线程同步 ~15ms/帧）
+## v3.51.5 补充：枚举回退留痕 + 开机恢复模型直载/用户否决
+
+1. **ffmpeg 枚举回退不再静默**：`_list_dshow_devices_ffmpeg` 解析为空时打印 stderr 头部 8 行；`_detect_cameras_windows` 走老试开法兜底时明示（设备名"摄像头 N"式=在走兜底，搜 `[Camera]` 前缀即知走的哪条路）。
+2. **启动直载转换引擎**：`main.py` `_resolve_startup_model_path` 按 `project.model_format` 解析 ModelConversion 表的转换引擎（GPU 架构匹配才用），`_load_channel_model_with_fallback` 引擎失败回退 `.pt`——治启动先载 .pt 再重载 TRT 的双重加载慢启动。
+3. **自动恢复用户否决**：`_restore_detection_pass` 记录自动拉起通道的 capture 线程 id，下轮检测停了而线程未变=用户手动停，记 `user_vetoed` 不再拉起；线程换了（源真重启）照常恢复。单测 `tests/test_boot_restore_v3515.py`。

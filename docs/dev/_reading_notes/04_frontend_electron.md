@@ -35,6 +35,10 @@
 > - 回归：e2e `tests/e2e_browser/test_v3_51_switches.py`（4 用例：activate-config API 默认值 / adopt 开关点击-落库-刷新回填 / unified_ok_report API 往返 / 面板 tag 可见）。
 > - `views/Project/LogicConfigTab.vue`（v3.50.0a 收编）：跟踪配置卡「扫码后才计数」开关（`tracking_scan_gate`）+ 齐件即结算 tooltip 新语义文案（含"配周期超时兜底"提醒）。
 >
+> **v3.51.5 补账（2026-08-17，捷昌现场热补丁 a/b/c 收编）**：
+> - `views/Monitor/index.vue`（BUG-001/002）：①`autoRestoreSource()` 先查 `channel_count`，多工位跳过 localStorage 单工位兜底（治重启后左右工位相机/模型串位）；②`fetchChannelCount` 失败 3 秒重试（后端未就绪不再锁死单工位）；③`processChannelResult` 检测到 `is_running` false→true 重置零帧计数并 `syncMultiStreams()` 强制重连（治源加载完要切页才出画面）。回归 `tests/e2e_browser/test_monitor_autorestore_guard.py`。
+> - `views/MES/WorkpiecePanel.vue`（BUG-005）：`onMounted` 查工位数，`channel_count>1` 时 `onlyCurrentProject` 默认 false——多工位下"当前项目"只是最后激活的那个，默认过滤会藏其它工位项目 ok 工件，批量删除删不干净 → `strict_ok_dedup` 拒码找不到原因。单工位保持默认开。回归 `tests/e2e_browser/test_workpiece_panel_multiws_v3515.py`。
+>
 > **v3.48.1 补账（2026-08-11，体验修复补丁版）**：
 > - `views/Monitor/index.vue`（→6942 行）：**快照轮询回退**——`syncMultiStreams` 在可见工位 > `MAX_MJPEG_STREAMS`(4) 时掐掉全部 MJPEG 长连接改 `/snapshot?channel=N` 单帧轮询（浏览器同 host HTTP/1.1 仅 6 条并发连接，九路 MJPEG + 数据轮询互踢饿死）；新增 `mjpegZeroFrameFails`/`_registerMjpegDeath`：任一工位 MJPEG 连续 2 次零帧断流（WebKit fetch 不支持 multipart/x-mixed-replace）单独降级快照；`startSnapshotPolling` 定时器 40ms 基础节拍 + `_snapshotIntervalMs()` 按并发工位数自适应取帧间隔（≤2 路 80ms / ≤4 路 120ms / ≤9 路 200ms / 更多 300ms），`snapshotInFlight` 背压跳 tick，`stopMultiStreams` 清零帧计数
 > - `views/Data/index.vue`：周期列表「全部/仅OK/仅NG」筛选（`cycleResultFilter` → cycles 端点 `result` 参数，换筛选重置分页/展开态）；播放弹窗 0.5x~4x 倍速（`videoPlaybackRate` + `applyPlaybackRate`，`@loadedmetadata` 时套用、换视频不重置）+「下载录像」按钮（a[download] 指向同 `/data/videos/{id}`）；视频报错文案引导下载兜底

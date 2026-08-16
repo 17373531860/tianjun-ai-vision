@@ -306,3 +306,9 @@ class ChannelManager:
 ---
 
 **最后更新**：2026-05-07（v3.5.x 主线 / 实测代码核对）
+
+## 十三、v3.51.5 补充：channel-config 部分更新 merge 语义 + [ChannelCfg] 写盘日志
+
+**血泪（捷昌 B 站）**：`PUT /workstations/channel-config` 曾固定 `merge=False` 整写——前端"绑定项目"只发 `{project_id}`，把该工位 `source_type/device_index/resolution` 整段抹掉，重启后相机不恢复黑屏。v3.51.5 起 `save_channel_config` 按请求体**有无 `source_type`** 判定：有=完整源配置整写（老语义），没有=部分更新转 `merge=True` 只动给的键。回归 `tests/test_channel_manager_multi.py` 两条（只带 project_id 不抹配置 / 带 source_type 保持整写）。
+
+**排查工具**：每次写盘打 `[ChannelCfg]` 日志——`整写 keys=[...] 丢弃旧键=[...]` / `合并写 keys=[...]`。再遇"配置莫名丢了"直接搜该前缀看是谁整写丢的键。
