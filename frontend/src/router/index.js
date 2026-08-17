@@ -84,6 +84,10 @@ const REMEMBERABLE_NAMES = new Set([
   'Monitor', 'Project', 'Model', 'Data', 'Source', 'Settings', 'Alarm', 'MES', 'Interconnect'
 ]);
 
+// 工位子窗与主窗口共用 /monitor；子窗 query 不得读写主窗口的路由记忆。
+const isMultiMonitorRoute = (route) =>
+  route?.query?.kiosk === '1' || route?.query?.multi_monitor === '1';
+
 /**
  * v3.10.0 用户系统: 在路由守卫中确保 useAuthStore 已 init.
  *
@@ -107,7 +111,7 @@ router.beforeEach(async (to, from) => {
   console.log(`[⬛ Router] 导航: ${from.fullPath} → ${to.fullPath} (name: ${to.name})`);
 
   // 冷启动恢复: 第一次进入且目标是默认 /monitor 时, 尝试取上次路由
-  if (!lastRouteRestored && from.name === undefined && to.path === '/monitor') {
+  if (!lastRouteRestored && from.name === undefined && to.path === '/monitor' && !isMultiMonitorRoute(to)) {
     lastRouteRestored = true;
     try {
       const last = localStorage.getItem(LAST_ROUTE_KEY);
@@ -187,7 +191,7 @@ router.afterEach((to, from) => {
   // 调试设置 'page.nav': 每次页面切换留痕 (开关关闭时零开销)
   dbg('page.nav', `页面切换 ${from.fullPath} → ${to.fullPath}`, `name=${String(to.name || '')}`);
   // 只记可恢复的页面
-  if (to.name && REMEMBERABLE_NAMES.has(to.name)) {
+  if (to.name && REMEMBERABLE_NAMES.has(to.name) && !isMultiMonitorRoute(to)) {
     try {
       localStorage.setItem(LAST_ROUTE_KEY, to.fullPath);
     } catch (e) {

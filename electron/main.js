@@ -1,9 +1,19 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const BackendManager = require('./backend-manager');
 const LicenseManager = require('./license-manager');
+const {
+  advanceCrashWindow,
+  buildKioskHash,
+  enumerateDisplaysForApply,
+  isMainRenderer,
+  isReservedMainDisplayTarget,
+  normalizeMultiMonitorConfig,
+  resolveDisplayTarget,
+  toDisplayDto,
+} = require('./multi-monitor');
 
 // v3.15.2: Windows 控制台默认 GBK(936) → 主进程 console.log 的中文 + 转发的后端日志
 // 在用户手动从 cmd 启动时整屏乱码(澶╁啗...). 启动最早把当前控制台输出代码页切到
@@ -147,6 +157,7 @@ let shutdownWindow = null;
 let backendManager = null;
 let isQuitting = false;
 let shutdownCancelled = false;
+const stationWindows = new Map();
 let renderGoneReloadTimer = null;
 let unresponsiveReloadTimer = null;
 let gpuCrashReloadTimer = null;
@@ -386,6 +397,214 @@ function readWorkstationConfig() {
   return {};
 }
 
+function getMainWindowDisplay(primaryDisplay = null) {
+  const fallback = primaryDisplay || screen.getPrimaryDisplay();
+  if (!mainWindow || mainWindow.isDestroyed()) return fallback;
+  try {
+    return screen.getDisplayMatching(mainWindow.getBounds()) || fallback;
+  } catch (e) {
+    console.warn(`[MultiMonitor] 定位主窗口显示器失败，回退 OS 主屏: ${e.message}`);
+    return fallback;
+  }
+}
+
+function getDisplayDtos() {
+  const primary = screen.getPrimaryDisplay();
+  const mainDisplay = getMainWindowDisplay(primary);
+  return screen.getAllDisplays().map((display) => (
+    toDisplayDto(display, primary.id, mainDisplay && mainDisplay.id)
+  ));
+}
+
+function getMainWindowDisplayDto() {
+  const primary = screen.getPrimaryDisplay();
+  const mainDisplay = getMainWindowDisplay(primary);
+  return toDisplayDto(mainDisplay, primary.id, mainDisplay && mainDisplay.id);
+}
+
+function destroyStationWindows(reason = '布局关闭') {
+  const removedCount = stationWindows.size;
+  for (const [channelId, entry] of stationWindows.entries()) {
+    stationWindows.delete(channelId);
+    try {
+      if (entry.window && !entry.window.isDestroyed()) entry.window.destroy();
+    } catch (e) {
+      console.warn(`[MultiMonitor] 关闭工位 ${channelId} 窗口失败: ${e.message}`);
+    }
+  }
+  if (removedCount > 0) {
+    console.log(`[MultiMonitor] 已清理 ${removedCount} 个工位窗口: ${reason}`);
+  }
+}
+
+function loadStationRoute(window, channelId, readonly) {
+  const routeHash = buildKioskHash(channelId, readonly);
+  if (CONFIG.isDev) {
+    const base = getFrontendDevURL().replace(/\/$/, '');
+    return window.loadURL(`${base}/#${routeHash}`);
+  }
+  const indexPath = getResourcePath('app', 'dist', 'index.html');
+  return window.loadFile(indexPath, { hash: routeHash });
+}
+
+function createStationWindow(channelId, target, readonly, signature) {
+  const bounds = target.bounds;
+  const stationWindow = new BrowserWindow({
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+    frame: false,
+    fullscreen: false,
+    show: false,
+    closable: false,
+    minimizable: false,
+    maximizable: false,
+    resizable: false,
+    title: `${CONFIG.appName} - 工位 ${channelId + 1}`,
+    icon: path.join(__dirname, 'build', 'icon.png'),
+    backgroundColor: '#02060c',
+    webPreferences: {
+      webSecurity: false,
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js'),
+    },
+  });
+  stationWindow.setMenuBarVisibility(false);
+
+  const entry = {
+    window: stationWindow,
+    signature,
+    reloadAttempts: 0,
+    lastCrashAt: 0,
+  };
+  stationWindows.set(channelId, entry);
+
+  stationWindow.once('ready-to-show', () => {
+    if (stationWindow.isDestroyed() || isQuitting) return;
+    try {
+      stationWindow.setBounds(bounds, false);
+      stationWindow.setFullScreen(true);
+      stationWindow.show();
+      console.log(`[MultiMonitor] 工位 ${channelId} 窗口已显示 (${target.source})`);
+    } catch (e) {
+      console.error(`[MultiMonitor] 工位 ${channelId} 窗口钉屏失败: ${e.message}`);
+    }
+  });
+
+  stationWindow.webContents.on('render-process-gone', (_event, details) => {
+    if (isQuitting || stationWindow.isDestroyed()) return;
+    const crashState = advanceCrashWindow(entry, Date.now());
+    entry.reloadAttempts = crashState.reloadAttempts;
+    entry.lastCrashAt = crashState.lastCrashAt;
+    console.error(
+      `[MultiMonitor] 工位 ${channelId} renderer 退出: ${details.reason}, `
+      + `60 秒窗口内第 ${entry.reloadAttempts} 次`,
+    );
+    if (entry.reloadAttempts > 2) {
+      console.error(`[MultiMonitor] 工位 ${channelId} renderer 60 秒内第 3 次失败，停止自动重载`);
+      return;
+    }
+    setManagedTimeout(() => {
+      if (!isQuitting && !stationWindow.isDestroyed()) {
+        try { stationWindow.webContents.reload(); } catch (e) {
+          console.error(`[MultiMonitor] 工位 ${channelId} renderer 重载失败: ${e.message}`);
+        }
+      }
+    }, 1000);
+  });
+  stationWindow.on('closed', () => {
+    if (stationWindows.get(channelId) === entry) stationWindows.delete(channelId);
+  });
+
+  loadStationRoute(stationWindow, channelId, readonly).catch((e) => {
+    console.error(`[MultiMonitor] 工位 ${channelId} 页面加载失败: ${e.message}`);
+  });
+  return entry;
+}
+
+function applyMultiMonitorConfig(rawConfig) {
+  const { config, warnings } = normalizeMultiMonitorConfig(rawConfig);
+  if (!isLicensed) {
+    destroyStationWindows('License 未通过');
+    return { ok: false, enabled: false, windows: [], warnings: [...warnings, 'License 未通过，未创建工位窗口'] };
+  }
+  if (!config.enabled) {
+    destroyStationWindows('多屏模式关闭');
+    return { ok: true, enabled: false, readonly: config.readonly, windows: [], warnings };
+  }
+
+  const displayResult = enumerateDisplaysForApply(getDisplayDtos);
+  const displays = displayResult.displays;
+  let mainWindowDisplay = displays.find((display) => display.isMainWindowDisplay) || null;
+  if (!mainWindowDisplay) {
+    try {
+      mainWindowDisplay = getMainWindowDisplayDto();
+    } catch (e) {
+      warnings.push(`未能定位主窗口显示器: ${e.message}`);
+    }
+  }
+  warnings.push(...displayResult.warnings);
+  if (displayResult.error) {
+    console.warn(`[MultiMonitor] 枚举显示器失败: ${displayResult.error}; 按记忆/手工 bounds 降级`);
+  }
+  const desired = new Map();
+  const occupiedTargets = new Set();
+  for (const [channelKey, assignment] of Object.entries(config.mapping)) {
+    const channelId = Number(channelKey);
+    const target = resolveDisplayTarget(assignment, displays);
+    if (!target || !target.bounds) {
+      warnings.push(`工位 ${channelId} 无可用显示器位置，已跳过`);
+      continue;
+    }
+    if (target.warning) warnings.push(`工位 ${channelId}: ${target.warning}`);
+    if (isReservedMainDisplayTarget(target, mainWindowDisplay)) {
+      warnings.push(`工位 ${channelId} 映射到主窗口显示器，已跳过（主屏保留总览/操作）`);
+      continue;
+    }
+    const targetKey = `${target.bounds.x},${target.bounds.y},${target.bounds.width},${target.bounds.height}`;
+    if (occupiedTargets.has(targetKey)) {
+      warnings.push(`工位 ${channelId} 与其他工位映射到同一显示区域，已跳过`);
+      continue;
+    }
+    occupiedTargets.add(targetKey);
+    const signature = JSON.stringify({ bounds: target.bounds, readonly: config.readonly });
+    desired.set(channelId, { target, signature });
+  }
+
+  for (const [channelId, entry] of stationWindows.entries()) {
+    const next = desired.get(channelId);
+    if (!next || next.signature !== entry.signature || entry.window.isDestroyed()) {
+      stationWindows.delete(channelId);
+      try {
+        if (!entry.window.isDestroyed()) entry.window.destroy();
+      } catch (e) {
+        console.warn(`[MultiMonitor] 重建工位 ${channelId} 窗口前清理失败: ${e.message}`);
+      }
+    }
+  }
+
+  for (const [channelId, desiredEntry] of desired.entries()) {
+    if (!stationWindows.has(channelId)) {
+      try {
+        createStationWindow(channelId, desiredEntry.target, config.readonly, desiredEntry.signature);
+      } catch (e) {
+        warnings.push(`工位 ${channelId} 窗口创建失败: ${e.message}`);
+      }
+    }
+  }
+
+  for (const warning of warnings) console.warn(`[MultiMonitor] ${warning}`);
+  return {
+    ok: true,
+    enabled: true,
+    readonly: config.readonly,
+    windows: [...stationWindows.keys()].sort((left, right) => left - right),
+    warnings,
+  };
+}
+
 // 创建主窗口
 // v3.10.x: 新增 opts.fullscreen 参数, 默认 false (窗口模式带标题栏)
 function createWindow(opts = {}) {
@@ -622,6 +841,7 @@ async function startGracefulShutdown() {
     // 后端已经不在运行，直接退出
     console.log('[App] Backend not running, exiting directly...');
     isQuitting = true;
+    destroyStationWindows('后端未运行，直接退出');
     app.exit(0);
     return;
   }
@@ -702,6 +922,7 @@ async function executeShutdown() {
 // 完成关闭
 async function finishShutdown(forced = false) {
   isQuitting = true;
+  destroyStationWindows('完成关机流程');
   clearReloadTimers();
   if (splashCloseTimer) {
     clearManagedTimeout(splashCloseTimer);
@@ -975,6 +1196,34 @@ ipcMain.handle('window:set-fullscreen', (_evt, fullscreen) => {
   }
 });
 
+ipcMain.handle('multi-monitor:get-displays', () => {
+  try {
+    return { ok: true, displays: getDisplayDtos() };
+  } catch (e) {
+    console.warn('[MultiMonitor] 枚举显示器失败:', e.message);
+    return { ok: false, displays: [], error: e.message };
+  }
+});
+
+ipcMain.handle('multi-monitor:apply', (_evt, rawConfig) => {
+  if (!mainWindow || mainWindow.isDestroyed()
+      || !isMainRenderer(_evt.sender, mainWindow.webContents)) {
+    return {
+      ok: false,
+      enabled: false,
+      windows: [...stationWindows.keys()].sort((left, right) => left - right),
+      warnings: [],
+      error: '仅主窗口可应用多屏布局',
+    };
+  }
+  try {
+    return applyMultiMonitorConfig(rawConfig);
+  } catch (e) {
+    console.error('[MultiMonitor] 应用布局失败:', e);
+    return { ok: false, enabled: false, windows: [], warnings: [], error: e.message };
+  }
+});
+
 // 主窗 ready + splash finished 双满足才显示主窗; 也容忍 splash 失败时强制显示
 function maybeShowMainWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -985,6 +1234,10 @@ function maybeShowMainWindow() {
   try {
     mainWindow.show();
     mainWindow.focus();
+    if (isLicensed) {
+      const config = readWorkstationConfig();
+      applyMultiMonitorConfig(config.multi_monitor);
+    }
   } catch (e) {
     console.warn('[App] 显示主窗失败:', e.message);
   }
@@ -1007,6 +1260,7 @@ app.on('activate', () => {
 
 // 应用退出前清理（作为最后的保障）
 app.on('before-quit', async (event) => {
+  destroyStationWindows('应用退出');
   if (!isQuitting) {
     event.preventDefault();
     isQuitting = true;
@@ -1081,6 +1335,7 @@ ipcMain.handle('import-license', async () => {
     // 启动完成 → license-activated 跳主页; 启动失败 → 事件 + 错误框, 不再静默吞掉。
     startBackend()
       .then(() => {
+        applyMultiMonitorConfig(readWorkstationConfig().multi_monitor);
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('license-activated');
         }

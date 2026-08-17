@@ -1,7 +1,46 @@
 ﻿# 04 · 前端 + Electron 读码笔记
 
-> 覆盖范围：`frontend/src/` 全部约 100 文件（含 `Monitor/index.vue` 6245 行分段通读）、`electron/` 核心壳文件（`main.js` / `backend-manager.js` / `license-manager.js` / `preload.js`；vendor/splash 第三方资源仅记用途）。
-> 行号锚点均来自当前仓库快照，后续改动以代码为准。
+> **类型**：reference
+> **本文不讲**：多屏配置后端模型与持久化细节（见 `backend/api/channel_manager.py`）、现场异显坞验收步骤（见对应交付记录）。
+> **与代码冲突时**：以代码为准，发现请顺手修本文或告知主作者。
+
+覆盖范围：`frontend/src/` 与 `electron/` 核心壳文件；vendor/splash 第三方资源仅记用途。
+下文带行号的旧版本补账只用于历史定位，当前实现统一按文件与函数名查找。
+
+## 当前多屏工位显示指针
+
+一期使用同一个 `/monitor` hash 路由承载主屏放大态与副屏 kiosk，不新增平行页面。
+代码位置：`frontend/src/router/index.js` → `isMultiMonitorRoute`；`frontend/src/layout/index.vue` → `kioskMode`。
+
+`SingleChannelMonitor` 是主屏放大态与副屏 kiosk 的共用单工位组件，只消费父级传入的通道快照和 canvas 注册函数，不自行取流或轮询。
+只读模式保留开始、停止、待机和清零按钮但全部原生禁用；显式 `readonly=0` 时仍 emit 到 Monitor 既有 actions。
+共用组件与原单工位复用 `GoodBadPieChart` 良品/不良环形图和 `YieldRateGauge` 半圆合格率仪表盘；共用组件把良品/不良统计、合格率与 NG TOP3 放在同一行并按当前启用项等宽分布。
+它同时展示平均 CT、上次 CT、当前周期与步骤统计；主屏通过 `context-bar` slot 恢复 MES 工件、工单、任务字段及扫码 actions，kiosk 不装载该 slot 内容。
+代码位置：`frontend/src/views/Monitor/GoodBadPieChart.vue`；`frontend/src/views/Monitor/YieldRateGauge.vue`；`frontend/src/views/Monitor/SingleChannelMonitor.vue`；`frontend/src/views/Monitor/index.vue` → `singleChannelViewActive`、`activeSingleChannel`。
+
+主屏多屏模式总览强制使用 `/snapshot`，放大态只保留目标工位一路 MJPEG，kiosk 只取 query 指定工位的数据和视频。
+既有 MJPEG 上限、零帧降级、自适应快照节奏、framePump 背压和单工位定期换流保持不变。
+代码位置：`frontend/src/views/Monitor/index.vue` → `visibleStreamChannels`、`syncMultiStreams`、`startMultiPolling`、`loadMultiMonitorRuntime`。
+
+设置入口复用工位数量真相源，保存 `display_id` 与显示器 `bounds`，并把后端规范化结果交给 Electron 热应用。
+枚举不到已保存显示器时保留失联 ID，供主进程按记忆坐标降级。
+代码位置：`frontend/src/views/Settings/index.vue` → `multiMonitorForm`、`refreshMultiMonitorDisplays`、`saveAndApplyMultiMonitor`；`frontend/src/api/detection.js` → `getMultiMonitorConfig`、`setMultiMonitorConfig`。
+
+Electron 主进程负责 License 守门、显示器解析、工位窗口生命周期和 crash 有界恢复；preload 只暴露显示器查询与主窗应用布局 IPC。
+代码位置：`electron/main.js` → `applyMultiMonitorConfig`、`destroyStationWindows`；`electron/multi-monitor.js` → 配置规范化与显示器回退；`electron/preload.js` → `getDisplays`、`applyMultiMonitor`。
+
+CI 浏览器回归覆盖设置 roundtrip、Electron apply payload 可结构化克隆、kiosk 只读按钮禁用/单通道轮询、共享良品/不良环形图与合格率仪表盘、三块统计卡等宽、主屏跨工位数进入共用组件、关闭多屏后恢复卡片选择，以及总览快照与放大单路 MJPEG。
+代码位置：`tests/e2e_browser/test_multi_monitor_phase1.py`。
+
+### 现场设置与单屏降级验证
+
+1. Windows 先把所有显示器设为“扩展这些显示器”，主屏接独显 HDMI；应用内进入“设置 → 显示设置 → 多屏工位显示（一期）”。
+2. 点击“刷新显示器”，为每个工位选择不同显示器，保持“副屏只读”开启，再点击“保存并应用”。同一物理区域只允许一个工位窗口；重复映射会被 Electron 跳过并返回提示。
+3. 主屏仍显示总览；多屏开启时点击工位卡进入共用单工位大屏并可返回。副屏直接加载同一 `/monitor` 路由的 kiosk query，不显示导航，写操作按钮保留但在一期只读配置下全部禁用。
+4. 检测中心不提供独立的全局退出按钮；关闭多屏统一回到本设置卡片，关闭“启用多屏工位显示”并保存后，Electron 立即销毁所有工位子窗。配置默认仍为 `enabled=false`、`readonly=true`。
+
+只有一两块物理屏时，可在隔离数据目录调用 `PUT /api/v1/workstations/multi-monitor` 写入不存在的 `display_id` 与非重叠 `bounds`，验证主进程 `manual_bounds` 降级、重复区域拒绝和关闭清理；这只能验证窗口编排，不能代替四屏现场钉屏验收。
+若 WAVLINK/DisplayLink 驱动导致 `screen.getAllDisplays()` 漏屏，先在 Windows 显示设置确认扩展桌面，再刷新并重选；已保存项会保留最后一次 `bounds`。枚举仍异常时可通过该 API 手工写 bounds，后续热插拔自动重绑属于二期范围。
 
 > **v3.47 补账（2026-08-07，多分支汇合发版）**：
 > - `views/Monitor/index.vue`（→6847 行）：**多工位布局重构**——模板顶层链 `layoutBodyOverride → channelCount===2 → ===3（三行横排：左视频 16:9 + 右数据面板 ChannelVideoCard）→ >3（网格总览「多工位总览」工具条 auto/2x2/3x3/4x4 + 分页 + 点卡片放大详情）→ 单工位`；新状态区（:2265 起）`gridPage/gridDims/zoomedChannel/gridPageChannels`；MJPEG 按可见工位收放：`visibleStreamChannels()`（≤3 全拉 / 放大只拉一路 / 网格只拉当前页）+ `syncMultiStreams()`（翻页/换布局/进出放大 watcher 触发，:2315），数据轮询仍覆盖全部工位；流被服务端正常收流（done 非异常）也自动重连（带可见性守门，:2523）；`startMultiStreams` 入口守卫 layout.body 插件独占（互踢修复）；列级 OK/NG Toast 从仅双工位放开到任意工位数（`channelCount >= 1` 网格，:30）；`fetchChannelCount` 工位数变化后放大越界退回总览

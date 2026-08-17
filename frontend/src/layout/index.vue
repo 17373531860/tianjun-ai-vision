@@ -1,12 +1,12 @@
 <template>
   <div class="flex h-screen w-screen bg-ind-bg relative">
     <!-- 侧边栏遮罩 -->
-    <Transition name="fade">
+    <Transition v-if="!kioskMode" name="fade">
       <div v-if="sidebarOpen" class="fixed inset-0 bg-black/40 z-30" @click="sidebarOpen = false"></div>
     </Transition>
 
     <!-- 侧边栏（默认隐藏，点击按钮滑出） -->
-    <Transition name="slide">
+    <Transition v-if="!kioskMode" name="slide">
       <aside v-if="sidebarOpen" class="fixed left-0 top-0 h-full w-64 bg-ind-panel border-r border-gray-800 flex flex-col z-40 shadow-2xl">
         <div class="p-6 text-xl font-bold text-tech-blue border-b border-gray-800 flex justify-between items-center">
           <span>VISION SYSTEM</span>
@@ -64,7 +64,7 @@
     </Transition>
 
     <main class="flex-1 flex flex-col overflow-hidden">
-      <Navbar>
+      <Navbar v-if="!kioskMode">
         <template #left>
           <button @click="sidebarOpen = true" class="p-2 rounded hover:bg-slate-700 transition text-gray-400 hover:text-white mr-2" title="导航菜单">
             <el-icon class="text-[1.25rem]"><Menu /></el-icon>
@@ -72,11 +72,14 @@
         </template>
       </Navbar>
 
-      <section class="flex-1 overflow-auto px-4 pt-4 pb-0 bg-[#0f172a]">
+      <section
+        class="flex-1 bg-[#0f172a]"
+        :class="kioskMode ? 'overflow-hidden p-0' : 'overflow-auto px-4 pt-4 pb-0'"
+      >
         <router-view />
       </section>
 
-      <BottomBar />
+      <BottomBar v-if="!kioskMode" />
     </main>
   </div>
 </template>
@@ -84,7 +87,8 @@
 <script setup>
 import Navbar from './Navbar.vue';
 import BottomBar from './BottomBar.vue';
-import { ref, onMounted } from 'vue';
+import { computed, ref, onMounted } from 'vue';
+import { useRoute } from 'vue-router';
 import { Monitor, Folder, Cpu, DataLine, Setting, VideoCamera, Bell, Close, Menu, Tickets, DataAnalysis, Connection } from '@element-plus/icons-vue';
 import { useSystemStore } from '@/store/useSystemStore';
 import { usePluginThemeStore } from '@/store/usePluginThemeStore';
@@ -96,11 +100,13 @@ const systemStore = useSystemStore();
 const pluginTheme = usePluginThemeStore();
 const authStore = useAuthStore();
 const sidebarOpen = ref(false);
+const route = useRoute();
+const kioskMode = computed(() => route.query.kiosk === '1');
 
 // USB 扫码枪: 全局挂键盘监听, 这样在任何页面 (含全屏检测页) 扫码都能按用途处理
 // (拉工单/绑工件)。关/开与用途由 扫码器→USB 扫码枪 Tab 控制 (本监听内部实时读配置)。
 onMounted(() => {
-  startScanGun();
+  if (!kioskMode.value) startScanGun();
 });
 
 // 菜单可见 = 插件主题未隐藏 AND 当前账号有路由权限.

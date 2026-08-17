@@ -2934,6 +2934,39 @@
     "title": "DeviceUpdate",
     "type": "object"
    },
+   "DisplayBounds": {
+    "description": "显示器在扩展桌面坐标系中的矩形。",
+    "properties": {
+     "height": {
+      "description": "显示器高度，必须大于 0",
+      "title": "Height",
+      "type": "integer"
+     },
+     "width": {
+      "description": "显示器宽度，必须大于 0",
+      "title": "Width",
+      "type": "integer"
+     },
+     "x": {
+      "description": "显示器左上角横坐标，可为负数",
+      "title": "X",
+      "type": "integer"
+     },
+     "y": {
+      "description": "显示器左上角纵坐标，可为负数",
+      "title": "Y",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "x",
+     "y",
+     "width",
+     "height"
+    ],
+    "title": "DisplayBounds",
+    "type": "object"
+   },
    "DisplayPayload": {
     "properties": {
      "app_name": {
@@ -4590,6 +4623,57 @@
      }
     },
     "title": "ModelUpdate",
+    "type": "object"
+   },
+   "MultiMonitorConfig": {
+    "description": "多屏工位显示配置。",
+    "properties": {
+     "enabled": {
+      "default": false,
+      "description": "是否启用多屏工位窗口；默认关闭以保持单窗行为",
+      "title": "Enabled",
+      "type": "boolean"
+     },
+     "mapping": {
+      "additionalProperties": {
+       "$ref": "#/components/schemas/MultiMonitorMappingItem"
+      },
+      "description": "工位 ID 到显示器 ID/坐标的映射；非法工位或无效尺寸会被规范化",
+      "title": "Mapping",
+      "type": "object"
+     },
+     "readonly": {
+      "default": true,
+      "description": "工位副屏是否只读；一期默认只读",
+      "title": "Readonly",
+      "type": "boolean"
+     }
+    },
+    "title": "MultiMonitorConfig",
+    "type": "object"
+   },
+   "MultiMonitorMappingItem": {
+    "description": "单个工位绑定的显示器标识和离线降级坐标。",
+    "properties": {
+     "bounds": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/DisplayBounds"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "显示器 ID 变化或枚举失败时使用的持久化坐标"
+     },
+     "display_id": {
+      "default": "",
+      "description": "Electron Display.id 的字符串形式；为空时仅按 bounds 定位",
+      "title": "Display Id",
+      "type": "string"
+     }
+    },
+    "title": "MultiMonitorMappingItem",
     "type": "object"
    },
    "OperatorsOut": {
@@ -33521,6 +33605,70 @@
      }
     },
     "summary": "Set Workstation Mode",
+    "tags": [
+     "workstations",
+     "workstations"
+    ]
+   }
+  },
+  "/api/v1/workstations/multi-monitor": {
+   "get": {
+    "description": "[内部端点] 读取多屏工位开关、只读策略和显示器映射。\n\n- 配置文件缺失或内容损坏时返回默认关闭、默认只读，不返回错误。",
+    "operationId": "get_multi_monitor_config_api_v1_workstations_multi_monitor_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MultiMonitorConfig"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "读取多屏配置",
+    "tags": [
+     "workstations",
+     "workstations"
+    ]
+   },
+   "put": {
+    "description": "[内部端点] 规范化并保存多屏工位配置，仅替换顶层 multi_monitor 段。\n\n- 请求体字段类型不合法时返回 422。\n- 配置文件无法写入时返回 500，原有其他顶层配置不主动改写。",
+    "operationId": "set_multi_monitor_config_api_v1_workstations_multi_monitor_put",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/MultiMonitorConfig"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MultiMonitorConfig"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "保存多屏配置",
     "tags": [
      "workstations",
      "workstations"

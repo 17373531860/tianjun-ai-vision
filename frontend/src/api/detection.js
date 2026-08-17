@@ -104,6 +104,11 @@ export const setChannelGpu = (channelId, device) => api.post(`/workstations/${ch
 
 export const getGpuAllocation = () => api.get('/workstations/gpu-allocation');
 
+// 一期多屏工位显示：配置由后端按 workstation_config.json 顶层分段持久化。
+export const getMultiMonitorConfig = () => api.get('/workstations/multi-monitor');
+
+export const setMultiMonitorConfig = (config) => api.put('/workstations/multi-monitor', config);
+
 // v3.3.0 码-码闭环结算: 查询当前窗口 / 停止时收尾最后一码
 export const getScanPairActive = (channel = 0) => api.get(`/scanner/scan-pair/active?channel_id=${channel}`);
 

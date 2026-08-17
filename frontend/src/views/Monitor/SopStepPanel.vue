@@ -4,7 +4,7 @@
        排他条件(v-if)留在父级调用点。steps/stepIntervals 由父级轮询维护, 走 props 只读;
        自动滚动由父级轮询在"最新变化卡片"判定后经 defineExpose 方法驱动
        (scrollToCard / resetScroll), 子组件不自起轮询（Monitor 隔离不变量）。 -->
-  <div class="h-44 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col">
+  <div class="h-44 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col" data-testid="sop-step-panel">
     <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex-shrink-0">
       <span class="text-cyan-400 text-lg font-bold">SOP流程卡片</span>
     </div>

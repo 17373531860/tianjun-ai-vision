@@ -68,6 +68,7 @@ Thumbs.db
 
 # Logs
 *.log
+!tests/uat/artifacts/multi-monitor-phase1/run.log
 logs/
 
 # Environment files

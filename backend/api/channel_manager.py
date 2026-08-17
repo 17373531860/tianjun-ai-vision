@@ -39,6 +39,33 @@ class WorkstationModeRequest(BaseModel):
     channels: List[WorkstationConfig] = Field(default_factory=list)
 
 
+class DisplayBounds(BaseModel):
+    """显示器在扩展桌面坐标系中的矩形。"""
+
+    x: int = Field(..., description="显示器左上角横坐标，可为负数")
+    y: int = Field(..., description="显示器左上角纵坐标，可为负数")
+    width: int = Field(..., description="显示器宽度，必须大于 0")
+    height: int = Field(..., description="显示器高度，必须大于 0")
+
+
+class MultiMonitorMappingItem(BaseModel):
+    """单个工位绑定的显示器标识和离线降级坐标。"""
+
+    display_id: str = Field("", description="Electron Display.id 的字符串形式；为空时仅按 bounds 定位")
+    bounds: Optional[DisplayBounds] = Field(None, description="显示器 ID 变化或枚举失败时使用的持久化坐标")
+
+
+class MultiMonitorConfig(BaseModel):
+    """多屏工位显示配置。"""
+
+    enabled: bool = Field(False, description="是否启用多屏工位窗口；默认关闭以保持单窗行为")
+    readonly: bool = Field(True, description="工位副屏是否只读；一期默认只读")
+    mapping: Dict[str, MultiMonitorMappingItem] = Field(
+        default_factory=dict,
+        description="工位 ID 到显示器 ID/坐标的映射；非法工位或无效尺寸会被规范化",
+    )
+
+
 class ChannelManager:
     """Manages multiple VideoSourceManager instances (one per workstation)."""
 
@@ -368,14 +395,14 @@ class ChannelManager:
             existing = {}
             if os.path.exists(_CONFIG_FILE):
                 try:
-                    with open(_CONFIG_FILE, 'r') as f:
+                    with open(_CONFIG_FILE, 'r', encoding='utf-8') as f:
                         existing = json.load(f)
                 except Exception:
                     pass
-            data = {"channel_count": self.channel_count}
-            data["channels"] = existing.get("channels", {})
-            with open(_CONFIG_FILE, 'w') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            existing["channel_count"] = self.channel_count
+            existing.setdefault("channels", {})
+            with open(_CONFIG_FILE, 'w', encoding='utf-8') as f:
+                json.dump(existing, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"[ChannelManager] Failed to save config: {e}")
 
@@ -632,6 +659,90 @@ class ChannelManager:
         except Exception as e:
             print(f"[ChannelManager] save startup_ready_gate config failed: {e}")
 
+    # ------------------------------------------------------------------
+    # 多屏工位窗口配置
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _normalize_multi_monitor_mapping(raw_mapping) -> dict:
+        """规范化工位到显示器的映射，丢弃越界工位和不可定位项。"""
+        if not isinstance(raw_mapping, dict):
+            return {}
+
+        normalized = {}
+        for raw_channel_id, raw_item in raw_mapping.items():
+            try:
+                channel_id = int(raw_channel_id)
+            except (TypeError, ValueError):
+                continue
+            if not 0 <= channel_id < MAX_CHANNELS or not isinstance(raw_item, dict):
+                continue
+
+            display_id = str(raw_item.get("display_id") or "").strip()
+            bounds = raw_item.get("bounds")
+            normalized_bounds = None
+            if isinstance(bounds, dict):
+                try:
+                    candidate = {
+                        "x": int(bounds.get("x")),
+                        "y": int(bounds.get("y")),
+                        "width": int(bounds.get("width")),
+                        "height": int(bounds.get("height")),
+                    }
+                    if candidate["width"] > 0 and candidate["height"] > 0:
+                        normalized_bounds = candidate
+                except (TypeError, ValueError):
+                    normalized_bounds = None
+
+            if not display_id and normalized_bounds is None:
+                continue
+            item = {"display_id": display_id}
+            if normalized_bounds is not None:
+                item["bounds"] = normalized_bounds
+            normalized[str(channel_id)] = item
+        return normalized
+
+    def get_multi_monitor_config(self) -> dict:
+        """读取多屏工位配置；缺失或损坏时返回默认关闭且只读。"""
+        try:
+            if os.path.exists(_CONFIG_FILE):
+                with open(_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                config = data.get("multi_monitor") or {}
+                return {
+                    "enabled": config.get("enabled") is True,
+                    "readonly": config.get("readonly") is not False,
+                    "mapping": self._normalize_multi_monitor_mapping(config.get("mapping")),
+                }
+        except Exception as e:
+            print(f"[ChannelManager] read multi_monitor config failed: {e}")
+        return {"enabled": False, "readonly": True, "mapping": {}}
+
+    def set_multi_monitor_config(self, enabled: bool, readonly: bool, mapping: dict) -> dict:
+        """只替换顶层 multi_monitor 段并返回规范化后的已保存配置。
+
+        写入失败抛出 RuntimeError，由 API 转成 500；不会覆盖 channels 或其他顶层段。
+        """
+        normalized = {
+            "enabled": bool(enabled),
+            "readonly": bool(readonly),
+            "mapping": self._normalize_multi_monitor_mapping(mapping),
+        }
+        try:
+            os.makedirs(os.path.dirname(_CONFIG_FILE), exist_ok=True)
+            data = {}
+            if os.path.exists(_CONFIG_FILE):
+                try:
+                    with open(_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                except Exception:
+                    data = {}
+            data["multi_monitor"] = normalized
+            with open(_CONFIG_FILE, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            raise RuntimeError(f"保存多屏工位配置失败: {e}") from e
+        return normalized
+
     def _load_config(self):
         try:
             print(f"[ChannelManager] config file path: {_CONFIG_FILE}, exists: {os.path.exists(_CONFIG_FILE)}")
@@ -753,6 +864,41 @@ def save_channel_config(body: dict):
               f"(无 source_type, 部分更新不动相机配置)", flush=True)
     channel_manager.save_channel_source(ch_id, body, merge=not is_full_source_write)
     return {"status": "success", "channel_id": ch_id, "config": body}
+
+
+@router.get(
+    "/multi-monitor",
+    summary="读取多屏配置",
+    response_model=MultiMonitorConfig,
+)
+def get_multi_monitor_config():
+    """[内部端点] 读取多屏工位开关、只读策略和显示器映射。
+
+    - 配置文件缺失或内容损坏时返回默认关闭、默认只读，不返回错误。
+    """
+    return channel_manager.get_multi_monitor_config()
+
+
+@router.put(
+    "/multi-monitor",
+    summary="保存多屏配置",
+    response_model=MultiMonitorConfig,
+    dependencies=[Depends(require_perm("settings.edit"))],
+)
+def set_multi_monitor_config(req: MultiMonitorConfig):
+    """[内部端点] 规范化并保存多屏工位配置，仅替换顶层 multi_monitor 段。
+
+    - 请求体字段类型不合法时返回 422。
+    - 配置文件无法写入时返回 500，原有其他顶层配置不主动改写。
+    """
+    mapping = {
+        channel_id: item.model_dump(exclude_none=True)
+        for channel_id, item in req.mapping.items()
+    }
+    try:
+        return channel_manager.set_multi_monitor_config(req.enabled, req.readonly, mapping)
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 class GpuAssignRequest(BaseModel):

@@ -32,6 +32,7 @@
     },
     "files": [
       "main.js",
+      "multi-monitor.js",
       "preload.js",
       "backend-manager.js",
       "license-manager.js",
