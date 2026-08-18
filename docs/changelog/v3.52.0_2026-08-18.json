@@ -1,0 +1,64 @@
+{
+  "version": "3.52.0",
+  "date": "2026-08-18",
+  "previous_version": "3.51.5",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "多显示器一期——工位子窗映射与单通道监控页",
+      "symptom": "多工位现场希望每个工位有专属显示屏实时监看，主控屏保留总览与全部操作入口",
+      "root_cause": "原架构单窗单屏，Electron 无多显示器窗口编排能力，前端无单工位只读监看页",
+      "fix": "Electron 新增 multi-monitor.js 按 display_id+bounds 开无边框 kiosk 子窗（License 守门/主屏保留/同区去重/崩溃 60s 窗口 3 次熔断/关机三出口销毁）；后端 workstation_config.json 新增 multi_monitor 顶层段（GET/PUT /workstations/multi-monitor，PUT 挂 settings.edit）；前端新增 SingleChannelMonitor 共用组件（主屏放大态与副屏 kiosk 共用，kiosk 屏蔽全部写通路只轮询绑定工位）+ 设置页多屏配置卡热应用；多屏开启时主屏总览改快照轮询让出 MJPEG；kiosk 路由不污染主窗路由记忆。默认 enabled=false 零差异",
+      "files": ["electron/multi-monitor.js", "electron/main.js", "electron/preload.js", "electron/package.json", "backend/api/channel_manager.py", "frontend/src/views/Monitor/SingleChannelMonitor.vue", "frontend/src/views/Monitor/index.vue", "frontend/src/views/Settings/index.vue", "frontend/src/layout/index.vue", "frontend/src/router/index.js", "frontend/src/api/detection.js"],
+      "keywords": ["多显示器", "多屏", "multi-monitor", "kiosk", "工位子窗", "副屏", "display_id", "bounds", "SingleChannelMonitor", "只读监看", "station window", "扩展桌面", "钉屏"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "良品/不良饼图与合格率仪表盘抽为共用组件",
+      "symptom": "单工位监控与多屏单通道页需要同一套统计图，Monitor 内联 ECharts 双份维护",
+      "root_cause": "initCharts/updateCharts 内联在 Monitor/index.vue，无法被新单通道页复用",
+      "fix": "抽出 GoodBadPieChart / YieldRateGauge 组件（props 驱动，替代内联 ECharts 与 2 秒节流器），单工位主页与 SingleChannelMonitor 共用",
+      "files": ["frontend/src/views/Monitor/GoodBadPieChart.vue", "frontend/src/views/Monitor/YieldRateGauge.vue", "frontend/src/views/Monitor/index.vue"],
+      "keywords": ["ECharts", "饼图", "仪表盘", "合格率", "良品不良", "GoodBadPieChart", "YieldRateGauge", "组件抽取"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "网格总览整卡点击放大在多屏关闭时被误改为仅选中（合并审计发现，未流出）",
+      "symptom": "dev-qing 分支原实现：多屏关闭时 4+ 工位网格点击卡片只高亮不放大，v3.47 的放大入口消失",
+      "root_cause": "分支把 2/3 工位的点击=选中语义误推广到网格总览，违反新功能默认关零差异铁律；v3.47 回归测试合并后变红暴露",
+      "fix": "网格整卡点击恢复恒为 zoomChannel（多屏开关不改变），提示文案恢复'点击卡片放大单路'；新 e2e 的 4 工位分支改为断言点击进入放大，与 v3.47 回归测试双向守门",
+      "files": ["frontend/src/views/Monitor/index.vue", "tests/e2e_browser/test_multi_monitor_phase1.py", "tests/e2e_browser/test_multi_workstation_layout.py"],
+      "keywords": ["网格总览", "点击卡片", "放大单路", "zoomChannel", "行为回归", "零差异", "v3.47", "多工位总览"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "_save_config 整写 workstation_config.json 抹掉其他顶层段",
+      "symptom": "修改工位数时配置文件被整写为仅 channel_count+channels，startup_ready_gate 等其他顶层段被静默抹掉",
+      "root_cause": "ChannelManager._save_config 用新字典整写文件而非 merge 保留既有顶层键，违反不变量 17 各段写入权独占",
+      "fix": "改为读旧文件 merge 更新 channel_count/channels 两键其余原样保留；set_multi_monitor_config 同样只替换 multi_monitor 段",
+      "files": ["backend/api/channel_manager.py"],
+      "keywords": ["workstation_config", "_save_config", "整写", "顶层段", "不变量17", "merge", "分段写入"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "start 接口 HTTP 迟迟不返回时前端操作锁死等",
+      "symptom": "现场网络/壳层异常时点开始后后端已启动检测，但 HTTP promise 未返回，前端按钮一直转圈",
+      "root_cause": "启动达成态只依赖 start API 的 HTTP 响应，轮询循环不认后端已 detecting 的真相",
+      "fix": "单工位轮询加启动达成判定：仅'正操作+前端未 detecting+后端 is_detecting=true'三条件齐时释放操作锁并对齐运行态",
+      "files": ["frontend/src/views/Monitor/index.vue"],
+      "keywords": ["isOperating", "操作锁", "start", "启动转圈", "is_detecting", "轮询真相源"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["api-sync", "debug-frontend", "debug-electron", "debug-channel"],
+  "files_changed": ["electron/multi-monitor.js", "electron/main.js", "electron/preload.js", "electron/package.json", "electron/test/multi-monitor.test.js", "electron/test/display-smoke.js", "backend/api/channel_manager.py", "frontend/src/views/Monitor/SingleChannelMonitor.vue", "frontend/src/views/Monitor/GoodBadPieChart.vue", "frontend/src/views/Monitor/YieldRateGauge.vue", "frontend/src/views/Monitor/index.vue", "frontend/src/views/Monitor/ChannelVideoCard.vue", "frontend/src/views/Monitor/SopStepPanel.vue", "frontend/src/views/Settings/index.vue", "frontend/src/layout/index.vue", "frontend/src/router/index.js", "frontend/src/api/detection.js", "tests/test_multi_monitor_config.py", "tests/test_channel_manager_multi.py", "tests/e2e_browser/test_multi_monitor_phase1.py", "tests/e2e_browser/test_multi_workstation_layout.py", "tests/uat/uat_multi_monitor_phase1.py"]
+}

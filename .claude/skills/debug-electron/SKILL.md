@@ -393,3 +393,13 @@ powershell "Remove-Item -Recurse -Force '%APPDATA%\tianjun-ai-vision\Cache','%AP
 ## 开机自启（v3.29.0，安装器可选）
 
 `electron/build/installer.iss` 新增「开机自动启动」可选项（写系统启动项），**默认不勾**。勾了之后开机自动起软件；配合系统设置「开机自动恢复检测」即"通电→起软件→自动开检测"。客户反馈"开机没自动起"→ 先确认安装时是否勾选 + 启动项是否被安全软件拦。
+
+## 多屏工位子窗（v3.52.0 一期）
+
+`electron/multi-monitor.js`（纯逻辑，`node --test electron/test/multi-monitor.test.js` 10 条）+ `main.js` 的 `applyMultiMonitorConfig`/`createStationWindow`/`destroyStationWindows`。
+
+- **生命周期**：主窗显示后（`maybeShowMainWindow`）与 License 激活后按 `workstation_config.json` 的 `multi_monitor` 段自动应用；设置页"保存并应用"走 IPC `multi-monitor:apply`（**仅主窗 sender 授权**，副窗调用被拒）。子窗 = 无边框 kiosk 全屏、`closable:false`、加载同一前端 `/monitor#?kiosk=1&channel=N`。
+- **守门**：License 未过不开窗并销毁存量子窗；主窗所在显示器保留（映射到主屏的工位跳过）；同一显示区域去重；display_id 枚举不到时按持久化 bounds 降级（`manual_bounds`）。
+- **崩溃恢复**：子窗 renderer `render-process-gone` → 60 秒窗口内最多重载 2 次，第 3 次停止自动重载（防死循环）。
+- **关机清理**：`before-quit` / `finishShutdown` / `startGracefulShutdown` 直退路径三处都调 `destroyStationWindows`——排查"退出后残留黑窗"先看这三处是否被新退出路径绕过。
+- **排查**：子窗不出现 → 主进程 console 搜 `[MultiMonitor]`（每条 warning 都落日志：无可用位置/映射主屏跳过/同区跳过/创建失败）。

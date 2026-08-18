@@ -305,18 +305,30 @@ def test_main_overview_uses_shared_single_channel_and_returns(
 def test_disabled_workstations_keep_legacy_selection(
     page, base_url, workstation_display_guard, channel_count
 ):
-    """多屏关闭时 2/3/4 工位不增加放大按钮，整卡点击仍只改变 selectedChannel。"""
+    """多屏关闭时不增加放大按钮；2/3 工位整卡点击仍只改 selectedChannel，
+    4+ 工位网格整卡点击保持 v3.47 的放大单路行为（零差异守门）。"""
     _set_channel_count(channel_count)
     _set_multi_monitor({"enabled": False, "readonly": True, "mapping": {}})
     page.route("**/video_feed?**", lambda route: route.abort())
+    page.route(
+        "**/snapshot?**",
+        lambda route: route.fulfill(status=200, content_type="image/jpeg", body=b"\xff\xd8\xff\xd9"),
+    )
     _goto(page, base_url, "/monitor")
 
     assert page.locator("[data-testid^='channel-zoom-']").count() == 0
     assert page.get_by_test_id("multi-monitor-emergency-exit").count() == 0
     page.get_by_test_id("channel-card-1").click()
     page.wait_for_timeout(200)
-    assert page.get_by_test_id("single-channel-monitor").count() == 0
-    assert "border-cyan-500" in (page.get_by_test_id("channel-card-1").get_attribute("class") or "")
+    if channel_count > 3:
+        # v3.47 交付行为: 网格整卡点击=放大单路 (多屏关闭时必须与 v3.51.5 一致)
+        page.get_by_test_id("single-channel-monitor").wait_for(state="visible", timeout=5_000)
+        assert page.get_by_test_id("single-channel-monitor").get_attribute("data-channel") == "1"
+        page.get_by_test_id("single-channel-back").click()
+        page.get_by_test_id("single-channel-monitor").wait_for(state="detached", timeout=5_000)
+    else:
+        assert page.get_by_test_id("single-channel-monitor").count() == 0
+        assert "border-cyan-500" in (page.get_by_test_id("channel-card-1").get_attribute("class") or "")
 
 
 def test_enabled_overview_uses_snapshots_then_zoom_uses_one_mjpeg(

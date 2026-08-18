@@ -652,9 +652,7 @@
       <!-- 工具条: 布局选择 + 分页 -->
       <div class="flex items-center gap-3 flex-shrink-0 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 flex-wrap">
         <span class="text-cyan-400 font-bold text-sm">多工位总览</span>
-        <span class="text-xs text-gray-500">
-          共 {{ channelCount }} 工位 · {{ multiMonitorRuntime.enabled ? '点击卡片放大单路' : '点击卡片切换工位' }}
-        </span>
+        <span class="text-xs text-gray-500">共 {{ channelCount }} 工位 · 点击卡片放大单路</span>
         <div class="flex items-center gap-1 ml-auto">
           <span class="text-xs text-gray-400 mr-1">布局:</span>
           <button v-for="opt in [['auto', '自动'], ['2x2', '2×2'], ['3x3', '3×3'], ['4x4', '4×4']]" :key="opt[0]"
@@ -673,6 +671,7 @@
         </div>
       </div>
       <!-- 网格: 当前页工位卡片 (缩小视频流 + 简略数据) -->
+      <!-- v3.47 起网格整卡点击=放大单路, 多屏开关不得改变此行为 (存量客户依赖); zoom 按钮仅是多屏开启时的显式入口 -->
       <div class="flex-1 grid gap-2 min-h-0"
         :style="{ gridTemplateColumns: `repeat(${gridDims.cols}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${gridDims.rows}, minmax(0, 1fr))` }">
         <ChannelVideoCard
@@ -682,11 +681,11 @@
           :ch="ch"
           :ch-data="multiChannelData[ch]"
           :model-stats="channelModelStats[ch]"
-          :selected="selectedChannel === ch"
+          :selected="false"
           :zoomable="multiMonitorRuntime.enabled"
           :register-video-canvas="el => { multiVideoCanvasRefs[ch] = el }"
           :register-overlay-canvas="el => { multiCanvasRefs[ch] = el }"
-          @select="selectOverviewChannel(ch)"
+          @select="zoomChannel(ch)"
           @zoom="zoomChannel(ch)">
           <!-- MES 迷你条: 工件号 / 未绑码 / 等待扫码 -->
           <div v-if="shouldShowMesBarFor(ch)"

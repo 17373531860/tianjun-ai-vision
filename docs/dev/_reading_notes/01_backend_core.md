@@ -51,6 +51,10 @@
 > - `channel_manager.py`（BUG-004）：`save_channel_config` 按请求体**有无 `source_type`** 决定写盘语义——有=整写（merge=False 老语义），无=部分更新转 `merge=True` 只动给的键；治"绑定项目只发 {project_id} 把工位源配置整段抹掉→重启黑屏"。每次写盘打 `[ChannelCfg]` 日志（写入模式+键+整写丢弃的旧键）。回归 `tests/test_channel_manager_multi.py` 新增 2 条。
 > - `source_routes.py`（FEAT-001 可观测性）：`_list_dshow_devices_ffmpeg` 解析为空不再静默回退——打印 stderr 头部 8 行；`_detect_cameras_windows` 走老试开法兜底时明示日志（设备名"摄像头 N"式=兜底路径）。
 >
+> **v3.52.0 补账（2026-08-18，多显示器一期）**：
+> - `channel_manager.py`（FEAT-001）：新增 `multi_monitor` 顶层配置段——Pydantic 模型 `MultiMonitorConfig`（`enabled` 默认 False / `readonly` 默认 True / `mapping{channel_id→{display_id,bounds}}`）+ `_normalize_multi_monitor_mapping()`（丢越界工位 0..MAX_CHANNELS、非法 bounds 宽高≤0、display_id 与 bounds 双缺的项）+ `get_multi_monitor_config()`（缺失/损坏回默认关）+ `set_multi_monitor_config()`（读旧文件只替换本段，写失败抛 RuntimeError→API 500）。端点 `GET/PUT /workstations/multi-monitor`（PUT 挂 `settings.edit`）。回归 `tests/test_multi_monitor_config.py`。
+> - `channel_manager.py`（BUG-002）：`_save_config`（工位数写盘）原整写只留 `channel_count`+`channels` 会抹掉 `startup_ready_gate`/`multi_monitor` 等其他顶层段——改为读旧文件 merge 两键、其余段原样保留（不变量 17），文件读写补 `encoding='utf-8'`。
+>
 > **v3.41 增量复核（2026-07-17）**：source/检测核心域按 `git diff a23a8d2..HEAD` 补账 v3.33~v3.41 九个版本变更。各条目内新增「v3.3x 变更」行；1.4 / 1.5 表下补增量清单；新建 `source_persist_worker.py`（v3.38）完整条目并补录 `source_region_events.py` / `source_region_events_mixin.py`（v3.32 落地时漏收）。受影响文件的行数标注与漂移行号已按当前代码刷新。
 >
 > **v3.44 补账（2026-07-22）**：NG 处置整改批次，source 族 10 文件——

@@ -49,7 +49,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `/alarm/*` | `alarm.py` | 无封装（Alarm 视图直调） | 灯塔 / 蜂鸣器 / 共享灯柱 |
 | `/sms/*` | `sms.py` | `sms.js` | 系统级统一短信通道 + NG 汇总通知（config/ports/test；通道五选一 at_modem/generic_http/wxpusher/aliyun/tencent，日报共用此配置，默认关） |
 | `/sms-report/*` | `sms_report.py` | `smsReport.js` | v3.46 每日短信日报（规则 CRUD/试发/预览/日志 + `/providers` 只读通道信息；通道配置走 `/sms/config`） |
-| `/workstations/*` | `channel_manager.py` | `detection.js`（混在其中） | 多工位 + GPU 分配 |
+| `/workstations/*` | `channel_manager.py` | `detection.js`（混在其中） | 多工位 + GPU 分配；v3.52 新增 GET/PUT `/multi-monitor`（多屏工位显示配置段，PUT 挂 `settings.edit`，前端 `getMultiMonitorConfig`/`setMultiMonitorConfig`） |
 | `/scanner/*` | `scanner.py` | `scanner.js` | 扫码器 CRUD + scan_pair + disable-toggle + resume（v3.50 人工恢复） |
 | `/scanner/wmax/*` | `wmax.py` | `wmax.js` | WMax 三端口协议（35+ 端点） |
 | `/external-devices/*` | `external_device.py` | `external_device.js` | 称重器/串口外设（list/create **要尾斜杠**） |

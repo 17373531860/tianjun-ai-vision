@@ -75,11 +75,11 @@ def test_grid_overview_pagination_and_zoom(page, base_url, channel_count_guard):
     page.wait_for_timeout(1000)
     assert page.locator("text=— 空 —").count() == 2  # 第 2 页: 工位5/6 + 2 空位
 
-    # —— 点击工位5 → 放大详情 ——
+    # —— 点击工位5 → 放大详情 (v3.52 起放大详情复用 SingleChannelMonitor 组件) ——
     page.locator("text=工位5").first.click()
     page.wait_for_timeout(1000)
     assert page.get_by_role("button", name="‹ 返回总览").count() == 1
-    assert page.locator("text=SOP 流程").count() == 1
+    assert page.get_by_test_id("single-channel-monitor").count() == 1
 
     # —— 下一路: 5 → 6 → 回卷 1; 上一路: 1 → 6 ——
     page.get_by_role("button", name="下一路 ›").click()

@@ -1,0 +1,22 @@
+started_at=2026-08-18T09:32:14
+frontend=http://127.0.0.1:6002
+backend=http://127.0.0.1:8002
+browser=headless_false
+overview_snapshot_channels=[0, 1, 2, 3]
+overview_mjpeg_channels=[]
+all_result_channels=[0, 1, 2, 3]
+main_overview_to_shared_single_and_back=PASS
+single_and_kiosk_sop_below_video=PASS
+single_summary_three_equal_panels=PASS
+single_and_kiosk_shared_good_bad_chart=PASS
+single_and_kiosk_shared_yield_gauge=PASS
+kiosk_readonly_and_navigation_hidden=PASS
+readonly_controls_visible_disabled=PASS
+main_display_option_disabled=PASS
+main_monitor_has_no_emergency_exit=PASS
+electron_payload_structured_clone=PASS
+settings_disable_persisted_false_and_applied_electron=PASS
+disabled_four_station_click_keeps_legacy_selection=PASS
+status=PASS
+failed:0
+config_restored=true

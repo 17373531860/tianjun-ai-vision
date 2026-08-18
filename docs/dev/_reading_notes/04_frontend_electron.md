@@ -29,8 +29,10 @@
 Electron 主进程负责 License 守门、显示器解析、工位窗口生命周期和 crash 有界恢复；preload 只暴露显示器查询与主窗应用布局 IPC。
 代码位置：`electron/main.js` → `applyMultiMonitorConfig`、`destroyStationWindows`；`electron/multi-monitor.js` → 配置规范化与显示器回退；`electron/preload.js` → `getDisplays`、`applyMultiMonitor`。
 
-CI 浏览器回归覆盖设置 roundtrip、Electron apply payload 可结构化克隆、kiosk 只读按钮禁用/单通道轮询、共享良品/不良环形图与合格率仪表盘、三块统计卡等宽、主屏跨工位数进入共用组件、关闭多屏后恢复卡片选择，以及总览快照与放大单路 MJPEG。
+CI 浏览器回归覆盖设置 roundtrip、Electron apply payload 可结构化克隆、kiosk 只读按钮禁用/单通道轮询、共享良品/不良环形图与合格率仪表盘、三块统计卡等宽、主屏跨工位数进入共用组件、关闭多屏后 2/3 工位保持卡片选择，以及总览快照与放大单路 MJPEG。
 代码位置：`tests/e2e_browser/test_multi_monitor_phase1.py`。
+
+⚠️ v3.52.0 发版审计修正：**网格总览（>3 工位）整卡点击=放大单路是 v3.47 交付行为，多屏开关不得改变**（一期分支曾误改为"关闭时仅选中"，合并审计拦下）。2/3 工位整卡点击=选中不变；"放大"按钮仅多屏开启时渲染，是额外显式入口。放大详情自 v3.52 复用 `SingleChannelMonitor` 组件（原内联模板已删）。双向守门：`test_multi_workstation_layout.py::test_grid_overview_pagination_and_zoom`（6 工位点卡进放大）+ `test_multi_monitor_phase1.py::test_disabled_workstations_keep_legacy_selection`（4 工位分支断言点击进入放大）。
 
 ### 现场设置与单屏降级验证
 
