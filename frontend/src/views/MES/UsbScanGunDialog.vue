@@ -117,7 +117,7 @@
       <el-form-item v-if="form.usage === 'both'" label="工单号识别规则">
         <el-input v-model="form.orderPattern" placeholder="^(JOB|ORD)" class="w-72" />
         <div class="text-xs text-gray-500 mt-1">
-          正则表达式。扫到的码匹配上 = 当工单去拉取，匹配不上 = 当工件去绑定。默认匹配 JOB / ORD 开头（上银工单号格式）。
+          正则表达式。扫到的码匹配上 = 当工单去拉取，匹配不上 = 当工件去绑定。默认匹配以 JOB / ORD 开头的常见工单号格式。
         </div>
       </el-form-item>
 

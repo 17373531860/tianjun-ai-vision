@@ -436,7 +436,7 @@
         <el-form-item v-if="form.adapter_type !== 'modbus_rtu' && attachSnapshot" label="带 dataURI 前缀">
           <el-switch v-model="snapshotDataUri" />
           <span class="text-xs text-gray-500 ml-2">
-            额外提供 <code>{snapshot.image_data_uri}</code>(带 data:image/jpeg;base64, 前缀)；川南要求纯 Base64, 保持关
+            额外提供 <code>{snapshot.image_data_uri}</code>（带 data:image/jpeg;base64, 前缀）；对接方要求纯 Base64 时保持关闭
           </span>
         </el-form-item>
         <el-form-item label="重试次数">
@@ -450,11 +450,11 @@
             <el-radio value="fixed">固定间隔</el-radio>
             <el-radio value="exponential">指数退避(×2)</el-radio>
           </el-radio-group>
-          <span class="text-xs text-gray-500 ml-2">指数退避：间隔×2 递增（间隔设 1 即 1→2→4 秒，川南 §5.1）</span>
+          <span class="text-xs text-gray-500 ml-2">指数退避：间隔按 ×2 递增（间隔设 1 即 1→2→4 秒）</span>
         </el-form-item>
         <el-form-item v-if="isHttpAdapter" label="4xx 是否重试">
           <el-switch v-model="form.retry_on_4xx" />
-          <span class="text-xs text-gray-500 ml-2">关 = 仅对 5xx / 网络超时重试，4xx(客户端错误)不重试（川南 §5.1）</span>
+          <span class="text-xs text-gray-500 ml-2">关 = 仅对 5xx / 网络超时重试，4xx（客户端错误）不重试</span>
         </el-form-item>
         <el-form-item v-if="form.adapter_type !== 'modbus_rtu'" label="重试总预算(秒)">
           <el-input-number v-model="form.retry_budget_sec" :min="0" :precision="0" data-testid="gw-retry-budget" />
@@ -468,7 +468,7 @@
           <el-input-number v-model="connectTimeout" :min="0" :precision="1" placeholder="连接" class="w-32" />
           <span class="mx-1 text-gray-400">/</span>
           <el-input-number v-model="readTimeout" :min="0" :precision="1" placeholder="读取" class="w-32" />
-          <span class="text-xs text-gray-500 ml-2">填了就用 (连接,读取) 分离超时，覆盖上面的单值；川南 §5.1 连接 5 / 读取 10(含图建议 30)</span>
+          <span class="text-xs text-gray-500 ml-2">填写后使用（连接, 读取）分离超时并覆盖上方单值；参考值：连接 5 / 读取 10（含图片建议 30）</span>
         </el-form-item>
 
         <!-- 主动健康探测 (A2) -->
@@ -851,7 +851,7 @@ const PRESET_TEMPLATES = {
     },
   },
   cycle_end_chuannan_alarm: {
-    label: 'cycle_end · 川南报警上报 /warning/report (含截图)',
+    label: 'cycle_end · 报警上报 /warning/report (含截图)',
     event: 'cycle_end',
     pushOnResult: ['NG'],
     attachSnapshot: true,
@@ -874,7 +874,7 @@ const PRESET_TEMPLATES = {
     },
   },
   cycle_end_chuannan_complete: {
-    label: 'cycle_end · 川南完工上报 /task/complete',
+    label: 'cycle_end · 完工上报 /task/complete',
     event: 'cycle_end',
     pushOnResult: ['OK', 'NG'],   // 每件装配完成都上报完工 (不分良/不良)
     attachSnapshot: false,

@@ -246,7 +246,7 @@
           placeholder="外部消除命令按这几个字段匹配在途报警" class="w-full">
           <el-option v-for="k in alarmKeyOptions" :key="k" :label="k" :value="k" />
         </el-select>
-        <span class="text-xs text-gray-500 ml-2">川南：任务号_产品号_工序工步_操作员。可直接输入自定义维度（如 batch_no），需在下方台账映射里同名映射一份</span>
+        <span class="text-xs text-gray-500 ml-2">例：任务号_产品号_工序工步_操作员。可直接输入自定义维度（如 batch_no），需在下方台账映射中建立同名映射</span>
       </el-form-item>
       <el-form-item v-if="form.alarm_event_name.length" label="台账字段映射">
         <div class="flex flex-col gap-2 w-full">

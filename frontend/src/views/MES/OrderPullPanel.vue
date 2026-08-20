@@ -78,7 +78,7 @@
       <!-- 预设模板 -->
       <div class="flex items-center gap-2 mb-4 p-2 rounded bg-slate-800/50">
         <span class="text-xs text-gray-400">预设模板：</span>
-        <el-button size="small" type="primary" plain @click="applyTemplate('hiwin')">上银 HIWIN</el-button>
+        <el-button size="small" type="primary" plain @click="applyTemplate('hiwin')">HIWIN 模板</el-button>
         <el-button size="small" plain @click="applyTemplate('blank')">通用 REST（空白）</el-button>
         <span class="text-xs text-gray-500 ml-2">选模板自动填好大部分，只需改地址和认证</span>
       </div>
@@ -88,10 +88,10 @@
         <el-divider content-position="left"><span class="text-cyan-300 text-xs">基础配置</span></el-divider>
 
         <el-form-item label="配置名称" required>
-          <el-input v-model="form.name" placeholder="如：上银工单同步" />
+          <el-input v-model="form.name" placeholder="如：工单同步连接" />
         </el-form-item>
         <el-form-item label="接口地址" required>
-          <el-input v-model="form.url" placeholder="上银给你的查询接口网址" />
+          <el-input v-model="form.url" placeholder="MES 提供的工单查询接口地址" />
         </el-form-item>
         <el-form-item label="认证方式">
           <el-select v-model="form.auth_type" class="w-44">
@@ -323,7 +323,7 @@ function applyTemplate(kind) {
   const base = emptyForm()
   if (kind === 'hiwin') {
     Object.assign(base, {
-      name: '上银 HIWIN MES',
+      name: 'HIWIN MES',
       url: 'https://itweb.hiwin.cn/java_demo_test/api',
       request_body_template: JSON.stringify(
         { api: 'hiwin/webcn/ai_error_prevention_job_info/query', parameters: { job_no: '{job_no}' } },

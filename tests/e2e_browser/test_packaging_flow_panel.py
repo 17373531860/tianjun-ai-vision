@@ -1,7 +1,7 @@
 """配置面板 E2E — 包装结算 (上银包装线, v3.21 M6).
 
 铁律「带 UI 的功能改动必须走 E2E 点击验证」: 验证 PackagingFlowPanel 的
-新建 → 一键套用上银预设 → 保存 整条链路真把字段传到后端并落库
+新建 → 套用物品计数预设 → 保存 整条链路真把字段传到后端并落库
 (拦下 axios 漏传字段 / 表单校验阻断 / 预设按钮点不动 / 保存按钮 disabled 等前端 bug).
 
 前置: 后端 8001 + 前端 6001 已起 (conftest 没起则整组 skip).
@@ -42,10 +42,10 @@ def test_packaging_panel_create_with_hiwin_preset(page, base_url, api_url):
     page.wait_for_selector(".el-dialog", state="visible", timeout=5000)
 
     # 填配置名称
-    page.locator('input[placeholder="上银包装线-1"]').fill(name)
+    page.locator('input[placeholder="包装线-1"]').fill(name)
 
-    # 一键套用上银预设
-    page.get_by_role("button", name=re.compile("一键套用")).click()
+    # 套用物品计数预设
+    page.get_by_role("button", name=re.compile("套用预设")).click()
     page.wait_for_timeout(500)
 
     # 保存 (对话框 footer 内的"保存")
@@ -115,10 +115,10 @@ def test_packaging_panel_group8_manual_toggle_roundtrip(page, base_url, api_url)
     page.get_by_role("button", name="新建配置").click()
     page.wait_for_selector(".el-dialog", state="visible", timeout=5000)
     dlg = page.locator(".el-dialog").last
-    page.locator('input[placeholder="上银包装线-1"]').fill(name)
+    page.locator('input[placeholder="包装线-1"]').fill(name)
 
     # 切滑块口径 (组⑧ 仅 sliders 显示)
-    dlg.get_by_text("按滑块 (上银)").first.click()
+    dlg.get_by_text("按物品总数").first.click()
     page.wait_for_timeout(400)
     # 展开组⑧
     dlg.get_by_text("⑧ 箱标签扫码").click()

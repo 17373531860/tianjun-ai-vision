@@ -1,7 +1,7 @@
 <template>
   <div class="channel-group-panel p-4">
     <div class="header flex justify-between items-center mb-4">
-      <h2 class="text-lg text-white font-bold">工位组互通配置 (RFC 10 CG)</h2>
+      <h2 class="text-lg text-white font-bold">工位组互通</h2>
       <el-button type="primary" size="small" @click="openCreate">新建工位组</el-button>
     </div>
 

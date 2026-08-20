@@ -198,7 +198,7 @@
                    v-if="store.display.monitor.ptAggregate === 'sum'">
                 <div class="flex flex-col">
                   <span class="text-gray-300">PT 多段合并策略</span>
-                  <span class="text-[10px] text-gray-500">总和=累加所有段 (默认, 现场识别准时贴近真实); 取最长=抗 YOLO 抖动累加; 仅首段=accept_once 步骤适用</span>
+                  <span class="text-[10px] text-gray-500">总和 = 累加所有出现段（默认，识别稳定时最接近真实时长）；取最长 = 仅取最长一段，可抑制检测抖动导致的虚增；仅首段 = 适用于 accept_once 类步骤</span>
                 </div>
                 <el-select v-model="store.display.monitor.ptAccumulateStrategy" size="small" style="width: 9rem" @change="saveDisplaySettings">
                   <el-option label="总和（默认）" value="sum" />

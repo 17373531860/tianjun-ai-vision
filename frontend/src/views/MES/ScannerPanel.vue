@@ -426,7 +426,7 @@
             </el-radio-group>
             <div class="text-xs text-gray-500 mt-1">
               <span v-if="form.broadcast_settle_mode === 'independent'">
-                每个广播工位用自己的"消失"信号独立结算 (老行为)
+                每个广播工位以自身的「消失」信号独立结算
               </span>
               <span v-else>
                 由<b>主工位</b>结算时, 强制带动其他广播工位同步结算; 适合大件 (容器) + 小件 (全部消失) 同箱的双工位场景

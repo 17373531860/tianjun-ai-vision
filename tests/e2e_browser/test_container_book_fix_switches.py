@@ -19,10 +19,10 @@ import requests
 PROJECT_ID = 41  # SY8
 
 SWITCHES = {  # 行首文案 → (pipeline_config 键, 出厂默认)
-    "滑块重复框去重": ("custom_mix_container_dedup_items", True),
-    "托盘重复框去重": ("custom_mix_container_dedup_trays", False),
-    "空账托盘身份清理": ("custom_mix_container_purge_empty_primary", False),
-    "记账托盘可让位": ("custom_mix_container_yield_primary", False),
+    "物品重复框去重": ("custom_mix_container_dedup_items", True),
+    "容器重复框去重": ("custom_mix_container_dedup_trays", False),
+    "空账容器清理": ("custom_mix_container_purge_empty_primary", False),
+    "记账容器让位": ("custom_mix_container_yield_primary", False),
     "显示与记账同源": ("custom_mix_container_unified_book_source", False),
 }
 

@@ -64,7 +64,7 @@
                 </el-radio-button>
               </el-radio-group>
               <div class="text-xs text-gray-500 mt-1 leading-5">
-                默认推各工位监控面板上的 OK/NG（与金龙等插件面板同源）；可选改为调度时间窗内全部已结算周期合计。
+                默认推送各工位监控面板显示的 OK/NG 计数；可选改为调度时间窗内全部已结算周期的合计值。
               </div>
             </div>
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-3">

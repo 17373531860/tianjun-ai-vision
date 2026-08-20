@@ -1,20 +1,21 @@
 <template>
   <TjSlot name="mes.layout.body">
   <div class="mes-container h-full flex flex-col bg-[#0a0e1a] text-white overflow-hidden">
-    <!-- 顶部标签页（按域分组：生产 / 采集对接 / 外部系统） -->
-    <div class="flex items-center flex-wrap px-4 pt-3 pb-1 gap-2 border-b border-cyan-900/50">
-      <template v-for="(group, gi) in tabGroups" :key="group.name">
-        <div v-if="gi > 0" class="h-6 w-px bg-cyan-900/60 mx-1"></div>
-        <span class="text-[10px] text-gray-600 uppercase tracking-wider select-none">{{ group.name }}</span>
-        <button
-          v-for="tab in group.tabs" :key="tab.key"
-          @click="activeTab = tab.key"
-          class="px-4 py-2 rounded-t text-sm font-medium transition-all"
-          :class="activeTab === tab.key
-            ? 'bg-cyan-800/40 text-cyan-300 border border-cyan-700 border-b-transparent'
-            : 'text-gray-400 hover:text-gray-200 hover:bg-slate-800/50'"
-        >{{ tab.label }}</button>
-      </template>
+    <!-- 顶部标签页（按域分组的分段控件：生产 / 采集对接 / 外部系统） -->
+    <div class="flex items-end flex-wrap gap-x-6 gap-y-2 px-4 pt-3 pb-3 border-b border-slate-700/60">
+      <div v-for="group in tabGroups" :key="group.name" class="flex flex-col gap-1">
+        <span class="text-[10px] text-gray-500 tracking-[0.2em] select-none pl-1">{{ group.name }}</span>
+        <div class="flex items-center gap-1 p-1 rounded-lg bg-slate-800/70 border border-slate-700/60">
+          <button
+            v-for="tab in group.tabs" :key="tab.key"
+            @click="activeTab = tab.key"
+            class="px-3.5 py-1.5 rounded-md text-sm whitespace-nowrap transition-colors"
+            :class="activeTab === tab.key
+              ? 'bg-cyan-600/90 text-white font-medium shadow-sm'
+              : 'text-gray-400 hover:text-gray-100 hover:bg-slate-700/70'"
+          >{{ tab.label }}</button>
+        </div>
+      </div>
     </div>
 
     <!-- 内容区 -->

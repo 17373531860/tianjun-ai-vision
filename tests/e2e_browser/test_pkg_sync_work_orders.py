@@ -50,7 +50,7 @@ def test_sync_work_orders_switch_default_on_and_save_off(page, base_url, api_url
     page.wait_for_timeout(800)
     page.get_by_role("button", name="新建配置").click()
     page.wait_for_selector(".el-dialog", state="visible", timeout=5000)
-    page.locator('input[placeholder="上银包装线-1"]').fill(name)
+    page.locator('input[placeholder="包装线-1"]').fill(name)
 
     # 展开组⑤ → 开关默认开 → 关掉
     dlg = page.locator(".el-dialog").last

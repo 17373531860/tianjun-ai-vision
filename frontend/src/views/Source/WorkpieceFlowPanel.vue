@@ -1,7 +1,7 @@
 <template>
   <div class="workpiece-flow-panel p-4">
     <div class="header flex justify-between items-center mb-4">
-      <h2 class="text-lg text-white font-bold">流水线串行配置 (v3.14 RFC 11)</h2>
+      <h2 class="text-lg text-white font-bold">流水线串行</h2>
       <el-button type="primary" size="small" @click="openCreate">新建流水线</el-button>
     </div>
 

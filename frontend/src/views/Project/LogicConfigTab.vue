@@ -49,7 +49,7 @@
         <template #header>
           <div class="flex items-center justify-between">
             <span class="font-bold text-white">NG 判定与处置</span>
-            <span class="text-xs text-gray-500">默认全部「直接判NG」= 老行为零差异</span>
+            <span class="text-xs text-gray-500">默认全部「直接判NG」，与既有行为一致</span>
           </div>
         </template>
         <div class="space-y-3 text-sm text-gray-300">
@@ -873,7 +873,7 @@
                     (新 ID 接走了), 等结算时件数=0 → 整箱缺件 → 入账 NG。<br/>
                     阈值 = 该箱至少装 N 件才视为真箱; 件数低于阈值的箱子直接丢弃, 不计 OK 不计 NG。<br/>
                     · <b>默认 1</b>: 至少装 1 件才入账 (推荐)<br/>
-                    · 设 0: 关闭过滤, 所有箱子都入账 (v3.1.3 行为, 容易出"幽灵 NG")<br/>
+                    · 设 0：关闭过滤，所有容器均入账（可能引入误检目标的冗余记录）<br/>
                     · 设大: 要求装件更多才入账 (现场遮挡严重时可调高)
                   </div>
                 </template>
@@ -883,7 +883,7 @@
               <el-tooltip placement="top">
                 <template #content>
                   <div style="max-width:320px;line-height:1.5">
-                    <b>ID 漂移合并 (v3.2.0 试验性)</b>: ByteTrack 在工人手部遮挡瞬间常常切换 box 的 track_id;
+                    <b>ID 漂移合并（试验性）</b>：ByteTrack 在目标被遮挡的瞬间可能切换检测框的 track_id；
                     后端 phase2 已有 5 秒窗口的 IoU + 外观再识别, 但跨 5 秒的接管接不住, 老条目仍会被 settle 成幽灵 NG。<br/>
                     本配置 > 0 时, 新 box 即将进入 _box_objects 前先扫已 gone-confirm 中的老条目,
                     位置 IoU ≥ 此阈值就复用老 did 继续累计装件, 不开新条目。<br/>
@@ -1849,7 +1849,7 @@
               <el-button type="primary" size="small" link @click="addSettlementRule">+ 新增判定</el-button>
             </div>
             <p class="text-xs text-gray-500">
-              不配置 = 全部按"合格"结算（老行为）。典型配置：① 序列匹配 标准流程→合格 ② 缺"测硬度"→不合格 ③ "扫码"重复≥2次→不合格。全不命中时回退默认。
+              不配置 = 全部按「合格」结算。典型配置：① 序列匹配 标准流程→合格 ② 缺"测硬度"→不合格 ③ "扫码"重复≥2次→不合格。全不命中时回退默认。
             </p>
             <div v-for="(sr, sIdx) in (regionEventsCfg.settlement_rules || [])" :key="sIdx"
               class="flex items-center gap-2 flex-wrap bg-slate-800 rounded px-2 py-1.5 text-xs">

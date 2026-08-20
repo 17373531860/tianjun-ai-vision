@@ -185,10 +185,10 @@
                     <el-tooltip placement="top">
                       <template #content>
                         <div style="max-width: 320px">
-                          关掉自动曝光可防止 USB 摄像头在光线变暗时<br/>
-                          自驱把帧率从 30fps 降到 10fps (现场已复现).<br/>
-                          建议: 现场光照不稳定 / 工人遮挡频繁时关闭,<br/>
-                          搭配 LED 补光保证画面亮度.
+                          关闭自动曝光可避免 USB 摄像头在光线变暗时<br/>
+                          自动延长曝光时间、导致帧率显著下降（如 30fps 降至 10fps）。<br/>
+                          建议：现场光照不稳定或遮挡频繁时关闭，<br/>
+                          并搭配 LED 补光保证画面亮度。
                         </div>
                       </template>
                       <el-icon class="ml-1" style="vertical-align: -2px"><InfoFilled /></el-icon>
@@ -342,10 +342,10 @@
                   <el-tooltip placement="top">
                     <template #content>
                       <div style="max-width: 340px">
-                        关掉自动曝光可防止 USB 摄像头在光线变暗时<br/>
-                        自驱把帧率从 30fps 降到 10fps (现场已复现, 客户机日志验证).<br/>
-                        建议: 现场光照不稳定 / 工人遮挡频繁时关闭,<br/>
-                        搭配 LED 补光保证画面亮度.
+                        关闭自动曝光可避免 USB 摄像头在光线变暗时<br/>
+                        自动延长曝光时间、导致帧率显著下降（如 30fps 降至 10fps）。<br/>
+                        建议：现场光照不稳定或遮挡频繁时关闭，<br/>
+                        并搭配 LED 补光保证画面亮度。
                       </div>
                     </template>
                     <el-icon class="ml-1" style="vertical-align: -2px"><InfoFilled /></el-icon>

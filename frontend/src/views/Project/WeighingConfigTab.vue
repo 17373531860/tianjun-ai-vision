@@ -317,7 +317,7 @@
               </tr>
             </tbody>
           </table>
-          <div v-else class="text-gray-500 text-xs py-2">还没有规则。百斯特场景示例：规则「钢帽料盆」= 动作标签 [舀料] × 大盆区域 → 映射料别 钢帽水泥；再加一条「钢脚料盆」映射 钢脚水泥。</div>
+          <div v-else class="text-gray-500 text-xs py-2">尚未创建规则。示例：规则「A 料盆」= 动作标签 [舀料] × A 盆区域 → 映射料别 A 料；可为每个料盆各建一条规则分别映射料别。</div>
         </div>
       </div>
       <div v-else class="text-gray-500 text-xs">未启用。启用后按"动作 × 区域"规则识别当前料源，配合「料别校验方式 = 视觉识别」使用。</div>

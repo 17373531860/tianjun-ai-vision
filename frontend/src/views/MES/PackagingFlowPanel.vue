@@ -1,13 +1,14 @@
 <template>
   <div class="packaging-flow-panel p-4">
     <div class="header flex justify-between items-center mb-4">
-      <h2 class="text-lg text-white font-bold">包装箱结算配置 (v3.21)</h2>
+      <h2 class="text-lg text-white font-bold">包装箱结算</h2>
       <el-button type="primary" size="small" @click="openCreate">新建配置</el-button>
     </div>
 
     <div class="text-gray-400 text-xs mb-3 leading-relaxed">
-      扫码驱动的"工单 → 箱 → 托盘"三层结算: 扫工单拉箱数 → 每箱依次放 N 个合格托盘 → 扫下一标签封上一箱.
-      漏箱 / 多箱 / 托盘不达标 / 标签错都会报警. 不启用任何配置时与不配置时完全一致 (零差异).
+      面向包装工序的扫码驱动结算：按「工单 → 箱 → 托盘 / 物品」层级组织装箱进度，
+      扫描工单获取排产数量，逐箱统计合格数量，扫描下一标签即封结上一箱；
+      漏箱、多箱、数量不达标、标签不符等异常均可关联报警事件。未启用任何配置时对系统行为无影响。
     </div>
 
     <el-table :data="flows" stripe size="small" empty-text="尚未创建任何包装结算配置" class="w-full">
@@ -57,28 +58,28 @@
     >
       <div class="preset-bar mb-3">
         <el-button type="warning" plain size="small" @click="applyHiwinPreset">
-          一键套用「上银包装线」预设
+          套用预设：物品计数包装线
         </el-button>
-        <span class="text-xs text-gray-400 ml-2">先套预设再按现场微调, 不确定的高级项保持默认即可</span>
+        <span class="text-xs text-gray-400 ml-2">推荐先套用预设、再按产线实际情况微调；高级项保持默认即可</span>
       </div>
 
       <el-form :model="form" label-width="150px" size="small">
-        <!-- ===== 基础区 (小白必填) ===== -->
+        <!-- ===== 基础区 (必填) ===== -->
         <el-divider content-position="left">基础</el-divider>
         <el-form-item label="配置名称">
-          <el-input v-model="form.name" placeholder="上银包装线-1" :disabled="!!form.id" />
+          <el-input v-model="form.name" placeholder="包装线-1" :disabled="!!form.id" />
         </el-form-item>
         <el-form-item label="检测工位 (channel)">
           <el-input-number v-model="form.channel_id" :min="0" :max="3" />
-          <span class="text-xs text-gray-400 ml-2">数托盘滑块用的那个摄像头工位</span>
+          <span class="text-xs text-gray-400 ml-2">执行装箱视觉计数的摄像头工位</span>
         </el-form-item>
         <el-form-item label="扫码器 ID">
-          <el-input v-model="scanDeviceIdStr" placeholder="留空 = 用全局 USB 扫码枪" />
-          <span class="text-xs text-gray-400 ml-2">扫工单 / 箱标签的设备; 不确定就留空</span>
+          <el-input v-model="scanDeviceIdStr" placeholder="留空 = 使用全局 USB 扫码枪" />
+          <span class="text-xs text-gray-400 ml-2">用于扫描工单 / 箱标签的设备，未单独部署时留空</span>
         </el-form-item>
         <el-form-item label="拉单 MES 连接 ID">
-          <el-input v-model="pullConnIdStr" placeholder="留空 = 不拉单 (离线/手填)" />
-          <span class="text-xs text-gray-400 ml-2">扫工单后向哪条 MES 连接查箱数 (在 MES 网关页配)</span>
+          <el-input v-model="pullConnIdStr" placeholder="留空 = 不拉单 (离线/手动录入)" />
+          <span class="text-xs text-gray-400 ml-2">扫描工单后向该 MES 连接查询排产数量（连接在「外部对接」页配置）</span>
         </el-form-item>
         <el-form-item label="启用">
           <el-switch v-model="form.enabled" />
@@ -86,13 +87,13 @@
 
         <el-form-item label="计数口径">
           <el-radio-group v-model="form.count_unit">
-            <el-radio value="sliders">按滑块 (上银)</el-radio>
-            <el-radio value="trays">按托盘 (三层)</el-radio>
+            <el-radio value="sliders">按物品总数</el-radio>
+            <el-radio value="trays">按托盘（三层结构）</el-radio>
           </el-radio-group>
           <div class="text-xs text-gray-400 mt-1">
-            按滑块: 扫工单从 MES 拿滑块总数 ÷ 每箱滑块数(从项目读,如96) = 箱数 + 尾箱余数, 只数每箱滑块总数 →
-            托盘那两组(①②)会自动隐藏, 只配 ⑦ 滑块设置。<br/>
-            按托盘: 三层 工单→箱→托盘, 配 ①② 每箱几托盘/每托盘几件。
+            按物品总数：扫描工单后从 MES 获取排产总量，除以每箱数量（读取自项目配置）得出箱数与尾箱余数，逐箱统计物品总数；
+            此口径下托盘相关分组（①②）自动隐藏，仅需配置组 ⑦。<br/>
+            按托盘：工单 → 箱 → 托盘三层结构，在组 ①② 中配置每箱托盘数与每托盘件数。
           </div>
         </el-form-item>
 
@@ -100,7 +101,7 @@
         <el-collapse v-model="activeGroups" class="mt-2">
           <!-- 组① 工单与箱数 (仅托盘口径; 滑块口径箱数由 ⑦ 滑块总数÷每箱数 算出) -->
           <el-collapse-item v-if="form.count_unit !== 'sliders'"
-                            title="① 工单与箱数 — 这张工单一共做几箱怎么算" name="g1">
+                            title="① 工单与箱数 — 单工单箱数的计算方式" name="g1">
             <el-form-item label="箱数来源">
               <el-radio-group v-model="form.box_count_source">
                 <el-radio value="field">直接取 MES 字段</el-radio>
@@ -117,7 +118,7 @@
 
           <!-- 组② 数量规格 (仅托盘口径; 滑块口径不用托盘概念) -->
           <el-collapse-item v-if="form.count_unit !== 'sliders'"
-                            title="② 数量规格 — 每箱几托盘 / 每托盘几件" name="g2">
+                            title="② 数量规格 — 每箱托盘数与每托盘件数" name="g2">
             <el-form-item label="每箱托盘数模式">
               <el-radio-group v-model="form.trays_per_box_mode">
                 <el-radio value="fixed">固定</el-radio>
@@ -149,7 +150,7 @@
           </el-collapse-item>
 
           <!-- 组③ 标签校验 -->
-          <el-collapse-item title="③ 标签校验 — 工单号与箱标签怎么比对" name="g3">
+          <el-collapse-item title="③ 标签校验 — 工单号与箱标签的比对规则" name="g3">
             <el-form-item label="复合条码取段">
               <el-switch v-model="form.composite_label_enabled" />
               <span class="text-xs text-gray-400 ml-2">
@@ -171,12 +172,12 @@
               <el-form-item v-if="form.composite_pick_mode === 'prefix'" label="工单段前缀">
                 <el-input v-model="form.composite_prefix" placeholder="JOB" style="width: 160px" maxlength="32" />
                 <span class="text-xs text-gray-400 ml-2">
-                  取以此开头的段 (上银填 JOB); 段顺序变了也不受影响, 多段命中取最长
+                  取以此前缀开头的段（例：JOB）；不受段顺序变化影响，多段命中时取最长者
                 </span>
               </el-form-item>
               <el-form-item v-else label="第几段">
                 <el-input-number v-model="form.composite_index" :min="1" :max="32" />
-                <span class="text-xs text-gray-400 ml-2">从 1 数起 (上银工单在第 2 段)</span>
+                <span class="text-xs text-gray-400 ml-2">从 1 起计（例：工单号位于第 2 段时填 2）</span>
               </el-form-item>
               <el-form-item label="取段预览">
                 <div class="w-full">
@@ -200,14 +201,14 @@
             <el-form-item label="比对方式">
               <el-select v-model="form.label_match" class="w-full">
                 <el-option label="精确比对" value="exact" />
-                <el-option label="补回特殊符号 (上银推荐)" value="insert_char" />
+                <el-option label="补回特殊符号" value="insert_char" />
                 <el-option label="去掉连字符再比" value="strip_hyphen" />
                 <el-option label="只取数字再比" value="digits_only" />
               </el-select>
               <div class="text-xs text-gray-400 mt-1">
-                上银: 标签是 JOB150700114-1, 但扫码枪丢了"-"扫成 JOB1507001141 (序号还在).
-                选"补回特殊符号", 把"-"补回固定位置 → 还原成 JOB150700114-1,
-                之后记录、查 MES 永远用这个完整值 (JOB1507001141 只在扫码转换前一瞬出现).
+                用于修正扫码设备丢失特殊字符的场景。例：标签实际为 JOB150700114-1，
+                扫码枪读作 JOB1507001141 时，选「补回特殊符号」可在固定位置补回「-」还原完整单号；
+                后续记录与 MES 查询均使用还原后的值。
               </div>
             </el-form-item>
             <template v-if="form.label_match === 'insert_char'">
@@ -218,7 +219,7 @@
               <el-form-item label="补在第几位后">
                 <el-input-number v-model="form.hyphen_pos" :min="0" :max="64" />
                 <span class="text-xs text-gray-400 ml-2">
-                  主单号长度 (如 JOB+9 位 = 12); 补在第 12 位字符之后, 序号 1~3 位都适配; 0 = 不补
+                  填主单号长度（例：JOB + 9 位数字 = 12，即补在第 12 位之后），序号位数可变时同样适配；0 = 不补
                 </span>
               </el-form-item>
               <el-form-item label="效果预览">
@@ -243,21 +244,21 @@
             <el-form-item label="工单号识别规则">
               <el-input v-model="form.order_code_pattern" placeholder="留空 = 不过滤" class="w-72" maxlength="128" clearable />
               <div class="text-xs text-gray-400 mt-1">
-                仅在没有在途工单、准备<strong>开第一单</strong>时校验: 取段+归一化后的码须从头匹配此正则才允许开单,
-                否则拒扫并提示 (如挡掉第一枪误扫的数量码 80.00). 已有在途工单时仍走上面的复合取段 + 标签不符逻辑, 不受此项影响.
-                留空 = 不过滤. 上银填 <code>^JOB</code>
+                仅在没有在途工单、准备<strong>开第一单</strong>时校验：取段并归一化后的码须从头匹配此正则方可开单，
+                否则拒扫并提示（可拦截首次误扫的数量码等非工单内容）。已有在途工单时仍走复合取段与标签比对逻辑，不受此项影响。
+                留空 = 不过滤；例：<code>^JOB</code>
               </div>
             </el-form-item>
             <el-form-item label="标签固定长度">
               <el-input-number v-model="form.label_len" :min="0" :max="64" />
               <span class="text-xs text-gray-400 ml-2">
-                0 = 不限长; 填 N = 不是 N 位就报警 (上银序号位数不固定, 应保持 0)
+                0 = 不限制；填 N 时长度不为 N 位即报警（单号位数不固定的产线应保持 0）
               </span>
             </el-form-item>
           </el-collapse-item>
 
           <!-- 组④ 异常策略 -->
-          <el-collapse-item title="④ 异常策略 — 出问题时怎么处理" name="g4">
+          <el-collapse-item title="④ 异常策略 — 拉单失败与标签不符的处置" name="g4">
             <el-form-item label="拉单失败时">
               <el-radio-group v-model="form.on_mes_fail">
                 <el-radio value="block">阻断 (重扫)</el-radio>
@@ -289,7 +290,7 @@
           </el-collapse-item>
 
           <!-- 组⑤ 收尾与回推 -->
-          <el-collapse-item title="⑤ 收尾与回推 — 停止/待机怎么收尾, 完成要不要回推 MES" name="g5">
+          <el-collapse-item title="⑤ 收尾与回推 — 停止/待机的收尾策略与 MES 回推" name="g5">
             <el-form-item label="停止/待机处置">
               <el-select v-model="form.on_forced_stop" class="w-full">
                 <el-option label="收尾结算并完成工单" value="settle" />
@@ -303,7 +304,7 @@
             </el-form-item>
             <el-form-item label="完成回推 MES">
               <el-switch v-model="form.push_on_complete" />
-              <span class="text-xs text-gray-400 ml-2">开 = 工单做完把结果推回 MES (需现场确认)</span>
+              <span class="text-xs text-gray-400 ml-2">开 = 工单完成后将结果回推 MES（需与对接方确认接口就绪）</span>
             </el-form-item>
             <el-form-item label="回推事件名" v-if="form.push_on_complete">
               <el-input v-model="form.push_event_type" placeholder="packaging_complete" />
@@ -316,13 +317,13 @@
               <span class="text-xs text-gray-400 ml-2">
                 开(默认) = 扫码开工的工单同步进「MES管理 → 工单」页(来源=包装扫码):
                 开工"生产中"、收尾"已完成"、中止"已取消", 可在工单页查看与管理;
-                关 = 老行为, 包装单只存运行记录, 工单页不可见
+                关 = 包装工单仅保存运行记录，不在工单页展示
               </span>
             </el-form-item>
           </el-collapse-item>
 
           <!-- 组⑥ 异常事件映射 -->
-          <el-collapse-item title="⑥ 异常报警 — 每种异常触发哪个项目事件" name="g6">
+          <el-collapse-item title="⑥ 异常报警 — 各类异常与项目事件的映射" name="g6">
             <div class="text-xs text-gray-400 mb-2 leading-relaxed">
               每种异常可挑一个"项目-事件设置"里建好的事件去触发, 复用它配好的报警(灯/蜂鸣)、语音、Toast、计数;
               <b>留空 = 走默认通用报警</b>. 触发包装异常不会打断正在跑的托盘检测.
@@ -339,21 +340,21 @@
             </el-form-item>
           </el-collapse-item>
 
-          <!-- 组⑦ 滑块口径 + 尾箱 + 自动切项目 + 塞工单 (v3.22 上银 MES 闭环, 仅滑块口径显示) -->
+          <!-- 组⑦ 物品口径 + 尾箱 + 自动切项目 + 放工单（仅物品总数口径显示） -->
           <el-collapse-item v-if="form.count_unit === 'sliders'"
-                            title="⑦ 滑块口径设置 — 每箱滑块数 / 尾箱 / 塞工单 / 缺油嘴" name="g7">
-              <el-form-item label="每箱滑块数来源">
+                            title="⑦ 物品口径设置 — 每箱数量 / 尾箱 / 工单单据 / 附件校验" name="g7">
+              <el-form-item label="每箱数量来源">
                 <el-radio-group v-model="form.items_per_box_source">
-                  <el-radio value="project">读激活项目容器目标</el-radio>
-                  <el-radio value="config">下面固定值</el-radio>
+                  <el-radio value="project">读取激活项目的容器目标</el-radio>
+                  <el-radio value="config">使用下方固定值</el-radio>
                 </el-radio-group>
               </el-form-item>
-              <el-form-item label="每箱滑块数 (固定)" v-if="form.items_per_box_source === 'config'">
+              <el-form-item label="每箱数量 (固定)" v-if="form.items_per_box_source === 'config'">
                 <el-input-number v-model="form.items_per_box_fixed" :min="0" :max="9999" />
               </el-form-item>
-              <el-form-item label="MES 滑块总数字段">
+              <el-form-item label="MES 总量字段">
                 <el-input v-model="form.slider_total_field" placeholder="dispatch_qty" />
-                <span class="text-xs text-gray-400 ml-2">上银 = 排产量字段</span>
+                <span class="text-xs text-gray-400 ml-2">工单报文中表示排产总量的字段名</span>
               </el-form-item>
               <el-form-item label="按规格自动切项目">
                 <el-switch v-model="form.auto_switch_project" />
@@ -361,24 +362,24 @@
               </el-form-item>
               <el-form-item label="项目名匹配规格 兜底" v-if="form.auto_switch_project">
                 <el-switch v-model="form.match_project_by_name" />
-                <span class="text-xs text-gray-400 ml-2">开 = 映射表没命中时, 按"项目名是规格的一段"自动匹配 (项目名贴在规格里即可, 免维护映射表)</span>
+                <span class="text-xs text-gray-400 ml-2">开 = 映射表未命中时，按「项目名是规格的子串」自动匹配，可免维护映射表</span>
               </el-form-item>
               <el-form-item label="严格边界" v-if="form.auto_switch_project && form.match_project_by_name">
                 <el-switch v-model="form.name_match_strict_boundary" />
-                <span class="text-xs text-gray-400 ml-2">开 = 项目名须贴规格首/尾或分隔符(防短名误吞); 关 = 取最长命中压歧义, 能覆盖无分隔符场景</span>
+                <span class="text-xs text-gray-400 ml-2">开 = 项目名须位于规格首/尾或紧邻分隔符（防止短名误匹配）；关 = 取最长命中以消除歧义，可覆盖无分隔符场景</span>
               </el-form-item>
               <el-form-item label="规格→项目映射 (JSON)" v-if="form.auto_switch_project">
                 <el-input type="textarea" v-model="specToProjectJson" :rows="2"
                           placeholder='{"HGH20-*": 3, "*-HGW15": 4}' />
                 <div class="text-xs text-gray-400 mt-1">键 = 规格(支持通配符 * ?, 如 HGH20-* / *-HGW15 / *ABC*), 值 = 项目 ID; 优先于"项目名兜底", 全靠命名匹配可留空</div>
               </el-form-item>
-              <el-form-item label="尾箱必须塞工单">
+              <el-form-item label="尾箱须放工单单据">
                 <el-switch v-model="form.tail_paper_order_required" />
-                <span class="text-xs text-gray-400 ml-2">开 = 尾箱结算前必须检测到"放工单"动作, 否则不收尾并报警</span>
+                <span class="text-xs text-gray-400 ml-2">开 = 尾箱结算前必须检测到「放工单」动作，否则暂不收尾并报警</span>
               </el-form-item>
               <el-form-item label="放工单步骤标签" v-if="form.tail_paper_order_required">
                 <el-input v-model="form.tail_paper_step_label" placeholder="put_paper" />
-                <span class="text-xs text-gray-400 ml-2">项目里"放工单"那一步的检测标签</span>
+                <span class="text-xs text-gray-400 ml-2">项目中「放工单」步骤对应的检测标签</span>
               </el-form-item>
               <el-form-item label="放工单=工单收尾" v-if="form.tail_paper_order_required">
                 <el-switch v-model="form.tail_paper_as_close_action" />
@@ -386,7 +387,7 @@
                   开 = 箱归周期结算、放工单归工单收尾: 尾箱照常按自身成绩当场落账（不报警不弹NG）,
                   工单转入「等放工单收尾」, 检测到放工单动作即完成工单;
                   一直没放、直接扫下一张工单时, 旧工单判 NG 收尾再开新单（是否报警见下方开关）.
-                  关 = 老行为: 尾箱暂不收尾, 每个周期结算都报警等着
+                  关 = 尾箱暂不收尾，每个周期结算时均报警等待
                 </span>
               </el-form-item>
               <el-form-item label="缺工单判定方式"
@@ -413,12 +414,11 @@
                             v-if="form.tail_paper_order_required && form.tail_paper_as_close_action">
                 <el-switch v-model="form.tail_paper_only_after_awaiting" />
                 <span class="text-xs text-gray-400 ml-2">
-                  默认关。关 = 尾箱落账时回查步骤记录, 尾箱这一周期（含上一周期）里出现过放工单就算已放
-                  —— 允许工人封箱前先放纸, 但那个窗口里误检一次, 工单就会当场收尾, 工人其实没放也没人提醒。
-                  开 = 尾箱落账一律先挂「等放工单收尾」, 之前的检出一概不算, 只认挂起之后新做的放工单动作;
-                  非等待态的检出整条丢弃, <b>连「提前放工单」报警也不报</b>（该报警与「未放工单」共用「缺工单触发事件」档,
-                  现场若把该档设成 NG, 过程中误检一次就会刷一条 NG）。
-                  <b class="text-amber-400">代价: 工人必须在封箱之后再放工单</b>, 封箱前就放好、纸一直在画面里的会被判成没放。
+                  默认关。关 = 尾箱落账时回查步骤记录，本周期（含上一周期）内检出过放工单动作即视为已放，
+                  允许封箱前先放置单据，但该窗口内的误检出会使工单被提前收尾且无提示。
+                  开 = 尾箱落账后一律先进入「等待放工单收尾」状态，仅认可该状态之后新发生的放工单动作，
+                  此前及非等待状态的检出一概不计（含「提前放工单」报警——该报警与「未放工单」共用同一触发事件档位）。
+                  <b class="text-amber-400">注意：启用后放工单动作必须发生在封箱之后</b>，封箱前放置且持续在画面中的将被判定为未放。
                 </span>
               </el-form-item>
               <el-form-item label="缺工单触发事件">
@@ -428,15 +428,15 @@
                              :label="ev.label" :value="ev.value" />
                 </el-select>
               </el-form-item>
-              <el-form-item label="每箱必须放油嘴">
+              <el-form-item label="每箱必装附件校验">
                 <el-switch v-model="form.oil_nozzle_required" />
-                <span class="text-xs text-gray-400 ml-2">开 = 每箱封箱结算前必须检测到"放油嘴"动作, 否则不收尾并报警(等补放)</span>
+                <span class="text-xs text-gray-400 ml-2">开 = 每箱封箱结算前必须检测到指定的附件放置动作（如放油嘴），否则暂不收尾并报警等待补放</span>
               </el-form-item>
-              <el-form-item label="放油嘴步骤标签" v-if="form.oil_nozzle_required">
+              <el-form-item label="附件步骤标签" v-if="form.oil_nozzle_required">
                 <el-input v-model="form.oil_nozzle_step_label" placeholder="put_nozzle" />
-                <span class="text-xs text-gray-400 ml-2">项目里"放油嘴"那一步的检测标签</span>
+                <span class="text-xs text-gray-400 ml-2">项目中该附件放置步骤对应的检测标签</span>
               </el-form-item>
-              <el-form-item label="缺油嘴触发事件" v-if="form.oil_nozzle_required">
+              <el-form-item label="缺附件触发事件" v-if="form.oil_nozzle_required">
                 <el-select v-model="form.event_missing_nozzle" class="w-full" clearable
                            placeholder="默认通用报警" filterable>
                   <el-option v-for="ev in eventOptions" :key="ev.value"
@@ -447,7 +447,7 @@
                 <el-switch v-model="form.block_completed_order_rescan" />
                 <span class="text-xs text-gray-400 ml-2">
                   开 = 工单完成且结果 OK 后, 再扫到同号时只提示、不再重新录入
-                  (完成但 NG 的单不拦, 允许重扫补做); 关 = 老行为, 重扫会重新开单
+                  （完成但 NG 的工单不拦截，允许重扫补做）；关 = 重扫将重新开单
                 </span>
               </el-form-item>
               <el-form-item label="重扫拦截提示事件" v-if="form.block_completed_order_rescan">
@@ -461,7 +461,7 @@
 
           <!-- 组⑧ 箱标签扫码授权 + 标签取本箱数量 (v3.45, 仅滑块口径显示) -->
           <el-collapse-item v-if="form.count_unit === 'sliders'"
-                            title="⑧ 箱标签扫码 — 每箱扫标签放行 / 从标签取本箱数量" name="g8">
+                            title="⑧ 箱标签扫码 — 逐箱扫码放行与本箱数量提取" name="g8">
               <div class="text-xs text-gray-400 mb-2 leading-relaxed">
                 每箱开做前必须扫箱标签（含第一箱）: 扫工单只开工单, 每箱都要再扫一次箱标签才放行开做, 未扫就开始作业当场报警;
                 可再开「取本箱数量」: 从标签复合二维码里取出本箱应装数量当本箱目标（<b>逐箱可变</b>, 覆盖工单级每箱数/尾数计划）.
@@ -469,7 +469,7 @@
               <el-form-item label="每箱必须扫箱标签">
                 <el-switch v-model="form.box_label_scan_required" />
                 <span class="text-xs text-gray-400 ml-2">
-                  开 = 每箱进「等扫箱标签」态, 扫到本工单的标签才放行开做; 关 = 老行为 (扫工单后自动逐箱开)
+                  开 = 每箱进入「等待扫箱标签」状态，扫到本工单的标签方放行开做；关 = 扫工单后自动逐箱开做
                 </span>
               </el-form-item>
               <template v-if="form.box_label_scan_required">
@@ -560,17 +560,17 @@
             <el-descriptions-item label="NG 箱">{{ stateData.state.box_ng }}</el-descriptions-item>
             <el-descriptions-item label="当前第几箱">{{ stateData.state.current_box_index }}</el-descriptions-item>
             <el-descriptions-item
-              :label="stateData.state.count_unit === 'sliders' ? '当前箱滑块' : '当前箱托盘'">
+              :label="stateData.state.count_unit === 'sliders' ? '当前箱物品数' : '当前箱托盘数'">
               {{ stateData.state.count_unit === 'sliders'
                   ? stateData.state.current_box_sliders : stateData.state.current_box_trays }}
             </el-descriptions-item>
             <el-descriptions-item label="状态">{{ stateData.state.status }}</el-descriptions-item>
             <el-descriptions-item label="规格">{{ stateData.state.spec || '-' }}</el-descriptions-item>
             <template v-if="stateData.state.count_unit === 'sliders'">
-              <el-descriptions-item label="滑块总数">{{ stateData.state.slider_total }}</el-descriptions-item>
-              <el-descriptions-item label="每箱滑块">{{ stateData.state.items_per_box }}</el-descriptions-item>
+              <el-descriptions-item label="物品总数">{{ stateData.state.slider_total }}</el-descriptions-item>
+              <el-descriptions-item label="每箱数量">{{ stateData.state.items_per_box }}</el-descriptions-item>
               <el-descriptions-item label="尾箱目标">{{ stateData.state.tail_target }}</el-descriptions-item>
-              <el-descriptions-item label="尾箱已塞工单">
+              <el-descriptions-item label="尾箱已放工单">
                 {{ stateData.state.paper_order_done ? '是' : '否' }}
               </el-descriptions-item>
             </template>
@@ -581,7 +581,7 @@
                     :data="stateData.state.box_details || []" size="small" class="mt-1"
                     empty-text="还没结算任何箱">
             <el-table-column prop="box" label="箱号" width="70" />
-            <el-table-column prop="sliders" label="滑块数" width="80" />
+            <el-table-column prop="sliders" label="物品数" width="80" />
             <el-table-column prop="target" label="目标" width="70" />
             <el-table-column label="尾箱" width="60">
               <template #default="{ row }">{{ row.is_tail ? '尾' : '' }}</template>
@@ -899,7 +899,7 @@ const applyHiwinPreset = () => {
     push_event_type: 'packaging_complete',
   });
   _syncStrFields();
-  ElMessage.success('已套用上银 SY 滑块口径预设 (含事件映射/自动切项目/重扫拦截); 只需手动配: 工位、扫码器、拉单连接');
+  ElMessage.success('已套用物品计数包装线预设（含事件映射 / 自动切项目 / 重扫拦截），请补充配置：检测工位、扫码器、拉单连接');
 };
 
 const _parseIntOrNull = (s) => {
