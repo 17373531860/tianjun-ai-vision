@@ -22,7 +22,7 @@ def test_settings_three_tabs_present(page, base_url):
     """
     sp = SettingsPage(page, base_url).goto()
     tabs = sp.get_visible_tabs()
-    expected_native = {"显示设置", "检测框设置", "性能设置", "插件管理", "账号鉴权", "流水线串行"}
+    expected_native = {"显示设置", "检测框设置", "性能设置", "插件管理", "账号鉴权"}
     missing = expected_native - set(tabs)
     assert not missing, f"Settings 页缺少原生 tab: {missing}, 实际 {tabs}"
 

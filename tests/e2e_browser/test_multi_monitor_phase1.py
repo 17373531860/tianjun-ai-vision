@@ -101,7 +101,9 @@ def test_settings_roundtrip_and_electron_apply(page, base_url, workstation_displ
         """
     )
 
-    _goto(page, base_url, "/settings")
+    # 多屏配置已从系统设置迁到「工位与输入源」页的独立 tab
+    _goto(page, base_url, "/source")
+    page.get_by_role("tab", name="多屏工位显示").click()
     card = page.get_by_test_id("multi-monitor-card")
     card.scroll_into_view_if_needed()
     page.get_by_test_id("multi-monitor-enabled-switch").click()

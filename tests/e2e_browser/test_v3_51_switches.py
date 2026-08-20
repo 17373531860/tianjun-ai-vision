@@ -126,7 +126,8 @@ def test_unified_ok_report_tag_visible_in_panel(page, base_url, api_helper):
         assert r.status_code == 201, f"创建失败: {r.status_code} {r.text}"
         gid = r.json()["id"]
 
-        page.goto(f"{base_url}/#/settings", wait_until="domcontentloaded")
+        # 工位组互通已从系统设置迁到「工位与输入源」页
+        page.goto(f"{base_url}/#/source", wait_until="domcontentloaded")
         page.get_by_role("tab", name="工位组互通").click()
         row = page.locator(".el-table__row", has_text=_E2E_GROUP_NAME)
         row.wait_for(state="visible", timeout=10000)

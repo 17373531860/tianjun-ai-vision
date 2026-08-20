@@ -6,8 +6,9 @@ from typing import Optional
 from .base_page import BasePage
 
 
+# 流水线串行 / 工位组互通已迁「工位与输入源」页 (信息架构重构)
 SETTINGS_TABS = ("显示设置", "检测框设置", "性能设置", "插件管理",
-                 "账号鉴权", "流水线串行")
+                 "账号鉴权")
 
 
 class SettingsPage(BasePage):

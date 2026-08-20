@@ -1,8 +1,10 @@
 <template>
   <TjSlot name="source.layout.body">
   <div class="p-6 h-full overflow-y-auto">
-    <h2 class="text-2xl font-bold mb-6 border-l-4 border-tech-blue pl-3 text-white">输入源设置</h2>
+    <h2 class="text-2xl font-bold mb-6 border-l-4 border-tech-blue pl-3 text-white">工位与输入源</h2>
 
+    <el-tabs type="border-card" class="bg-gray-800 border-gray-700">
+      <el-tab-pane label="输入源配置">
     <!-- ===== Workstation Mode Selector ===== -->
     <el-card v-if="systemStore.developerMode" shadow="never" class="bg-slate-800 border-slate-700 mb-6">
       <template #header>
@@ -617,6 +619,25 @@
         </el-alert>
       </div>
     </div>
+      </el-tab-pane>
+
+      <!-- 多屏工位显示（原系统设置→显示设置内卡片，v3.52 一期） -->
+      <el-tab-pane label="多屏工位显示" lazy>
+        <div class="p-4">
+          <MultiMonitorPanel />
+        </div>
+      </el-tab-pane>
+
+      <!-- 工位组互通（RFC 10，原系统设置 Tab） -->
+      <el-tab-pane label="工位组互通" lazy>
+        <ChannelGroupPanel />
+      </el-tab-pane>
+
+      <!-- 流水线串行（RFC 11，原系统设置 Tab） -->
+      <el-tab-pane label="流水线串行" lazy>
+        <WorkpieceFlowPanel />
+      </el-tab-pane>
+    </el-tabs>
   </div>
   </TjSlot>
 </template>
@@ -637,6 +658,9 @@ import { setWorkstationMode, getWorkstations, setProjectConfig as apiSetProjectC
 import { getModelDetail, resolveModelPath as apiResolveModelPath } from '@/api/model';
 import { getProjects } from '@/api/project';
 import { dbg, dbgErr } from '@/utils/debug';
+import MultiMonitorPanel from './MultiMonitorPanel.vue';
+import ChannelGroupPanel from './ChannelGroupPanel.vue';
+import WorkpieceFlowPanel from './WorkpieceFlowPanel.vue';
 
 const router = useRouter();
 const sourceStore = useSourceStore();

@@ -26,7 +26,7 @@
             <el-icon class="mr-2"><Cpu /></el-icon> {{ $t('menu.model') }}
           </router-link>
           <router-link v-if="canShow('/source')" to="/source" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
-            <el-icon class="mr-2"><VideoCamera /></el-icon> 输入源设置
+            <el-icon class="mr-2"><VideoCamera /></el-icon> 工位与输入源
           </router-link>
           <router-link v-if="canShow('/data')" to="/data" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
             <el-icon class="mr-2"><DataLine /></el-icon> {{ $t('menu.data') }}

@@ -132,14 +132,7 @@
         <AuthPanel />
       </el-tab-pane>
 
-      <!-- v3.14 RFC 11: 流水线串行 Tab -->
-      <el-tab-pane label="流水线串行">
-        <WorkpieceFlowPanel />
-      </el-tab-pane>
-
-      <el-tab-pane label="工位组互通">
-        <ChannelGroupPanel />
-      </el-tab-pane>
+      <!-- 流水线串行 / 工位组互通已迁到「工位与输入源」页（同属多工位协调域） -->
 
       <el-tab-pane label="包装箱结算">
         <PackagingFlowPanel />
@@ -180,8 +173,6 @@ import { usePluginThemeStore } from '@/store/usePluginThemeStore';
 import { Refresh, Lightning } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import AuthPanel from './AuthPanel.vue';
-import WorkpieceFlowPanel from './WorkpieceFlowPanel.vue';
-import ChannelGroupPanel from './ChannelGroupPanel.vue';
 import PackagingFlowPanel from './PackagingFlowPanel.vue';
 import DebugPanel from './DebugPanel.vue';
 import TriggerPanel from './TriggerPanel.vue';
