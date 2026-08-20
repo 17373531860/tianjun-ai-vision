@@ -21,7 +21,7 @@ jobs:
   e2e-browser-windows:
     name: Playwright E2E (Windows)
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 75
     env:
       RUNTIME_MODE: test
       TIANJUN_TEST_MODE: 1
@@ -85,19 +85,25 @@ jobs:
             -PassThru -NoNewWindow
           "FRONTEND_PID=$($p.Id)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
+      # Windows runner 上 torch/cv2 冷 import 明显慢于 ubuntu，窗口放宽到 ~12min，
+      # 且每 10 轮打一次两端口的 http code 方便失败归因
       - name: Wait for ports 8001 + 6001
         run: |
-          for i in $(seq 1 90); do
-            if curl -sf -o /dev/null http://127.0.0.1:8001/api/v1/test/synthetic/state \
-                && curl -sf -o /dev/null http://127.0.0.1:6001/; then
+          for i in $(seq 1 240); do
+            be=$(curl -s -o /dev/null --max-time 3 -w '%{http_code}' http://127.0.0.1:8001/api/v1/test/synthetic/state || echo 000)
+            fe=$(curl -s -o /dev/null --max-time 3 -w '%{http_code}' http://127.0.0.1:6001/ || echo 000)
+            if [ "$be" = "200" ] && [ "$fe" = "200" ]; then
               echo "ports ready (attempt $i)"
               exit 0
             fi
+            if [ $((i % 10)) -eq 0 ]; then
+              echo "attempt $i: backend=$be frontend=$fe"
+            fi
             sleep 2
           done
-          echo "ports NOT ready in 180s"
-          tail -80 ci-logs/backend.log || true
-          tail -80 ci-logs/backend.err.log || true
+          echo "ports NOT ready (backend=$be frontend=$fe)"
+          tail -120 ci-logs/backend.log || true
+          tail -120 ci-logs/backend.err.log || true
           tail -80 ci-logs/frontend.log || true
           exit 1
 
