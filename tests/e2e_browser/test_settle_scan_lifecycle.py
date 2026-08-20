@@ -99,9 +99,10 @@ def test_开关开启_确认放入帧数列露出并落库(page, base_url, api_u
     # data-testid 直取该列输入 (el-input-number 需要键盘输入 + blur 才提交 v-model)
     col_input = page.locator(
         "[data-testid='settle-confirm-frames-input'] input").first
+    # Meta+a 全选仅 macOS 生效, Ubuntu CI 上是 no-op → "5"追加到默认"1"变"15" (曾红灯 v3.53.0 发版 CI)。
+    # fill() 原生替换值 + Tab blur 提交, 跨平台无竞态。
     col_input.click()
-    page.keyboard.press("Meta+a")
-    page.keyboard.type("5")
+    col_input.fill("5")
     page.keyboard.press("Tab")
     time.sleep(0.4)
 
