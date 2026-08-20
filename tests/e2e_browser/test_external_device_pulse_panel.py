@@ -6,6 +6,7 @@
 
 需后端+前端在跑(conftest 未起会自动 skip)。
 """
+import time
 import uuid
 
 import requests
@@ -95,9 +96,16 @@ def test_pulse_device_saves_and_shows_button(page, base_url, api_url):
             "button", name="保存").first.click()
         page.wait_for_selector(".el-message--success", timeout=8000)
 
-        r = requests.get(f"{api_url}/api/v1/external-devices/", timeout=10)
-        assert r.status_code == 200, f"读外设列表失败 http={r.status_code}"
-        dev = next((d for d in r.json() if d.get("name") == name), None)
+        # 全套并行跑时 .el-message--success 可能匹配到残留 toast, GET 会跑在落库前 →
+        # 改短轮询 (最长 6s), 治全量回归下的偶发红灯; 单跑行为不变 (首轮即命中)。
+        dev = None
+        for _ in range(12):
+            r = requests.get(f"{api_url}/api/v1/external-devices/", timeout=10)
+            assert r.status_code == 200, f"读外设列表失败 http={r.status_code}"
+            dev = next((d for d in r.json() if d.get("name") == name), None)
+            if dev is not None:
+                break
+            time.sleep(0.5)
         assert dev is not None, "保存后后端查不到该设备"
         assert dev["protocol"] == "modbus_pulse"
         assert dev["device_role"] == "plc", "完成脉冲设备角色应自动切成 PLC"
