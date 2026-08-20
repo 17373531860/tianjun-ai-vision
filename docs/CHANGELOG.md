@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.53.0 (2026-08-20)
+
+> 主题：**录像归档与媒体证据体系（一~四期一次落地）**——规则驱动的周期录像自动归档（Jinja2 模板命名/原子落位/spool 断点重放/台账）+ 证据能力（NG 结算瞬间带框关键帧/sidecar 数据报告/证据包 zip/FFmpeg 事件切片）+ 生态联动（archived_* 进字段库/video_archived 网关事件与插件 hook/短信参数）+ 远端与治理（FTP/SFTP/S3/HTTP adapter + Fernet 凭据加密 + 插件 adapter 注册口 + 时间窗/限速/历史回补/归档后删源）。全部默认关零配置差异。随版修掉监控页"无扫码器仍画等待扫码/扫码按钮"的 v3.47 守门丢失。
+
+- [FEAT-001] 新增: 归档引擎一期——`video_archive_rules/logs` 两表 + 录像收尾自动入队 worker（三重过滤/模板命名/重名策略/黑名单护栏/spool 重放）+ `/export/video-archive/*` API + Data 页归档卡与配置弹窗
+- [FEAT-002] 新增: 证据二期——NG 关键帧（结算帧异步画框存 JPEG，keyframe_wanted 零开销守门）+ sidecar 绑导出模板成对渲染 + bundle_zip 证据包 + evidence-pack 手动批量下载 + clip_tail 尾段秒切（失败回退整段）
+- [FEAT-003] 新增: 生态三期——字段库 archived_video_path/archived_at/archive_status + aggregations 归档成败数 + MES 网关 `video_archived` 事件推最终地址 + 插件 hook + 短信 {archive_success}/{archive_failed} 变量
+- [FEAT-004] 新增: 远端四期——FTP/SFTP/S3/HTTP adapter（统一 deliver 契约 + PermanentDeliveryError 不重试语义）+ Fernet 凭据加密（落库密文/回显打码/回传打码保留旧值）+ PluginHost.register_archive_adapter + 时间窗（窗外 defer 不耗预算）/带宽限速/历史回补/删源（字节校验一致才删）
+- [BUG-001] 修复: 无扫码器产线监控页仍画「等待扫码/清除/禁用扫码」——全部渲染点挂 hasScannerFor 守门（scanner_resume_blocked 视为在场证据），e2e 双向钉死
+- [BUG-002] 修复: 关键帧 JPEG 原子写 .tmp 扩展名致 imwrite 必败（开发期拦下）
+- [BUG-003] 修复: 归档两表未进 main.py/conftest 显式模型注册清单致测试库漏表
+- [TEST] 单测 68 条（一期 25 + 二~四期 43，全量 2887 绿）+ e2e 6 条（全套 214 隔离栈绿）+ 可见 UAT 两剧本三件套归档（含 synthetic NG 周期真链路抽帧进 zip）
+
 ## v3.52.0 (2026-08-18)
 
 > 主题：**多显示器一期（dev-qing 合入）**——工位子窗映射与单通道监控页：Electron 按显示器映射为每个工位开独立 kiosk 子窗（副屏一期只读），主屏保留总览与全部操作权，多屏开启时主屏总览改快照轮询让出 MJPEG。默认关闭零配置差异。合并审计发现并拦下分支引入的网格总览"点击卡片放大"行为回归。

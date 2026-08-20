@@ -703,6 +703,7 @@ const eventLabels = {
   weight_no_barcode: '称重无码',
   packaging_complete: '包装结算完成',
   task_complete: '工单完工回传',
+  video_archived: '录像归档完成',
 }
 
 // 内置事件下拉项 (allow-create 仍可输入插件自定义事件名/别名)
@@ -715,6 +716,7 @@ const eventOptions = [
   { value: 'weighing_product_done', label: 'weighing_product_done (称重成品结案)' },
   { value: 'packaging_complete', label: 'packaging_complete (包装结算完成)' },
   { value: 'task_complete', label: 'task_complete (完工回传)' },
+  { value: 'video_archived', label: 'video_archived (录像归档完成)' },
 ]
 
 const connections = ref([])

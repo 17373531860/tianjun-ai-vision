@@ -131,7 +131,7 @@ actions:
 
 > **旧 SKILL 提到的 `tianjun_xxx_*` 前缀键已不存在**。只有 `tianjun:lastRoute` 一个保留 `tianjun:` 前缀。
 
-## 5. API 客户端清单（`frontend/src/api/*.js`，共 16 个）
+## 5. API 客户端清单（`frontend/src/api/*.js`，共 17 个）
 
 | 文件 | 行数 | 后端前缀 | 状态 |
 |---|---|---|---|
@@ -149,6 +149,7 @@ actions:
 | `report.js` | — | `/reports/*` | **已删**（2026-07 死代码清理） |
 | `scanner.js` | 25 | `/scanner/*` | OK |
 | `wmax.js` | 84 | `/scanner/wmax/*` | OK |
+| `videoArchive.js` | ~90 | `/export/video-archive/*` | OK（v3.53 录像归档；`downloadEvidencePack` 是 blob 下载，timeout 300s） |
 | `task.js` | — | `/tasks/*` | **已删**（2026-07 死代码清理） |
 | `camera.js` | — | `/cameras/*` | **已删**（2026-07 死代码清理；旧式相机表后端仍在） |
 
@@ -177,7 +178,8 @@ App.vue
         │   ├── Source/index.vue (1288) ← useSystemStore, useSourceStore, api/index, api/detection,
         │   │                              api/model, api/project
         │   ├── Data/index.vue (1985) ← useSystemStore, useProjectStore, api/data, api/detection,
-        │   │                            api/export, api/operators
+        │   │   │                        api/export, api/operators
+        │   │   └── VideoArchiveDialog.vue ← api/videoArchive, api/export（v3.53 归档规则/台账/证据包弹窗）
         │   │   └── components/CustomExportDialog.vue
         │   │   └── components/RealtimeRulesDialog.vue
         │   ├── MES/index.vue (75) ← 7 Tab 容器

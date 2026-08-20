@@ -396,6 +396,9 @@ def _empty_cycle_section() -> Dict[str, Any]:
         "video_clip_path": None, "video_clip_url": None,
         "test_values": [],
         "barcode": None,
+        # v3.53 录像归档三期: 最近一次归档成功的最终地址/时间/状态
+        "archived_video_path": None, "archived_at": None,
+        "archive_status": None,
     }
 
 
@@ -523,6 +526,9 @@ def _empty_aggregations_section() -> Dict[str, Any]:
         "yield_rate": None,
         "daily_stats": [],
         "sessions": [],
+        # v3.53 录像归档三期: 范围内归档成败计数 + 最近归档地址 (日报可勾选)
+        "archive_success": 0, "archive_failed": 0,
+        "archive_last_dest": None,
     }
 
 
@@ -681,6 +687,14 @@ def _fill_cycle_steps_defects(ctx: Dict[str, Any], db: DBSession, cycle_id: int)
         return
 
     ctx["cycle"].update(_serialize_cycle_row(c))
+
+    # v3.53 归档三期: 最近一次归档成功地址 (video_archive_logs 按 cycle_id 反查,
+    # 未归档三字段保持 None; 查询异常不影响其余上下文)
+    try:
+        from backend.services.archive_ecosystem import latest_archive_info
+        ctx["cycle"].update(latest_archive_info(db, cycle_id))
+    except Exception:
+        pass
 
     # steps
     steps = db.query(StepRecord).filter(
@@ -1140,6 +1154,28 @@ def build_range_context(db: DBSession,
                 "ng": total - good,
                 "yield_rate": (round(100.0 * good / total, 2) if total else None),
             })
+
+    # v3.53 录像归档三期: 范围内归档成败计数 (日报"附证据信息"用;
+    # 无归档表/查询异常时保持 0, 不影响其余聚合)
+    try:
+        from backend.models.archive_models import VideoArchiveLog
+        aq = db.query(VideoArchiveLog)
+        if start_date:
+            aq = aq.filter(VideoArchiveLog.created_at
+                           >= datetime.strptime(start_date, "%Y-%m-%d"))
+        if end_date:
+            aq = aq.filter(VideoArchiveLog.created_at
+                           < datetime.strptime(end_date, "%Y-%m-%d")
+                           .replace(hour=23, minute=59, second=59))
+        A["archive_success"] = aq.filter(
+            VideoArchiveLog.status == "success").count()
+        A["archive_failed"] = aq.filter(
+            VideoArchiveLog.status == "failed").count()
+        last = aq.filter(VideoArchiveLog.status == "success").order_by(
+            VideoArchiveLog.id.desc()).first()
+        A["archive_last_dest"] = last.dest_path if last else None
+    except Exception:
+        pass
 
     # 单 session 聚合 stats.*
     S = ctx["stats"]

@@ -25,6 +25,7 @@ from backend.models import notify_models  # noqa: F401, E402
 from backend.models import weighing_models  # noqa: F401, E402
 from backend.models import plc_models  # noqa: F401, E402
 from backend.models import trigger_models  # noqa: F401, E402
+from backend.models import archive_models  # noqa: F401, E402
 
 config = context.config
 if config.config_file_name is not None:

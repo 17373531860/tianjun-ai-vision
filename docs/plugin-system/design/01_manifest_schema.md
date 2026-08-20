@@ -402,6 +402,7 @@ plugins/{customer_code}/
 | `runtime.step_field_write` | `host.write_plugin_step_field(step_record_id, key, value)` | JSON 合并写入 `step_records.plugin_data`（`key` 必须 `plugin_<cc>_` 前缀，`value` 必须可 JSON 序列化）— v3.13 M3.3 |
 | `runtime.channel_group_broadcast` | `host.broadcast_to_channel_group(group_id, message)` | 给工位组成员 fire `plugin_broadcast_received` hook（`message` 必须 dict + 可 JSON 序列化）— v3.13 RFC 10 CG.7 |
 | `runtime.workpiece_flow_observe` | `host.list_workpiece_flows()` / `host.query_workpiece_flow_state(flow_id)` | 查 v3.14 RFC 11 串行流水线配置 + 当前 in-flight 工件状态。只读, 但因为涉及客户产线敏感数据, 声明性能力位以备审计 |
+| `runtime.archive_adapter` | `host.register_archive_adapter(name, deliver_fn)` | 注册自定义录像归档目的地 adapter（v3.53 归档四期）。归档规则 dest_type 选 `plugin:<name>` 时归档 worker 调 `deliver_fn(src_path, subdir, filename, cfg, throttle_kbps) -> 地址串` 投递（客户私有协议/私有对象存储）；抛 `PermanentDeliveryError` = 不重试，其它异常回 spool 重试。注册为进程级，插件启停需重启生效 |
 
 **注意**：
 - `host.read_system_config(...)` **不**需要声明 capability（只读无副作用，跨插件查主程序状态是合理需求）

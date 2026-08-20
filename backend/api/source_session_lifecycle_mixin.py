@@ -835,6 +835,21 @@ class SessionLifecycleMixin:
             # 记录周期结束时间，用于计算下一周期的间隔 (内存态, 必须同步更新)
             self.last_cycle_end_time = _now_end
 
+            # v3.53 归档 NG 关键帧: 在 final_is_good 定案后置采帧标志 (比
+            # interconnect 的 _trigger_event 置位更准 — 含组覆盖/插件 override),
+            # 推理循环同帧消费 (见 source_inference_loop_mixin)。keyframe_wanted()
+            # 守门: 无 attach_keyframe 归档规则时零开销。
+            if not final_is_good:
+                try:
+                    from backend.services.video_archive import keyframe_wanted
+                    if keyframe_wanted():
+                        self._archive_ng_frame_pending = {
+                            "cycle_uuid": _cycle_uuid,
+                            "channel_id": _channel_id,
+                        }
+                except Exception:
+                    pass
+
             def _persist_cycle_end():
                 db = SessionLocal()
                 try:

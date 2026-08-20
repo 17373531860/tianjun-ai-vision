@@ -66,6 +66,7 @@ try:
     from backend.models import plugin_models as _plugin_models  # noqa: F401, E402
     from backend.models import auth_models as _auth_models  # noqa: F401, E402
     from backend.models import notify_models as _notify_models  # noqa: F401, E402  短信日报三表
+    from backend.models import archive_models as _archive_models  # noqa: F401, E402  v3.53 录像归档两表
     _BACKEND_AVAILABLE = True
 except ImportError:
     _BACKEND_AVAILABLE = False

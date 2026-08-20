@@ -50,6 +50,8 @@ from backend.models import notify_models as _notify_models  # noqa: F401
 from backend.models import plc_models as _plc_models  # noqa: F401
 # RFC 14 统一触发中心: trigger_channels 表
 from backend.models import trigger_models as _trigger_models  # noqa: F401
+# v3.53 录像归档: video_archive_rules / video_archive_logs 两张表
+from backend.models import archive_models as _archive_models  # noqa: F401
 # 路由挂载统一走 router_manifest（OVERLAP-3 治理）; 这里只保留非路由用途的 import
 from backend.api.router_manifest import mount_all_routers
 from backend.api.source import get_video_manager

@@ -1,11 +1,11 @@
 # 数据库表参考
 
 > **类型**：reference（生成物勿手改）
-> **生成命令**：`python scripts/docgen/gen_db_schema.py`（生成日 2026-08-12）
+> **生成命令**：`python scripts/docgen/gen_db_schema.py`（生成日 2026-08-20）
 > **单一事实源**：SQLAlchemy ORM（Base.metadata）。字段含义看模型源文件行内注释；
 > 迁移历史看 backend/db/migrations/ 与 backend/main.py 的 migrate_database。
 
-共 **52** 张表。
+共 **54** 张表。
 
 ## 表索引
 
@@ -56,6 +56,8 @@
 | [`trigger_channels`](#trigger_channels) | `TriggerChannel` | `backend/models/trigger_models.py` |
 | [`user_roles`](#user_roles) | `UserRole` | `backend/models/auth_models.py` |
 | [`users`](#users) | `User` | `backend/models/auth_models.py` |
+| [`video_archive_logs`](#video_archive_logs) | `VideoArchiveLog` | `backend/models/archive_models.py` |
+| [`video_archive_rules`](#video_archive_rules) | `VideoArchiveRule` | `backend/models/archive_models.py` |
 | [`video_clips`](#video_clips) | `VideoClip` | `backend/models/models.py` |
 | [`weighing_records`](#weighing_records) | `WeighingRecord` | `backend/models/weighing_models.py` |
 | [`work_orders`](#work_orders) | `WorkOrder` | `backend/models/mes_models.py` |
@@ -1060,6 +1062,62 @@ ORM 类 `User`，定义于 `backend/models/auth_models.py`。
 | `active` | BOOLEAN | INDEX NOT NULL | True |
 | `must_change_password` | BOOLEAN | NOT NULL | False |
 | `last_login_at` | DATETIME |  |  |
+| `created_at` | DATETIME | NOT NULL | server |
+| `updated_at` | DATETIME | NOT NULL | server |
+
+## video_archive_logs
+
+ORM 类 `VideoArchiveLog`，定义于 `backend/models/archive_models.py`。
+
+| 字段 | 类型 | 约束 | 默认 |
+|---|---|---|---|
+| `id` | INTEGER | PK INDEX |  |
+| `rule_id` | INTEGER | INDEX |  |
+| `cycle_id` | INTEGER | INDEX |  |
+| `channel_id` | INTEGER |  |  |
+| `src_path` | VARCHAR(500) |  |  |
+| `dest_path` | VARCHAR(500) |  |  |
+| `status` | VARCHAR(16) | NOT NULL |  |
+| `error` | TEXT |  |  |
+| `file_size` | INTEGER |  |  |
+| `duration_ms` | INTEGER |  |  |
+| `created_at` | DATETIME | INDEX NOT NULL | server |
+
+## video_archive_rules
+
+ORM 类 `VideoArchiveRule`，定义于 `backend/models/archive_models.py`。
+
+| 字段 | 类型 | 约束 | 默认 |
+|---|---|---|---|
+| `id` | INTEGER | PK INDEX |  |
+| `name` | VARCHAR(128) | NOT NULL |  |
+| `enabled` | BOOLEAN | INDEX NOT NULL | True |
+| `description` | TEXT |  |  |
+| `result_filter` | VARCHAR(16) | NOT NULL | 'ng_only' |
+| `channel_filter` | JSON |  |  |
+| `project_filter` | JSON |  |  |
+| `dest_dir` | VARCHAR(500) | NOT NULL |  |
+| `subdir_by_date` | BOOLEAN | NOT NULL | True |
+| `filename_template` | VARCHAR(256) | NOT NULL | "{{ workpiece.serial_no | default(cycle.id, true) }}_{{ 'OK' if cycle.is_good else 'NG' }}.mp4" |
+| `overwrite_policy` | VARCHAR(16) | NOT NULL | 'rename' |
+| `attach_keyframe` | BOOLEAN | NOT NULL | False |
+| `keyframe_watermark` | BOOLEAN | NOT NULL | True |
+| `sidecar_template_id` | INTEGER |  |  |
+| `bundle_zip` | BOOLEAN | NOT NULL | False |
+| `transform` | VARCHAR(16) | NOT NULL | 'none' |
+| `clip_seconds` | INTEGER | NOT NULL | 10 |
+| `dest_type` | VARCHAR(32) | NOT NULL | 'local_dir' |
+| `dest_config` | JSON |  |  |
+| `active_window` | VARCHAR(16) |  |  |
+| `bandwidth_limit_kbps` | INTEGER |  |  |
+| `delete_source_after` | BOOLEAN | NOT NULL | False |
+| `last_run_time` | DATETIME |  |  |
+| `last_run_status` | VARCHAR(16) |  |  |
+| `last_run_error` | TEXT |  |  |
+| `last_dest_file` | VARCHAR(500) |  |  |
+| `success_count` | INTEGER | NOT NULL | 0 |
+| `failed_count` | INTEGER | NOT NULL | 0 |
+| `skipped_count` | INTEGER | NOT NULL | 0 |
 | `created_at` | DATETIME | NOT NULL | server |
 | `updated_at` | DATETIME | NOT NULL | server |
 

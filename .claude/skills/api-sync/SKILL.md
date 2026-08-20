@@ -253,6 +253,7 @@ export function getBackendHost() {
 - `GET/POST/PUT/DELETE /export/realtime-rules` `/realtime-rules/{id}/toggle` `/test-run` `/logs`
 - `GET /export/run-logs` — 全部触发日志
 - `GET /export/scanner-bypass/status` — 扫码器旁路 SN 监控状态（v3.38，只读内存快照，可带 `channel_id`；前端 `export.js` 有封装）
+- **v3.53 录像归档子前缀 `/export/video-archive/*`**（后端 `api/video_archive.py`，前端 **`videoArchive.js`** 独立客户端）：`GET/POST /rules` `PUT/DELETE /rules/{id}` `/rules/{id}/toggle`、`GET /status`、`GET /logs`、`POST /test-run`、`GET /adapter-types`、`POST /backfill`、`POST /evidence-pack`（blob 下载）。注意 dest_config 敏感字段 API 回显恒为 `******`，前端回传 `******` = 不修改
 
 ---
 

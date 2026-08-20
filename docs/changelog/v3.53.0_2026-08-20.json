@@ -1,0 +1,87 @@
+{
+  "version": "3.53.0",
+  "date": "2026-08-20",
+  "previous_version": "3.52.0",
+  "theme": "录像归档与媒体证据体系（一~四期一次落地）+ 监控页无扫码器扫码UI整组守门",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "录像归档引擎一期: 规则驱动的周期录像自动归档",
+      "symptom": "NG 录像散落本地 recordings, 质量部要自动搬网盘/指定目录+按工件号命名+台账可查",
+      "root_cause": null,
+      "fix": "video_archive_rules/logs 两表 + 归档 worker (录像 release 后入队, 结果/工位/项目三重过滤, Jinja2 文件名模板, tmp+rename 原子落位, 重名策略, spool 断点重放 8 次预算, 目录黑名单护栏) + /export/video-archive/* API + Data 页归档卡与配置弹窗",
+      "files": ["backend/models/archive_models.py", "backend/services/video_archive.py", "backend/api/video_archive.py", "backend/api/router_manifest.py", "backend/api/source_recording_api_mixin.py", "backend/main.py", "alembic/env.py", "frontend/src/api/videoArchive.js", "frontend/src/views/Data/components/VideoArchiveDialog.vue", "frontend/src/views/Data/index.vue"],
+      "keywords": ["录像归档", "video archive", "归档规则", "NG录像", "网盘", "文件名模板", "spool", "断点重放", "台账", "ledger", "归档worker", "overwrite policy", "目录黑名单"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "归档二期: NG关键帧/sidecar报告/证据包zip/事件切片",
+      "symptom": "光录像不够, 要出事瞬间带框截图+数据报告+一个包交付质量部",
+      "root_cause": null,
+      "fix": "end_cycle NG 定案置 pending → 推理循环同帧消费异步画框存 JPEG (keyframe_wanted 守门零开销); 规则绑导出模板成对渲染 sidecar; bundle_zip 打包录像+关键帧+meta; evidence-pack 手动批量下载; clip_tail 用 ffmpeg -sseof -c copy 切尾段 N 秒失败回退整段",
+      "files": ["backend/services/archive_media.py", "backend/services/video_archive.py", "backend/api/source_session_lifecycle_mixin.py", "backend/api/source_inference_loop_mixin.py", "backend/api/video_archive.py", "frontend/src/views/Data/components/VideoArchiveDialog.vue"],
+      "keywords": ["NG关键帧", "keyframe", "抽帧", "水印", "watermark", "sidecar", "伴随报告", "证据包", "evidence pack", "zip", "事件切片", "clip_tail", "sseof", "结算瞬间"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "归档三期: 字段库 archived_* / MES video_archived 网关事件 / 短信参数",
+      "symptom": "归档地址要进报表/推MES/进短信, 证据链闭环到客户系统",
+      "root_cause": null,
+      "fix": "字段库新增 cycle.archived_video_path/archived_at/archive_status + aggregations.archive_success/failed/last_dest; 网关事件 video_archived 推最终地址 (dispatch_gateway 异步+spool); 插件 hook video_archived; 短信模板 {archive_success}/{archive_failed} 命名变量",
+      "files": ["backend/services/export_field_registry.py", "backend/services/export_context.py", "backend/services/archive_ecosystem.py", "backend/services/sms_service.py", "frontend/src/views/MES/GatewayPanel.vue"],
+      "keywords": ["archived_video_path", "归档字段", "video_archived", "网关事件", "MES推送", "归档地址", "短信变量", "archive_success"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "归档四期: FTP/SFTP/S3/HTTP远端 + Fernet凭据加密 + 插件adapter + 时间窗/限速/回补/删源",
+      "symptom": "网盘不总能挂盘符要原生推远端; 夜间搬运别抢带宽; 存量可回补; 归档后本地可瘦身",
+      "root_cause": null,
+      "fix": "archive_adapters 统一 deliver 契约 (5 内置 + plugin: 注册口 + PermanentDeliveryError 不重试语义); archive_secrets Fernet 本机密钥加密 dest_config 敏感字段 (API 回显打码/回传打码保留旧值); ThrottledReader 限速; 时间窗跨午夜 defer 不耗重试预算; backfill 批量回补; delete_source_after 字节校验一致才删源并回写 video_path=None; PluginHost.register_archive_adapter (capability runtime.archive_adapter)",
+      "files": ["backend/services/archive_adapters.py", "backend/services/archive_secrets.py", "backend/services/video_archive.py", "backend/api/video_archive.py", "backend/plugin_system/registry.py", "frontend/src/views/Data/components/VideoArchiveDialog.vue"],
+      "keywords": ["FTP", "SFTP", "S3", "MinIO", "HTTP上传", "adapter", "凭据加密", "Fernet", "打码", "限速", "bandwidth", "时间窗", "active_window", "历史回补", "backfill", "删源", "delete_source_after", "归档分层", "register_archive_adapter"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "监控页无扫码器时「等待扫码/清除/禁用扫码」整组UI未守门",
+      "symptom": "没配扫码器的产线, 多工位监控信息条仍画等待扫码和清除/禁用扫码按钮, 误导操作员",
+      "root_cause": "v3.47 布局重构丢守门: shouldShowMesBarFor 在跑兜底、4处等待扫码占位、3组扫码按钮都没查 mes.scanner_present",
+      "fix": "全部渲染点挂 hasScannerFor(); scanner_resume_blocked 视为扫码器在场证据 (灭灯态人工恢复按钮不藏); 老后端无字段行为不变; e2e test_mes_bar_no_scanner 双向钉死",
+      "files": ["frontend/src/views/Monitor/index.vue", "tests/e2e_browser/test_mes_bar_no_scanner.py"],
+      "keywords": ["等待扫码", "scanner_present", "扫码器", "监控页", "信息条", "禁用扫码", "清除本次扫码", "hasScannerFor", "scanner_resume_blocked"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "归档关键帧 JPEG 原子写 tmp 扩展名致 imwrite 必败 (开发期拦下)",
+      "symptom": "关键帧永远存不下来, 日志 could not find a writer for the specified extension",
+      "root_cause": "cv2.imwrite 按扩展名选编码器, .tmp 结尾没有编码器",
+      "fix": "临时名改 .tmp.jpg 再 os.replace 原子落位",
+      "files": ["backend/services/archive_media.py"],
+      "keywords": ["imwrite", "tmp扩展名", "关键帧保存失败", "JPEG编码器", "原子写"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "归档两表未在 conftest/main.py 显式注册致测试库漏表",
+      "symptom": "单测 no such table: video_archive_rules; 生产靠 router import 链兜住",
+      "root_cause": "create_all 只建已 import 的模型, archive_models 没进显式注册清单",
+      "fix": "backend/main.py 与 tests/conftest.py 补 archive_models import (与 notify_models 同风格)",
+      "files": ["backend/main.py", "tests/conftest.py"],
+      "keywords": ["create_all", "no such table", "模型注册", "conftest", "archive_models"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-video-archive", "api-sync", "modify-model", "modify-frontend", "run-tests"],
+  "files_changed": ["backend/models/archive_models.py", "backend/services/video_archive.py", "backend/services/archive_media.py", "backend/services/archive_adapters.py", "backend/services/archive_secrets.py", "backend/services/archive_ecosystem.py", "backend/api/video_archive.py", "backend/api/router_manifest.py", "backend/api/source_recording_api_mixin.py", "backend/api/source_session_lifecycle_mixin.py", "backend/api/source_inference_loop_mixin.py", "backend/services/export_field_registry.py", "backend/services/export_context.py", "backend/services/sms_service.py", "backend/plugin_system/registry.py", "backend/main.py", "alembic/env.py", "frontend/src/api/videoArchive.js", "frontend/src/views/Data/components/VideoArchiveDialog.vue", "frontend/src/views/Data/index.vue", "frontend/src/views/MES/GatewayPanel.vue", "frontend/src/views/Monitor/index.vue", "tests/conftest.py", "tests/test_video_archive.py", "tests/test_video_archive_evidence.py", "tests/test_sms_summary.py", "tests/e2e_browser/test_video_archive_rules.py", "tests/e2e_browser/test_mes_bar_no_scanner.py", "tests/uat/uat_video_archive_phase1.py", "tests/uat/uat_video_archive_phase234.py"]
+}

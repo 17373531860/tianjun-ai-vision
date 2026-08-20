@@ -480,6 +480,8 @@ curl -sI http://127.0.0.1:6001/ | head -1
 | 前端 `Settings/index.vue` 或 `useSystemStore.js` | 暂无单元测试 — 跑 `tests/e2e_browser/test_monitor_page.py` 看用户配置变更是否被前端正确读取 |
 | 前端 `Monitor/index.vue` | `tests/e2e_browser/test_monitor_page.py` |
 | 前端 `Data/index.vue` 或导出对话框 | `tests/e2e_browser/test_data_export_dialog.py` + `tests/e2e_browser/test_realtime_rules.py` |
+| `backend/services/video_archive*.py` / `archive_media.py` / `archive_adapters.py` / `archive_secrets.py` / `archive_ecosystem.py` / `backend/api/video_archive.py`（v3.53 录像归档） | `tests/test_video_archive.py`（一期 25 例）+ `tests/test_video_archive_evidence.py`（二~四期 43 例，含真 ffmpeg 切片）+ `tests/e2e_browser/test_video_archive_rules.py`；碰 sms_service 归档参数再加 `tests/test_sms_summary.py`。单测直调 `va._run_task` 前必须 `va._stop_event.clear()`（stop_worker 的停止位会让等待循环秒退）。UAT 剧本 `tests/uat/uat_video_archive_phase1.py` / `phase234.py` |
+| 前端 `VideoArchiveDialog.vue` / `videoArchive.js` | `tests/e2e_browser/test_video_archive_rules.py` |
 | 前端 `Project/index.vue` | `tests/e2e_browser/test_project_page.py` |
 | 后端任意 API 端点新增/改字段 | 找对应 `tests/test_*_exposure.py`（命名约定：`test_<api名>_exposure.py`），没有就**新建**一个 |
 

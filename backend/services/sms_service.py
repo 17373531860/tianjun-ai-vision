@@ -276,7 +276,31 @@ class SummaryPayload:
                 "ng_rate": self.ng_rate,
             }
         )
+        # v3.53 录像归档三期: 窗口内归档成败数, 云通道自定义模板可引用
+        # (默认 render_message 文案不变 — 老客户短信零差异)。查询失败给 "0"。
+        params.update(self._archive_params())
         return params
+
+    def _archive_params(self) -> dict[str, str]:
+        try:
+            from backend.db.database import SessionLocal
+            from backend.models.archive_models import VideoArchiveLog
+            db = SessionLocal()
+            try:
+                q = db.query(VideoArchiveLog).filter(
+                    VideoArchiveLog.created_at >= self.window_start,
+                    VideoArchiveLog.created_at < self.window_end,
+                )
+                return {
+                    "archive_success": str(q.filter(
+                        VideoArchiveLog.status == "success").count()),
+                    "archive_failed": str(q.filter(
+                        VideoArchiveLog.status == "failed").count()),
+                }
+            finally:
+                db.close()
+        except Exception:
+            return {"archive_success": "0", "archive_failed": "0"}
 
     def to_context(self, *, include_template_params: bool = True) -> dict[str, object]:
         context: dict[str, object] = {

@@ -76,6 +76,18 @@ def _seed_order_and_detect(api_url: str):
     raise AssertionError("10s 内工位未绑定 e2e 工单")
 
 
+def _seed_scanner(api_url: str) -> int:
+    """扫码操作按钮只在 scanner_present=true 时渲染; 本用例测的是显示开关不是空列表。"""
+    name = f"__e2e_til_scan_{uuid.uuid4().hex[:6]}"
+    r = requests.post(f"{api_url}/api/v1/scanner/devices", json={
+        "name": name, "ip": "127.0.0.1",
+        "port": 24000 + (int(uuid.uuid4().hex[:3], 16) % 800),
+        "enabled": True, "device_type": "text_lon", "channel_id": 0,
+    }, timeout=10)
+    assert r.status_code == 200, r.text[:300]
+    return r.json()["id"]
+
+
 def _teardown(api_url: str):
     requests.post(f"{api_url}/api/v1/source/detection/stop?channel=0", timeout=15)
     requests.post(f"{api_url}/api/v1/test/synthetic/stop?channel=0", timeout=15)
@@ -87,9 +99,11 @@ def _teardown(api_url: str):
 # ==================== 用例 ====================
 
 def test_task_info_layout_switches(page, base_url, api_url):
+    scan_id = None
     try:
         _put_inbound(api_url, {})
         _purge_test_orders(api_url)
+        scan_id = _seed_scanner(api_url)
         _seed_order_and_detect(api_url)
 
         # ---- 默认态 = 原界面: 徽标在, 单行标签, 无表格, 扫码按钮在 ----
@@ -129,4 +143,6 @@ def test_task_info_layout_switches(page, base_url, api_url):
         assert TASK_NO in txt, "隐藏按钮不应影响任务要素显示"
         _toggle_scan_buttons()  # 复位回默认显示
     finally:
+        if scan_id is not None:
+            requests.delete(f"{api_url}/api/v1/scanner/devices/{scan_id}", timeout=10)
         _teardown(api_url)

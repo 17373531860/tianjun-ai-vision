@@ -683,6 +683,35 @@
                       </div>
                     </div>
                   </div>
+                  <!-- v3.53: 录像归档卡 -->
+                  <div class="border-t border-slate-800 pt-4 mt-4" data-test="video-archive-card">
+                    <div class="text-xs text-gray-500 font-medium mb-3 uppercase tracking-wider">录像归档</div>
+                    <div class="text-xs text-gray-600 pl-1 mb-2">
+                      周期录像收尾后自动拷贝到指定目录（本地或网络盘），支持仅 NG 筛选、按条码/工单命名。
+                    </div>
+                    <div class="space-y-2">
+                      <div class="setting-row">
+                        <span>归档规则</span>
+                        <span class="font-mono text-xs" :class="archiveStatus.rules_enabled > 0 ? 'text-cyan-400' : 'text-gray-500'">
+                          {{ archiveStatus.rules_enabled || 0 }} / {{ archiveStatus.rules_total || 0 }} 启用
+                        </span>
+                      </div>
+                      <div class="setting-row">
+                        <span>累计成功 / 失败</span>
+                        <span class="font-mono text-xs">
+                          <span class="text-emerald-400">{{ archiveStatus.success || 0 }}</span>
+                          <span class="text-gray-600"> / </span>
+                          <span :class="archiveStatus.failed > 0 ? 'text-red-400' : 'text-gray-500'">{{ archiveStatus.failed || 0 }}</span>
+                        </span>
+                      </div>
+                      <div v-if="archiveStatus.spool_depth > 0" class="text-xs text-yellow-400 pl-1">
+                        {{ archiveStatus.spool_depth }} 个任务等待重试（目标目录可能暂不可写）
+                      </div>
+                    </div>
+                    <el-button type="info" plain size="small" class="w-full mt-3" @click="openVideoArchiveDialog">
+                      配置录像归档
+                    </el-button>
+                  </div>
                 </div>
                 <!-- 清理操作 -->
                 <div class="space-y-4">
@@ -862,6 +891,9 @@
 
     <!-- v3.46: 每日短信日报管理对话框 -->
     <SmsReportDialog v-model="smsReportVisible" />
+
+    <!-- v3.53: 录像归档规则管理对话框 -->
+    <VideoArchiveDialog v-model="videoArchiveVisible" />
   </div>
   </TjSlot>
 </template>
@@ -877,6 +909,8 @@ import CustomExportDialog from './components/CustomExportDialog.vue';
 import RealtimeRulesDialog from './components/RealtimeRulesDialog.vue';
 import ScheduledRulesDialog from './components/ScheduledRulesDialog.vue';
 import SmsReportDialog from './components/SmsReportDialog.vue';
+import VideoArchiveDialog from './components/VideoArchiveDialog.vue';
+import { getArchiveStatus } from '@/api/videoArchive';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { getDetectionResults, getWorkstations } from '@/api/detection';
 import { 
@@ -1167,6 +1201,23 @@ const scheduledRulesVisible = ref(false);
 function openScheduledRulesDialog() {
   scheduledRulesVisible.value = true;
 }
+
+// v3.53: 录像归档对话框 + 状态卡
+const videoArchiveVisible = ref(false);
+const archiveStatus = ref({});
+function openVideoArchiveDialog() {
+  videoArchiveVisible.value = true;
+}
+async function loadArchiveStatus() {
+  try {
+    const res = await getArchiveStatus();
+    archiveStatus.value = res.data || {};
+  } catch (e) {
+    dbgErr('data', '加载录像归档状态失败', e);
+  }
+}
+// 弹窗里可能改了规则/跑了试归档, 关掉后刷新卡片计数
+watch(videoArchiveVisible, (v) => { if (!v) loadArchiveStatus(); });
 
 // v3.46: 短信日报对话框
 const smsReportVisible = ref(false);
@@ -2092,6 +2143,7 @@ onMounted(() => {
   loadStorageInfo();
   loadChannelCount();
   loadMesOrders();
+  loadArchiveStatus();
   
   if (projectStore.currentProjectId) {
     loadAvailableDates();

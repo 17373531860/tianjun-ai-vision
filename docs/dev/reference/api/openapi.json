@@ -282,6 +282,50 @@
     "title": "AutoResumeConfigRequest",
     "type": "object"
    },
+   "BackfillRequest": {
+    "properties": {
+     "date_from": {
+      "anyOf": [
+       {
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Date From"
+     },
+     "date_to": {
+      "anyOf": [
+       {
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Date To"
+     },
+     "limit": {
+      "default": 500,
+      "maximum": 5000.0,
+      "minimum": 1.0,
+      "title": "Limit",
+      "type": "integer"
+     },
+     "rule_id": {
+      "title": "Rule Id",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "rule_id"
+    ],
+    "title": "BackfillRequest",
+    "type": "object"
+   },
    "BarcodeInject": {
     "properties": {
      "barcode": {
@@ -3071,6 +3115,62 @@
      "admin_password"
     ],
     "title": "EnableAuthRequest",
+    "type": "object"
+   },
+   "EvidencePackRequest": {
+    "description": "三选一: cycle_ids 直接给 / session_id 整会话 / date 整天。默认只打 NG。",
+    "properties": {
+     "cycle_ids": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cycle Ids"
+     },
+     "date": {
+      "anyOf": [
+       {
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Date"
+     },
+     "limit": {
+      "default": 200,
+      "maximum": 500.0,
+      "minimum": 1.0,
+      "title": "Limit",
+      "type": "integer"
+     },
+     "ng_only": {
+      "default": true,
+      "title": "Ng Only",
+      "type": "boolean"
+     },
+     "session_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Session Id"
+     }
+    },
+    "title": "EvidencePackRequest",
     "type": "object"
    },
    "ExportSettingResponse": {
@@ -8172,6 +8272,182 @@
    },
    "RuleCreate": {
     "properties": {
+     "active_window": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Active Window"
+     },
+     "attach_keyframe": {
+      "default": false,
+      "title": "Attach Keyframe",
+      "type": "boolean"
+     },
+     "bandwidth_limit_kbps": {
+      "anyOf": [
+       {
+        "maximum": 1048576.0,
+        "minimum": 0.0,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Bandwidth Limit Kbps"
+     },
+     "bundle_zip": {
+      "default": false,
+      "title": "Bundle Zip",
+      "type": "boolean"
+     },
+     "channel_filter": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Channel Filter"
+     },
+     "clip_seconds": {
+      "default": 10,
+      "maximum": 600.0,
+      "minimum": 1.0,
+      "title": "Clip Seconds",
+      "type": "integer"
+     },
+     "delete_source_after": {
+      "default": false,
+      "title": "Delete Source After",
+      "type": "boolean"
+     },
+     "description": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Description"
+     },
+     "dest_config": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Dest Config"
+     },
+     "dest_dir": {
+      "maxLength": 500,
+      "minLength": 1,
+      "title": "Dest Dir",
+      "type": "string"
+     },
+     "dest_type": {
+      "default": "local_dir",
+      "pattern": "^(local_dir|ftp|sftp|s3|http|plugin:[A-Za-z0-9_\\-]+)$",
+      "title": "Dest Type",
+      "type": "string"
+     },
+     "enabled": {
+      "default": true,
+      "title": "Enabled",
+      "type": "boolean"
+     },
+     "filename_template": {
+      "default": "{{ workpiece.serial_no | default(cycle.id, true) }}_{{ 'OK' if cycle.is_good else 'NG' }}.mp4",
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Filename Template",
+      "type": "string"
+     },
+     "keyframe_watermark": {
+      "default": true,
+      "title": "Keyframe Watermark",
+      "type": "boolean"
+     },
+     "name": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Name",
+      "type": "string"
+     },
+     "overwrite_policy": {
+      "default": "rename",
+      "pattern": "^(rename|overwrite|skip)$",
+      "title": "Overwrite Policy",
+      "type": "string"
+     },
+     "project_filter": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Project Filter"
+     },
+     "result_filter": {
+      "default": "ng_only",
+      "pattern": "^(all|ng_only|ok_only)$",
+      "title": "Result Filter",
+      "type": "string"
+     },
+     "sidecar_template_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Sidecar Template Id"
+     },
+     "subdir_by_date": {
+      "default": true,
+      "title": "Subdir By Date",
+      "type": "boolean"
+     },
+     "transform": {
+      "default": "none",
+      "pattern": "^(none|clip_tail)$",
+      "title": "Transform",
+      "type": "string"
+     }
+    },
+    "required": [
+     "name",
+     "dest_dir"
+    ],
+    "title": "RuleCreate",
+    "type": "object"
+   },
+   "RuleCreate2": {
+    "properties": {
      "channel_filter": {
       "anyOf": [
        {
@@ -8325,7 +8601,7 @@
     "title": "RuleCreate",
     "type": "object"
    },
-   "RuleCreate2": {
+   "RuleCreate3": {
     "properties": {
      "channel_id": {
       "anyOf": [
@@ -8485,7 +8761,7 @@
     "title": "RuleCreate",
     "type": "object"
    },
-   "RuleCreate3": {
+   "RuleCreate4": {
     "properties": {
      "channel_ids": {
       "anyOf": [
@@ -8640,6 +8916,264 @@
     "type": "object"
    },
    "RuleUpdate": {
+    "properties": {
+     "active_window": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Active Window"
+     },
+     "attach_keyframe": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Attach Keyframe"
+     },
+     "bandwidth_limit_kbps": {
+      "anyOf": [
+       {
+        "maximum": 1048576.0,
+        "minimum": 0.0,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Bandwidth Limit Kbps"
+     },
+     "bundle_zip": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Bundle Zip"
+     },
+     "channel_filter": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Channel Filter"
+     },
+     "clip_seconds": {
+      "anyOf": [
+       {
+        "maximum": 600.0,
+        "minimum": 1.0,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Clip Seconds"
+     },
+     "delete_source_after": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Delete Source After"
+     },
+     "description": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Description"
+     },
+     "dest_config": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Dest Config"
+     },
+     "dest_dir": {
+      "anyOf": [
+       {
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Dest Dir"
+     },
+     "dest_type": {
+      "anyOf": [
+       {
+        "pattern": "^(local_dir|ftp|sftp|s3|http|plugin:[A-Za-z0-9_\\-]+)$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Dest Type"
+     },
+     "enabled": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Enabled"
+     },
+     "filename_template": {
+      "anyOf": [
+       {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Filename Template"
+     },
+     "keyframe_watermark": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Keyframe Watermark"
+     },
+     "name": {
+      "anyOf": [
+       {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Name"
+     },
+     "overwrite_policy": {
+      "anyOf": [
+       {
+        "pattern": "^(rename|overwrite|skip)$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Overwrite Policy"
+     },
+     "project_filter": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Project Filter"
+     },
+     "result_filter": {
+      "anyOf": [
+       {
+        "pattern": "^(all|ng_only|ok_only)$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Result Filter"
+     },
+     "sidecar_template_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Sidecar Template Id"
+     },
+     "subdir_by_date": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Subdir By Date"
+     },
+     "transform": {
+      "anyOf": [
+       {
+        "pattern": "^(none|clip_tail)$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Transform"
+     }
+    },
+    "title": "RuleUpdate",
+    "type": "object"
+   },
+   "RuleUpdate2": {
     "properties": {
      "channel_filter": {
       "anyOf": [
@@ -8885,7 +9419,7 @@
     "title": "RuleUpdate",
     "type": "object"
    },
-   "RuleUpdate2": {
+   "RuleUpdate3": {
     "properties": {
      "channel_id": {
       "anyOf": [
@@ -9103,7 +9637,7 @@
     "title": "RuleUpdate",
     "type": "object"
    },
-   "RuleUpdate3": {
+   "RuleUpdate4": {
     "properties": {
      "channel_ids": {
       "anyOf": [
@@ -12329,6 +12863,34 @@
        }
       ],
       "title": "Session Id"
+     }
+    },
+    "title": "TestRunRequest",
+    "type": "object"
+   },
+   "TestRunRequest2": {
+    "properties": {
+     "cycle_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cycle Id"
+     },
+     "rule_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Rule Id"
      }
     },
     "title": "TestRunRequest",
@@ -17742,7 +18304,7 @@
      "content": {
       "application/json": {
        "schema": {
-        "$ref": "#/components/schemas/RuleCreate"
+        "$ref": "#/components/schemas/RuleCreate2"
        }
       }
      },
@@ -17880,7 +18442,7 @@
      "content": {
       "application/json": {
        "schema": {
-        "$ref": "#/components/schemas/RuleUpdate"
+        "$ref": "#/components/schemas/RuleUpdate2"
        }
       }
      },
@@ -18349,7 +18911,7 @@
      "content": {
       "application/json": {
        "schema": {
-        "$ref": "#/components/schemas/RuleCreate2"
+        "$ref": "#/components/schemas/RuleCreate3"
        }
       }
      },
@@ -18575,7 +19137,7 @@
      "content": {
       "application/json": {
        "schema": {
-        "$ref": "#/components/schemas/RuleUpdate2"
+        "$ref": "#/components/schemas/RuleUpdate3"
        }
       }
      },
@@ -19206,6 +19768,516 @@
     "summary": "Clone Template",
     "tags": [
      "export"
+    ]
+   }
+  },
+  "/api/v1/export/video-archive/adapter-types": {
+   "get": {
+    "description": "可用目的地类型 (内置 + 插件注册的), 前端下拉数据源。",
+    "operationId": "adapter_types_api_v1_export_video_archive_adapter_types_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Adapter Types Api V1 Export Video Archive Adapter Types Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Adapter Types",
+    "tags": [
+     "video-archive"
+    ]
+   }
+  },
+  "/api/v1/export/video-archive/backfill": {
+   "post": {
+    "description": "历史回补 (四期): 把存量带录像周期按指定规则补归档, 异步执行。\n目标端建议规则用 skip/overwrite 重名策略保证幂等。",
+    "operationId": "backfill_api_v1_export_video_archive_backfill_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/BackfillRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Backfill Api V1 Export Video Archive Backfill Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Backfill",
+    "tags": [
+     "video-archive"
+    ]
+   }
+  },
+  "/api/v1/export/video-archive/evidence-pack": {
+   "post": {
+    "description": "手动证据包 (二期): 勾选周期/会话/日期打 zip, 直接流式下载。\nzip 内每周期一个文件夹: video.mp4 + keyframe.jpg + meta.json。",
+    "operationId": "evidence_pack_api_v1_export_video_archive_evidence_pack_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/EvidencePackRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Evidence Pack",
+    "tags": [
+     "video-archive"
+    ]
+   }
+  },
+  "/api/v1/export/video-archive/logs": {
+   "get": {
+    "operationId": "archive_logs_api_v1_export_video_archive_logs_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "rule_id",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Rule Id"
+      }
+     },
+     {
+      "in": "query",
+      "name": "status",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Status"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 50,
+       "maximum": 500,
+       "minimum": 1,
+       "title": "Limit",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "offset",
+      "required": false,
+      "schema": {
+       "default": 0,
+       "minimum": 0,
+       "title": "Offset",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Archive Logs Api V1 Export Video Archive Logs Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Archive Logs",
+    "tags": [
+     "video-archive"
+    ]
+   }
+  },
+  "/api/v1/export/video-archive/rules": {
+   "get": {
+    "operationId": "list_rules_api_v1_export_video_archive_rules_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response List Rules Api V1 Export Video Archive Rules Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "List Rules",
+    "tags": [
+     "video-archive"
+    ]
+   },
+   "post": {
+    "operationId": "create_rule_api_v1_export_video_archive_rules_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RuleCreate"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Create Rule Api V1 Export Video Archive Rules Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Create Rule",
+    "tags": [
+     "video-archive"
+    ]
+   }
+  },
+  "/api/v1/export/video-archive/rules/{rule_id}": {
+   "delete": {
+    "operationId": "delete_rule_api_v1_export_video_archive_rules__rule_id__delete",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "rule_id",
+      "required": true,
+      "schema": {
+       "title": "Rule Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Delete Rule Api V1 Export Video Archive Rules  Rule Id  Delete",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Delete Rule",
+    "tags": [
+     "video-archive"
+    ]
+   },
+   "get": {
+    "operationId": "get_rule_api_v1_export_video_archive_rules__rule_id__get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "rule_id",
+      "required": true,
+      "schema": {
+       "title": "Rule Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Get Rule Api V1 Export Video Archive Rules  Rule Id  Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Get Rule",
+    "tags": [
+     "video-archive"
+    ]
+   },
+   "put": {
+    "operationId": "update_rule_api_v1_export_video_archive_rules__rule_id__put",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "rule_id",
+      "required": true,
+      "schema": {
+       "title": "Rule Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RuleUpdate"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Update Rule Api V1 Export Video Archive Rules  Rule Id  Put",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Update Rule",
+    "tags": [
+     "video-archive"
+    ]
+   }
+  },
+  "/api/v1/export/video-archive/rules/{rule_id}/toggle": {
+   "post": {
+    "operationId": "toggle_rule_api_v1_export_video_archive_rules__rule_id__toggle_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "rule_id",
+      "required": true,
+      "schema": {
+       "title": "Rule Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Toggle Rule Api V1 Export Video Archive Rules  Rule Id  Toggle Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Toggle Rule",
+    "tags": [
+     "video-archive"
+    ]
+   }
+  },
+  "/api/v1/export/video-archive/status": {
+   "get": {
+    "operationId": "archive_status_api_v1_export_video_archive_status_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Archive Status Api V1 Export Video Archive Status Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Archive Status",
+    "tags": [
+     "video-archive"
+    ]
+   }
+  },
+  "/api/v1/export/video-archive/test-run": {
+   "post": {
+    "operationId": "test_run_api_v1_export_video_archive_test_run_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/TestRunRequest2"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Test Run Api V1 Export Video Archive Test Run Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Test Run",
+    "tags": [
+     "video-archive"
     ]
    }
   },
@@ -28298,7 +29370,7 @@
      "content": {
       "application/json": {
        "schema": {
-        "$ref": "#/components/schemas/RuleCreate3"
+        "$ref": "#/components/schemas/RuleCreate4"
        }
       }
      },
@@ -28424,7 +29496,7 @@
      "content": {
       "application/json": {
        "schema": {
-        "$ref": "#/components/schemas/RuleUpdate3"
+        "$ref": "#/components/schemas/RuleUpdate4"
        }
       }
      },

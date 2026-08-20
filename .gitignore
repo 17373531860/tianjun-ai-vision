@@ -208,6 +208,8 @@ tests/uat/*.png
 tests/uat/*.webm
 tests/uat/evidence_*/
 tests/uat/settle_scan_*/
+# artifacts 下截图入库作证据, webm 录像不入库 (体积大, 惯例从未入库)
+tests/uat/artifacts/*/video/
 
 # 测试临时输出
 tests/_ar_*.txt
@@ -220,3 +222,9 @@ backend/diag_flicker/
 
 # pack-plugin.py 默认输出目录 (发布物走 dist-plugins/ 归档)
 /dist/
+
+# v3.53 录像归档: 本机 Fernet 凭据密钥 (换机重填凭据, 绝不入库)
+archive_secret.key
+
+# 本机开发用 ffmpeg 二进制 (Mac 调试落位, 打包链路另有 GPL Win64 资源)
+/ffmpeg/

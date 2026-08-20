@@ -12,9 +12,27 @@
 > - `db/sql_compat.py`（27→47 行）：新增三个方言助手——`hour_minute(col)`（PG `to_char(HH24:MI)` / SQLite `strftime('%H:%M')`）、`date_str(col)`（PG `to_char(YYYY-MM-DD)` / SQLite `date()`）、`sum_bool(expr)`（`sum(case when ...)` 双方言通用）。存量 SQLite 特有 SQL 的收编出口，消费方：export_context / reports 域。双方言回归 `tests/test_sql_compat_ws5.py`。
 > - `services/external_alarm.py`：原生 `json_extract` 裸 SQL 改 SQLAlchemy JSON 索引表达式（双方言可用）。
 > - `services/sms_offline_queue.py` / `services/interconnect/sample_queue.py`：文件头补**旁路队列决策注释**——两队列独立本地 SQLite，**不随 DATABASE_URL 迁 PG**（离线暂存语义本来就要求本地可用，主库断连时仍能落盘）。
+> **v3.53 补账（2026-08-20，录像归档与媒体证据体系）**：新增归档家族七文件（见下方「录像归档与媒体证据」节）；另 `services/export_field_registry.py` 加 `cycle.archived_*` 三字段 + `aggregations.archive_*` 三字段，`services/export_context.py` 反查台账填充，`services/sms_service.py` 加 `{archive_success}/{archive_failed}` 模板参数，`plugin_system/registry.py` 加 `register_archive_adapter` 主动 API（capability `runtime.archive_adapter`）。
+>
 > - `scripts/db/sqlite_to_pg.py`：迁移工具扩能——`--dry-run`（只探不写）/ `--verify`（逐表行数比对）/ JSON 列解码后直写（防 PG 存成转义字符串）/ 孤儿外键扫描报告（SQLite 不强制 FK 的历史遗留）/ 迁移期 `session_replication_role=replica` 关 FK + 序列重置。真迁移回归 `tests/test_sqlite_to_pg_migration.py`（需 PG 服务，SQLite 环境自动 skip）。
 
 ---
+
+## 〇之一点五、录像归档与媒体证据（v3.53 新增家族）
+
+> 规则驱动的周期录像自动归档 + NG 关键帧/sidecar/证据包/事件切片 + FTP/SFTP/S3/HTTP 远端投递。默认关零开销；诊断见 `debug-video-archive` skill（文件地图/症状排查/不变量都在那里，此处只记落位）。
+
+| 文件 | 行数 | 职责一句话 |
+|---|---|---|
+| `models/archive_models.py` | 121 | `VideoArchiveRule`（规则：筛选/目的地/命名/证据/治理）+ `VideoArchiveLog`（台账）两表；create_all 自建。**三处注册**：main.py / tests/conftest.py / alembic/env.py 显式 import |
+| `services/video_archive.py` | 872 | 引擎：规则缓存（`refresh_rules_cache` 同时刷 `keyframe_wanted` 守门位）/ 任务队列 + lazy worker / spool 断点重放（`video_archive_spool.jsonl`，预算 8 次）/ 时间窗 defer 不耗预算 / Jinja2 模板渲染 / 交付编排 `_archive_cycle_with_rules` / 删源三重门 / 回补 / 手动证据包 `build_evidence_pack` |
+| `services/archive_media.py` | 160 | 媒体件：`save_ng_keyframe`（水印+`.tmp.jpg` 原子写，扩展名坑勿改）/ `save_keyframe_async`（画框+编码独立线程）/ `find_keyframe`（今天/昨天两日期目录反查）/ `clip_tail`（ffmpeg `-sseof -c copy` 尾切）/ `build_evidence_zip` |
+| `services/archive_adapters.py` | 306 | 目的地 adapter 注册表：local_dir/ftp/sftp/s3/http 内置 + `register_archive_adapter` 插件口；`PermanentDeliveryError`=不重试；`_iter_file_throttled` 256KB 块间 sleep 限速 |
+| `services/archive_secrets.py` | 112 | dest_config 凭据 Fernet 加密（`{DATA_DIR}/archive_secret.key` 0600 本机钥）：encrypt/decrypt/mask（回显 `******`）/merge_masked（回传 `******`=不改） |
+| `services/archive_ecosystem.py` | 128 | 归档成功联动：`video_archived` 插件 hook + 网关事件（走 dispatch_gateway 异步执行器）+ sidecar 渲染 + `latest_archive_info`（export_context 反查 `cycle.archived_*`） |
+| `api/video_archive.py` | 380 | `/api/v1/export/video-archive/*` 9 端点（rules CRUD+toggle / status / logs / test-run / adapter-types / backfill / evidence-pack）；权限 `data.export`；`_DEST_DIR_BLACKLIST` 目录护栏在此层 |
+
+触发点在三个 source mixin：`source_recording_api_mixin`（录像收尾 enqueue）/ `source_session_lifecycle_mixin`（NG 定案置 `_archive_ng_frame_pending`）/ `source_inference_loop_mixin`（同帧消费异步抽帧）。前端 `api/videoArchive.js` + `views/Data/components/VideoArchiveDialog.vue`。
 
 ## 〇之二、训练平台互连（v3.47 新增家族）
 

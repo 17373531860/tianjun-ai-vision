@@ -36,6 +36,7 @@ def mount_all_routers(app: FastAPI) -> None:
     from backend.api import interconnect      # v3.47 训练平台互连 (契约 1.0)
     from backend.api import plc               # RFC 13 通用 PLC 连接器
     from backend.api import triggers          # RFC 14 统一触发中心
+    from backend.api import video_archive     # v3.53 录像归档规则
 
     app.include_router(projects.router, prefix=f"{v1}/projects", tags=["projects"])
     app.include_router(models.router, prefix=f"{v1}/models", tags=["models"])
@@ -48,6 +49,7 @@ def mount_all_routers(app: FastAPI) -> None:
     app.include_router(export_custom.router, prefix=f"{v1}/export", tags=["export"])
     app.include_router(export_realtime.router, prefix=f"{v1}/export", tags=["export-realtime"])
     app.include_router(export_scheduled.router, prefix=f"{v1}/export", tags=["export-scheduled"])
+    app.include_router(video_archive.router, prefix=f"{v1}/export", tags=["video-archive"])
     app.include_router(sms_report.router, prefix=f"{v1}/sms-report", tags=["sms-report"])
     app.include_router(channel_groups.router, prefix=f"{v1}/channel-groups", tags=["channel-groups"])
     app.include_router(workpiece_flows.router, prefix=f"{v1}/workpiece-flows", tags=["workpiece-flows"])

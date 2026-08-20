@@ -444,6 +444,21 @@ class InferenceLoopMixin:
                 except Exception as _e:
                     debug_log(f"!!! interconnect 采样异常 (已隔离): {_e}", "INFERENCE")
 
+                # v3.53 归档 NG 关键帧: end_cycle NG 定案后置的 pending 在此同帧
+                # 消费 (与 interconnect 采样同款时序 — 结算当帧)。热路径只付
+                # 一次 getattr + copy, 画框/JPEG 编码/落盘在独立线程做; 无
+                # attach_keyframe 归档规则时 pending 永不置位 (零开销)。
+                _va_pending = getattr(self, '_archive_ng_frame_pending', None)
+                if _va_pending is not None:
+                    self._archive_ng_frame_pending = None
+                    try:
+                        from backend.services.archive_media import save_keyframe_async
+                        save_keyframe_async(original_frame, detections,
+                                            _va_pending,
+                                            getattr(self, 'drawer', None))
+                    except Exception as _e:
+                        debug_log(f"!!! 归档关键帧采集异常 (已隔离): {_e}", "INFERENCE")
+
                 # 推理节流: 每帧至少 5ms, 防止推理线程吃满 CPU
                 loop_elapsed = time.time() - loop_start
                 min_inference_interval = 0.005

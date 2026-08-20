@@ -199,6 +199,14 @@ class RecordingApiMixin:
             _cycle_uuid = getattr(self, 'current_cycle_uuid', None)
             _start_dt = datetime.now()
 
+            # v3.53 录像归档: 把周期身份钉在 writer 上, 停止时的延迟释放线程
+            # 在 release() 成功后凭它入队归档任务 (那时 self.current_cycle_uuid
+            # 可能已经翻到下一个周期, 不能现取)。
+            writer._archive_meta = {
+                'cycle_uuid': _cycle_uuid,
+                'channel_id': getattr(self, 'channel_id', 0),
+            }
+
             def _persist_cycle_video_meta():
                 from backend.db.database import SessionLocal
                 db = SessionLocal()
@@ -244,6 +252,19 @@ class RecordingApiMixin:
                 try:
                     w.release()
                     print("[Recording] cycle video stopped (drained)")
+                    # v3.53 录像归档: release 返回 = FFmpeg 子进程已退出,
+                    # 这是"文件完整可搬运"的唯一可靠信号点。只投递不阻塞
+                    # (无启用规则时 notify 内部直接短路, 零开销)。
+                    try:
+                        meta = getattr(w, '_archive_meta', None)
+                        if meta and meta.get('cycle_uuid'):
+                            from backend.services.video_archive import (
+                                notify_cycle_video_ready)
+                            notify_cycle_video_ready(
+                                meta.get('channel_id', 0),
+                                meta['cycle_uuid'], w.filepath)
+                    except Exception as _ae:
+                        print(f"[VideoArchive] 归档任务入队失败(不影响录像): {_ae}")
                 except Exception as e:
                     print(f"[Recording] stop cycle recording failed: {e}")
                 finally:
