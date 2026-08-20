@@ -1333,6 +1333,63 @@ def _get_pkg_hold_safe(channel: int) -> Optional[dict]:
         return None
 
 
+def _combo_plc_type_safe(mgr) -> Optional[dict]:
+    """v3.49 二期: 实时缸型透出 {value, tag} (Monitor 大字卡用)。
+
+    点位来源: combo_table.plc_display (独立配置, 数量门没开也能显示),
+    缺省回落 step_guard 的 plc_connection_id/plc_point。读 RFC 13 点位
+    引擎的轮询缓存值 (零新增通讯); tag 用行级 plc_code 宽松比对反查
+    (如 4 → "4缸")。无配置/读不到 → None, 前端不画。异常隔离。
+    """
+    combo = getattr(mgr, '_combo_table', None)
+    if not combo:
+        return None
+    pd = combo.get('plc_display') or {}
+    sg = combo.get('step_guard') or {}
+    conn = pd.get('connection_id') or sg.get('plc_connection_id')
+    point = pd.get('point') or sg.get('plc_point')
+    if not conn or not point:
+        return None
+    try:
+        from backend.services.plc.manager import get_plc_manager
+        eng = get_plc_manager().get_engine(int(conn))
+        val = eng.values.get(point) if eng is not None else None
+    except Exception:
+        val = None
+    if val is None:
+        return None
+    tag = None
+    try:
+        from backend.api.source_combo_guard import _loose_eq
+        for row in combo.get('rows') or []:
+            if row.get('plc_code') and _loose_eq(row['plc_code'], val):
+                tag = row.get('tag') or None
+                break
+    except Exception:
+        tag = None
+    return {'value': val, 'tag': tag}
+
+
+def _combo_settle_hold_safe(mgr) -> Optional[dict]:
+    """v3.49 二期: 结算挂起等补状态透出 (Monitor 琥珀横幅用)。None=无挂起。"""
+    hold = getattr(mgr, '_combo_settle_hold', None)
+    if not hold:
+        return None
+    combo = getattr(mgr, '_combo_table', None) or {}
+    sg = combo.get('step_guard') or {}
+    timeout = float(sg.get('hold_timeout_s') or 0)
+    elapsed = max(0.0, time.time() - float(hold.get('since') or 0))
+    return {
+        'active': True,
+        'since': hold.get('since'),
+        'reason': hold.get('reason'),
+        'timeout_s': timeout,
+        # 剩余秒数 (0=已到期待落账; None=不限时)
+        'remaining_s': (max(0.0, round(timeout - elapsed, 1))
+                        if timeout else None),
+    }
+
+
 def _resolve_pkg_hold_on_ack(channel: int, action: Optional[str],
                              operator: Optional[str]) -> Optional[dict]:
     """v3.44: 人工确认时联动解除包装层 NG 挂账 (无挂账 / 通道不参与包装 → None).
@@ -1723,12 +1780,32 @@ def get_detection_results(
         # v3.23 缺步骤延迟落账挂起明细 (None=无挂起; 前端 ack 窗据此展示缺项 + "补步骤"按钮)
         "pending_remediation": getattr(mgr, '_pending_remediation', None),
         # v3.48 计数组合判定表 (纯视觉判型): enabled=项目配了表, last_tag=最近命中机型;
-        # count_mode='positional' 时另透出本周期位置去重实时计数 (未结算也可读)
+        # count_mode='positional' 时另透出本周期位置去重实时计数 + 锁定/候选 ROI
+        # (Monitor 画常驻锁框+编号, 现场肉眼核数; 未结算也可读)
         "combo_verdict": {
             "enabled": bool(getattr(mgr, '_combo_table', None)),
             "last_tag": getattr(mgr, '_combo_last_tag', None),
-            **({"positional_counts": mgr._combo_positional.counts()}
+            **({"positional_counts": mgr._combo_positional.counts(),
+                "positional_rois": mgr._combo_positional.rois(),
+                # 锁定框显示开关 (只控制 Monitor 画不画, 锁定/计数照常跑)
+                "show_lock_overlay": (getattr(mgr, '_combo_table', None)
+                                      or {}).get('show_lock_overlay', True)}
                if getattr(mgr, '_combo_positional', None) is not None else {}),
+            # v3.49 切步数量门运行态 (未启用 = enabled False; last=最近违规快照)
+            "step_guard": {
+                "enabled": getattr(mgr, '_combo_guard', None) is not None,
+                "last": getattr(mgr, '_combo_guard_last', None),
+                "plc_value": (getattr(mgr, '_combo_guard', None).last_plc_value
+                              if getattr(mgr, '_combo_guard', None) is not None
+                              else None),
+            },
+            # v3.49 二期: 实时缸型 {value, tag} (plc_display/step_guard 点位缓存;
+            # 无配置/读不到 = None) + Monitor 大字卡配置 (默认 None = 关)
+            "plc_type": _combo_plc_type_safe(mgr),
+            "live_display": (getattr(mgr, '_combo_table', None)
+                             or {}).get('live_display'),
+            # v3.49 二期: 结算挂起等补状态 (on_settle_mismatch='hold'; None=无挂起)
+            "settle_hold": _combo_settle_hold_safe(mgr),
         },
     }
 

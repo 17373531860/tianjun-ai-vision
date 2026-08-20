@@ -348,7 +348,24 @@ def _parse_combo_table(raw):
     输入 schema (pipeline_config.combo_table):
       {enabled: bool, labels: [str], rows: [{counts: [int], verdict: "OK"|"NG", tag: str}],
        count_mode: "steps"(默认) | "positional",
-       tracking: {iou, ema_alpha, min_consecutive, pending_ttl, perish_ticks, idle_reset_ticks}}
+       tracking: {iou, ema_alpha, min_consecutive, pending_ttl, perish_ticks, idle_reset_ticks},
+       show_lock_overlay: bool (默认 True; 仅 positional 有意义 — Monitor 画不画
+                          锁定框, 只影响显示, 锁定/计数照常跑),
+       step_guard: {enabled, check_under, check_over, check_order,
+                    action: "hint"|"instant_ng",
+                    event_id, resolved_event_id, expected_source: "table"|"plc"|"auto",
+                    narrow_by_progress, plc_unavailable: "table"|"skip",
+                    plc_connection_id, plc_point,
+                    on_settle_mismatch: "ng"|"hold", hold_timeout_s}
+                   (v3.49 切步数量门, 未启用 = None = 零差异,
+                    详见 source_combo_guard.py),
+       live_display: {enabled, size: "normal"|"large", show_plc_type, position: "top"|"bottom"}
+                   (v3.49 Monitor 大字实时卡, 默认关 = 仅现状小字条),
+       plc_display: {connection_id, point}
+                   (v3.49 缸型显示独立点位来源, 缺省回落 step_guard 的点位),
+       tracking_per_label: {label: {六参数任意子集}}
+                   (v3.49 positional 追踪参数按标签覆盖, 缺省用全局 tracking)}
+    行级可选 plc_code: 该机型行对应的 PLC 缸型码 (数量门 expected_source=plc/auto 用)。
     校验规则: labels 非空去重; 行 counts 长度必须与 labels 等长 (错行丢弃并打日志),
     counts 逐项转非负 int; verdict 只认 NG (其余按 OK); 全部行非法时整表禁用。
     count_mode='positional' 时结算计数改用位置去重引擎 (IoU 追踪, 同位置返工
@@ -377,28 +394,139 @@ def _parse_combo_table(raw):
             'counts': counts,
             'verdict': 'NG' if str(row.get('verdict', 'OK')).upper() == 'NG' else 'OK',
             'tag': str(row.get('tag') or '').strip(),
+            # v3.49 数量门 PLC 联动: 行级缸型码 (选填, 与 PLC 缸型点位值宽松比对)
+            'plc_code': str(row.get('plc_code') or '').strip(),
         })
     if not rows:
         print("[ComboTable] 启用但无有效行, 整表禁用")
         return None
+    # ---- v3.49 切步数量门 (step_guard) 归一化: 未启用 = None = 零差异 ----
+    step_guard = None
+    sg = raw.get('step_guard')
+    if isinstance(sg, dict) and sg.get('enabled'):
+        action = sg.get('action')
+        if action not in ('hint', 'instant_ng'):
+            action = 'hint'
+        src = sg.get('expected_source')
+        if src not in ('table', 'plc', 'auto'):
+            src = 'table'
+        unavailable = sg.get('plc_unavailable')
+        if unavailable not in ('table', 'skip'):
+            unavailable = 'table'
+        try:
+            event_id = int(sg['event_id']) if sg.get('event_id') is not None else None
+        except (TypeError, ValueError):
+            event_id = None
+        try:
+            conn_id = int(sg['plc_connection_id']) if sg.get('plc_connection_id') else None
+        except (TypeError, ValueError):
+            conn_id = None
+        try:
+            resolved_event_id = int(sg['resolved_event_id']) if sg.get('resolved_event_id') is not None else None
+        except (TypeError, ValueError):
+            resolved_event_id = None
+        # 2026-08-12 产品决策: 系统 合格(1)/不合格(2) 是结算事件, 数量门的
+        # 提示/消警禁止借用 (借面会污染 OK/NG 统计与主逻辑联动) —— 配了
+        # 一律视为未配 (仅横幅+日志)。前端下拉已同步不给选, 这里兜底旧配置。
+        if event_id in (1, 2):
+            print(f"[ComboGuard] 提示事件禁止借用系统 OK/NG 事件 (id={event_id}), "
+                  f"已忽略 — 请在事件设置新建专用事件 (如「数量门警告」)")
+            event_id = None
+        if resolved_event_id in (1, 2):
+            print(f"[ComboGuard] 已补齐事件禁止借用系统 OK/NG 事件 (id={resolved_event_id}), "
+                  f"已忽略 — 请在事件设置新建专用事件")
+            resolved_event_id = None
+        on_settle_mismatch = sg.get('on_settle_mismatch')
+        if on_settle_mismatch not in ('ng', 'hold'):
+            on_settle_mismatch = 'ng'
+        try:
+            hold_timeout_s = min(86400.0, max(0.0, float(sg.get('hold_timeout_s', 120))))
+        except (TypeError, ValueError):
+            hold_timeout_s = 120.0
+        step_guard = {
+            'enabled': True,  # 进归一化结果即启用; 前端落库/回显认这个键
+            'check_under': sg.get('check_under') is not False,
+            'check_over': sg.get('check_over') is not False,
+            # v3.49 二期: combo 标签间工序顺序检查 (默认关)
+            'check_order': sg.get('check_order') is True,
+            'action': action,
+            'event_id': event_id,
+            # v3.49 二期: 补齐消警时触发的可配事件 (None = 仅消横幅+日志)
+            'resolved_event_id': resolved_event_id,
+            'expected_source': src,
+            'narrow_by_progress': sg.get('narrow_by_progress') is not False,
+            'plc_unavailable': unavailable,
+            'plc_connection_id': conn_id,
+            'plc_point': str(sg.get('plc_point') or '').strip(),
+            # v3.49 二期: 结算查表未命中处置 — ng(现状) | hold(挂起等补, 超时 NG)
+            'on_settle_mismatch': on_settle_mismatch,
+            'hold_timeout_s': hold_timeout_s,
+        }
+
     mode = 'positional' if str(raw.get('count_mode') or '').lower() == 'positional' else 'steps'
+    # 追踪六参数统一 clamp 口径: key -> (default, lo, hi, as_int)
+    _TRACK_SPEC = {
+        'iou': (0.4, 0.05, 0.95, False),
+        'ema_alpha': (0.6, 0.0, 1.0, False),
+        'min_consecutive': (3, 1, 60, True),
+        'pending_ttl': (10, 1, 600, True),
+        'perish_ticks': (0, 0, 100000, True),
+        'idle_reset_ticks': (0, 0, 100000, True),
+    }
     tracking = {}
+    tracking_per_label = {}
     if mode == 'positional':
         tr = raw.get('tracking') if isinstance(raw.get('tracking'), dict) else {}
-        def _f(key, default, lo, hi):
+        for key, (default, lo, hi, as_int) in _TRACK_SPEC.items():
             try:
-                return min(hi, max(lo, float(tr.get(key, default))))
+                v = min(hi, max(lo, float(tr.get(key, default))))
             except (TypeError, ValueError):
-                return default
-        tracking = {
-            'iou': _f('iou', 0.4, 0.05, 0.95),
-            'ema_alpha': _f('ema_alpha', 0.6, 0.0, 1.0),
-            'min_consecutive': int(_f('min_consecutive', 3, 1, 60)),
-            'pending_ttl': int(_f('pending_ttl', 10, 1, 600)),
-            'perish_ticks': int(_f('perish_ticks', 0, 0, 100000)),
-            'idle_reset_ticks': int(_f('idle_reset_ticks', 0, 0, 100000)),
+                v = default
+            tracking[key] = int(v) if as_int else v
+        # v3.49 二期: 追踪参数按标签覆盖 (留空的键回落全局 tracking)
+        tpl = raw.get('tracking_per_label')
+        if isinstance(tpl, dict):
+            for lbl, ov in tpl.items():
+                lbl = str(lbl).strip()
+                if lbl not in labels or not isinstance(ov, dict):
+                    continue
+                cleaned = {}
+                for key, (default, lo, hi, as_int) in _TRACK_SPEC.items():
+                    if ov.get(key) is None or ov.get(key) == '':
+                        continue
+                    try:
+                        v = min(hi, max(lo, float(ov[key])))
+                    except (TypeError, ValueError):
+                        continue
+                    cleaned[key] = int(v) if as_int else v
+                if cleaned:
+                    tracking_per_label[lbl] = cleaned
+    # ---- v3.49 二期: Monitor 大字实时卡 (默认关 = 零差异) ----
+    live_display = None
+    ld = raw.get('live_display')
+    if isinstance(ld, dict) and ld.get('enabled'):
+        live_display = {
+            'enabled': True,
+            'size': 'normal' if str(ld.get('size') or '').lower() == 'normal' else 'large',
+            'show_plc_type': ld.get('show_plc_type') is not False,
+            'position': 'bottom' if str(ld.get('position') or '').lower() == 'bottom' else 'top',
         }
-    return {'labels': labels, 'rows': rows, 'count_mode': mode, 'tracking': tracking}
+    # ---- v3.49 二期: 缸型显示独立点位来源 (缺省回落 step_guard 点位) ----
+    plc_display = None
+    pd = raw.get('plc_display')
+    if isinstance(pd, dict):
+        try:
+            pd_conn = int(pd['connection_id']) if pd.get('connection_id') else None
+        except (TypeError, ValueError):
+            pd_conn = None
+        pd_point = str(pd.get('point') or '').strip()
+        if pd_conn and pd_point:
+            plc_display = {'connection_id': pd_conn, 'point': pd_point}
+    return {'labels': labels, 'rows': rows, 'count_mode': mode, 'tracking': tracking,
+            'tracking_per_label': tracking_per_label,
+            'show_lock_overlay': raw.get('show_lock_overlay') is not False,
+            'step_guard': step_guard,
+            'live_display': live_display, 'plc_display': plc_display}
 
 
 def _apply_pipeline_config(h, config, pipeline_config):
@@ -421,12 +549,21 @@ def _apply_pipeline_config(h, config, pipeline_config):
     h._combo_last_tag = None
     from backend.api.source_combo_positional import build_combo_positional
     h._combo_positional = build_combo_positional(h._combo_table)
+    # v3.49 切步数量门: 上一步数量不对不等结算, 切步/超装当场报 (提示或即时NG)。
+    # 未配置 step_guard = None = 热路径一次 getattr 早退零开销。
+    from backend.api.source_combo_guard import build_combo_step_guard
+    h._combo_guard = build_combo_step_guard(h._combo_table)
+    h._combo_guard_last = None
+    # v3.49 二期: 结算挂起 (on_settle_mismatch=hold) 运行态, 切配置必清
+    h._combo_settle_hold = None
     if h._combo_table:
         print(f"计数组合判定表: labels={h._combo_table['labels']} "
               f"{len(h._combo_table['rows'])} 行 (未命中一律 NG), "
               f"count_mode={h._combo_table['count_mode']}"
               + (f", tracking={h._combo_table['tracking']}"
-                 if h._combo_positional else ""))
+                 if h._combo_positional else "")
+              + (f", step_guard={h._combo_table['step_guard']}"
+                 if h._combo_guard else ""))
 
     # ==================== NG 判定与处置 (v3.44 统一模型) ====================
     # 单一块 ng_handling (新配置) 或 legacy 键合成 (老项目零差异), 展开到既有

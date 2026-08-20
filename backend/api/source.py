@@ -1480,6 +1480,15 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         if _re_engine is not None:
             _re_engine.reset()
 
+        # v3.49 切步数量门: 启停/切项目/强制结算时清去重账;
+        # _combo_guard_last 故意保留 — 即时NG 也会走本清理, 横幅要留到下次违规/切配置
+        _combo_guard = getattr(self, '_combo_guard', None)
+        if _combo_guard is not None:
+            _combo_guard.reset()
+        # v3.49 二期: 结算挂起等补随运行时清理终结 (停止/切项目/强制结算)
+        if getattr(self, '_combo_settle_hold', None) is not None:
+            self._combo_settle_hold = None
+
         # v3.35 步骤外设门控: 清空未消费门控 + 视觉守卫连击, 防跨启停/强制结算残留
         if getattr(self, 'step_device_gates', None):
             try:

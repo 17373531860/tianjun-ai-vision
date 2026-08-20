@@ -1301,6 +1301,25 @@ def _start_scanner_bypass_monitor():
 _start_scanner_bypass_monitor()
 
 
+# 热补丁加载器 (create-hotfix 体系, v3.48.1a 起恢复): backend/hotfix.py 存在则在
+# 全部 router/static/插件挂载完成后加载并 apply(app); 不存在 = 静默跳过零开销。
+# 补丁自身任何异常必须隔离, 不能拖垮主程序启动 (与插件加载同一底线)。
+def _apply_hotfix_after_app():
+    _hf = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hotfix.py")
+    if not os.path.exists(_hf):
+        return
+    try:
+        from backend import hotfix
+        hotfix.apply(app)
+    except Exception as e:
+        print(f"[Hotfix] 热补丁加载失败（已隔离, 主程序继续）: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+
+
+_apply_hotfix_after_app()
+
+
 @app.get("/")
 def root():
     return {

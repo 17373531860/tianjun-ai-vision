@@ -1,0 +1,30 @@
+{
+  "steps": [
+    {
+      "name": "位置1 锁定且目标已离场 (锁框应常驻)",
+      "ok": true,
+      "detail": "locked=[{'label': '区A', 'box': [0.1, 0.15, 0.25, 0.3], 'state': 'locked', 'seq': 1}]"
+    },
+    {
+      "name": "信息条显示「判型计数」区A 1",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "位置2 锁定, 编号 #1/#2",
+      "ok": true,
+      "detail": "seqs=[1, 2]"
+    },
+    {
+      "name": "结算 OK + 机型X",
+      "ok": true,
+      "detail": "counters={'合格总数': 1, '不良总数': 0, '总产量': 1, 'NG步骤': 0} last_tag=机型X"
+    },
+    {
+      "name": "结算后锁框池清空",
+      "ok": true,
+      "detail": "rois=[]"
+    }
+  ],
+  "pass": true
+}
