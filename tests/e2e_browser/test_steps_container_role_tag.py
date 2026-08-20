@@ -4,7 +4,8 @@
 背景 (上银 7-27 现场困惑): 托盘/放托盘被「托盘容器」机制接管后, 步骤行为
 参数表里的最少帧数/消失等待等对它们不生效, 客户改了没反应以为是 bug。
 本测试锁定: 混合容器模式下, 容器标签与进箱动作标签所在行渲染
-「容器 · 参数在逻辑设置」/「进箱动作 · 参数在逻辑设置」警示标。
+「容器 · 参数在装箱清点」/「进箱动作 · 参数在装箱清点」警示标
+（信息架构重构后容器参数自逻辑设置迁至独立「装箱清点」Tab）。
 
 前置: 后端 8001 + 前端已起; 依赖项目 SY6 (id=37, 容器混合模式) 存在 —
 没有则跳过, 不动用户其他项目。
@@ -37,7 +38,7 @@ def test_container_role_tags_render(page, base_url, api_url):
     page.get_by_role("tab", name=re.compile("步骤")).click()
     page.wait_for_timeout(800)
 
-    tags = page.locator("text=参数在逻辑设置")
+    tags = page.locator("text=参数在装箱清点")
     texts = [tags.nth(i).inner_text() for i in range(tags.count())]
     assert any("容器" in t for t in texts), f"容器标签 [{container_label}] 行应挂警示标: {texts}"
     if action_label:

@@ -519,13 +519,13 @@
                     <div style="max-width: 340px; line-height: 1.5">
                       该标签已被「托盘容器」机制接管（角色：{{ containerRoleOf(step.label) }}）。<br/>
                       本表的最少帧数 / 最短·最大持续 / 消失等待 / 检测类型等参数<b>对它不生效</b>，
-                      对应门槛请到「逻辑设置 → 混合校验 · 托盘容器 / 进箱确认」配置
+                      对应门槛请到「装箱清点 → 托盘容器 / 进箱确认」配置
                       （如动作最少帧数、消失确认帧、动作不应期）。<br/>
                       「标签与检测属性」表里的置信度阈值与步骤ROI 照常生效。
                     </div>
                   </template>
                   <el-tag size="small" type="warning" effect="plain" class="!h-5 !leading-5 ml-1">
-                    {{ containerRoleOf(step.label) }} · 参数在逻辑设置
+                    {{ containerRoleOf(step.label) }} · 参数在装箱清点
                   </el-tag>
                 </el-tooltip>
               </td>

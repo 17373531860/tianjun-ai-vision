@@ -38,7 +38,7 @@ def _mk_project(api_url, mode, steps=None):
     return pid, name
 
 
-def _open_logic_tab(page, base_url, name):
+def _open_logic_tab(page, base_url, name, tab="逻辑设置"):
     page.goto(f"{base_url}/#/project", wait_until="domcontentloaded", timeout=15000)
     # 同 hash URL 二次 goto 不触发真实导航 → 项目列表停留旧快照, 必须显式 reload
     page.reload(wait_until="domcontentloaded", timeout=15000)
@@ -52,7 +52,7 @@ def _open_logic_tab(page, base_url, name):
         card = page.get_by_text(name, exact=False).first
     card.click(timeout=5000)
     time.sleep(0.8)
-    page.locator(".el-tabs__item:has-text('逻辑设置')").first.click()
+    page.locator(f".el-tabs__item:has-text('{tab}')").first.click()
     time.sleep(0.8)
     return page.evaluate("document.body.innerText")
 
@@ -114,7 +114,8 @@ def _fill_row_number(page, row_text, nth, value):
 def test_容器动作门槛三参数_可见可改_保存落库(page, base_url, api_url):
     """v3.43.1 治"放托盘一次动作结算两次": 动作出现/消失确认帧 + 进箱最小间隔(不应期)
     在进箱确认卡直配 (此前借用步骤字段, 该模式无 UI 入口调不到)。入口可见 → 真实键入 →
-    保存 → pipeline 三键落库 → 重进回显。"""
+    保存 → pipeline 三键落库 → 重进回显。
+    信息架构重构后容器装箱块在独立「装箱清点」Tab（混合跟踪时出现）。"""
     pid, name = _mk_project(api_url, "custom")
     requests.put(f"{api_url}/api/v1/projects/{pid}", json={
         "pipeline_config": {
@@ -130,7 +131,7 @@ def test_容器动作门槛三参数_可见可改_保存落库(page, base_url, a
              "count_mode": "track", "expected_count": 24},
         ],
     }, timeout=5).raise_for_status()
-    body = _open_logic_tab(page, base_url, name)
+    body = _open_logic_tab(page, base_url, name, tab="装箱清点")
     for label in ("动作出现确认帧", "动作消失确认帧", "进箱最小间隔"):
         assert label in body, f"入口断言失败: 找不到「{label}」"
     _fill_row_number(page, "动作出现确认帧", 0, 4)
@@ -145,7 +146,7 @@ def test_容器动作门槛三参数_可见可改_保存落库(page, base_url, a
            pc.get("custom_mix_container_action_cooldown_s"))
     assert got == (4, 20, 3.5), f"三参数应落库, 实际 {got}"
     # 重进回显 (水合断言): 不配则出现/消失帧显 0(跟随步骤), 不应期缺省 2
-    _open_logic_tab(page, base_url, name)
+    _open_logic_tab(page, base_url, name, tab="装箱清点")
     row = page.locator("div.flex:has-text('动作出现确认帧')").last
     assert row.locator(".el-input-number input").nth(0).input_value() == "4"
     assert row.locator(".el-input-number input").nth(1).input_value() == "20"

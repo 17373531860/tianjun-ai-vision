@@ -4,7 +4,7 @@
 背景 (2026-07-30 上银现场"主盘指针"诊断): 滑块/托盘重复框、空账幽灵占指针、
 指针卡残数、三数两盘混排 — 五项修正全部做成项目级可选开关, 默认值 = v3.45
 线上行为 (滑块去重开、其余关), 现场关掉即回退。本测试锁定:
-  1. 逻辑设置 → 容器装箱清点内渲染五个开关, 且回填默认值
+  1. 装箱清点 Tab（信息架构重构后自逻辑设置外置）内渲染五个开关, 且回填默认值
   2. UI 翻转 → 保存 → GET 项目断言 pipeline_config 真落库
   3. 改回原值 → 保存 → 不污染 SY8 生产配置
 
@@ -82,7 +82,7 @@ def test_book_fix_switches_roundtrip(page, base_url, api_url):
     page.wait_for_load_state("networkidle")
     page.get_by_text("SY8", exact=True).first.click()
     page.wait_for_timeout(1000)
-    page.get_by_role("tab", name="逻辑设置").click()
+    page.get_by_role("tab", name="装箱清点").click()
     page.wait_for_timeout(800)
 
     # 1. 五个开关都渲染, 且回填当前配置值

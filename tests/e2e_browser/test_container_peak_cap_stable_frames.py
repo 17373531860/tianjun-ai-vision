@@ -4,7 +4,7 @@
 背景 (上银 7-28 现场): 模型偶发重复框把一盘 24 数成 25 后峰值卡住降不回来 —
 止血配置「每盘峰值封顶」此前只有后端键没有 UI 入口, 现场没法设;
 「动作前稳定计数」快照记账同理。本测试锁定两个入口:
-  1. 逻辑设置 → 容器装箱清点内渲染「每盘峰值封顶」「动作前稳定计数(帧)」
+  1. 装箱清点 Tab（信息架构重构后自逻辑设置外置）内渲染「每盘峰值封顶」「动作前稳定计数(帧)」
   2. UI 改值 → 保存 → GET 项目断言 pipeline_config 真落库
   3. 改回原值 → 保存 → 不污染 SY6 生产配置
 
@@ -64,7 +64,7 @@ def test_peak_cap_and_stable_frames_roundtrip(page, base_url, api_url):
     page.wait_for_load_state("networkidle")
     page.get_by_text("SY6", exact=True).first.click()
     page.wait_for_timeout(1000)
-    page.get_by_role("tab", name="逻辑设置").click()
+    page.get_by_role("tab", name="装箱清点").click()
     page.wait_for_timeout(800)
 
     # 1. 两个入口都渲染, 且回填原值

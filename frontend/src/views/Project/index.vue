@@ -104,6 +104,14 @@
               @open-region-roi-editor="openRegionRoiEditor" />
           </el-tab-pane>
 
+          <!-- 装箱清点 Tab：仅自定义模式 × 混合跟踪时出现（信息架构重构：原逻辑设置内嵌块外置） -->
+          <el-tab-pane
+            v-if="activeProject.logic_mode === 'custom' && activeProject.custom_mixed_with === 'tracking'"
+            label="装箱清点"
+            name="mixbox">
+            <CustomMixBoxTab :project="activeProject" />
+          </el-tab-pane>
+
           <!-- Tab 4: Events Settings -->
           <el-tab-pane label="事件设置" name="events">
             <!-- 事件设置 Tab 已外置（2026-07 拆分批次 P-3） -->
@@ -197,6 +205,7 @@ import TjSlot from '@/components/TjSlot.vue';
 import WeighingConfigTab from './WeighingConfigTab.vue';
 import EventsConfigTab from './EventsConfigTab.vue';
 import LogicConfigTab from './LogicConfigTab.vue';
+import CustomMixBoxTab from './CustomMixBoxTab.vue';
 import StepsConfigTab from './StepsConfigTab.vue';
 import { ensureMixItemDefaults } from './mixItemDefaults';
 import { applyStepEnabledChange } from './stepEnabled';
@@ -234,6 +243,16 @@ const pluginProjectTabs = computed(() => pluginThemeStore.projectTabs || []);
 // searchQuery / filteredProjects / formatDate 已随项目列表卡外置到 ProjectListPanel.vue（2026-08）。
 const activeProject = ref(null);
 const activeTab = ref('basic');
+
+// 「装箱清点」条件 Tab 消失（切项目/改模式）时避免 activeTab 悬空
+watch(
+  () => activeProject.value
+    && activeProject.value.logic_mode === 'custom'
+    && activeProject.value.custom_mixed_with === 'tracking',
+  (visible) => {
+    if (!visible && activeTab.value === 'mixbox') activeTab.value = 'logic';
+  }
+);
 const createDialogVisible = ref(false);
 const showModelSelect = ref(false);
 const showFormatSelect = ref(false);
