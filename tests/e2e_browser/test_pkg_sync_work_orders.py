@@ -42,10 +42,11 @@ def test_sync_work_orders_switch_default_on_and_save_off(page, base_url, api_url
     _cleanup_pkg(api_url)
     name = f"__e2e_wosync_{uuid.uuid4().hex[:6]}"
 
-    page.goto(f"{base_url}/#/settings", wait_until="domcontentloaded",
+    # 包装结算已从系统设置迁到 MES 管理页（自绘按钮 tab）
+    page.goto(f"{base_url}/#/mes", wait_until="domcontentloaded",
               timeout=15000)
     page.wait_for_load_state("networkidle")
-    page.get_by_role("tab", name="包装箱结算").click()
+    page.get_by_role("button", name="包装结算").click()
     page.wait_for_timeout(800)
     page.get_by_role("button", name="新建配置").click()
     page.wait_for_selector(".el-dialog", state="visible", timeout=5000)

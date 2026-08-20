@@ -29,11 +29,12 @@ def test_packaging_panel_create_with_hiwin_preset(page, base_url, api_url):
     _cleanup_pkg(api_url)
     name = f"__e2e_pkg_{uuid.uuid4().hex[:6]}"
 
-    page.goto(f"{base_url}/#/settings", wait_until="domcontentloaded", timeout=15000)
+    # 包装结算已从系统设置迁到 MES 管理页（自绘按钮 tab）
+    page.goto(f"{base_url}/#/mes", wait_until="domcontentloaded", timeout=15000)
     page.wait_for_load_state("networkidle")
 
-    # 切到「包装箱结算」Tab
-    page.get_by_role("tab", name="包装箱结算").click()
+    # 切到「包装结算」Tab
+    page.get_by_role("button", name="包装结算").click()
     page.wait_for_timeout(800)
 
     # 新建配置 → 对话框
@@ -107,9 +108,9 @@ def test_packaging_panel_group8_manual_toggle_roundtrip(page, base_url, api_url)
     _cleanup_pkg(api_url)
     name = f"__e2e_pkg_{uuid.uuid4().hex[:6]}"
 
-    page.goto(f"{base_url}/#/settings", wait_until="domcontentloaded", timeout=15000)
+    page.goto(f"{base_url}/#/mes", wait_until="domcontentloaded", timeout=15000)
     page.wait_for_load_state("networkidle")
-    page.get_by_role("tab", name="包装箱结算").click()
+    page.get_by_role("button", name="包装结算").click()
     page.wait_for_timeout(800)
     page.get_by_role("button", name="新建配置").click()
     page.wait_for_selector(".el-dialog", state="visible", timeout=5000)

@@ -25,12 +25,7 @@
         <PollingSettingsTab />
       </el-tab-pane>
 
-      <!-- 触发中心 (RFC 14) -->
-      <el-tab-pane label="触发中心" lazy>
-        <div class="p-4">
-          <TriggerPanel />
-        </div>
-      </el-tab-pane>
+      <!-- 触发中心已迁到 MES 管理页（与 PLC 对接相邻，共享动作注册表） -->
 
       <!-- Plugin Management Tab -->
       <el-tab-pane label="插件管理">
@@ -132,11 +127,7 @@
         <AuthPanel />
       </el-tab-pane>
 
-      <!-- 流水线串行 / 工位组互通已迁到「工位与输入源」页（同属多工位协调域） -->
-
-      <el-tab-pane label="包装箱结算">
-        <PackagingFlowPanel />
-      </el-tab-pane>
+      <!-- 流水线串行 / 工位组互通已迁「工位与输入源」页；包装箱结算已迁 MES 管理页 -->
 
       <!-- 调试设置 Tab: 仅开发者模式可见 (Navbar 齿轮 → 开发者模式 → 密码), 与多工位同款门控 -->
       <el-tab-pane v-if="store.developerMode" label="调试设置">
@@ -173,9 +164,7 @@ import { usePluginThemeStore } from '@/store/usePluginThemeStore';
 import { Refresh, Lightning } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import AuthPanel from './AuthPanel.vue';
-import PackagingFlowPanel from './PackagingFlowPanel.vue';
 import DebugPanel from './DebugPanel.vue';
-import TriggerPanel from './TriggerPanel.vue';
 import DisplaySettingsTab from './DisplaySettingsTab.vue';
 import DetectionBoxSettingsTab from './DetectionBoxSettingsTab.vue';
 import PerformanceSettingsTab from './PerformanceSettingsTab.vue';

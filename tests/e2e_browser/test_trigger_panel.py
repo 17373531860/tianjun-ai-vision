@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""RFC 14 统一触发中心 —— 系统设置页「触发中心」面板 CI E2E。
+"""RFC 14 统一触发中心 —— MES 管理页「触发中心」面板 CI E2E。
 
 守住三条回归线:
-  1. 面板真有 UI: 系统设置页有「触发中心」tab, 空态/模板/添加按钮都在
+  1. 面板真有 UI: MES 管理页有「触发中心」tab, 空态/模板/添加按钮都在
      (历史教训: 后端做了前端没入口, 单测+build 全绿客户才发现)
   2. UI 建触发源 → 后端真落库 (T5 双向验证: 模板载入 → 保存 → GET API 核对)
   3. mock 触发源启用后引擎真在跑: 卡片「运行中」, 注入脉冲 →
@@ -48,13 +48,14 @@ def _make_mock_trigger(api_url: str, name: str, enabled: bool = True) -> int:
 
 
 def _open_trigger_tab(page, base_url: str):
-    page.goto(f"{base_url}/#/settings", wait_until="networkidle")
-    page.get_by_text("触发中心", exact=True).first.click()
+    # 触发中心已从系统设置迁到 MES 管理页（与 PLC 对接相邻）
+    page.goto(f"{base_url}/#/mes", wait_until="networkidle")
+    page.get_by_role("button", name="触发中心").click()
     page.wait_for_selector("text=触发源", timeout=8000)
 
 
 def test_trigger_tab_renders_controls(page, base_url, api_url):
-    """系统设置页有「触发中心」tab, 面板常驻控件全部渲染。"""
+    """MES 管理页有「触发中心」tab, 面板常驻控件全部渲染。"""
     _cleanup_triggers(api_url)
     _open_trigger_tab(page, base_url)
     body = page.evaluate("document.body.innerText")
