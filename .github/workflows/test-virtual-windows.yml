@@ -1,0 +1,137 @@
+name: Virtual Functional Tests (Windows)
+
+# Windows 跑道：客户全部跑 Windows 工控机，e2e 必须在 windows-latest 也过一遍
+# 与 test-virtual.yml 的 ubuntu e2e job 同构：真后端 + 真前端 build + Playwright
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'tests/**'
+      - '.github/workflows/test-virtual-windows.yml'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-browser-windows:
+    name: Playwright E2E (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      RUNTIME_MODE: test
+      TIANJUN_TEST_MODE: 1
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: pip
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pytest pytest-bdd pytest-playwright requests httpx
+
+      - name: Install Playwright browsers
+        run: |
+          python -m playwright install chromium
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      # Windows 上 bash 后台进程会在 step 结束时被回收，
+      # 必须用 Start-Process 脱离父进程树才能活到后续 step
+      - name: Start backend (background)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
+          $p = Start-Process -FilePath python `
+            -ArgumentList '-m','uvicorn','backend.main:app','--host','127.0.0.1','--port','8001' `
+            -RedirectStandardOutput ci-logs/backend.log `
+            -RedirectStandardError ci-logs/backend.err.log `
+            -PassThru -NoNewWindow
+          "BACKEND_PID=$($p.Id)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Start frontend preview (background, port 6001)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath cmd `
+            -ArgumentList '/c','npx vite preview --host 127.0.0.1 --port 6001 > ..\ci-logs\frontend.log 2>&1' `
+            -WorkingDirectory frontend `
+            -PassThru -NoNewWindow
+          "FRONTEND_PID=$($p.Id)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Wait for ports 8001 + 6001
+        run: |
+          for i in $(seq 1 90); do
+            if curl -sf -o /dev/null http://127.0.0.1:8001/api/v1/test/synthetic/state \
+                && curl -sf -o /dev/null http://127.0.0.1:6001/; then
+              echo "ports ready (attempt $i)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "ports NOT ready in 180s"
+          tail -80 ci-logs/backend.log || true
+          tail -80 ci-logs/backend.err.log || true
+          tail -80 ci-logs/frontend.log || true
+          exit 1
+
+      - name: Run Playwright E2E (browser tests)
+        run: |
+          python -m pytest tests/e2e_browser/ \
+            -v --tb=short \
+            --junitxml=test-results/e2e-windows.xml
+
+      - name: Stop background processes
+        if: always()
+        shell: pwsh
+        run: |
+          foreach ($pid_ in @($env:BACKEND_PID, $env:FRONTEND_PID)) {
+            if ($pid_) { Stop-Process -Id $pid_ -Force -ErrorAction SilentlyContinue }
+          }
+
+      - name: Upload screenshots
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-screenshots-windows
+          path: |
+            C:\tmp\sat_full_workflow_shots\
+            C:\tmp\uat_shots\
+            test-results/
+          retention-days: 7
+
+      - name: Upload backend/frontend logs
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-server-logs-windows
+          path: ci-logs/
+          retention-days: 7

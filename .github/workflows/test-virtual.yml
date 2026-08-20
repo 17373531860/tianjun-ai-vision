@@ -7,6 +7,7 @@ on:
     branches: [main]
     paths:
       - 'backend/**'
+      - 'frontend/**'
       - 'tests/**'
       - 'scripts/recommend_scenarios.py'
       - '.github/workflows/test-virtual.yml'
