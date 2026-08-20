@@ -17,12 +17,13 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from playwright.sync_api import sync_playwright
 
-FRONTEND = "http://localhost:5173"
-MOCK_PORT = 8888
-DB_PATH = "/tmp/tianjun_uat_pull/sql_app.db"
-SHOTS = "/tmp/tianjun_uat_pull_shots"
-
 import os
+
+# 可用环境变量指向任意已起的前后端栈 (默认沿用历史独立栈约定)
+FRONTEND = os.environ.get("UAT_FRONTEND", "http://localhost:5173")
+MOCK_PORT = int(os.environ.get("UAT_MOCK_PORT", "8888"))
+DB_PATH = os.environ.get("UAT_DB_PATH", "/tmp/tianjun_uat_pull/sql_app.db")
+SHOTS = "/tmp/tianjun_uat_pull_shots"
 os.makedirs(SHOTS, exist_ok=True)
 
 _results = []
