@@ -1,0 +1,70 @@
+{
+  "version": "3.51.3",
+  "date": "2026-08-15",
+  "previous_version": "3.51.2",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "Windows 摄像头枚举无物理去重，同一台相机列成两台，双工位同选互抢到超时",
+      "symptom": "2 台 USB + 1 内置列出 4 个摄像头，第 3、4 项是同一台物理机；双工位同选后开方卡到前端 60s 超时；枚举本身慢",
+      "root_cause": "_detect_cameras_windows 用 cv2.VideoCapture(i, CAP_DSHOW) 盲扫 index 0~4，同一 USB 相机在 DirectShow 注册多个 filter（IR 副摄/驱动重复注册）时必然重复；无设备真名；枚举试开还可能干扰在采集的相机",
+      "fix": "Windows 枚举优先用打包内 ffmpeg -list_devices -f dshow 列设备（快/带真名/不试开），按 USB (vid,pid,serial) 去重重复 filter；使用中标记扩到全部工位；ffmpeg 不可用自动回退老试开法零差异",
+      "files": ["backend/api/source_routes.py"],
+      "keywords": ["摄像头枚举", "重复摄像头", "DirectShow", "dshow", "ffmpeg list_devices", "vid pid serial", "去重", "IR 副摄", "检测出四个摄像头", "camera enumeration duplicate", "使用中标记"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "双工位选同一摄像头 index 无预检，后开方卡满重试循环逼近 60s 超时",
+      "symptom": "两个工位选中同一台摄像头保存启动，后开的工位卡几十秒才报笼统的\"被占用\"",
+      "root_cause": "_start_camera_locked 无跨通道占用预检，通道生命周期锁只防同通道并发不防跨工位抢设备，后开方走满 3 轮 DSHOW+MSMF 退避 + FPS 探测",
+      "fix": "打开前查其他工位是否正持有同一 device_index，命中立即抛\"摄像头 N 正在被工位 X 使用\"；预检挡在 self.stop() 之前不误停本工位旧源；真机实测 14ms 快速失败",
+      "files": ["backend/api/source_camera_start_mixin.py"],
+      "keywords": ["抢相机", "同时选超时", "跨工位占用", "camera conflict", "快速失败", "双工位", "被其他程序占用"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "SQLite 侧车损坏后 disk I/O error 无处理，后端 down 掉且拉不起来",
+      "symptom": "切换输入源时 SQLite 报 disk I/O error，后端 down 掉或重启拉不起来",
+      "root_cause": "强杀/断电后 -wal/-shm 半写入损坏，全仓只兜 locked/busy；import 期 create_all 挂死=软件拉不起来；退出链路从不做 WAL checkpoint 损坏窗口常开",
+      "fix": "启动 create_all 捕获 disk I/O error / unable to open database file，隔离 -wal/-shm 为 .corrupt-<时间戳>（保留不删）重试一次；退出钩子加 PRAGMA wal_checkpoint(TRUNCATE)。真库 E2E：坏库自愈启动+写库 201+退出 checkpoint 清零",
+      "files": ["backend/main.py"],
+      "keywords": ["disk I/O error", "disk io", "库文件被锁", "WAL 损坏", "拉不起来", "unable to open database file", "wal_checkpoint", "自愈", "corrupt", "强杀", "taskkill"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "CI 安装包收编嵌入式 PostgreSQL 可选组件（修复 v3.49 交付缺口）",
+      "symptom": "v3.49~v3.51.2 发出的安装包里根本没有 PG 选项——installer.iss 的 #ifdef IncludePostgres 从未被 CI 传过编译开关，用户以为切了 PG 实际全程 SQLite",
+      "root_cause": "build.yml ISCC 只传 /DMyAppVersion，PG 便携包也从未被铺进 dist；只写 #ifdef 不接 CI = 静默发出无 PG 的包",
+      "fix": "build.yml 新增 Stage PostgreSQL portable 步骤（PG 16.15 官方便携包下载 3 重试失败硬红 + 裁 pgAdmin/doc/include 只留 bin/lib/share + 校验 initdb.exe）+ ISCC 加 /DIncludePostgres；安装界面出现 PG 可选项默认不勾选",
+      "files": [".github/workflows/build.yml"],
+      "keywords": ["PostgreSQL", "PG 组件", "IncludePostgres", "安装器", "installer", "pg-portable", "initdb", "交付缺口", "16.15", "嵌入式数据库"],
+      "breaking": false
+    },
+    {
+      "type": "test",
+      "id": "TEST-001",
+      "title": "四路真实环境 E2E（真库/真相机/真浏览器）+ 新单测 17 条",
+      "symptom": "",
+      "root_cause": "",
+      "fix": "A SQLite 坏库自愈全链路；B Mac 真相机双工位抢占 14ms；C PG 16 真库 53 表 + CI 同款子集 710 passed；D 真浏览器监控画面/占用标记/数据库卡片；tests/test_camera_enum_dedup_v3513.py 17 条",
+      "files": ["tests/test_camera_enum_dedup_v3513.py"],
+      "keywords": ["E2E", "真实测试", "真相机", "真 PG", "UAT", "camera enum dedup"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-video", "build-release"],
+  "files_changed": [
+    "backend/api/source_routes.py",
+    "backend/api/source_camera_start_mixin.py",
+    "backend/main.py",
+    ".github/workflows/build.yml",
+    "tests/test_camera_enum_dedup_v3513.py"
+  ]
+}

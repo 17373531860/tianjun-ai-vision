@@ -456,6 +456,10 @@
           <el-switch v-model="form.retry_on_4xx" />
           <span class="text-xs text-gray-500 ml-2">关 = 仅对 5xx / 网络超时重试，4xx(客户端错误)不重试（川南 §5.1）</span>
         </el-form-item>
+        <el-form-item v-if="form.adapter_type !== 'modbus_rtu'" label="重试总预算(秒)">
+          <el-input-number v-model="form.retry_budget_sec" :min="0" :precision="0" data-testid="gw-retry-budget" />
+          <span class="text-xs text-gray-500 ml-2">单次推送(含全部重试)的耗时上限，超时提前记失败；0 = 不限制。MES 长时间断连时防止单条推送拖住队列</span>
+        </el-form-item>
         <el-form-item v-if="form.adapter_type !== 'modbus_rtu'" label="请求超时(秒)">
           <el-input-number v-model="requestTimeout" :min="1" :precision="1" class="w-32" />
           <span class="text-xs text-gray-500 ml-2">单值总超时；仅当下方连接/读取留空时生效（默认 30s）</span>
@@ -699,6 +703,7 @@ const eventLabels = {
   weight_no_barcode: '称重无码',
   packaging_complete: '包装结算完成',
   task_complete: '工单完工回传',
+  video_archived: '录像归档完成',
 }
 
 // 内置事件下拉项 (allow-create 仍可输入插件自定义事件名/别名)
@@ -711,6 +716,7 @@ const eventOptions = [
   { value: 'weighing_product_done', label: 'weighing_product_done (称重成品结案)' },
   { value: 'packaging_complete', label: 'packaging_complete (包装结算完成)' },
   { value: 'task_complete', label: 'task_complete (完工回传)' },
+  { value: 'video_archived', label: 'video_archived (录像归档完成)' },
 ]
 
 const connections = ref([])
@@ -736,6 +742,7 @@ const form = reactive({
   retry_interval_sec: 5,
   retry_backoff: 'fixed',
   retry_on_4xx: true,
+  retry_budget_sec: 0,
   bound_channels: [],
 })
 
@@ -1036,6 +1043,7 @@ function openCreate() {
   form.retry_interval_sec = 5
   form.retry_backoff = 'fixed'
   form.retry_on_4xx = true
+  form.retry_budget_sec = 0
   form.bound_channels = []
   configUrl.value = ''
   configMethod.value = 'POST'
@@ -1115,6 +1123,7 @@ function openEdit(row) {
   const cfg = row.config || {}
   form.retry_backoff = cfg.retry_backoff || 'fixed'
   form.retry_on_4xx = cfg.retry_on_4xx !== false
+  form.retry_budget_sec = cfg.retry_budget_sec ?? 0
   requestTimeout.value = cfg.timeout ?? 30
   connectTimeout.value = cfg.connect_timeout ?? null
   readTimeout.value = cfg.read_timeout ?? null
@@ -1351,6 +1360,7 @@ function buildConfig() {
     health_probe_expect_status: healthProbeEnabled.value && healthProbeExpect.value ? healthProbeExpect.value : undefined,
     retry_backoff: form.retry_backoff || 'fixed',
     retry_on_4xx: form.retry_on_4xx !== false,
+    retry_budget_sec: form.retry_budget_sec || 0,
     timeout: requestTimeout.value || 30,
     connect_timeout: connectTimeout.value != null ? connectTimeout.value : undefined,
     read_timeout: readTimeout.value != null ? readTimeout.value : undefined,

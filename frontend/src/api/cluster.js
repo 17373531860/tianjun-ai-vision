@@ -11,6 +11,9 @@ export const clusterHealth = () => api.get('/cluster/health')
 export const sendHeartbeat = (data) => api.post('/cluster/heartbeat', data)
 export const getConnectedSlaves = () => api.get('/cluster/slaves')
 
+// v3.49: 副机上报链路状态（异步队列/落盘积压/最近错误）
+export const getReportStatus = () => api.get('/cluster/report-status')
+
 // 删除单箱记录（BoxAggregation + BoxSummary）
 export const deleteBox = (boxSerial) =>
   api.delete(`/cluster/boxes/${encodeURIComponent(boxSerial)}`)

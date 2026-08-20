@@ -157,6 +157,8 @@ def _when_scan(client, ctx, code):
 def _when_wait_event(client, ctx, serial):
     evt = _wait_scan_event(client, serial)
     assert evt and evt.get("serial_no") == serial, f"扫码事件未出现: {evt}"
+    # 记住首枚码建出的工件 id, 供拒绝场景断言"待检工件保持不变"
+    ctx["first_workpiece_id"] = evt.get("workpiece_id")
 
 
 # ---------------- then ----------------
@@ -168,13 +170,19 @@ def _then_event_is(client, ctx, serial):
         f"期望扫码事件 {serial}, 实际 {evt}"
 
 
-@then(parsers.parse('通道 0 的最近扫码事件应保持为 "{serial}"'))
-def _then_event_stays(client, ctx, serial):
-    # 给异步队列足够时间处理第二枚码 (若未被拒绝, 事件会被顶掉)
+@then(parsers.parse('通道 0 应收到 "{serial}" 的拒绝警告事件且待检工件保持不变'))
+def _then_reject_warning(client, ctx, serial):
+    # v3.50: 拒绝路径改为发 scan_warning 警告事件 (前端弹 toast 提示操作员),
+    # 不再静默丢弃; 但不建新工件, 原待检工件保持在位
     time.sleep(1.2)
     evt = _scan_event(client)
     assert evt and evt.get("serial_no") == serial, \
-        f"拒绝策略失效: 期望事件保持 {serial}, 实际 {evt}"
+        f"期望 {serial} 的警告事件, 实际 {evt}"
+    assert evt.get("scan_warning") is True, f"缺少 scan_warning 标记: {evt}"
+    assert evt.get("workpiece_id") is None, f"拒绝路径不应建新工件: {evt}"
+    pending = _hook()._pending_workpiece.get(0)
+    assert pending == ctx.get("first_workpiece_id"), \
+        f"待检工件被顶掉: 期望 {ctx.get('first_workpiece_id')}, 实际 {pending}"
 
 
 @then("系统应识别为存在扫码器")

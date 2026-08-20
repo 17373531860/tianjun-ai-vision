@@ -119,19 +119,39 @@ jobs:
       # ----------------------------------------------------------
       # 跑测试
       # ----------------------------------------------------------
-      - name: (SQLite) Run unit + BDD
+      # 测试面 (2026-08 WS5 扩容): 除 plugin/synthetic/BDD 外, 全量 MES /
+      # cluster / scan_pair / 扫码器 / sql_compat / timing 都进双方言矩阵——
+      # 捷昌改造 (异步外推/集群上报/scan_pair 新序/PG 迁移) 的回归主战场。
+      # 两段拆开跑 (独立 pytest 进程): synthetic/BDD e2e 族对 channel mgr
+      # 单例状态敏感, 与几百个单测混在一个进程里会偶发串污染 (单跑必过、
+      # 混跑偶挂, 见 test_synthetic_cross_cycle_e2e 文件头注记)。进程隔离
+      # 直接消掉跨文件污染面, 失败也更好归因。
+      - name: (SQLite) Run unit suites
         if: matrix.db == 'sqlite'
         run: |
           mkdir -p test-results
           python -m pytest \
             tests/plugin_system/ \
+            tests/test_mes_*.py \
+            tests/test_cluster_*.py \
+            tests/test_scan_pair_*.py \
+            tests/test_scanner_bypass_monitor.py \
+            tests/test_sql_compat_ws5.py \
+            tests/test_timing_probe_ws4.py \
+            -v --tb=short --maxfail=10 \
+            --junitxml=test-results/sqlite-unit.xml
+
+      - name: (SQLite) Run synthetic + BDD
+        if: matrix.db == 'sqlite'
+        run: |
+          python -m pytest \
             tests/test_synthetic_full_flow.py \
             tests/test_synthetic_project_restore.py \
             tests/step_defs/ \
             -v --tb=short --maxfail=10 \
-            --junitxml=test-results/sqlite.xml
+            --junitxml=test-results/sqlite-bdd.xml
 
-      - name: (PG) Run unit + BDD
+      - name: (PG) Run unit suites
         if: matrix.db == 'postgres'
         env:
           DATABASE_URL: "postgresql+psycopg2://tianjun:tianjun_test@127.0.0.1:5433/tianjun_test"
@@ -139,15 +159,41 @@ jobs:
           mkdir -p test-results
           python -m pytest \
             tests/plugin_system/ \
+            tests/test_mes_*.py \
+            tests/test_cluster_*.py \
+            tests/test_scan_pair_*.py \
+            tests/test_scanner_bypass_monitor.py \
+            tests/test_sql_compat_ws5.py \
+            tests/test_timing_probe_ws4.py \
+            -v --tb=short --maxfail=10 \
+            --junitxml=test-results/postgres-unit.xml
+
+      - name: (PG) Run synthetic + BDD
+        if: matrix.db == 'postgres'
+        env:
+          DATABASE_URL: "postgresql+psycopg2://tianjun:tianjun_test@127.0.0.1:5433/tianjun_test"
+        run: |
+          python -m pytest \
             tests/test_synthetic_full_flow.py \
             tests/test_synthetic_project_restore.py \
             tests/step_defs/ \
             -v --tb=short --maxfail=10 \
-            --junitxml=test-results/postgres.xml
+            --junitxml=test-results/postgres-bdd.xml
 
       # ----------------------------------------------------------
-      # PG 专属: 验证 sqlite_to_pg.py 数据迁移脚本可跑
+      # PG 专属: sqlite→pg 迁移工具双保险
+      #   1. 真数据迁移 pytest (JSON 双编码 / 孤儿 FK / --verify 校验)
+      #   2. 空库 dry-run (脚本入口冒烟, 保留)
       # ----------------------------------------------------------
+      - name: (PG) Real-data migration test (sqlite→pg + verify)
+        if: matrix.db == 'postgres'
+        env:
+          DATABASE_URL: "postgresql+psycopg2://tianjun:tianjun_test@127.0.0.1:5433/tianjun_test"
+        run: |
+          python -m pytest tests/test_sqlite_to_pg_migration.py \
+            -v --tb=short \
+            --junitxml=test-results/postgres-migration.xml
+
       - name: (PG) Smoke-test sqlite→pg data migrator (dry-run)
         if: matrix.db == 'postgres'
         env:

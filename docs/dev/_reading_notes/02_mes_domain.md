@@ -28,10 +28,43 @@
 > - PackagingFlowConfig 新 11 列与迁移 m0004/m0005 见 `03_data_plugin.md`。
 >
 > **v3.47 补账（2026-08-07）**：MES 域本轮仅一处触碰——`mes_models.py` `DefectRecord.cycle_id` 补索引（`index=True`，老库走迁移 `m0007_defect_cycle_index`），为开机首启的孤儿缺陷扫描按 cycle_id 关联探查提速（feat/system-optimize 六项之一）。services/api 层零变更。
+>
+> **v3.49 补账（2026-08-12，捷昌整改批次 WS1~WS4）**：
+> - `mes_hooks.py`（→2104 行）：①**WS1 外推并发派发**——B1② 执行器族从"每工位"重构为**每网关连接**独立 `ThreadPoolExecutor(1)`（同连接 FIFO 保序、连接间并发，慢/挂连接不再互堵），积压超上限落盘 **`gateway_spool.jsonl`** 恢复后补发（与 `mes_hook_spool.jsonl` 分文件），`mes_async_dispatch` 默认值改**开**；box_complete 集群汇总推送同走异步。②**WS3 scan_pair 新码先上屏**——`_handle_scan_pair_event` 新序：先 `_scan_pair_promote_pending` 顶替上屏+提交扫码状态，再用**显式 `prev_wp_id`/`prev_scanned_at`** 调 `_dispatch_scan_pair_settle` 异步结算旧窗口（顶替后 `_inspecting_workpiece` 已是新工件，结算身份必须走显式传参不能回读）；开关 `scan_pair_new_code_first`（SystemConfig，默认开，关=回退旧序）。③**广播兄弟通道结算串身份修复**——广播超时/停止结算身份改 `_inspecting_workpiece.get(channel_id) or entry.get("wp_id")`，每通道各归各账（老代码统一拿主通道 wp_id）。④**WS4 耗时埋点**——扫码处理/窗口结算/外推派发关键路径打 `backend.timing` 分段耗时点（debug_center 新类目，见 05 册）。
+> - `mes_gateway.py`（→881 行）：每连接**重试预算** `retry_budget_sec`（读自连接 **config JSON**，非顶层列；0=不限），重试循环按预算钳制总耗时，防单条推送重试黑洞。
+> - `cluster_collector.py`（→1428 行）：**WS2 副机上报异步化**——`report_to_master` 改独立发送线程+内存队列（结算路径只入队即返回），失败落盘 **`cluster_report_spool.jsonl`** 恢复后按序重放；`report_timeout_sec`/`report_async` 进 ClusterConfig 可配（默认异步开/10s）；新增 `get_report_queue_status()`（queued/spooled/spool_replayed_total）。
+> - api 层：`mes_gateway.py` 新增 `GET/PUT /async-dispatch`；`scanner.py` 新增 `GET/PUT /scan-pair/new-code-first`；`cluster.py` 新增 `GET /report-status` + `/config` 面扩 `report_timeout_sec`/`report_async`。
+> - 回归：`test_mes_async_dispatch_b1b.py`（扩）/ `test_mes_gateway_dispatch_isolation.py`（扩）/ `test_cluster_report_async.py`（新）/ `test_scan_pair_new_first.py`（新）/ `test_scan_pair_three_window_gold.py`（新，三窗金标准含双通道广播）/ `test_timing_probe_ws4.py`（新）。
+>
+> **v3.50 补账（2026-08-12，捷昌二期：扫码器生命周期"码-合格-码"闭环）**：
+> - `services/scanner.py`（→约 2100 行）：①`ScannerConnection` 加 4 字段——配置面 `resume_on`（'cycle_end' 默认 / 'ok_only'）/ `rearm_forget_last` / `strict_ok_dedup` + 运行时 `_resume_blocked`；`_start_device` 从 ORM 装填。②`resume_after_cycle(channel_id, is_good=None, manual=False)` 重构——ok_only 且非人工且 `is_good is not True`（NG/未知一视同仁）→ 置 `_resume_blocked` 保持灭灯 continue；成功恢复清 `_resume_blocked` 并按 `rearm_forget_last` 调 `_rearm_forget`。③`_rearm_forget`：清 `conn.last_scan/last_scan_time`（物理去重缓存）+ `mes_hook.clear_pending_scan(ch, force=False)` 作废未绑定旧码。④新增 `resume_scanning_manual(ch)`（= manual=True 转发）与 `is_resume_blocked(ch)`（工位级查询，source_routes 的数据源）。⑤`_resume_blocked` 与 `_wait_cycle_resume` 同步清理点：`_catch_up_lons` / `apply_channel_disable_change` / `start_scanning` / `stop_scanning`。
+> - `services/mes_hooks.py`：①`_get_strict_ok_dedup(ch)` 从扫码器连接取配置；②`_emit_scan_warning(ch, sn, reason)` 统一警告事件（`_last_scan_event` 带 `scan_warning=True + warn_reason`）；③`_handle_scan` 三条拒绝路径改发警告不再静默——strict_ok_dedup 查库已 OK 永久拒（新增，含 ScanLog 落账）/ OK 冷却拒 / duplicate_scan_action=reject 拒；④scan_pair 重复码 toast 并入统一字段（旧 `scan_pair_dup_warning` 保留兼容）。
+> - `models/mes_models.py`：`ScannerDevice` 加 `resume_on / rearm_forget_last / strict_ok_dedup` 三列（迁移 **m0010**，SQLite 默认 0 / PG FALSE 分道，默认值=现状零差异）。
+> - `api/scanner.py`：Create/Update Schema + `_serialize_device` 透出三字段；新增 **`POST /scanner/resume?channel_id=N`**（人工恢复，无条件解除灭灯锁）。
+> - `services/triggers/actions.py`：全局动作注册表加 **`resume_scanner`**（= `resume_scanning_manual`，脚踏板/PLC 的 NG 灭灯出口，见 05 册动作表）。
+> - 上游联动：`end_cycle` 传 `is_good`、`source_routes` 透出 `scanner_resume_blocked`（见 01 册 v3.50 补账）；前端 ScannerPanel/Monitor 见 04 册。
+> - 回归：`test_scanner_lifecycle.py`（新 16 用例）/ `test_settle_on_complete.py`（新 21 用例）/ BDD `settle_scan_lifecycle.feature`（8 场景）/ e2e `test_settle_scan_lifecycle.py`（6 用例）。
+>
+> **v3.51 补账（2026-08-14，捷昌 B 站双工位整改；含 v3.50.0a 热补丁收编）**：
+> - `services/scanner.py`（v3.50.0a FEAT-004/005 + BUG-003~006 收编）：①扫描模式 **E「码-合格-码」**——`_effective_resume_on`（E 强制 ok_only 无视存的 resume_on）+ `_effective_scan_required`（E 强制先扫后检，其余读设备字段；`mes_hooks.is_scan_required` 走它，取不到方法退回读字段）；②`_loff_on_code_received`——灭灯动作从 listen loop 闭包下移为 service 方法，`_on_data_received` 在去重判定**之前**调（物理扫到码就灭灯，幂等，治打补丁机器 E 模式扫码不灭灯：监听线程早于 hotfix 启动持有出厂闭包）；③广播多工位 `resume_after_cycle`——这把枪覆盖的**所有在检工位都 OK** 才亮灯，已 OK 集合按本轮箱码锚定防跨轮残留，没在检测的工位不进分母；④ok_only 枪跨线/新箱一律不点灯（`send_lon_for_channel` 守门），亮灯权独占给 OK 结算/人工恢复；⑤`resume_after_cycle` 只有明确 NG 才标 `_resume_blocked`（结果未知只灭灯不惊动人，治"一扫码就挂恢复按钮"）。
+> - `services/mes_hooks.py`（v3.50.0a FEAT-001/003 收编）：`_settle_stale_on_new_scan` 在重复扫码判定前跑——齐件即结算通道扫到新码把挂起旧账（≥1 件）强制 NG 收场；`has_workpiece_in_flight(ch)`（待检或在检都算码在位，「扫码后才计数」tracking_scan_gate 的数据源）。
+> - `services/workpiece.py`（v3.50.0a BUG-007）：`link_to_cycle` 同工件+周期**幂等**（查到已有记录复用不抛 UNIQUE），`_handle_cycle_start` 落库失败也先保住在检身份再抛（不变量 14）。
+> - `services/channel_group_coordinator.py`（v3.51 FEAT-009）：`_install_group` 读 `plugin_data.unified_ok_report` 进内存组配置；新增 `should_unify_ok_report(channel_id)`（组员×synchronized_all_ok×开关三条件）+ `_fire_unified_report(group, channel_ids, reason)`（对成员逐个 `mgr.fire_external_event_response(1, remind_only=True)` 复用各通道事件1 配置的灯/语音/toast，不重复计数）；`_finalize_aggregation`：complete 且组 OK → 全员统一播报；timeout fallback → 只补播已 OK 成员（防"永远没反馈"）；异常隔离。个体抑制侧见 01 册 `source_event_trigger_mixin`。回归 `tests/channel_group/test_unified_ok_report_v3_51.py`。
+> - `api/channel_groups.py`（v3.51 FEAT-009）：`ChannelGroupBase`/`Update` Schema 加 `unified_ok_report`（存取均走 `plugin_data`，不动主 schema 无迁移）；`_serialize` 透出。
+> - `api/projects.py`（v3.51 FEAT-008）：SystemConfig KV **`activate.adopt_unbound`**（默认 '1'=存量收养行为）+ `_get_adopt_unbound()`；关闭时 `_sync_project_config_to_channels` / `_reload_model_for_active_project` 只同步"已显式绑定本项目"的通道（无绑定通道不收养/不改绑）；新端点 `GET/PUT /projects/activate-config`（**声明在 `/{project_id}` 之前**防路由吞噬）。回归 `tests/test_activate_adopt_unbound_v3_51.py`。
+> - `api/sessions_maintenance.py`（v3.51 BUG-014）：`_unlock_ok_workpieces(db, cycle_ids)`——clear/all（cycle_ids=None 解封全部）与 clear/range（经 WorkpieceInspection 关联被删周期）把 status='ok' 工件重置回 'registered'，响应带 `workpieces_unlocked`；失败只打日志不阻断清理。治 strict_ok_dedup"删记录仍永久拒码"。回归 `tests/test_clear_data_unlock_workpiece_v3_51.py`。
+>
+> **v3.51.5 补账（2026-08-17，捷昌现场热补丁收编）**：
+> - `services/mes_hooks.py`（FEAT-001 可观测性）：`strict_ok_dedup` 拒码日志升级为全量依据——`workpiece#id / channel / project_id / registered_at / last_inspect_at + 两条解除方法`（追溯页关"仅当前项目"删工件 / 数据中心清理联动解封）。动机：多工位下追溯页默认过滤藏其它项目 ok 工件，现场"全删了还拒码"没日志无从定位（配套前端修复见 04 册 WorkpiecePanel）。逻辑零变更，纯日志。
+>
+> **v3.51.1 补账（2026-08-14，虚拟双工位战役修复）**：
+> - `services/mes_hooks.py`（BUG-002）：三条拒码路径（strict_ok_dedup / OK 冷却 / duplicate_scan_action=reject）除弹警告外新增 `_notify_scan_rejected(device_id, ch, sn)` 通知扫码器服务（仅该通道无在检工件时才发，防误 rearm 正常流程）；`on_scan_received` 改带布尔返回（通道禁扫返 False）。
+> - `services/scanner.py`（BUG-002）：`_on_data_received` 记录本次真实派发的通道集合（`_last_dispatch`）；新增 `notify_scan_rejected` 按码聚合各通道拒绝状态，**全部**派发通道都拒绝 → `_rearm_after_full_reject` 清 `_wait_cycle_resume`/`_ok_ready_marker`/`_lon_sent` 等等待态并置 `_rearm_after_reject_serial`，`_schedule_next_lon` 据此跳过周期等待立即重发 LON——治"扫了已 OK 码后灯永灭产线卡死"；新码进入时清 `_rearm_after_reject_serial` 防竞态。回归 vcase1 A3（`tests/uat/virtual_dual_station/`）。
+> - `services/channel_group_coordinator.py`（BUG-003/004）：①`_fire_unified_report` 加 `event_id` 形参（1 合格/2 不合格）；`_finalize_aggregation` 超时且 `timeout_action=force_ng` → 全组统一播整体 NG（不再给已 OK 工位播"已合格"）+ 已到成员 cycle 组结果回写 `NG_BY_TIMEOUT`；fallback_independent 档保持补播不变。②`_pending_override` 配套 `_pending_override_deadline`（60s TTL）——`get_pending_override` 过期作废打日志（治周期迟迟不结算时残留 NG 覆盖污染后续无关周期），`_broadcast_ng_to_group`/force_ng 超时两处设置，`on_channel_removed` 同步清理。回归 `tests/channel_group/test_unified_ok_report_v3_51.py` 新增三例 + vcase3。
 
 ## 一、逐文件档案
 
-### 1. backend/services/mes_hooks.py（1784 行，v3.41 复核）
+### 1. backend/services/mes_hooks.py（2104 行，v3.49 复核）
 
 **职责一句话**：MES 检测引擎回调管理器——检测状态机（source.py）与 MES 子系统（工件/工单/缺陷/外推/集群）之间的唯一异步桥，5 个 hook 全部经内存队列由单条后台线程消费，保证不阻塞检测帧率。
 
@@ -187,7 +220,7 @@
 - L103（同目录多规则合并）："mtime 策略不加保险, 其余取最严 (宁严勿松), 与 export_snapshot 口径一致"。
 - L209（同通道命中多目录）："后者覆盖前者 (罕见配置, 取扫描顺序最后一个)"。
 
-### 3. backend/services/mes_gateway.py（860 行，v3.41 复核）
+### 3. backend/services/mes_gateway.py（881 行，v3.49 复核）
 
 **职责一句话**：MES 外部对接网关（出站推送侧）——把 cycle/session/box 等事件按连接配置（push_events 过滤 + bound_channels 过滤）分发到对应适配器，带重试/退避/4xx 策略、推送熔断器（v3.38）、截图注入、物料名映射、鉴权头合成、报警去重与在途报警台账登记，每次通讯写 MESCommLog。注意：**6 种推送适配器本身不在本文件**（v3.35 起含 database 直写，见 §3.1），在 `backend/services/mes_adapters/` 子包，本文件通过 `get_adapter(conn.adapter_type)`（L442）取用。
 
@@ -329,7 +362,7 @@
 - L497-500（PullScheduler 设计要点）："错误隔离: 单条连接拉取失败不影响其他连接…启动即先拉一次 (last_run=0), 满足客户'开机就同步当班工单'"。
 - 注意：模块头注释 L34 写 triggers 支持 `"on_scan": false`，但全文件搜不到 on_scan 的消费代码（调度器只看 scheduled）——疑似规划了未实现，记入疑点清单。
 
-### 6. backend/services/cluster_collector.py（1205 行）
+### 6. backend/services/cluster_collector.py（1428 行，v3.49 复核）
 
 **职责一句话**：集群数据汇总服务——主机接收本地/远程工位的 cycle 结果（BoxAggregation 表），按 box_serial 聚齐 expected_stations 后生成 BoxSummary 并推 MES `box_complete`；副机侧提供上报主机 + 定时心跳；超时未齐按策略推 `box_timeout` 或仅标记。
 

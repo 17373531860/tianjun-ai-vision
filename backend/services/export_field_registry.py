@@ -332,6 +332,14 @@ _GROUP_CYCLE_FIELDS: List[FieldDef] = [
        "项目配置里把检测结果映射到的浮点数列表，供 SN.txt 等固定表头格式使用"),
     _f("cycle.barcode", "工件条码(冗余)", TYPE_STR, GROUP_CYCLE, "8SSC21K6...",
        "等同 cycle.workpiece.serial_no，方便顶层引用"),
+    # v3.53 录像归档三期: 最终归档地址可进报表/MES 模板
+    _f("cycle.archived_video_path", "归档后录像地址", TYPE_STR, GROUP_CYCLE,
+       "\\\\nas\\quality\\2026-08-19\\SN123_NG.mp4",
+       "录像归档规则搬运成功后的最终地址（本地/网盘/远端 URL）；未归档为空"),
+    _f("cycle.archived_at", "归档完成时间", TYPE_DATETIME, GROUP_CYCLE,
+       "2026-08-19T23:55:01", "最近一次归档成功的时间；未归档为空"),
+    _f("cycle.archive_status", "归档状态", TYPE_STR, GROUP_CYCLE, "success",
+       "success / failed / skipped；从未归档为空"),
 ]
 
 
@@ -742,6 +750,14 @@ _GROUP_AGGREGATIONS_FIELDS: List[FieldDef] = [
     _f("aggregations.total_good", "总良品", TYPE_INT, GROUP_AGGREGATIONS, "4115"),
     _f("aggregations.total_ng", "总 NG", TYPE_INT, GROUP_AGGREGATIONS, "165"),
     _f("aggregations.yield_rate", "整体良率(%)", TYPE_FLOAT, GROUP_AGGREGATIONS, "96.15"),
+    # v3.53 录像归档三期: 日报/汇总可勾选的证据信息
+    _f("aggregations.archive_success", "归档成功数", TYPE_INT,
+       GROUP_AGGREGATIONS, "12", "范围内录像归档成功条数"),
+    _f("aggregations.archive_failed", "归档失败数", TYPE_INT,
+       GROUP_AGGREGATIONS, "0", "范围内录像归档失败条数"),
+    _f("aggregations.archive_last_dest", "最近归档地址", TYPE_STR,
+       GROUP_AGGREGATIONS, "\\\\nas\\quality\\2026-08-19\\SN123_NG.mp4",
+       "范围内最近一次归档成功的最终地址"),
     _f("aggregations.daily_stats", "按日统计", TYPE_LIST, GROUP_AGGREGATIONS,
        "[{date, total, good, ng, yield_rate}, ...]"),
     _f("aggregations.daily_stats[*].date", "日期", TYPE_STR, GROUP_AGGREGATIONS,

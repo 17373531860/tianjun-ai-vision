@@ -158,6 +158,9 @@ def test_merged_summary_queues_one_job_with_two_channel_rates_and_totals(
         "total": "14",
         "ok_rate": "79",
         "ng_rate": "21",
+        # v3.53 录像归档三期: 窗口内归档成败数 (测试库无归档记录 = 0)
+        "archive_success": "0",
+        "archive_failed": "0",
     }
     assert job.context["total_ok"] == 11
     assert job.context["total_ng"] == 3

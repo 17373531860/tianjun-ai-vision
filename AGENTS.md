@@ -17,7 +17,7 @@
 | 性质 | **商业项目，客户已在用** — 工厂工控机部署 |
 | 客户场景 | 装配线视觉检测 / 包装线 / MES 数据回传 / 多工位集群 |
 | 部署模式 | Windows 工控机本地安装（Inno Setup 一键包，约 1.5 GB），Electron 桌面壳套 FastAPI 后端 + Vue3 前端 |
-| 当前线上版本 | **v3.48.1**（2026-08-11）— 体验修复补丁版：多工位监控视频加载/卡顿治本（MJPEG 连接饿死 + WebKit 快照轮询降级 + 自适应取帧节奏）+ 数据中心录像播放失败治本（转码缓存原子落位 `_h264v2` + 超时 300s）+ NG 录像回看三件套（仅NG筛选/倍速/下载）+ Electron 退出僵尸后端 forceKillSync 兜底 + alembic PG 基线迁移补模型 import。上一版 v3.48.0（2026-08-10）三分支汇合发版：RFC 13 通用 PLC 连接器（`/api/v1/plc/*`，8 驱动 + 点位/规则全可配，默认无连接零开销）+ RFC 14 统一触发中心（`/api/v1/triggers/*`，6 触发源 × 全局动作注册表）+ 计数组合判定表（combo_table 判型 + positional 位置去重口径）+ 上银 SY9 记账精度（槽位完整性门/去重 IoU 阈值可配/放工单只认收尾后，迁移 m0009）+ Modbus 完成脉冲外设协议（per_item 联动）+ 短信汇总发送形态（合并分列/逐工位 + 工位筛选）。**逐版变更详见 `docs/changelog/`，本文件不再记版本流水账** |
+| 当前线上版本 | **v3.53.0**（2026-08-20）— 录像归档与媒体证据体系（一~四期一次落地）：规则驱动的周期录像自动归档（`video_archive_rules/logs` 两表 + 录像收尾入队独立 worker + 结果/工位/项目三重过滤 + Jinja2 文件名模板 + tmp+rename 原子落位 + 重名策略 + spool 断点重放 8 次预算 + 目录黑名单护栏 + `/api/v1/export/video-archive/*` + Data 页归档卡/弹窗/台账）+ 证据能力（NG 结算瞬间推理线程同帧抽带框关键帧 keyframe_wanted 零开销守门 / sidecar 绑导出模板成对渲染 / bundle_zip 证据包 / evidence-pack 手动批量下载 / clip_tail FFmpeg 尾段秒切失败回退整段）+ 生态联动（字段库 archived_video_path/archived_at/archive_status + aggregations 归档成败数 + MES 网关 video_archived 事件 + 插件 hook + 短信 {archive_success} 变量）+ 远端与治理（FTP/SFTP/S3/HTTP adapter 统一 deliver 契约 + Fernet 凭据加密落库密文回显打码 + PluginHost.register_archive_adapter + 时间窗窗外 defer 不耗预算 + 带宽限速 + 历史回补 + 删源字节校验一致才删）；全部默认关零配置差异。随版修复：监控页无扫码器仍画"等待扫码/清除/禁用扫码"（v3.47 守门丢失，全渲染点挂 hasScannerFor，scanner_resume_blocked 视为在场证据）。上一版 v3.52.0（2026-08-18）— 多显示器一期（dev-qing 合入）：工位子窗映射与单通道监控页——Electron multi-monitor.js 按 display_id/bounds 为每工位开无边框 kiosk 子窗（License 守门/主窗所在屏保留总览操作权/同区去重/renderer 崩溃 60s 窗口 3 次熔断/关机三出口销毁）+ 后端 workstation_config.json 新增 multi_monitor 顶层段（GET/PUT /workstations/multi-monitor，PUT 挂 settings.edit）+ 前端 SingleChannelMonitor 共用单工位组件（主屏放大态与副屏 kiosk 共用，kiosk 屏蔽 Toast/人工确认/插件覆盖/扫码等全部写通路只轮询绑定工位）+ 设置页多屏配置卡热应用 + 多屏开启时主屏总览改快照轮询让出 MJPEG + kiosk 路由不污染主窗路由记忆；默认 enabled=false 零配置差异。随版收编：_save_config 整写抹别段改 merge（不变量 17）、start HTTP 迟返时轮询按后端 is_detecting 释放前端操作锁；合并审计拦下"网格总览整卡点击放大被误改为仅选中"回归（v3.47 行为守住，e2e 双向守门）。上一版 v3.51.5（2026-08-17）— 捷昌 B 站现场补丁收编版：8-15 现场实测 5 修复全量收编（相机/模型串位=前端单工位 localStorage 兜底与后端多通道恢复赛跑、启动黑屏要切页=模型双重加载+channelCount 锁死+is_running 跳变不重连、自动开始盖手动停止=capture 线程 id 判人为记 user_vetoed、绑项目抹相机配置=无 source_type 部分更新转 merge、"全删了还被去重拒码"=追溯页多工位默认关"仅当前项目"过滤）+ 详细调试日志（[ChannelCfg] 写盘留痕/拒码全量依据+解除方法/枚举回退留痕）+ 捷昌三通道打包线标注规范交付；升级零配置差异。上一版 v3.51.4（2026-08-15）— 交付补全补丁版：安装包收编 SQLite→PG 迁移工具 `sqlite_to_pg.py`（v3.49~v3.51.3 从未进包，客户勾 PG 组件也搬不了旧数据，成品解剖审计才发现；落位 `resources\scripts\db\` 零改动可跑）+ CI 打包资源自检加该文件缺失红灯 + run-tests/build-release skill 沉淀「交付审计逃逸复盘」（写了代码≠交付了/故障注入真样本/定稿回归冻结代码）；无代码行为变更。上一版 v3.51.3（2026-08-15）— 捷昌现场夜测反馈补丁版 + PG 组件交付缺口修复：摄像头枚举改 ffmpeg dshow 列设备 + USB (vid,pid,serial) 物理去重（治"2 USB + 1 内置列出 4 个、双工位同选超时"，带设备真名、不试开、全工位使用中标记，ffmpeg 不可用回退老试开法）+ 跨工位抢相机预检 14ms 快速失败 + SQLite 侧车损坏 disk I/O error 启动自愈（隔离 -wal/-shm 为 .corrupt-* 重试）与退出 wal_checkpoint(TRUNCATE) + CI 打包真正带出嵌入式 PG 16.15 可选组件（v3.49 只写了 #ifdef 从未传开关，v3.49~v3.51.2 安装包里根本没有 PG 选项）；四路真实 E2E（真相机/真坏库/真 PG/真浏览器）验证。上一版 v3.51.2（2026-08-14）— 摄像头生命周期仿真战役补丁版：Mac 真机 67 断言仿真相机生命周期全路径，修复相机格式探测 Strategy 3 macOS 误入 V4L2 重开留死句柄僵尸态（接口成功但监控页永远 No Source）+ 全平台终检；剧本归档 tests/uat/mac_camera_sim/。上一版 v3.51.1（2026-08-14）— 捷昌 B 站双工位虚拟战役补丁版：虚拟双工位 60 断言复现现场，修 6 个新功能路径 bug。上一版 v3.51.0（2026-08-14）— 捷昌 B 站双工位整改批次：热补丁 17 条全量收编 + 开机黑屏兜底恢复轮 + activate.adopt_unbound + unified_ok_report + 数据清理联动解封。**逐版变更详见 `docs/changelog/`，本文件不再记版本流水账** |
 | 主仓库 | `17373531860/tianjun-ai-vision`（**PRIVATE**） |
 | 中转仓库 | `xu-yanzhi32/tianjun-releases` + `tianjun-releases-2`（Gitee 公开 release，给客户下载用） |
 | 母语 | **中文**（用户和注释主语言；技术术语保留英文） |
@@ -154,6 +154,7 @@
 | 排查 Electron 桌面壳问题 | `debug-electron` |
 | 排查前端问题 | `debug-frontend` |
 | 排查自定义导出 / 实时规则 / 模板 / 字段中央仓库（v3.5.0+）| `debug-export` |
+| 排查录像归档 / NG 关键帧 / 证据包 / 远端投递 FTP·SFTP·S3·HTTP / 归档凭据（v3.53+）| `debug-video-archive` |
 | 排查用户系统 / License 授权（machineId / RSA 验签 / token 鉴权 / 权限 / API Key）| `debug-operator-license` |
 | 排查 per_item 逐件覆盖模式（打螺丝场景 / 周期不开始 / 漏件不报 / 严格等量 / 手动结算 / box 尺寸过滤）| `debug-per-item` |
 | 数据问题修复 | `fix-data` |
@@ -266,7 +267,7 @@
 - `SystemConfig` KV 表——最适合存"客户级全局配置"
 - `_trigger_event` hook（所有事件中心触发点）/ `_handle_cycle_end` hook（cycle 结束中心）——插件挂这里
 - MES 适配器注册表（6 种推送协议，v3.35 起含数据库直写）/ 自定义导出字段注册表（308 字段）
-- 插件平台：10 个 hook（含 returnable）+ 10 个 PluginHost 主动 API + `<TjSlot>` UI 槽位 + `plugin_data` JSON 命名空间（详见 `docs/plugin-system/`）
+- 插件平台：17 种 hook（含 returnable，v3.53 新增 `video_archived`）+ 18 个 PluginHost 主动 API（v3.53 新增 `register_archive_adapter`）+ `<TjSlot>` UI 槽位 + `plugin_data` JSON 命名空间（详见 `docs/plugin-system/`）
 
 ---
 
@@ -328,6 +329,16 @@
 
 | 版本 | 日期 | 一句话 |
 |---|---|---|
+| v3.53.0 | 2026-08-20 | 录像归档与媒体证据体系一~四期：规则驱动周期录像自动归档（模板命名/原子落位/spool 重放/台账/Data 页配置弹窗）+ NG 结算瞬间带框关键帧/sidecar 报告/证据包 zip/事件切片 + archived_* 进字段库/video_archived 网关事件与插件 hook/短信变量 + FTP/SFTP/S3/HTTP adapter/Fernet 凭据加密/插件 adapter 注册口/时间窗/限速/历史回补/归档后删源；全部默认关零差异。随版修监控页无扫码器仍画等待扫码/扫码按钮（v3.47 守门丢失） |
+| v3.52.0 | 2026-08-18 | 多显示器一期（dev-qing 合入）：Electron 工位子窗映射（kiosk 只读副屏 + 主屏保留操作权 + 崩溃熔断 + 关机清理）+ multi_monitor 配置段与设置页热应用 + SingleChannelMonitor 共用单工位组件 + 主屏总览快照让位 MJPEG；随版收编 _save_config 整写抹别段改 merge、start 迟返操作锁释放；合并审计拦下网格点击放大回归；默认关零配置差异 |
+| v3.51.5 | 2026-08-17 | 捷昌 B 站现场补丁收编版：v3.51.3a/b/c 热补丁全量收编（相机/模型串位、启动黑屏要切页、自动开始盖手动停止、绑项目抹相机配置、多工位追溯页藏工件致去重误拒）+ 详细调试日志体系（写盘/拒码/枚举回退全留痕）+ 捷昌三通道打包线标注规范（二工位小件 v1.0 带正误示范图 PDF）；升级零配置差异 |
+| v3.51.4 | 2026-08-15 | 交付补全补丁版：安装包收编 sqlite_to_pg 迁移工具（v3.49~v3.51.3 从未进包，成品解剖审计才发现）+ CI 打包资源自检缺失红灯 + run-tests/build-release 沉淀「交付审计逃逸复盘」；无代码行为变更 |
+| v3.51.3 | 2026-08-15 | 捷昌现场夜测补丁版 + PG 交付缺口修复：摄像头枚举 ffmpeg dshow + USB (vid,pid,serial) 物理去重（治 4 列 3/双工位同选超时）+ 跨工位抢相机预检 14ms 快速失败 + SQLite disk I/O error 启动自愈（隔离坏侧车 .corrupt-* 重试）与退出 wal_checkpoint(TRUNCATE) + CI 真正带出嵌入式 PG 16.15 可选组件（v3.49~v3.51.2 安装包从没有过 PG 选项）；四路真实 E2E（真相机/真坏库/真 PG 710 测试/真浏览器）验证 |
+| v3.51.2 | 2026-08-14 | 摄像头生命周期仿真战役补丁版：Mac 真机 67 断言仿真相机全路径（占用/抢相机/调参重开/开停竞态/强杀重启恢复/双工位异模型恢复），修相机格式探测 Strategy 3 macOS 误入 V4L2 重开留死句柄僵尸态（启动成功但画面永远 No Source）+ 全平台终检；剧本归档 tests/uat/mac_camera_sim/ |
+| v3.51.1 | 2026-08-14 | 捷昌 B 站双工位虚拟战役补丁版：虚拟双工位环境（synthetic 剧本源 + 假 TCP 扫码器）60 断言复现现场，修 6 个新功能路径 bug（新码强制收旧账对挂账周期失效 / 拒码后扫码器灯不回亮 / force_ng 超时误播已合格 / 组级 NG 覆盖跨轮污染 / 豁免漂移吞新品种 / 统一播报弹错 Toast）+ synthetic 支持 tracking 模式 + UAT 剧本归档 tests/uat/virtual_dual_station/ |
+| v3.51.0 | 2026-08-14 | 捷昌 B 站双工位整改批次：v3.50.0a 热补丁 17 条全量收编（堆损坏 0xC0000374 治本/E 码-合格-码/扫码后才计数/广播全 OK 亮灯/绑定保护/齐件即结算周期守门）+ 开机黑屏收尾兜底恢复轮 + 激活收养开关 activate.adopt_unbound（默认开=存量）+ 工位组统一播报 unified_ok_report（全员合格才一起报 OK，NG 永不抑制，默认关）+ 数据清理联动解封 ok 工件；新增项默认关或保持存量零差异 |
+| v3.50.0 | 2026-08-12 | 捷昌二期批次：跟踪模式齐件即结算（仅 ROI离开/容器策略，凑齐并稳定 N 帧立即出结果 + 步骤级"确认放入帧数" + ROI 豁免名单/容器"已结算等离开"状态机防二次入账 + scan_pair 互斥守门）+ 扫码器生命周期码-合格-码闭环（resume_on 仅 OK 亮灯 NG 灭灯等人工恢复：监控页按钮/POST /scanner/resume/触发中心 resume_scanner 三出口 + rearm_forget_last 亮灯作废旧码 + strict_ok_dedup 强制去重 + 拒绝路径统一警告 toast，m0010）；全部默认关零差异 |
+| v3.49.0 | 2026-08-12 | 捷昌整改批次：MES 外推并发派发（连接级执行器 + gateway_spool 落盘补发 + 重试预算可配）+ 集群副机上报异步化（独立线程 + cluster_report_spool 断网重放 + report-status 可观测）+ scan_pair 新码先上屏（显式 prev_wp_id 异步结算旧窗口，上屏与结算解耦；广播兄弟通道结算串身份修复）+ 结算耗时埋点 backend.timing + PostgreSQL 支持（sql_compat 方言收编 + pg_dump 备份 + DATABASE_URL 注入 + 数据库卡片 + 安装器 PG 组件 + sqlite_to_pg --verify；幽灵项目绑定 stale 忽略）+ 双方言 db-matrix 扩容与双后端可见 UAT |
 | v3.48.1 | 2026-08-11 | 体验修复补丁版：多工位监控（>4 工位）视频加载不出/WebKit 黑屏治本（MJPEG 超 6 连接上限改快照轮询 + 零帧断流自动降级 + 取帧节奏按工位数自适应）+ 数据中心录像「视频加载失败」治本（转码 .tmp 原子落位 + 缓存 `_h264v2` + 超时 300s）+ NG 录像回看三件套（周期 仅OK/仅NG 筛选 + 0.5x~4x 倍速 + 下载录像）+ Electron 退出僵尸 python 兜底（race 8s + forceKillSync）+ alembic env 补 5 组模型 import（修 PG 基线迁移 CI） |
 | v3.48.0 | 2026-08-10 | 三分支汇合发版：RFC 13 通用 PLC 连接器（8 协议驱动 + 点位引擎 + bind_sn 绑码/结果码写回 + s7_db_handshake 模板，默认无连接零开销）+ RFC 14 统一触发中心（虚拟按钮/脚踏板/HTTP/串口/定时 6 源 × 全局动作注册表，channel 裁撤第 5 处清理）+ 计数组合判定表（纯视觉判型 + positional 位置去重六参数）+ 上银 SY9（槽位完整性门 + 物品/托盘去重 IoU 可配 + 放工单只认收尾后，m0009；与 v3.47 五开关归一化桥接零差异）+ Modbus 完成脉冲外设协议（逐件覆盖 all_covered/cycle_ok 联动，台达 ES3 文档）+ 短信汇总合并分列/逐工位 + 工位筛选 |
 | v3.47.0 | 2026-08-07 | 多分支汇合发版：多工位监控布局重构（三工位横排+网格分页总览+放大详情，工位上限 4→64）+ YoloVision 训练平台互连（模型双向分发+现场帧采样回流自学习闭环，默认关，m0008）+ 开机首启提速/授权激活治本六项（Defender 排除+startup-heavy-init 后台化+machineId 快路径，m0007）+ LG 工时看板插件 v1.5.2（F8 插件导出字段落地）+ custom_mix 记账五开关 + NG 汇总数字口径可选 + macOS MPS 并发串行锁 |
@@ -374,6 +385,6 @@
 
 ---
 
-**本文件最后更新**：2026-08-11（发版 v3.48.1：体验修复补丁版——多工位监控视频快照轮询回退 + 数据中心录像转码缓存原子化 + NG 录像回看三件套 + Electron forceKillSync + alembic env 模型补 import；第一节版本号 + 第十一节里程碑同步。上一版 v3.48.0：三分支汇合——RFC 13 PLC 连接器 + RFC 14 触发中心 + 计数组合判定表 + SY9 记账精度 + Modbus 完成脉冲 + 短信汇总形态；第一节版本号 + 第八节不变量 4 改 5 处清理 + 第十一节里程碑同步。路由表 `/plc` `/triggers` 与触发表 `debug-plc` `debug-triggers` 已随分支合入时同步）
+**本文件最后更新**：2026-08-20（发版 v3.53.0：录像归档与媒体证据体系一~四期——归档引擎/NG 关键帧/证据包/事件切片/生态联动/远端 adapter 与治理，全部默认关零差异；随版修监控页无扫码器扫码 UI 守门丢失；第一节版本号 + 第十一节里程碑同步。上一版 v3.52.0：多显示器一期）
 **维护者**：项目主作者 + AI agents
 **维护铁律**：本文件只放"地图 + 守则 + 不变量"。模块细节进 skill，版本变更进 `docs/changelog/`，扩展点/技术债进 `docs/plugin-system/inventory/`。**发版时务必同步更新本文件第一节版本号 + 文件尾日期**（详见 `update-release` skill）。

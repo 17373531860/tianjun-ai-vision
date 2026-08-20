@@ -1,7 +1,48 @@
 ﻿# 04 · 前端 + Electron 读码笔记
 
-> 覆盖范围：`frontend/src/` 全部约 100 文件（含 `Monitor/index.vue` 6245 行分段通读）、`electron/` 核心壳文件（`main.js` / `backend-manager.js` / `license-manager.js` / `preload.js`；vendor/splash 第三方资源仅记用途）。
-> 行号锚点均来自当前仓库快照，后续改动以代码为准。
+> **类型**：reference
+> **本文不讲**：多屏配置后端模型与持久化细节（见 `backend/api/channel_manager.py`）、现场异显坞验收步骤（见对应交付记录）。
+> **与代码冲突时**：以代码为准，发现请顺手修本文或告知主作者。
+
+覆盖范围：`frontend/src/` 与 `electron/` 核心壳文件；vendor/splash 第三方资源仅记用途。
+下文带行号的旧版本补账只用于历史定位，当前实现统一按文件与函数名查找。
+
+## 当前多屏工位显示指针
+
+一期使用同一个 `/monitor` hash 路由承载主屏放大态与副屏 kiosk，不新增平行页面。
+代码位置：`frontend/src/router/index.js` → `isMultiMonitorRoute`；`frontend/src/layout/index.vue` → `kioskMode`。
+
+`SingleChannelMonitor` 是主屏放大态与副屏 kiosk 的共用单工位组件，只消费父级传入的通道快照和 canvas 注册函数，不自行取流或轮询。
+只读模式保留开始、停止、待机和清零按钮但全部原生禁用；显式 `readonly=0` 时仍 emit 到 Monitor 既有 actions。
+共用组件与原单工位复用 `GoodBadPieChart` 良品/不良环形图和 `YieldRateGauge` 半圆合格率仪表盘；共用组件把良品/不良统计、合格率与 NG TOP3 放在同一行并按当前启用项等宽分布。
+它同时展示平均 CT、上次 CT、当前周期与步骤统计；主屏通过 `context-bar` slot 恢复 MES 工件、工单、任务字段及扫码 actions，kiosk 不装载该 slot 内容。
+代码位置：`frontend/src/views/Monitor/GoodBadPieChart.vue`；`frontend/src/views/Monitor/YieldRateGauge.vue`；`frontend/src/views/Monitor/SingleChannelMonitor.vue`；`frontend/src/views/Monitor/index.vue` → `singleChannelViewActive`、`activeSingleChannel`。
+
+主屏多屏模式总览强制使用 `/snapshot`，放大态只保留目标工位一路 MJPEG，kiosk 只取 query 指定工位的数据和视频。
+既有 MJPEG 上限、零帧降级、自适应快照节奏、framePump 背压和单工位定期换流保持不变。
+代码位置：`frontend/src/views/Monitor/index.vue` → `visibleStreamChannels`、`syncMultiStreams`、`startMultiPolling`、`loadMultiMonitorRuntime`。
+
+设置入口复用工位数量真相源，保存 `display_id` 与显示器 `bounds`，并把后端规范化结果交给 Electron 热应用。
+枚举不到已保存显示器时保留失联 ID，供主进程按记忆坐标降级。
+代码位置：`frontend/src/views/Settings/index.vue` → `multiMonitorForm`、`refreshMultiMonitorDisplays`、`saveAndApplyMultiMonitor`；`frontend/src/api/detection.js` → `getMultiMonitorConfig`、`setMultiMonitorConfig`。
+
+Electron 主进程负责 License 守门、显示器解析、工位窗口生命周期和 crash 有界恢复；preload 只暴露显示器查询与主窗应用布局 IPC。
+代码位置：`electron/main.js` → `applyMultiMonitorConfig`、`destroyStationWindows`；`electron/multi-monitor.js` → 配置规范化与显示器回退；`electron/preload.js` → `getDisplays`、`applyMultiMonitor`。
+
+CI 浏览器回归覆盖设置 roundtrip、Electron apply payload 可结构化克隆、kiosk 只读按钮禁用/单通道轮询、共享良品/不良环形图与合格率仪表盘、三块统计卡等宽、主屏跨工位数进入共用组件、关闭多屏后 2/3 工位保持卡片选择，以及总览快照与放大单路 MJPEG。
+代码位置：`tests/e2e_browser/test_multi_monitor_phase1.py`。
+
+⚠️ v3.52.0 发版审计修正：**网格总览（>3 工位）整卡点击=放大单路是 v3.47 交付行为，多屏开关不得改变**（一期分支曾误改为"关闭时仅选中"，合并审计拦下）。2/3 工位整卡点击=选中不变；"放大"按钮仅多屏开启时渲染，是额外显式入口。放大详情自 v3.52 复用 `SingleChannelMonitor` 组件（原内联模板已删）。双向守门：`test_multi_workstation_layout.py::test_grid_overview_pagination_and_zoom`（6 工位点卡进放大）+ `test_multi_monitor_phase1.py::test_disabled_workstations_keep_legacy_selection`（4 工位分支断言点击进入放大）。
+
+### 现场设置与单屏降级验证
+
+1. Windows 先把所有显示器设为“扩展这些显示器”，主屏接独显 HDMI；应用内进入“设置 → 显示设置 → 多屏工位显示（一期）”。
+2. 点击“刷新显示器”，为每个工位选择不同显示器，保持“副屏只读”开启，再点击“保存并应用”。同一物理区域只允许一个工位窗口；重复映射会被 Electron 跳过并返回提示。
+3. 主屏仍显示总览；多屏开启时点击工位卡进入共用单工位大屏并可返回。副屏直接加载同一 `/monitor` 路由的 kiosk query，不显示导航，写操作按钮保留但在一期只读配置下全部禁用。
+4. 检测中心不提供独立的全局退出按钮；关闭多屏统一回到本设置卡片，关闭“启用多屏工位显示”并保存后，Electron 立即销毁所有工位子窗。配置默认仍为 `enabled=false`、`readonly=true`。
+
+只有一两块物理屏时，可在隔离数据目录调用 `PUT /api/v1/workstations/multi-monitor` 写入不存在的 `display_id` 与非重叠 `bounds`，验证主进程 `manual_bounds` 降级、重复区域拒绝和关闭清理；这只能验证窗口编排，不能代替四屏现场钉屏验收。
+若 WAVLINK/DisplayLink 驱动导致 `screen.getAllDisplays()` 漏屏，先在 Windows 显示设置确认扩展桌面，再刷新并重选；已保存项会保留最后一次 `bounds`。枚举仍异常时可通过该 API 手工写 bounds，后续热插拔自动重绑属于二期范围。
 
 > **v3.47 补账（2026-08-07，多分支汇合发版）**：
 > - `views/Monitor/index.vue`（→6847 行）：**多工位布局重构**——模板顶层链 `layoutBodyOverride → channelCount===2 → ===3（三行横排：左视频 16:9 + 右数据面板 ChannelVideoCard）→ >3（网格总览「多工位总览」工具条 auto/2x2/3x3/4x4 + 分页 + 点卡片放大详情）→ 单工位`；新状态区（:2265 起）`gridPage/gridDims/zoomedChannel/gridPageChannels`；MJPEG 按可见工位收放：`visibleStreamChannels()`（≤3 全拉 / 放大只拉一路 / 网格只拉当前页）+ `syncMultiStreams()`（翻页/换布局/进出放大 watcher 触发，:2315），数据轮询仍覆盖全部工位；流被服务端正常收流（done 非异常）也自动重连（带可见性守门，:2523）；`startMultiStreams` 入口守卫 layout.body 插件独占（互踢修复）；列级 OK/NG Toast 从仅双工位放开到任意工位数（`channelCount >= 1` 网格，:30）；`fetchChannelCount` 工位数变化后放大越界退回总览
@@ -22,11 +63,36 @@
 > - `views/MES/ExternalDevicePanel.vue` + `api/external_device.js`（dev-qing）：`modbus_pulse` 协议配置区（线圈地址/pulse_ms/cooldown_ms/trigger_mode）+ 手动试发按钮
 > - `views/Alarm/index.vue`（dev-qing）：短信汇总「发送形态」单选（merged_detail 一条内分列多工位=默认 / per_channel 逐工位逐条）+ `summary_channel_ids` 参与工位多选
 
+> **v3.50 补账（2026-08-12，捷昌二期：齐件即结算 + 扫码器生命周期）**：
+> - `views/Project/LogicConfigTab.vue`：跟踪配置卡新增「全部合格立即结算」开关（`data-testid=settle-on-complete-switch`），**仅 `tracking_cycle_strategy` 为 roi_exit/container 时渲染**（v-if 条件），tooltip 说明语义 + 与 scan_pair 互斥警示；开启时下方警示文案提醒确认帧数配置。
+> - `views/Project/StepsConfigTab.vue`：物品设置表（tracking 模式）新增「确认放入帧数」列（`settle_confirm_frames`，el-input-number min=1，`data-testid=settle-confirm-frames-input`），**仅 `settleOnCompleteActive` computed 为真时渲染**（开关开 + 策略支持），count_mode≠track 行置灰。
+> - `views/Project/index.vue`：`initProjectDefaults` 回读 `pipeline_config.tracking_settle_on_complete` + 步骤 `settle_confirm_frames` 默认 1；保存映射仅 roi_exit/container 策略写 true（其他策略强制 false，防脏配置）。
+> - `views/MES/ScannerPanel.vue`：新「扫码器生命周期」选项区——「重新亮灯时机」下拉（cycle_end/ok_only）+「亮灯作废旧码」+「强制去重」开关；前两项 `lifecycleApplicable` computed 守门（device_type=text_lon 且 scan_mode ∈ once_per_cycle/D，USB 键盘枪无灯控置灰 + 提示文案）；强制去重任何设备可用；defaultForm 三字段默认=现状；scan_pair 提示文案补与齐件即结算互斥说明。
+> - `views/Monitor/index.vue`：①MES 信息条新增「恢复扫码」按钮（`data-testid=resume-scanner-btn`，`mesData.scanner_resume_blocked` 为真时显示，点击 `POST /scanner/resume?channel_id=` + 成功/无枪/失败三态 toast）；**信息条外层 v-if 补 `scanner_resume_blocked` 条件**——否则 NG 后无工件/工单时整条不渲染按钮出不来（开发中实测踩的坑）；②`handleScanToast` 统一警告分支：`scan_warning || scan_pair_dup_warning` 走 `warn_reason` 文案的 warning toast（多工位带工位号前缀），时间戳去重沿用。
+>
+> **v3.51 补账（2026-08-14，捷昌 B 站双工位整改）**：
+> - `views/Settings/index.vue`：显示设置页「开机自动恢复检测」卡片后新增**「启用项目时自动接管未绑定工位」卡片**（`data-testid="adopt-unbound-switch"`，`GET/PUT /projects/activate-config`，默认开=存量收养行为；说明文案标注"多工位多项目部署建议关闭"）；`loadAdoptUnboundConfig`/`onAdoptUnboundChange` + onMounted 装载；新 import `Connection` 图标。
+> - `views/Settings/ChannelGroupPanel.vue`：创建/编辑对话框在 `settle_strategy === 'synchronized_all_ok'` 时渲染**「统一播报」开关**（`form.unified_ok_report`，说明文案"全部合格后统一报一次合格，NG 仍立即播报"）；列表「联动策略」列 `row.unified_ok_report` 为真时追加橙色 `统一播报` tag；`_newForm` 默认 false。
+> - 回归：e2e `tests/e2e_browser/test_v3_51_switches.py`（4 用例：activate-config API 默认值 / adopt 开关点击-落库-刷新回填 / unified_ok_report API 往返 / 面板 tag 可见）。
+> - `views/Project/LogicConfigTab.vue`（v3.50.0a 收编）：跟踪配置卡「扫码后才计数」开关（`tracking_scan_gate`）+ 齐件即结算 tooltip 新语义文案（含"配周期超时兜底"提醒）。
+>
+> **v3.51.5 补账（2026-08-17，捷昌现场热补丁 a/b/c 收编）**：
+> - `views/Monitor/index.vue`（BUG-001/002）：①`autoRestoreSource()` 先查 `channel_count`，多工位跳过 localStorage 单工位兜底（治重启后左右工位相机/模型串位）；②`fetchChannelCount` 失败 3 秒重试（后端未就绪不再锁死单工位）；③`processChannelResult` 检测到 `is_running` false→true 重置零帧计数并 `syncMultiStreams()` 强制重连（治源加载完要切页才出画面）。回归 `tests/e2e_browser/test_monitor_autorestore_guard.py`。
+> - `views/MES/WorkpiecePanel.vue`（BUG-005）：`onMounted` 查工位数，`channel_count>1` 时 `onlyCurrentProject` 默认 false——多工位下"当前项目"只是最后激活的那个，默认过滤会藏其它工位项目 ok 工件，批量删除删不干净 → `strict_ok_dedup` 拒码找不到原因。单工位保持默认开。回归 `tests/e2e_browser/test_workpiece_panel_multiws_v3515.py`。
+>
 > **v3.48.1 补账（2026-08-11，体验修复补丁版）**：
 > - `views/Monitor/index.vue`（→6942 行）：**快照轮询回退**——`syncMultiStreams` 在可见工位 > `MAX_MJPEG_STREAMS`(4) 时掐掉全部 MJPEG 长连接改 `/snapshot?channel=N` 单帧轮询（浏览器同 host HTTP/1.1 仅 6 条并发连接，九路 MJPEG + 数据轮询互踢饿死）；新增 `mjpegZeroFrameFails`/`_registerMjpegDeath`：任一工位 MJPEG 连续 2 次零帧断流（WebKit fetch 不支持 multipart/x-mixed-replace）单独降级快照；`startSnapshotPolling` 定时器 40ms 基础节拍 + `_snapshotIntervalMs()` 按并发工位数自适应取帧间隔（≤2 路 80ms / ≤4 路 120ms / ≤9 路 200ms / 更多 300ms），`snapshotInFlight` 背压跳 tick，`stopMultiStreams` 清零帧计数
 > - `views/Data/index.vue`：周期列表「全部/仅OK/仅NG」筛选（`cycleResultFilter` → cycles 端点 `result` 参数，换筛选重置分页/展开态）；播放弹窗 0.5x~4x 倍速（`videoPlaybackRate` + `applyPlaybackRate`，`@loadedmetadata` 时套用、换视频不重置）+「下载录像」按钮（a[download] 指向同 `/data/videos/{id}`）；视频报错文案引导下载兜底
 > - `api/data.js`：`getSessionCycles` 加第 4 参 `result`
 > - Electron：`main.js` `finishShutdown` 的 stopBackend race 3s→8s + `app.exit(0)` 前必调 `forceKillSync`；`backend-manager.js`（→806 行）新增 `forceKillSync()` 同步强杀兜底（win32 `taskkill /f /t` / POSIX 杀进程组）——治"退出留僵尸 python 占 GPU 显存、每次启动清残留"
+
+> **v3.49 补账（2026-08-12，捷昌整改批次）**：
+> - `views/Settings/index.vue`：①显示设置页新增两只开关——「MES 外推并发派发」（`data-testid="mes-async-dispatch-switch"` → `GET/PUT /mes/gateway/async-dispatch`）与「扫码新码先上屏」（`data-testid="scan-pair-new-first-switch"` → `GET/PUT /scanner/scan-pair/new-code-first`），均默认开、即时生效；②性能设置页新增**数据库卡片**（`data-testid="db-info-card"` / dialect 标签 `db-dialect-tag`）——展示 dialect/位置/服务端版本/连接池，数据源 `GET /system/db-info`，带刷新按钮
+> - `views/MES/ClusterPanel.vue`：①集群配置面加「上报超时 report_timeout_sec」「异步上报 report_async」两项（写 `/cluster/config`）；②新增「上报链路状态」区（`data-testid="cluster-report-status"`）——内存队列/落盘积压/已补发三数字，轮询 `GET /cluster/report-status`
+> - `views/MES/GatewayPanel.vue`：连接弹窗新增「重试预算(秒)」输入框（`data-testid="gw-retry-budget"`）——值存进连接 **config JSON** 的 `retry_budget_sec`（非顶层字段），0=不限
+> - `views/Monitor/index.vue`：当前条码 override 适配 scan_pair 新码先上屏时序（新码顶替即上屏，不等旧窗口结算返回）
+> - `api/cluster.js`：新增 `getReportStatus()` 封装
+> - Electron：`backend-manager.js` 后端 spawn 环境注入 **`DATABASE_URL`**（进程环境变量优先，其次数据目录 `db_config.json`；都没有=SQLite 零差异）；`build/installer.iss` 新增 **PostgreSQL 可选组件**（默认不勾选，选装才铺 PG 运行时）
 
 > v3.41 复核（2026-07-17）：基线 a23a8d2（v3.32/v3.33 之交）→ v3.41.0 的前端/Electron 增量已回写本文——各条目下的「v3.3x 起」引用块即补账内容，行号锚点已整体刷新为当前快照。逐版动机详见 `docs/changelog/`（v3.33.0 ~ v3.41.0 各版 md）。
 

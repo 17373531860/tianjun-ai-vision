@@ -103,3 +103,34 @@ def test_fire_external_event_require_ack_no_double_reset():
     vsm.project_config["events_config"][0]["require_ack"] = True
     vsm.fire_external_event_response(3, "后续异常", source="packaging")
     assert vsm._pending_ack_event_id == "first"           # 没被覆盖
+
+
+# ==================== v3.51.1 toast_id 默认值按事件类型 ====================
+
+def _vsm_with_event(eid, name, **extra):
+    vsm = _FakeVSM()
+    vsm.project_config["events_config"] = [
+        {"id": eid, "name": name, "show_notification": True, **extra}]
+    return vsm
+
+
+def test_fire_external_ok_event_defaults_ok_toast():
+    """v3.51.1: 合格事件默认 ok Toast — 统一播报(工位组全员合格)借这条路,
+    原默认 'ng' 会让"全部合格"弹红色不合格 Toast (真机截图抓到的 bug)."""
+    vsm = _vsm_with_event(1, "合格")
+    vsm.fire_external_event_response(1, "工位组全部合格",
+                                     source="channel_group", remind_only=True)
+    assert vsm.events_log[-1]["toast_id"] == "ok"
+
+
+def test_fire_external_ng_event_defaults_ng_toast():
+    vsm = _vsm_with_event(2, "不合格")
+    vsm.fire_external_event_response(2, "整体判不合格",
+                                     source="channel_group", remind_only=True)
+    assert vsm.events_log[-1]["toast_id"] == "ng"
+
+
+def test_fire_external_explicit_toast_id_wins():
+    vsm = _vsm_with_event(1, "合格", toast_id="custom")
+    vsm.fire_external_event_response(1, "x", remind_only=True)
+    assert vsm.events_log[-1]["toast_id"] == "custom"

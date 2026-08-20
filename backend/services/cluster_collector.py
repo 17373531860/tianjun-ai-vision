@@ -7,6 +7,9 @@
 3. 所有工位到齐后触发 MES Gateway 推送 box_complete 事件
 4. 超时未齐的箱子按策略处理（推送不完整数据或告警）
 """
+import json
+import os
+import queue
 import threading
 import time
 import traceback
@@ -16,6 +19,7 @@ from typing import Optional
 
 from sqlalchemy.exc import OperationalError, IntegrityError
 
+from backend.core.config import DATA_DIR
 from backend.db.database import SessionLocal
 from backend.models.mes_models import (
     ClusterConfig, BoxAggregation, BoxSummary,
@@ -156,6 +160,22 @@ class ClusterCollector:
         self._box_locks: dict = {}
         self._box_locks_guard = threading.Lock()
 
+        # v3.49: 副机上报异步化。原来 report_to_master 的 requests.post(timeout=10)
+        # 跑在 mes-hook-worker 上, 主机慢/断网时把扫码配对等整个 hook 队列堵 10s/箱
+        # (捷昌工位2 双通道延迟根因之一)。改为: 上报进独立 cluster-report-sender
+        # 线程排队, 失败/积压落盘 cluster_report_spool.jsonl 严格 FIFO 重放,
+        # 断网期间不丢上报、恢复后自动补账。开关 report_async (默认开) 可退回同步。
+        self._report_thread: Optional[threading.Thread] = None
+        self._report_queue: queue.Queue = queue.Queue(maxsize=1000)
+        self._report_spool_file = os.path.join(DATA_DIR, "cluster_report_spool.jsonl")
+        self._report_spool_lock = threading.Lock()
+        self._report_spool_write_count = 0
+        self._report_spool_replay_count = 0
+        self._report_timeout = 10           # get_config 按 KV 刷新
+        self._report_last_error: Optional[str] = None
+        self._report_last_ok_at: Optional[float] = None
+        self._REPORT_RETRY_BACKOFF = 5.0    # spool 头条发送失败后的重试间隔(秒)
+
     def _acquire_box_lock(self, box_serial: str) -> threading.Lock:
         """获取/创建该箱号的串行锁，返回 Lock（未 acquire，由调用方 with 使用）"""
         with self._box_locks_guard:
@@ -184,7 +204,14 @@ class ClusterCollector:
         )
         self._heartbeat_thread.start()
 
-        logger.info("[Cluster] 汇总服务已启动 (含副机心跳发送线程)")
+        # v3.49: 副机上报独立发送线程 (常驻; 非 slave 角色时空转, 开销可忽略)
+        self._report_thread = threading.Thread(
+            target=self._report_sender_loop, daemon=True,
+            name="cluster-report-sender"
+        )
+        self._report_thread.start()
+
+        logger.info("[Cluster] 汇总服务已启动 (含副机心跳发送线程 + 上报发送线程)")
 
     def stop(self):
         self._stop_event.set()
@@ -192,6 +219,8 @@ class ClusterCollector:
             self._timeout_thread.join(timeout=5)
         if self._heartbeat_thread:
             self._heartbeat_thread.join(timeout=5)
+        if self._report_thread:
+            self._report_thread.join(timeout=5)
 
     def get_config(self, db=None) -> dict:
         """读取集群配置，带 5 秒缓存"""
@@ -234,6 +263,9 @@ class ClusterCollector:
             self._slave_timeout = timing["slave_timeout_sec"]
             self._heartbeat_interval = timing["heartbeat_interval_sec"]
             self._box_scan_interval = timing["box_scan_interval_sec"]
+            self._report_timeout = timing["report_timeout_sec"]
+            # KV 存 0/1, 对外/对前端统一成 bool (el-switch 只认布尔)
+            result["report_async"] = bool(timing["report_async"])
             self._config_cache = result
             self._config_ts = now
             return result
@@ -250,6 +282,9 @@ class ClusterCollector:
         "heartbeat_interval_sec": ("cluster.heartbeat_interval_sec", 5, 1, 3600),
         "slave_timeout_sec": ("cluster.slave_timeout_sec", 20, 2, 86400),
         "box_scan_interval_sec": ("cluster.box_scan_interval_sec", 30, 1, 3600),
+        # v3.49: 副机上报 HTTP 超时 + 异步开关 (1=独立线程+落盘重放, 0=旧同步内联)
+        "report_timeout_sec": ("cluster.report_timeout_sec", 10, 1, 120),
+        "report_async": ("cluster.report_async", 1, 0, 1),
     }
 
     def _read_timing_config(self, db) -> dict:
@@ -505,8 +540,7 @@ class ClusterCollector:
     def report_to_master(self, cycle_context: dict, box_serial: str,
                          station_id: str, master_url: str,
                          is_good: bool = True, event_name: str = None) -> dict:
-        """从机向主机 POST 数据"""
-        url = master_url.rstrip("/") + "/api/v1/cluster/report"
+        """从机向主机 POST 数据 (同步路径, report_async=0 时走这里)"""
         payload = {
             "station_id": station_id,
             "box_serial": box_serial,
@@ -514,22 +548,210 @@ class ClusterCollector:
             "is_good": is_good,
             "event_name": event_name,
         }
+        return self._post_report(payload, master_url)
+
+    def _post_report(self, payload: dict, master_url: str) -> dict:
+        """执行一次上报 POST。同步/异步两条路径共用的最终发送出口。"""
+        box_serial = payload.get("box_serial")
+        station_id = payload.get("station_id")
+        url = (master_url or "").rstrip("/") + "/api/v1/cluster/report"
+        _t0 = time.time()
         try:
-            resp = requests.post(url, json=payload, timeout=10)
+            resp = requests.post(url, json=payload, timeout=self._report_timeout)
+            if debug_center.is_on("backend.timing"):
+                debug_center.dbg("backend.timing", "集群上报耗时",
+                                 f"box={box_serial or '-'} status={resp.status_code} "
+                                 f"dur={(time.time()-_t0)*1000:.0f}ms")
             if resp.status_code == 200:
                 logger.info("[Cluster] 上报主机成功: %s -> %s", box_serial, master_url)
                 if debug_center.is_on("backend.cluster"):
                     debug_center.dbg("backend.cluster", "副机上报主机成功", f"box={box_serial or '-'} station={station_id or '-'} master={master_url or '-'}")
+                self._report_last_ok_at = time.time()
+                self._report_last_error = None
                 return {"success": True, "response": resp.json()}
             else:
                 logger.error("[Cluster] 上报主机失败: HTTP %d %s",
                              resp.status_code, resp.text[:200])
                 debug_center.dbg("backend.cluster", "副机上报主机失败", f"box={box_serial or '-'} status={resp.status_code}")
+                self._report_last_error = f"HTTP {resp.status_code}"
                 return {"success": False, "error": f"HTTP {resp.status_code}"}
         except Exception as e:
             logger.error("[Cluster] 上报主机异常: %s", e)
             debug_center.dbg("backend.cluster", "副机上报主机异常", f"box={box_serial or '-'} err={e}")
+            if debug_center.is_on("backend.timing"):
+                debug_center.dbg("backend.timing", "集群上报耗时(异常)",
+                                 f"box={box_serial or '-'} dur={(time.time()-_t0)*1000:.0f}ms err={e}")
+            self._report_last_error = str(e)
             return {"success": False, "error": str(e)}
+
+    # ==================== v3.49: 副机上报异步化 ====================
+
+    def enqueue_report(self, cycle_context: dict, box_serial: str,
+                       station_id: str, master_url: str,
+                       is_good: bool = True, event_name: str = None) -> dict:
+        """非阻塞把一次上报交给发送线程。队列满 → 直接落盘 (不丢)。
+
+        调用方 (mes-hook-worker) 立即返回, 不再被主机慢/断网拖住。"""
+        item = {
+            "payload": {
+                "station_id": station_id,
+                "box_serial": box_serial,
+                "cycle_context": cycle_context,
+                "is_good": is_good,
+                "event_name": event_name,
+            },
+            "master_url": master_url,
+            "created_at": time.time(),
+        }
+        # 严格 FIFO: spool 里还有积压时, 新上报直接排到 spool 尾部,
+        # 不允许越过积压直发 (同箱二次校正等场景依赖到达顺序)。
+        if self._report_spool_size() > 0:
+            self._spool_report_append(item)
+            return {"success": True, "queued": "spool"}
+        try:
+            self._report_queue.put_nowait(item)
+            return {"success": True, "queued": "memory"}
+        except queue.Full:
+            spooled = self._spool_report_append(item)
+            return {"success": bool(spooled), "queued": "spool" if spooled else "dropped"}
+
+    def _report_sender_loop(self):
+        """独立发送线程: 先按 FIFO 补 spool 积压, 再消化内存队列。
+
+        发送失败 → 该条落盘 (若尚未在盘上) + 退避重试, 不丢上报;
+        主机恢复后按原顺序补账。"""
+        while not self._stop_event.is_set():
+            try:
+                # 1) spool 积压优先 (严格 FIFO)
+                head = self._spool_report_head()
+                if head is not None:
+                    # 把内存队列里的新条目也归入 spool, 保持全局顺序
+                    self._drain_queue_to_spool()
+                    master_url = self._resolve_master_url(head.get("master_url"))
+                    if master_url and self._post_report(head["payload"], master_url).get("success"):
+                        self._spool_report_pop_head()
+                        self._report_spool_replay_count += 1
+                        left = self._report_spool_size()
+                        print(f"[Cluster] replayed 1 spooled report "
+                              f"(replayed_total={self._report_spool_replay_count}, left={left})",
+                              flush=True)
+                        continue
+                    # 发不动 (断网/主机没起/没配 master_url) → 退避后再试
+                    self._stop_event.wait(timeout=self._REPORT_RETRY_BACKOFF)
+                    continue
+
+                # 2) 无积压 → 正常消化内存队列
+                try:
+                    item = self._report_queue.get(timeout=1.0)
+                except queue.Empty:
+                    continue
+                master_url = self._resolve_master_url(item.get("master_url"))
+                if not master_url:
+                    self._spool_report_append(item)
+                    continue
+                result = self._post_report(item["payload"], master_url)
+                if not result.get("success"):
+                    self._spool_report_append(item)
+            except Exception as e:
+                # 发送线程绝不能死: 任何意外都记日志后继续
+                print(f"[Cluster] report sender loop error: {e}", flush=True)
+                self._stop_event.wait(timeout=1.0)
+
+    def _resolve_master_url(self, enqueue_url: Optional[str]) -> Optional[str]:
+        """发送时优先用当前配置的 master_url (现场改配置对积压立即生效),
+        回落到入队时记录的 url。"""
+        try:
+            cfg = self.get_config()
+            return cfg.get("master_url") or enqueue_url
+        except Exception:
+            return enqueue_url
+
+    def _drain_queue_to_spool(self):
+        """spool 非空时把内存队列全部转移到 spool 尾部 (保持全局 FIFO)。"""
+        while True:
+            try:
+                item = self._report_queue.get_nowait()
+            except queue.Empty:
+                return
+            self._spool_report_append(item)
+
+    def _spool_report_append(self, item: dict) -> bool:
+        try:
+            with self._report_spool_lock:
+                os.makedirs(os.path.dirname(self._report_spool_file), exist_ok=True)
+                with open(self._report_spool_file, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(item, ensure_ascii=False, default=str) + "\n")
+                self._report_spool_write_count += 1
+            return True
+        except Exception as e:
+            print(f"[Cluster] report spool write failed: {e}", flush=True)
+            return False
+
+    def _spool_report_size(self) -> int:
+        with self._report_spool_lock:
+            if not os.path.exists(self._report_spool_file):
+                return 0
+            try:
+                with open(self._report_spool_file, "r", encoding="utf-8") as f:
+                    return sum(1 for ln in f if ln.strip())
+            except Exception:
+                return 0
+
+    def _report_spool_size(self) -> int:
+        return self._spool_report_size()
+
+    def _spool_report_head(self) -> Optional[dict]:
+        """读 spool 第一条 (不删除); 损坏行直接清掉。"""
+        with self._report_spool_lock:
+            if not os.path.exists(self._report_spool_file):
+                return None
+            try:
+                with open(self._report_spool_file, "r", encoding="utf-8") as f:
+                    lines = [ln.strip() for ln in f if ln.strip()]
+            except Exception:
+                return None
+            while lines:
+                try:
+                    return json.loads(lines[0])
+                except Exception:
+                    lines.pop(0)  # 损坏行丢弃
+                    try:
+                        if lines:
+                            with open(self._report_spool_file, "w", encoding="utf-8") as f:
+                                f.write("\n".join(lines) + "\n")
+                        else:
+                            os.remove(self._report_spool_file)
+                    except Exception:
+                        pass
+            return None
+
+    def _spool_report_pop_head(self):
+        with self._report_spool_lock:
+            if not os.path.exists(self._report_spool_file):
+                return
+            try:
+                with open(self._report_spool_file, "r", encoding="utf-8") as f:
+                    lines = [ln.strip() for ln in f if ln.strip()]
+                lines = lines[1:]
+                if lines:
+                    with open(self._report_spool_file, "w", encoding="utf-8") as f:
+                        f.write("\n".join(lines) + "\n")
+                else:
+                    os.remove(self._report_spool_file)
+            except Exception as e:
+                print(f"[Cluster] report spool pop failed: {e}", flush=True)
+
+    def get_report_queue_status(self) -> dict:
+        """给前端 ClusterPanel 的上报链路状态 (副机侧关注)。"""
+        return {
+            "async_enabled": bool(self.get_config().get("report_async", 1)),
+            "queued": self._report_queue.qsize(),
+            "spooled": self._spool_report_size(),
+            "spool_written_total": self._report_spool_write_count,
+            "spool_replayed_total": self._report_spool_replay_count,
+            "last_error": self._report_last_error,
+            "last_ok_at": self._report_last_ok_at,
+        }
 
     @staticmethod
     def _match_records_to_expected(expected, records):
@@ -748,11 +970,12 @@ class ClusterCollector:
             }
 
         try:
-            from backend.services.mes_gateway import get_mes_gateway
-            gw = get_mes_gateway()
             if debug_center.is_on("backend.cluster"):
                 debug_center.dbg("backend.cluster", "box 聚齐,推送 box_complete", f"box={box_serial or '-'} overall={'OK' if overall_good else 'NG'} stations={len(matched_expected)}/{len(expected)} recovery={state.get('is_recovery', False)}")
-            gw.dispatch("box_complete", aggregated, channel_id=None)
+            # v3.49: 走 MES hook 的异步外推统一入口 —— box_complete 推送不再
+            # 阻塞集群聚合线程 (主机 MES 慢时曾拖住 receive_station_report)
+            from backend.services.mes_hooks import get_mes_hook
+            get_mes_hook().dispatch_gateway("box_complete", aggregated, None)
 
             # v3.13: box_complete 插件 hook — 集群所有工位齐发 + MES Gateway 推送后,
             # 让插件拿到聚合 box 数据做自定义动作 (写日志 / 推第三方系统 / 写 ClickHouse 等).
@@ -943,9 +1166,9 @@ class ClusterCollector:
             return
 
         try:
-            from backend.services.mes_gateway import get_mes_gateway
-            gw = get_mes_gateway()
-            gw.dispatch("box_timeout", aggregated, channel_id=None)
+            # v3.49: 同 box_complete, 超时推送也走异步外推统一入口
+            from backend.services.mes_hooks import get_mes_hook
+            get_mes_hook().dispatch_gateway("box_timeout", aggregated, None)
 
             def mark_pushed_timeout(db):
                 s = (db.query(BoxSummary)

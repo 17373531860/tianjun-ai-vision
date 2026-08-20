@@ -12,6 +12,49 @@
 > - `source_model_load_mixin.py` / `source_detect_runners_mixin.py` / `source_lifecycle_mixin.py`：MPS 触点全部走 `backend/core/torch_device.py` 的 `mps_guard()`（全局 `MPS_LOCK` RLock 串行，治 macOS 多通道并发 Metal 断言弑进程；CUDA 路径零影响）
 > - 新增 `backend/api/interconnect.py`（175 行，8 端点，见 05 册互连家族节）
 >
+> **v3.49 补账（2026-08-12，捷昌整改批次）**：
+> - `api/system_display.py`：新增 **`GET /system/db-info`**（WS5）——返回 dialect / 脱敏 DSN 位置（密码恒不下发）/ 连接状态 / 服务端版本 / 连接池水位（SQLite 回 pool=null + 文件大小），Settings 性能设置页数据库卡片的数据源。
+>
+> **v3.50 补账（2026-08-12，捷昌二期：齐件即结算）**：
+> - `source_tracking_mixin.py`（→约 1210 行）：①`_tracking_load_step_config` 增解析步骤级 `settle_confirm_frames`（仅 >1 时进 `entry_confirm_frames` dict）；②`_tracking_phase2_id_match` 加两道守门——`_settle_complete_exempt` 豁免名单（已结算仍在场目标不再入账，ID 漂移按 IoU 合并转移豁免身份）+ `_tracking_entry_pending` N 帧确认缓冲（连续在场满 N 帧才入 `_tracking_objects`，当帧未见即回退）；③`_update_tracking_stats` 尾部齐件即结算分支——`tracking_settle_on_complete=true` 且策略 roi_exit 且非 scan_pair 通道且非 force_settling 时，凑齐（`_all_met_now`）当帧调 `_finish_tracking_cycle`，在场目标全体登记豁免名单；每帧尾清 stale pending/exempt。
+> - `source_container_grouping_mixin.py`（→约 875 行）：容器版同款三件——`_container_entry_pending` 箱内物品 N 帧确认；`_box_settled_waiting_exit`「已结算等离开」箱状态机（收箱循环遇已登记 box_track_id 直接跳过不重建 ledger，ID 漂移 IoU 转移，`gone_frames` 连续未见满阈值清除）；整箱凑齐即 `_settle_box` 并登记等离开。
+> - `source_state_init.py`：新增 4 个 dict 初始化（`_tracking_entry_pending` / `_settle_complete_exempt` / `_box_settled_waiting_exit` / `_container_entry_pending`）。
+> - `source.py` `_reset_counting_cycle`：清两个 pending 缓冲；**豁免名单/等离开状态刻意不清**（跨周期防二次入账是其存在意义）。
+> - `source_project_config_apply.py`：项目配置应用时重置豁免名单/等离开状态（换项目才是二者的清理时机）。
+> - `source_session_lifecycle_mixin.py` `end_cycle`：`resume_after_cycle` 改传 `is_good=bool(final_is_good)`（扫码器生命周期 resume_on 分流的数据源，见 02 册 scanner.py）。
+> - `source_routes.py` `get_detection_status`：mes payload 增 `scanner_resume_blocked`（`ScannerService.is_resume_blocked(ch)` 为 True 时置位，监控页"恢复扫码"按钮显示依据），try/except 全兜底。
+>
+> **v3.51 补账（2026-08-14，捷昌 B 站双工位整改；含 v3.50.0a 热补丁收编）**：
+> - `main.py` `auto_restore_video_sources`：①失败工位延迟补开（`_restore_one_video_source` 抽出复用，v3.50.0a BUG-008）；②尾部**收尾兜底轮**（v3.51 BUG-013）——整个恢复流程走完再 sleep 5s，把"已配源但 `mgr.is_running=False`"的通道最后拉一次 + `_restore_detection_pass("收尾兜底")` 补开检测；幂等，全在跑零动作。动机：前端首屏激活项目会停输入源，与 ~18s 恢复窗口竞争，原 4s 二次恢复兜不住。
+> - `source_camera_start_mixin.py`（v3.50.0a BUG-008/009 收编）：`_open_camera_capture` 后端候选（DSHOW→MSMF 记住上次成功）× 递增退避；模块级**按通道可重入锁** `_source_lifecycle_lock`（锁表挂模块级 + mixin property——`source.py` 在 CI 编译白名单，实例字段热补丁替不掉 `__init__`），`start_camera` 全程持锁。
+> - `source_lifecycle_mixin.py` / `source_capture_loop_mixin.py`（v3.50.0a BUG-009）：新增 `_release_capture()` 在 `capture_lock` 内原子取出并置空再 release；stop/pause/capture_loop 重连全走它，治启动期三方并发 double-free（0xC0000374 堆损坏杀进程）。回归 `tests/test_source_lifecycle_concurrency.py`。
+> - `source_tracking_mixin.py`（v3.50.0a BUG-001/012）：齐件即结算开启时原"消失确认结算"路径整段跳过 + 周期超时强制结算兜底；两处出账口前 `_soc_ensure_db_cycle` 周期守门——`current_cycle_uuid` 为空先补开正式周期，开不出来（码未到）挂起不出账。回归 `tests/test_settle_on_complete.py`。
+> - `source_event_trigger_mixin.py`（v3.51 FEAT-009）：`_trigger_event` 里 `is_good` 事件先问 `channel_group_coordinator.should_unify_ok_report(channel_id)`——组开统一播报时个体 OK 的 `show_notification` 置 False、`_dispatch_event_alarm` 跳过（`if not suppress_alarm and not _unify_ok_suppress`）；结算/计数/落库/MES 照旧，NG 永不抑制。静态守护测试 `test_returnable_hook_consumption_M1_2c.py` 的 regex 已放宽允许附加条件。
+> - `channel_manager.py`（v3.50.0a BUG-011）：`save_channel_config` merge=False 时对归属别段的 key（`project_id`/`was_detecting`）body 缺失或 null 从旧配置继承——治 Source 页保存输入源把工位-项目绑定顺手抹掉（不变量 17）。回归 `tests/test_channel_manager_multi.py` 三例。
+>
+> **v3.51.1 补账（2026-08-14，虚拟双工位战役修复）**：
+> - `source_session_lifecycle_mixin.py`（BUG-001）：`force_settle_pending_cycle` 非容器分支守门 `current_cycle_uuid` → `_tracking_cycle_active`——挂账周期懒开（v3.50.0a 周期守门结算时才建 DB cycle）uuid 恒 None，旧守门静默跳过导致"新码强制收旧账"完全失效。回归 `tests/test_settle_on_complete.py` 新增 `_ForceSettleHost` 两例。
+> - `source_tracking_mixin.py`（BUG-005）：豁免名单条目登记 `label`（结算登记处 + 漂移转移处），ID 漂移兜底（IoU≥0.6）**只认同标签**转移——治原位换"另一种"新品被吞成旧件永不入账（老条目无 label 兼容匹配）。回归同文件新增两例。
+> - `source_event_trigger_mixin.py`（BUG-006）：`fire_external_event_response` 事件日志 `toast_id` 默认值按事件类型取（id=1 合格 → 'ok'，其余保持 'ng'；显式配置照旧优先）——治统一播报"全部合格"弹红色不合格 Toast。回归 `tests/test_fire_external_event.py` 新增三例。
+> - `source_inference_loop_mixin.py`（FEAT-001）：synthetic 取帧后按项目 `logic_mode` 决定 `is_tracking`——tracking 项目走 `_update_tracking_stats` 真实管线（剧本 detections 自带 track_id），其余模式行为不变；跟踪类配置（齐件即结算/扫码门/工位组）从此可虚拟回归（`tests/uat/virtual_dual_station/`）。
+>
+> **v3.51.2 补账（2026-08-14，Mac 摄像头仿真战役修复）**：
+> - `source_camera_start_mixin.py`（BUG-001）：`_start_camera_locked` 格式探测 Strategy 3（fourcc 非 MJPG 时 V4L2 重开）守门 `platform.system() != "Windows"` → `== "Linux"`——macOS 误命中会把正常出帧的 AVFoundation 句柄 release 后用 mac 不存在的 CAP_V4L2 重开（必失败且原无兜底），死句柄僵尸态：接口成功/is_running=True/心跳照跳但 `read()` 永远 False、`current_frame` 永不更新 → 监控页永远 "No Source"。同时补 V4L2 重开失败走 `_open_camera_capture` 候选兜底，并新增**终检**：任何策略分支走完 `self.capture` 必须 `isOpened()`，否则显式抛"打开后句柄失效"（全平台堵僵尸态出口）。回归 `tests/test_camera_open_fallback.py` 新增 2 条守门断言；真机仿真 `tests/uat/mac_camera_sim/` 67 断言。
+>
+> **v3.51.3 补账（2026-08-15，捷昌现场夜测修复 + PG 交付缺口）**：
+> - `source_routes.py`（BUG-001）：Windows 摄像头枚举重做——新增 `_list_dshow_devices_ffmpeg()`（打包内 ffmpeg `-list_devices -f dshow`，2s 超时，带设备真名不试开）/ `_parse_dshow_device_list()`（兼容 ffmpeg 5+ "(video)" 后缀与 4.x "DirectShow video devices" 段落两代 stderr 格式）/ `_dedup_dshow_devices()`（设备路径 `usb#vid_xxxx&pid_xxxx#serial` 解出 `(vid,pid,serial)` 三元组去重同一物理机的重复 filter——复合设备 IR 副摄/驱动重复注册；serial 不同的同型号双机不合并；无路径条目按名字保守保留）/ `_camera_indexes_in_use()`（全工位在用 index → channel 映射，替换原来只看 ch0 的写法）。`_detect_cameras_windows()` Windows 优先走 ffmpeg 路径（去重后仍按 index 对齐 `cv2.VideoCapture(i, CAP_DSHOW)` 语义），ffmpeg 缺失/解析失败回退老试开法零差异；macOS 仍走试开。回归 `tests/test_camera_enum_dedup_v3513.py` 17 条。
+> - `source_camera_start_mixin.py`（BUG-002）：模块级 `_find_camera_index_conflict(device_index, self_channel_id)`——遍历 channel_manager 其他工位，`source_type=='camera' && is_running && camera_index 相同` 即冲突；`_start_camera_locked` 在 `self.stop()` **之前**预检（不为注定失败的打开误停本工位旧源），冲突立即抛"摄像头 N 正在被工位 X 使用"（真机实测 14ms，原来卡满 3 轮 DSHOW/MSMF 退避逼近 60s 前端超时）。
+> - `main.py`（BUG-003）：`create_all` 包进 `_create_all_with_sqlite_selfheal()`——捕获 DBAPIError 文案含 `disk i/o error`（Windows）/ `unable to open database file`（POSIX 同类损坏）且方言为 sqlite 时，`engine.dispose()` → `_quarantine_sqlite_sidecars()` 把 `-wal/-shm` 改名 `.corrupt-<时间戳>`（保留现场不删，主库不动）→ 重试一次，仍失败原样抛；`cleanup_on_exit` 报警串口段之后新增 `PRAGMA wal_checkpoint(TRUNCATE)`（sqlite 方言限定，异常忽略）——把 WAL 未合并写入落回主库并截断，缩小 Electron 兜底 taskkill /f 强杀留坏 WAL 的窗口。真库 E2E：坏 WAL 自愈启动 + 写库 201 + SIGTERM 退出 checkpoint 把 12KB WAL 清零。
+>
+> **v3.51.5 补账（2026-08-17，捷昌现场热补丁 a/b/c 收编）**：
+> - `main.py`（BUG-002/003）：①新增 `_resolve_startup_model_path(project, db)`——按 `project.model_format` 查 `ModelConversion` 表解析转换引擎路径（GPU 架构匹配才用，缺转换回退原始 `.pt`），`_load_channel_model_with_fallback` 引擎加载失败自动重试 `.pt`；`auto_load_active_project` 改走这两个函数，治"启动先载 .pt、项目激活又重载 TRT 引擎"双重加载慢启动。②`_restore_detection_pass` 用户否决——记录本函数自动拉起通道的 capture 线程 id（`auto_started`），下轮发现检测停了**而线程未变**（源没重启=人停的）记入 `user_vetoed` 不再拉起；线程换了（激活项目等重启源）照常恢复。③`auto_restore_video_sources` 对"通道已跑但相机 index 与落盘配置不符"打警告。单测 `tests/test_boot_restore_v3515.py` 7 条。
+> - `channel_manager.py`（BUG-004）：`save_channel_config` 按请求体**有无 `source_type`** 决定写盘语义——有=整写（merge=False 老语义），无=部分更新转 `merge=True` 只动给的键；治"绑定项目只发 {project_id} 把工位源配置整段抹掉→重启黑屏"。每次写盘打 `[ChannelCfg]` 日志（写入模式+键+整写丢弃的旧键）。回归 `tests/test_channel_manager_multi.py` 新增 2 条。
+> - `source_routes.py`（FEAT-001 可观测性）：`_list_dshow_devices_ffmpeg` 解析为空不再静默回退——打印 stderr 头部 8 行；`_detect_cameras_windows` 走老试开法兜底时明示日志（设备名"摄像头 N"式=兜底路径）。
+>
+> **v3.52.0 补账（2026-08-18，多显示器一期）**：
+> - `channel_manager.py`（FEAT-001）：新增 `multi_monitor` 顶层配置段——Pydantic 模型 `MultiMonitorConfig`（`enabled` 默认 False / `readonly` 默认 True / `mapping{channel_id→{display_id,bounds}}`）+ `_normalize_multi_monitor_mapping()`（丢越界工位 0..MAX_CHANNELS、非法 bounds 宽高≤0、display_id 与 bounds 双缺的项）+ `get_multi_monitor_config()`（缺失/损坏回默认关）+ `set_multi_monitor_config()`（读旧文件只替换本段，写失败抛 RuntimeError→API 500）。端点 `GET/PUT /workstations/multi-monitor`（PUT 挂 `settings.edit`）。回归 `tests/test_multi_monitor_config.py`。
+> - `channel_manager.py`（BUG-002）：`_save_config`（工位数写盘）原整写只留 `channel_count`+`channels` 会抹掉 `startup_ready_gate`/`multi_monitor` 等其他顶层段——改为读旧文件 merge 两键、其余段原样保留（不变量 17），文件读写补 `encoding='utf-8'`。
+>
 > **v3.41 增量复核（2026-07-17）**：source/检测核心域按 `git diff a23a8d2..HEAD` 补账 v3.33~v3.41 九个版本变更。各条目内新增「v3.3x 变更」行；1.4 / 1.5 表下补增量清单；新建 `source_persist_worker.py`（v3.38）完整条目并补录 `source_region_events.py` / `source_region_events_mixin.py`（v3.32 落地时漏收）。受影响文件的行数标注与漂移行号已按当前代码刷新。
 >
 > **v3.44 补账（2026-07-22）**：NG 处置整改批次，source 族 10 文件——

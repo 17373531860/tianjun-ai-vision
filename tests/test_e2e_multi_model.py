@@ -108,9 +108,12 @@ def mock_load_methods(monkeypatch):
                 mgr_local.model = None
             return _release
 
-        mgr.load_model = _make_load(cid)
-        mgr.load_model_into_slot = _make_slot(cid)
-        mgr.release_all_models = _make_release_all(cid)
+        # 用 monkeypatch 而不是直接赋值: channel_manager 是进程级单例, 直接赋值
+        # 会把 stub 永久留在实例上, 污染同进程后续测试 (synthetic 剧本
+        # start_detection 变 MagicMock → "等待 OK 周期超时"), monkeypatch 自动恢复。
+        monkeypatch.setattr(mgr, 'load_model', _make_load(cid), raising=False)
+        monkeypatch.setattr(mgr, 'load_model_into_slot', _make_slot(cid), raising=False)
+        monkeypatch.setattr(mgr, 'release_all_models', _make_release_all(cid), raising=False)
 
     yield calls
 
@@ -120,18 +123,23 @@ def mock_load_methods(monkeypatch):
             for mi in mgr._router.models.values():
                 mi.model = None
             mgr.model = None
+            mgr.model_path = None
         except Exception:
             pass
 
 
 @pytest.fixture
 def stub_session(monkeypatch):
-    """阻止 mgr.start_detection / start_session 真启动线程"""
+    """阻止 mgr.start_detection / start_session 真启动线程。
+
+    必须走 monkeypatch (自动恢复), 不能直接赋值: 单例上残留的 MagicMock
+    会让后续 synthetic 测试的检测启动变成空操作 (串污染实锤案例)。
+    """
     from backend.api.channel_manager import channel_manager
     for mgr in channel_manager.channels.values():
-        mgr.start_detection = MagicMock()
-        mgr.start_session = MagicMock(return_value=None)
-        mgr.project_config = None
+        monkeypatch.setattr(mgr, 'start_detection', MagicMock(), raising=False)
+        monkeypatch.setattr(mgr, 'start_session', MagicMock(return_value=None), raising=False)
+        monkeypatch.setattr(mgr, 'project_config', None, raising=False)
     yield
 
 
@@ -474,10 +482,11 @@ def test_e2e_多模型_部分失败_返回500(client, monkeypatch, stub_session)
             return False  # tray 失败
         return True
 
-    mgr.load_model_into_slot = _slot_partial
-    mgr.release_all_models = MagicMock()
-    mgr.start_detection = MagicMock()
-    mgr.start_session = MagicMock(return_value=None)
+    # monkeypatch 自动恢复, 严禁直接赋值污染单例 (见 mock_load_methods 注释)
+    monkeypatch.setattr(mgr, 'load_model_into_slot', _slot_partial, raising=False)
+    monkeypatch.setattr(mgr, 'release_all_models', MagicMock(), raising=False)
+    monkeypatch.setattr(mgr, 'start_detection', MagicMock(), raising=False)
+    monkeypatch.setattr(mgr, 'start_session', MagicMock(return_value=None), raising=False)
 
     resp = client.post("/api/v1/source/detection/start?channel=0", json={
         "models": [

@@ -1,6 +1,6 @@
 {
   "name": "tianjun-ai-vision",
-  "version": "3.48.1",
+  "version": "3.53.0",
   "description": "天军科技AI视觉检测系统 - AI-powered machine vision detection system",
   "main": "main.js",
   "author": {
@@ -32,6 +32,7 @@
     },
     "files": [
       "main.js",
+      "multi-monitor.js",
       "preload.js",
       "backend-manager.js",
       "license-manager.js",
@@ -74,6 +75,13 @@
         "filter": [
           "plugin.schema.json",
           "customer-codes.md"
+        ]
+      },
+      {
+        "from": "../scripts/db",
+        "to": "scripts/db",
+        "filter": [
+          "sqlite_to_pg.py"
         ]
       },
       {

@@ -1,5 +1,138 @@
 # Changelog
 
+## v3.53.0 (2026-08-20)
+
+> 主题：**录像归档与媒体证据体系（一~四期一次落地）**——规则驱动的周期录像自动归档（Jinja2 模板命名/原子落位/spool 断点重放/台账）+ 证据能力（NG 结算瞬间带框关键帧/sidecar 数据报告/证据包 zip/FFmpeg 事件切片）+ 生态联动（archived_* 进字段库/video_archived 网关事件与插件 hook/短信参数）+ 远端与治理（FTP/SFTP/S3/HTTP adapter + Fernet 凭据加密 + 插件 adapter 注册口 + 时间窗/限速/历史回补/归档后删源）。全部默认关零配置差异。随版修掉监控页"无扫码器仍画等待扫码/扫码按钮"的 v3.47 守门丢失。
+
+- [FEAT-001] 新增: 归档引擎一期——`video_archive_rules/logs` 两表 + 录像收尾自动入队 worker（三重过滤/模板命名/重名策略/黑名单护栏/spool 重放）+ `/export/video-archive/*` API + Data 页归档卡与配置弹窗
+- [FEAT-002] 新增: 证据二期——NG 关键帧（结算帧异步画框存 JPEG，keyframe_wanted 零开销守门）+ sidecar 绑导出模板成对渲染 + bundle_zip 证据包 + evidence-pack 手动批量下载 + clip_tail 尾段秒切（失败回退整段）
+- [FEAT-003] 新增: 生态三期——字段库 archived_video_path/archived_at/archive_status + aggregations 归档成败数 + MES 网关 `video_archived` 事件推最终地址 + 插件 hook + 短信 {archive_success}/{archive_failed} 变量
+- [FEAT-004] 新增: 远端四期——FTP/SFTP/S3/HTTP adapter（统一 deliver 契约 + PermanentDeliveryError 不重试语义）+ Fernet 凭据加密（落库密文/回显打码/回传打码保留旧值）+ PluginHost.register_archive_adapter + 时间窗（窗外 defer 不耗预算）/带宽限速/历史回补/删源（字节校验一致才删）
+- [BUG-001] 修复: 无扫码器产线监控页仍画「等待扫码/清除/禁用扫码」——全部渲染点挂 hasScannerFor 守门（scanner_resume_blocked 视为在场证据），e2e 双向钉死
+- [BUG-002] 修复: 关键帧 JPEG 原子写 .tmp 扩展名致 imwrite 必败（开发期拦下）
+- [BUG-003] 修复: 归档两表未进 main.py/conftest 显式模型注册清单致测试库漏表
+- [TEST] 单测 68 条（一期 25 + 二~四期 43，全量 2887 绿）+ e2e 6 条（全套 214 隔离栈绿）+ 可见 UAT 两剧本三件套归档（含 synthetic NG 周期真链路抽帧进 zip）
+
+## v3.52.0 (2026-08-18)
+
+> 主题：**多显示器一期（dev-qing 合入）**——工位子窗映射与单通道监控页：Electron 按显示器映射为每个工位开独立 kiosk 子窗（副屏一期只读），主屏保留总览与全部操作权，多屏开启时主屏总览改快照轮询让出 MJPEG。默认关闭零配置差异。合并审计发现并拦下分支引入的网格总览"点击卡片放大"行为回归。
+
+- [FEAT-001] 新增: 多显示器一期——multi-monitor.js 子窗编排（License 守门/主屏保留/同区去重/崩溃熔断/关机三出口清理）+ `multi_monitor` 配置段（GET/PUT /workstations/multi-monitor）+ SingleChannelMonitor 共用单工位组件（kiosk 屏蔽全部写通路）+ 设置页多屏配置卡热应用 + kiosk 路由不污染主窗记忆
+- [FEAT-002] 新增: 良品/不良饼图与合格率仪表盘抽为 GoodBadPieChart/YieldRateGauge 共用组件（替代 Monitor 内联 ECharts）
+- [BUG-001] 修复: 分支原实现把多屏关闭时网格总览整卡点击改成了仅选中（v3.47 放大入口消失）——恢复恒为放大单路，e2e 双向守门（合并审计发现，未流出）
+- [BUG-002] 修复: `_save_config` 整写 workstation_config.json 抹掉其他顶层段——改 merge 保留（不变量 17）
+- [BUG-003] 修复: start 接口 HTTP 迟不返回时前端操作锁死等——轮询以后端 is_detecting 为真相源释放
+- [TEST] 后端单测 32 + Electron node --test 10 + E2E 12 + 可见 UAT 12 断言三件套归档；e2e 全套基线对照确认其余 6 失败为环境存量与本版无关
+
+## v3.51.5 (2026-08-17)
+
+> 主题：**捷昌 B 站现场补丁收编版**——8-15 现场实测揪出的 5 个问题（相机/模型串位、启动黑屏要切页、自动开始盖掉手动停止、绑项目抹相机配置、"全删了还被去重拒码"）以 v3.51.3a/b/c 三个热补丁现场救急后全量收编主线；配套详细调试日志体系（写盘/拒码/枚举回退全留痕）+ 捷昌三通道打包线标注规范交付。全部为修复与可观测性增强，升级零配置差异。
+
+- [BUG-001] 修复: 双工位重启后相机/模型串位——前端单工位 localStorage 兜底与后端多通道恢复赛跑抢相机，多工位模式跳过兜底（3.51.3a）
+- [BUG-002] 修复: 启动恢复慢/黑屏要切页才出画——启动直载转换 TensorRT 引擎不再双重加载 + fetchChannelCount 失败重试 + is_running 跳变强制重连视频流（3.51.3b）
+- [BUG-003] 修复: 自动恢复反复覆盖用户停止/待机——capture 线程未变即人为停止，记 user_vetoed 不再拉起（3.51.3b）
+- [BUG-004] 修复: 只带 project_id 的工位配置更新整写抹掉相机配置——无 source_type 的部分更新转 merge 语义（3.51.3c）
+- [BUG-005] 修复: 多工位下追溯页"仅当前项目"藏其它项目 ok 工件致"全删了还被强制去重拒码"——channel_count>1 默认关过滤（3.51.3c）
+- [FEAT-001] 详细调试日志：[ChannelCfg] 写盘模式/丢弃键、strict_ok_dedup 拒码全量依据+解除方法、相机枚举回退留痕、追溯页过滤决策进调试日志中心
+- [FEAT-002] 捷昌三通道打包线标注规范（总规范 + 二工位小件 v1.0 带 12 张实拍正误示范图 + MD→PDF 生成器）
+- [TEST] 新增 14 条：启动恢复单测 7 + channel-config merge 2 + E2E 恢复守卫 3 + E2E 追溯页 2
+
+## v3.51.4 (2026-08-15)
+
+> 主题：**交付补全补丁版**——v3.51.3 成品解剖审计发现 PG 配套迁移工具 `sqlite_to_pg.py` 从 v3.49 起就不在打包清单（客户勾了 PG 也搬不了旧数据）。收进安装包 + CI 存在性硬校验 + 测试/打包 skill 沉淀"代码全绿但安装包丢件"复盘。无代码行为变更。
+
+- [FEAT-001] 安装包收编迁移工具：extraResources 加 `scripts/db/sqlite_to_pg.py`（落位 `resources\scripts\db\`，路径逻辑/依赖零改动直接可跑）+ CI 打包资源自检必检清单加入该文件缺失红灯
+- [SKILL-001] run-tests 新增「捷昌 v3.51.3 交付审计逃逸复盘」（成品解剖清点/故障注入真样本/定稿回归冻结代码）；build-release 发版清单加「成品解剖清点」强制项
+
+## v3.51.3 (2026-08-15)
+
+> 主题：**捷昌现场夜测反馈补丁版 + PG 组件交付缺口修复**——现场 8-14 晚测出摄像头枚举重复（2 USB + 1 内置列出 4 个、双工位同选超时）与切源 SQLite `disk I/O error` 打挂后端两问题；同时发现 v3.49 的安装器 PG 组件只写了 `#ifdef`、CI 从未传编译开关，v3.49~v3.51.2 的安装包里根本没有 PG 选项。三修一补，全部经 Mac 真机 E2E（真相机/真坏库/真 PG 16/真浏览器）验证。
+
+- [BUG-001] 修复: Windows 摄像头枚举无物理去重——改用打包内 ffmpeg dshow 列设备（带真名/不试开/快），按 USB (vid,pid,serial) 去重同机重复 filter，"使用中"标记扩到全部工位，ffmpeg 不可用回退老试开法零差异
+- [BUG-002] 修复: 双工位抢同一摄像头 index 无预检卡满重试逼近 60s——打开前跨通道占用预检，14ms 明确报"正在被工位 X 使用"，预检挡在 stop 之前不误停旧源
+- [BUG-003] 修复: SQLite 侧车损坏 `disk I/O error` 炸穿且拉不起来——启动 create_all 自愈（隔离 -wal/-shm 为 .corrupt-* 保留现场后重试）+ 退出钩子 `wal_checkpoint(TRUNCATE)` 缩小强杀损坏窗口
+- [FEAT-001] 修复交付缺口: CI 打包真正带出嵌入式 PostgreSQL 可选组件（PG 16.15 便携包 staging 失败硬红 + `/DIncludePostgres`；安装项默认不勾选，行为与历史一致）
+- [TEST-001] 四路真实 E2E：坏库自愈全链路 / 真相机抢占 14ms / PG 真库 53 表 + CI 同款子集 710 passed / 真浏览器监控画面+占用标记+数据库卡片；新单测 17 条
+
+## v3.51.2 (2026-08-14)
+
+> 主题：**摄像头生命周期仿真战役补丁版**——哈金森一拖三"摄像头轮着坏/被占用/画面加载不出但检测在跑"（v3.48）反馈后，用 Mac 真实摄像头对相机生命周期全路径做 S1~S8 共 67 断言仿真，当场复现并修掉一个"启动成功但监控页永远 No Source"的主线僵尸态 bug；双工位"关软件再开"全自动恢复链（项目→模型→视频源→检测自动开始、异模型不串、停开改参不重置）在真实相机 + 真实 YOLO 模型下验证通过。
+
+- [BUG-001] 修复: 相机格式探测 Strategy 3 守门"非 Windows"在 macOS 误命中——正常出帧的 AVFoundation 句柄因 fourcc 非 MJPG 被 release 后用 mac 不存在的 CAP_V4L2 重开必失败且无兜底，死句柄僵尸态（接口成功/is_running=True/心跳照跳但画面永远 No Source）；守门收紧仅 Linux + 重开失败候选兜底 + 新增终检（句柄不活着显式抛错），堵住所有平台僵尸态出口
+- [TEST-001] 归档: Mac 真机摄像头仿真 UAT `tests/uat/mac_camera_sim/`（占用/双通道抢相机/调参重开/快速开停竞态/强杀重启恢复含前端竞态干扰/双工位异模型三件套恢复/停开改参不重置，67 断言全过）+ 相机单测 17→19 条
+
+## v3.51.1 (2026-08-14)
+
+> 主题：**捷昌 B 站双工位虚拟战役补丁版**——发 v3.51.0 后搭全虚拟双工位环境（synthetic 剧本源跑真实 tracking 管线 + 假 TCP 扫码器跑真实 E 模式协议），60 项断言复现全部现场场景，揪出并修复 6 个产品 bug。全部为 v3.50/v3.51 新功能路径上的修复，未开启相关功能的客户零差异。
+
+- [BUG-001] 修复: 「新码强制收旧账」对齐件即结算的挂账周期完全失效——`force_settle_pending_cycle` 的 `current_cycle_uuid` 守门对懒开周期（uuid 恒为 None）静默跳过；改认 `_tracking_cycle_active`
+- [BUG-002] 修复: 扫码器拒码后灯不回亮产线卡死——mes_hooks 三条拒绝路径（strict_ok_dedup / 冷却 / 在检）新增 `_notify_scan_rejected`，scanner 全部派发通道都拒绝才 `_rearm_after_full_reject` 重发 LON
+- [BUG-003] 修复: 工位组绑死档（force_ng）超时仍播"本工位已合格"——超时改为全组统一播整体 NG（event_id=2）+ 已到成员回写 NG_BY_TIMEOUT
+- [BUG-004] 修复: 组级 NG 覆盖（pending_override）无过期跨轮污染——配 60s TTL，过期作废打日志
+- [BUG-005] 修复: 豁免名单 ID 漂移兜底不看标签——原位换新品种（IoU≥0.6）被吞永不入账、账凑不齐下箱被强制 NG；豁免条目登记 label，转移只认同标签
+- [BUG-006] 修复: 统一播报"全部合格"弹红色不合格 Toast——`fire_external_event_response` 的 toast_id 默认按事件类型取（合格→ok）
+- [FEAT-001] 新增: synthetic 剧本源支持 tracking 逻辑模式（跟踪类配置从此可虚拟回归）
+- [FEAT-002] 归档: 虚拟双工位 UAT 剧本 `tests/uat/virtual_dual_station/`（假扫码器 + 4 剧本 60 断言 + 覆盖矩阵）
+- [TEST] 单测 +10（豁免同标签 / 挂账强制收账 / toast_id 默认 / override TTL），全量后端回归绿
+
+## v3.51.0 (2026-08-14)
+
+> 主题：**捷昌 B 站双工位整改批次**——v3.50.0a 现场热补丁全部 17 条收编进正式版（堆损坏崩溃治本 / E 码-合格-码 / 扫码后才计数 / 广播全 OK 亮灯 / 绑定保护 / 周期守门等，明细见下方 v3.50.0a 段），并新增四项现场闭环修复。新增项全部默认关或保持存量行为，不配置零差异。
+
+- [BUG-013] 修复: 开机第一时间黑屏——后台恢复线程 ~18s 恢复窗口被前端首屏激活打断后无兜底；`auto_restore_video_sources` 尾部新增收尾兜底轮（+5s 再拉一次没在跑的已配源通道 + 补自动开始检测，幂等）
+- [BUG-014] 修复: 数据页删了某码全部记录后强制去重仍永久拒绝——clear/all、clear/range 联动 `_unlock_ok_workpieces` 把被删周期关联的 ok 工件重置回 registered，响应返回 workpieces_unlocked
+- [FEAT-008] 新增: 「启用项目时自动接管未绑定工位」开关（SystemConfig `activate.adopt_unbound` 默认开=存量行为；关闭后启用项目只同步已显式绑定本项目的通道，不收养、不改写绑定；`GET/PUT /projects/activate-config` + 设置页卡片）——治"删个标签两个工位项目都变小件"的多工位互踩
+- [FEAT-009] 新增: 工位组统一播报 `unified_ok_report`（仅 synchronized_all_ok 策略可配，存 plugin_data 无迁移，默认关）——开启后各工位合格不单独亮灯/语音/toast，组内全部合格后统一播一次合格；NG 永不抑制；超时 fallback 补播已 OK 成员；结算/计数/落库/MES 不受影响——治"两个工位各报各的，我要两个都合格才一起报"
+- [FEAT-010] 收编: v3.50.0a 热补丁 17 条全量进正式版，现场不再依赖 hotfix.py 重绑
+- [TEST-001] 测试: 全量后端回归 2735 绿 + 新单测 3 文件（统一播报/收养开关/解封工件）+ 浏览器 E2E 4 用例 + 可见浏览器 UAT（两开关 UI→落库双向验证截图留证）
+
+## v3.50.0a hotfix (2026-08-13)
+
+> 主题：**「全部合格立即结算」语义修正**（捷昌二期现场口径确认后修正）。开关开启 = **取消**该策略原有的全部结算路径：没凑齐时物品/箱子离开画面不出账（不 OK 不 NG），账本挂起继续等；自动出账口只剩三个——凑齐当帧判 OK（唯一自动 OK 出口）/ 扫到下一个码强制把旧账（≥1 件）判 NG 收场（空账不冤判，scan_pair 互斥）/ 周期超时兜底 NG（配了秒数才生效）。人工结算 / 触发中心 manual_settle 照常可用。开关关闭（默认）行为与 v3.50.0 完全一致。
+
+- [BUG-001] 修复: ROI离开策略——齐件即结算开启时原"消失确认结算"路径整段跳过，未凑齐离场不再判 NG；新增周期超时强制结算兜底（`source_tracking_mixin._update_tracking_stats`）
+- [BUG-002] 修复: 容器策略——未凑齐箱子离开只挂账不判 NG（对齐 scan_pair 挂账写法）；箱龄超过"周期超时"强制结算（`source_container_grouping_mixin`）
+- [FEAT-001] 新增: 新码强制收旧账——`mes_hooks._settle_stale_on_new_scan` 在重复扫码判定之前跑，齐件即结算通道扫到新码时把挂起旧账（≥1 件）强制判 NG，新码正常开新周期
+- [FEAT-002] 新增: `main.py` 热补丁加载器回流常驻（v3.48.1a 补丁引入但没回流仓库，v3.49/v3.50 出厂包因此没有入口）——`backend/hotfix.py` 存在则启动尾声 `apply(app)`，异常隔离不拖垮主程序
+- [BUG-003] 修复: 扫码器「仅合格」在广播多工位枪上先 OK 的通道抢跑亮灯——改为**这把枪覆盖的所有正在检测的工位都 OK 才恢复亮灯**（捷昌 B 站一把枪广播大件+小件双通道清点同一箱）；已 OK 集合按本轮箱码锚定防跨轮残留，没在检测的工位不进分母防灯锁死，任一工位 NG 照旧灭灯等人工；单工位枪零差异（`scanner.resume_after_cycle`）
+- [BUG-004] 修复: 「仅合格」D 模式枪新箱提前跨线抢跑亮灯——上一箱还没结算（旧账挂起）时新箱跨过触发线会直接点灯，破坏"码-合格-码"闭环；改为 **ok_only 枪的亮灯权独占给 OK 结算 / 人工恢复**，跨线一律不点灯不解锁（`scanner.send_lon_for_channel` 守门）。OK 结算当场亮灯的机制不变（`resume_after_cycle` 解锁后 listen loop 80ms 内自动续 LON）；默认 cycle_end 枪跨线点灯行为零差异
+- [BUG-005] 修复: **打补丁的机器上 E 模式扫到码不灭灯**（现场实测暴露）——扫码器监听线程在 `_init_mes_services`（`main.py:759`）就启动，远早于热补丁 apply（`main.py:1322`），已进入循环的线程用的是**出厂编译版闭包** `_schedule_next_lon`，只认 `once_per_cycle`/`D`，E 枪扫到码落到"续 LON"分支 → 灯不灭，闭环从第一枪就断。治本：灭灯动作从 listen loop 闭包下移到 service 方法 `_loff_on_code_received`，由 `_on_data_received` 在去重判定**之前**调用（物理扫到码就灭灯，与去重/绑定结果无关；幂等，闭包兜底不重发）——service 方法每次扫码按实例查找，重绑当场生效；置 `_wait_cycle_resume=True` 后出厂版续 LON 判定自动不再点灯。C/D 模式行为等价，A/B 零差异
+- [BUG-006] 修复: **E 枪一扫码就挂出"恢复扫码"按钮**（现场日志实录：`resume_after_cycle(ch=0) resume_on=ok_only 且结果未知 → 等人工恢复` 紧跟在扫码灭灯后）——`start_cycle` 有一处 v2.7.17 死锁兜底**每开一个周期**都调 `resume_after_cycle()` 且不带结果，之前 `is_good=None` 与 NG 同样标 `_resume_blocked`，于是新单刚开工就提示要人工恢复；操作员一点按钮就在本单未结算时放行下一码，闭环破掉。改为**只有明确 NG 结算才标恢复阻塞**，结果未知（cycle_start 兜底 / D 模式 box gone）只保持灭灯不惊动人（`scanner.resume_after_cycle`）
+- [BUG-007] 修复: **监控页一直"未绑码 请扫描工件条码"，开了「扫码后才计数」一件都不入账**（现场日志实录 `UNIQUE constraint failed: workpiece_inspections.workpiece_id, cycle_id`）——`_handle_cycle_start` 先 `pop` 掉待检工件，随后 `link_to_cycle` 撞唯一约束抛异常，`_inspecting_workpiece[ch] = wp_id` 那行再也执行不到，工件卡成"既不在待检也不在在检"（违反不变量 14）：前端认为没绑码，扫码守门也判定码不在位。两层防线——`workpiece.link_to_cycle` 同工件+周期幂等（查到已有记录直接复用，不再抛）+ `_handle_cycle_start` 落库失败也先保住在检身份再抛异常
+- [BUG-008] 修复: **开机后监控页黑屏、每次都要人工重选输入源**（现场日志实录：`ch1 视频源恢复失败: 无法打开摄像头 1` 前一秒该相机刚以 MSMF 32fps 开成功过）——后台恢复线程开好相机后，前端首屏又激活了一次绑定项目，激活会停输入源，恢复流程紧接着重开同一台相机，Windows 下 UVC 句柄尚未释放；而 `start_camera` 只试 DirectShow、3 次重试挤在 1.5s 内，全失败即抛异常放弃。两层修复——打开阶段改「后端候选（DSHOW→MSMF，记住上次成功的优先）× 递增退避」，DSHOW 拿不到 index 时自动兜 MSMF（`_open_camera_capture`；后端选优段加守门，只在 DSHOW 开成功时才做 DSHOW↔MSMF 比较，避免把唯一可用句柄释放掉）+ `auto_restore_video_sources` 整轮结束后对失败工位延迟补开一次（`_restore_one_video_source` 抽出复用）
+- [BUG-009] 修复: **开机那几秒后端整进程崩掉**（现场日志实录：`Process exited (code: 3221226356)` = `0xC0000374` STATUS_HEAP_CORRUPTION，两次崩溃都紧跟在相机开起来之后，看门狗反复拉起；表现为监控页全黑 + 手动选输入源提示"启动失败" + 前端满屏 Network Error）——BUG-008 的真病根，光加重试兜不住：启动期三方并发动同一通道的输入源（前端首屏激活绑定项目 → `stop(release_model=False)` / 待机 `pause()` / 后台 `auto_restore_video_sources` → `start_camera`），三处释放句柄的代码都是裸的 `if self.capture: self.capture.release()`，两个线程同时穿过 `if` 就各 release 一次同一个 `VideoCapture` = double free → Windows 判堆损坏杀进程。修复：(1) 新增 `_release_capture()` 在 `capture_lock` 内**原子取出并置空**再释放，stop / pause / capture_loop 两处重连全部改走它；(2) `start_camera` 与 `stop` 全程持**按通道**的可重入锁 `_source_lifecycle_lock`（锁表挂 `source_camera_start_mixin` 模块级 + mixin property 暴露——`source.py` 在 CI 编译白名单里，热补丁替不掉它的 `__init__`，锁不能做成实例字段）。并发压测（5 线程 × 12 轮 start/stop/pause 混打，v3.50.0 基线树实测）：补丁前 open 42 / release 30 / **漏 12 个句柄** / 4 次 `'NoneType' object has no attribute 'release'|is_alive`（即现场"启动失败"），补丁后 open 48 / release 48 / 0 泄漏 / 0 报错。回归 `tests/test_source_lifecycle_concurrency.py`（旧写法下并发 8 线程会 release 同一句柄 8 次，测试必红）
+- [FEAT-005] 改进: **E 码-合格-码模式自动满足「先扫后检」**（现场反馈"码还没扫到，物品就已经进物品清单了"）——「扫码后才计数」要 `tracking_scan_gate`（项目级）**与** `is_scan_required`（工位级）同时成立才生效，后者以前只看扫码器设备勾没勾「先扫后检」，现场极易漏勾导致开关看着开了却不起作用。E 模式语义本就是"扫到码才开工、合格才放行下一码"，故新增 `ScannerService._effective_scan_required`（E → 强制 True，其余读设备字段）并让 `mes_hooks.is_scan_required` 走它（取不到方法时退回读字段，兼容未打补丁的出厂类）。其余扫描模式零差异
+- [BUG-010] 修复: **补丁脚本"文件没换上也报成功"**（现场日志实录：打完补丁后相机报错仍是出厂文案 `打开摄像头失败，重试 2/3`，即 BUG-008 的修复根本没上机，白等一轮现场验证）——`[4/4] Verifying` 段只做 `if not exist` 存在性检查，`copy /Y` 因软件未完全退出而失败时文件依然"存在"，脚本照样打印 applied successfully。改为**内容校验**：补丁包内每个整文件替换的 `.py` 末尾带 `# PATCHED_V3500A` 标记，bat 逐个 `findstr` 校验，缺标记直接报错并提示彻底关闭软件后重跑；README 增加"如何分辨补丁没打上 vs 功能没配"
+- [BUG-011] 修复: **源页面保存输入源后，启用项目把别的工位也切了**（2026-08-14 凌晨全流程日志实录：ch0 绑大件项目 id=7，用户启用小件项目 id=2 后日志出现 `[项目切换] 7 → 2` + `[激活项目] ch0 配置已同步` + `cleared ch0 scan state`——工位1 的项目/模型/物品清单/计数/在位条码全被连带换掉，且两通道随即同项目同码复用同一 workpiece#597，ch1 结算把 ch0 的码一起消费）——病根：`PUT /workstations/channel-config`（Source 页保存输入源）用 `merge=False` 整体重写该工位配置段，前端 payload 里 `project_id: cfg.projectId || null` 在项目下拉为空时把**工位-项目绑定顺手抹掉**（违反不变量 17"各段写入权独占"），绑定一丢 `_channels_bound_to_other` 保护即失效，activate 广播覆盖所有通道。修复：端点侧对归属别段的 key（`project_id` / `was_detecting`）在 body 缺失或为 null 时从旧配置继承，显式换绑照常生效（`channel_manager.save_channel_config`，回归 `tests/test_channel_manager_multi.py` 三例）
+- [BUG-012] 修复: **齐件即结算在正式周期未建立时出账**（同一份日志实录：`判定: ... cycle_id=None, cycle_active=True` → OK 事件 → **之后**才 `[Cycle] start #1` 并 link workpiece#597；随之 `resume_after_cycle ... 结果未知 → 保持灭灯`）——先扫后检把 `start_cycle` 挡到扫码之后（ScanBind 守门），但内存 tracking 周期与账本照跑（「扫码后才计数」未开时扫码前就记账），码一到瞬间"凑齐"当帧结算：结果挂不到任何周期/工件上——合格数不涨、E 枪拿到"结果未知"不亮灯、结算后新开的周期又把 pending 工件占走。修复：齐件即结算/超时兜底两处出账口前加 `_soc_ensure_db_cycle` **周期守门**——`current_cycle_uuid` 为空先补开正式周期（码在位即能开），开不出来（码未到）不出账挂起等待，扫码后下一帧自动结算（`source_tracking_mixin` + hotfix 重绑 `_soc_ensure_db_cycle`，回归 `tests/test_settle_on_complete.py` 两例）
+- [FEAT-007] 新增: 补丁包附 `check_patch.bat` 体检脚本（现场反馈"我确实打了补丁包但它没生效"）——只读，逐文件报 `PATCHED` / `NOT_PATCHED`（含出厂原版的时间戳）/ `ABSENT` / `SHADOWED`（旁边有同名 `.pyd` 会顶掉 `.py` 补丁），末尾给结论与处置建议。把"补丁到底上没上机"从靠猜日志文案变成一屏截图可判定。**本轮复盘结论**：补丁机制本身健全（bat 为 CRLF+GBK、部署清单齐全、三个相机文件均不在 CI 编译白名单故不存在 `.pyd` 遮蔽），现场"没生效"的真因是**跑的 zip 早于相机修复产出时间**，包里压根没有那三个文件，而旧脚本只查存在性（BUG-010）从不报错。README 同步加"解压必须解到空文件夹，勿与旧包合并"
+- [FEAT-006] 新增: 补丁包附 `enable_autostart.bat` / `disable_autostart.bat`（现场反馈"自启动有了吗"）——开机自启在 v3.29.0 起就有，但**只能在安装向导勾选**，已装机客户等于没有入口。两个脚本按安装器同一机制（`{commonstartup}\TianJun AI Vision.lnk` 快捷方式，无权限时退回当前用户 Startup）补上/撤销，不动注册表、不动主程序；配合系统设置「开机自动恢复检测」即"通电→起软件→自动开检测"
+- [FEAT-004] 新增: 扫描模式「E 码-合格-码」——一档到位的闭环模式：开始检测亮灯等第一个码 → 扫到码灭灯 → **只有全部合格判 OK 的当场**自动重新亮灯放行下一码（广播多工位 = 所有在检工位**都 OK** 才亮）；NG 保持灭灯等人工「恢复扫码」；跨线等几何触发一律不点灯；重新亮灯时机强制「仅合格」不可改（`_effective_resume_on` 无视存的 resume_on）；与 scan_pair 码-码闭环互斥。单机/广播都可用，替代"C/D + 手动把亮灯时机调成仅合格"的组合配置（`scanner.py` + `ScannerPanel.vue`）
+- [FEAT-003] 新增: 「扫码后才计数」开关（`pipeline_config.tracking_scan_gate`，默认关）——开启后码不在位（待检/在检工件都没有）期间检测一律不入账：不计数、不开周期、不进账本；扫到码后从当前画面重新开始看（此刻仍在场的物品当帧重新入账不丢件）。仅在该工位扫码器开「先扫后检」时生效；容器模式保留箱子跟踪（D 模式跨线亮灯不受影响）只拦物品；跟踪模式四种策略通用；关闭=现状（扫码前先记内存账）。配套 `mes_hooks.has_workpiece_in_flight` 查询（待检或在检都算码在位）
+- [DOC-001] 前端: 逻辑设置开关 tooltip 与开启提示改写为新语义（含"配周期超时兜底"现场提醒）
+- 现场补丁包 `patch_v3.50.0a`（bat + hotfix.py 方法重绑 + 前端 dist），仅适用 v3.50.0；出厂 `.pyd` 不动，新版源码以 `*_v3500a.py` 独立文件名落盘由 hotfix 按路径加载重绑。源码出厂的文件（`main.py` / `workpiece.py` / `source_camera_start_mixin.py` / `source_lifecycle_mixin.py` / `source_capture_loop_mixin.py`）直接整文件替换，备份只在首次生成保住 v3.50.0 回滚点
+
+## v3.50.0 (2026-08-12)
+
+> 主题：**捷昌二期批次**——齐件即结算 + 扫码器生命周期"码-合格-码"闭环。物品放齐并稳定 N 帧后周期立即出结果（不等物品离开），扫码器仅 OK 后重新亮灯（NG 灭灯等人工恢复）、亮灯作废旧码、已合格码永久拒绝。**全部默认关，不配置零差异。**
+
+- [FEAT-001] 新增: 跟踪模式「全部合格立即结算」——仅 ROI离开/容器策略可选（触发标签/全部消失语义冲突不开放）+ 步骤级"确认放入帧数"连续 N 帧确认入账 + ROI 豁免名单防已结算残留二次入账（ID 漂移合并）+ 容器"已结算等离开"状态机（对齐 scan_d 设计）+ scan_pair 运行时互斥守门
+- [FEAT-002] 新增: 扫码器生命周期三配置（m0010）——重新亮灯时机 cycle_end/ok_only（NG 灭灯等人工恢复，出口：监控页"恢复扫码"按钮 + POST /scanner/resume + 触发中心 resume_scanner 动作）+ 亮灯作废旧码（清 pending + 重置去重缓存）+ 强制去重（已 OK 条码永久拒绝）；拒绝路径（强制去重/冷却/重复拒绝）统一警告 toast 不再静默丢码；面板按 text_lon+C/D 模式条件解锁
+- [TEST-001] 测试: 四层全绿——单测 37 + BDD 8 场景 + 浏览器 E2E 6 用例 + 可见浏览器 UAT 12 项（三件套证据）+ 存量回归 93
+
+## v3.49.0 (2026-08-12)
+
+> 主题：**捷昌整改批次**——扫码/结算全链路去延迟（MES 外推并发派发 + 集群上报异步化 + scan_pair 新码先上屏）+ PostgreSQL 数据库支持落地 + 双方言测试体系扩容与双后端可见 UAT。
+
+- [FEAT-001] 新增: MES 网关外推并发派发——按连接独立执行器，慢/挂的客户 MES 不再堵结算热路径；积压落盘 gateway_spool.jsonl 补发；每连接重试预算可配；开关默认开可回退
+- [FEAT-002] 新增: 集群副机上报异步化——独立线程+内存队列，失败落盘 cluster_report_spool.jsonl 断网恢复重放；超时/异步可配；/cluster/report-status + ClusterPanel 状态区
+- [FEAT-003] 新增: scan_pair 新码先上屏——新码先顶替上屏再用显式 prev_wp_id 异步结算旧窗口，上屏延迟与结算耗时解耦；开关默认开可回退（治捷昌第一工位条码上屏慢）
+- [FEAT-004] 新增: 结算耗时埋点 backend.timing 类目——扫码/结算/外推分段耗时进调试日志中心
+- [FEAT-005] 新增: PostgreSQL 数据库支持——sql_compat 方言助手收编存量 SQL + pg_dump 备份 + Electron DATABASE_URL 注入 + Settings 数据库卡片 + 安装器 PG 可选组件 + sqlite_to_pg 迁移工具（--verify 逐表校验/孤儿 FK 扫描）；不配 PG 时与旧版零差异
+- [BUG-001] 修复: scan_pair 双通道广播下兄弟通道结算串身份——按通道取各自 _inspecting_workpiece，不再借主通道工件 ID 记账
+- [BUG-002] 修复: 幽灵项目绑定拦住项目激活——已删项目的工位绑定视为 stale 忽略（PG 外键暴露的历史脏数据路径）
+- [TEST-001] 测试: 双方言 db-matrix 扩容 + 真 SQLite→PG 迁移用例 + e2e 六用例 + 双后端可见 UAT（SQLite 20/20 + PG 12/12）
+
 ## v3.48.1 (2026-08-11)
 
 > 主题：**体验修复补丁版**——多工位监控视频加载/卡顿治本 + 数据中心录像播放失败治本 + NG 录像回看三件套 + Electron 退出僵尸后端兜底 + PG 基线迁移 CI 修复。

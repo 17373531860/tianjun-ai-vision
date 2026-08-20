@@ -189,9 +189,11 @@ def test_event_fire_hook_called_before_dispatch_event_alarm():
 def test_dispatch_event_alarm_guarded_by_suppress_check():
     """``_dispatch_event_alarm`` 必须被 ``if not suppress_alarm:`` 守门."""
     body = _trigger_event_body()
-    # 找 if not suppress_alarm: 紧跟 self._dispatch_event_alarm
+    # 找 if not suppress_alarm [and ...]: 紧跟 self._dispatch_event_alarm
+    # (v3.51 起允许叠加其它守门条件, 如工位组统一播报 _unify_ok_suppress,
+    #  但 suppress_alarm 本身必须仍在守门里)
     m = re.search(
-        r'if\s+not\s+suppress_alarm\s*:\s*\n\s*self\._dispatch_event_alarm\(',
+        r'if\s+not\s+suppress_alarm\b[^\n]*:\s*\n\s*self\._dispatch_event_alarm\(',
         body,
     )
     assert m, (

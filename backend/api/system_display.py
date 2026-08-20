@@ -14,6 +14,7 @@ SystemConfig KV 表（key='display.xxx'），让自定义导出系统的 build_*
 - GET  /api/v1/system/license-cache 读 License 缓存
 - PUT  /api/v1/system/license-cache  写 License 缓存（前端 IPC 解析后调用）
 """
+import os
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -40,6 +41,62 @@ def get_startup_ready(db: Session = Depends(get_db)) -> Dict[str, Any]:
     """深度就绪: 数据库 + 项目表可查则返回 {ready:true, projects:N}。"""
     n = db.query(Project).count()
     return {"ready": True, "projects": n}
+
+
+# ==================== WS5(PG): 数据库信息 (设置页数据库卡片) ====================
+@router.get("/db-info", summary="当前数据库信息")
+def get_db_info(db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """返回当前数据库 dialect、脱敏 DSN、连接状态与服务端版本。
+
+    只读展示用（Settings 数据库卡片）。DSN 中的密码恒不下发。
+    """
+    from backend.db.database import engine, get_dialect
+
+    dialect = get_dialect()
+    url = engine.url
+    info: Dict[str, Any] = {
+        "dialect": dialect,
+        "connected": True,   # 走到这里说明本次请求的 Session 已可用
+        "server_version": None,
+        "location": None,
+        "pool": None,
+    }
+    if dialect == "postgresql":
+        info["location"] = f"{url.host or 'localhost'}:{url.port or 5432}/{url.database or ''}"
+        try:
+            from sqlalchemy import text as _text
+            ver = db.execute(_text("SHOW server_version")).scalar()
+            info["server_version"] = str(ver)
+        except Exception:
+            pass
+        try:
+            pool = engine.pool
+            info["pool"] = {
+                "size": pool.size(),
+                "checked_out": pool.checkedout(),
+                "overflow": pool.overflow(),
+            }
+        except Exception:
+            pass
+    else:
+        db_path = str(url.database or "")
+        info["location"] = db_path
+        try:
+            import sqlite3
+            info["server_version"] = sqlite3.sqlite_version
+        except Exception:
+            pass
+        try:
+            if db_path and os.path.isfile(db_path):
+                size = os.path.getsize(db_path)
+                for extra in ("-wal", "-shm"):
+                    p = db_path + extra
+                    if os.path.isfile(p):
+                        size += os.path.getsize(p)
+                info["file_size_bytes"] = size
+        except Exception:
+            pass
+    return info
 
 DISPLAY_FIELDS = [
     "brand_name", "app_name",

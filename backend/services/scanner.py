@@ -164,6 +164,11 @@ class ScannerConnection:
     #   "continuous"     : 默认, 持续 LON 续发, 灯一直闪等下一码
     #   "throttled"      : 同 continuous 但每次续 LON 等 throttle_idle_ms 毫秒
     #   "once_per_cycle" : 扫到码 LOFF 灯灭, 等周期结束 (cycle_end) 再续 LON
+    #   "D"              : v3.4.0 容器跨线/区域触发 (几何驱动 LON)
+    #   "E"              : v3.50.1 码-合格-码闭环 — 扫到码 LOFF, 只有全部合格
+    #                      结算 (广播枪 = 所有在检工位都 OK) / 人工恢复才重新
+    #                      亮灯; 重新亮灯时机强制按 ok_only 处理 (无视 resume_on
+    #                      存的值), 跨线等几何触发一律不点灯
     scan_mode: str = "continuous"
     throttle_idle_ms: int = 500
 
@@ -188,6 +193,15 @@ class ScannerConnection:
     scan_d_zone: Optional[list] = None
     scan_d_gone_confirm_frames: int = 30
 
+    # v3.50 扫码器生命周期 (捷昌二期"码-合格-码"闭环), 默认值 = 现状行为:
+    #   resume_on: 周期结束后重新亮灯时机 ('cycle_end'=OK/NG 都亮 / 'ok_only'=仅
+    #              OK 自动亮, NG 保持灭灯等人工恢复)
+    #   rearm_forget_last: 重新亮灯时作废未绑定旧码 + 重置物理去重缓存
+    #   strict_ok_dedup: 已判 OK 的条码永久拒绝 (mes_hooks 侧读取)
+    resume_on: str = "cycle_end"
+    rearm_forget_last: bool = False
+    strict_ok_dedup: bool = False
+
     status: str = "disconnected"
     device_type: str = "text_lon"  # "text_lon"(默认), "auto", "text", "wmax"
     last_scan: str = ""
@@ -203,6 +217,15 @@ class ScannerConnection:
     _wait_cycle_resume: bool = False
     # v2.7.16 throttled 模式: 下一次允许续 LON 的时间戳 (time.monotonic()), 0 = 立即.
     _next_lon_after: float = 0.0
+    # v3.50 resume_on='ok_only': NG 结算后 resume 被拦下时置 True, 供前端露出
+    # "恢复扫码"按钮; 任何真正 resume (OK/手动/重新开始检测) 都清掉.
+    _resume_blocked: bool = False
+    # v3.50.0a ok_only + 广播多工位: "仅合格"= 这把枪覆盖的所有工位都 OK 才亮灯
+    # (捷昌 B 站: 一把枪广播大件+小件双通道清点同一箱, 不能先 OK 的通道抢跑亮灯).
+    # 已 OK 工位集合按 _ok_ready_marker (= 本轮箱码 last_scan) 锚定, 换码自动作废,
+    # 防上一轮的部分 OK 残留导致下一轮提前亮灯. 单通道枪不走此路径, 零差异.
+    _ok_ready_marker: Optional[str] = field(default=None, repr=False)
+    _ok_ready_channels: set = field(default_factory=set, repr=False)
 
 
 class ScannerService:
@@ -588,6 +611,10 @@ class ScannerService:
             mgr = cm.channels.get(cid)
             if mgr is None or not getattr(mgr, 'is_detecting', False):
                 continue
+            # v3.50: ok_only 拦停中 (NG 等人工恢复) 不做 catch-up 亮灯,
+            # 否则断线重连会把"NG 灭灯等人工"状态偷偷解掉.
+            if getattr(conn, '_resume_blocked', False):
+                continue
             # 同步本端 _scanning 标志 (start_scanning 的等价副作用), 这样
             # listen loop 主循环和 _emit 续 LON 路径都会工作.
             conn._scanning = True
@@ -628,6 +655,7 @@ class ScannerService:
             if disabled:
                 conn._scanning = False
                 conn._wait_cycle_resume = False
+                conn._resume_blocked = False
                 conn._next_lon_after = 0.0
                 conn._lon_sent = False
                 if conn.device_type == "text_lon":
@@ -708,7 +736,13 @@ class ScannerService:
                 # 本次会话的 ERROR 续 LON, 导致扫码器 LON 5s → LOFF → 永不再亮
                 # 的死锁. once_per_cycle / D 模式都依赖这个清理.
                 conn._wait_cycle_resume = False
+                # v3.50: 用户主动"开始检测" = 人工意志, 清掉 ok_only NG 拦停
+                conn._resume_blocked = False
                 conn._next_lon_after = 0.0
+                # v3.50.1: 广播全 OK 门控的已 OK 集合跨会话作废 — 停止后重开
+                # 并重扫同一箱码时, 上一轮某工位的 OK 不得残留计入本轮
+                conn._ok_ready_marker = None
+                conn._ok_ready_channels = set()
                 # 各 scan_mode (含 D) 开始检测都先发首次 LON, 灯立即亮.
                 # 后续 ERROR 由 listen loop 自动续 LON 维持工作.
                 if self._text_lon_send(conn, b"LON\r\n", "LON (开始扫码)"):
@@ -755,6 +789,16 @@ class ScannerService:
             if _mh is not None and any(
                 _mh.is_channel_scan_disabled(_b) for _b in bound
             ):
+                continue
+            # v3.50: ok_only 拦停中 (NG 等人工恢复), 新 box 跨线也不亮灯,
+            # 出口只有人工恢复 (监控页按钮/触发中心/开始检测).
+            if getattr(conn, '_resume_blocked', False):
+                continue
+            # v3.50.1: "仅合格"枪 (含 E 码-合格-码模式) 的亮灯权独占给 OK 结算 /
+            # 人工恢复 — 跨线一律不点灯不解锁. 否则上一箱还没结算时新箱提前跨线
+            # 会抢跑亮灯, 破坏"码-合格-码"闭环. OK 后 resume_after_cycle 解锁,
+            # listen loop 80ms 内自动续 LON, 不需要跨线补灯; cycle_end 行为不变.
+            if self._effective_resume_on(conn) == 'ok_only':
                 continue
             if self._text_lon_send(conn, b"LON\r\n",
                                     f"LON [scan_d {reason}]"):
@@ -847,7 +891,11 @@ class ScannerService:
                 # 时被上一轮状态污染 (上一轮扫到码 → _wait_cycle_resume=True,
                 # stop 不清 → 下次 start ERROR 续 LON 被拦 → 永久灭灯).
                 conn._wait_cycle_resume = False
+                conn._resume_blocked = False
                 conn._next_lon_after = 0.0
+                # v3.50.1: 同 start_scanning — 已 OK 集合不跨会话
+                conn._ok_ready_marker = None
+                conn._ok_ready_channels = set()
             else:
                 self._wmax_trigger(conn, on=False)
         if targets:
@@ -947,7 +995,8 @@ class ScannerService:
                 }
         return None
 
-    def resume_after_cycle(self, channel_id: int) -> list[str]:
+    def resume_after_cycle(self, channel_id: int, is_good: bool = None,
+                           manual: bool = False) -> list[str]:
         """v2.7.16: cycle_end 时调用, 让"扫到码后停灯"模式 (once_per_cycle / D)
         的扫码器恢复扫描.
 
@@ -959,27 +1008,202 @@ class ScannerService:
         D 模式 → 调用无效, _wait_cycle_resume 死锁导致灯永熄, 这是 D 模式
         "扫到码后再也不亮"的根因.
 
+        v3.50 扫码器生命周期 (resume_on 分流):
+          - is_good: 本次周期结算结果. None = 调用方不知道结果 (cycle_start
+            死锁兜底 / D 模式 box gone 等), 视同"非 OK 确认".
+          - manual: True = 人工恢复 (监控页按钮 / API / 触发中心 resume_scanner),
+            无条件放行.
+          - conn.resume_on == 'ok_only' 时: 仅 is_good=True 或 manual=True 才恢复,
+            NG/未知结果保持灭灯并置 _resume_blocked=True (前端露出恢复按钮).
+          - conn.resume_on == 'cycle_end' (默认): 行为与历史完全一致, 全部恢复.
+          - conn.rearm_forget_last: 真正恢复时作废未绑定旧码 (mes_hooks
+            clear_pending_scan) + 重置物理去重缓存, 保证旧码不自动挂新周期.
+
         返回被恢复的扫码器名列表.
         """
         resumed = []
         for conn in self._connections.values():
             if conn.device_type != "text_lon":
                 continue
-            if (conn.scan_mode or "continuous") not in ("once_per_cycle", "D"):
+            if (conn.scan_mode or "continuous") not in ("once_per_cycle", "D", "E"):
                 continue
             bound = self._resolve_bound_channels(conn)
             if channel_id not in bound:
                 continue
             if not getattr(conn, '_wait_cycle_resume', False):
                 continue
+            # v3.50: ok_only 分流 — NG/未知结果不自动恢复, 等人工出口
+            # (E 码-合格-码模式强制 ok_only, 见 _effective_resume_on)
+            if (not manual
+                    and self._effective_resume_on(conn) == 'ok_only'
+                    and is_good is not True):
+                # v3.50.1: 只有"明确 NG 结算"才标 _resume_blocked (前端弹"恢复
+                # 扫码"). is_good=None 只是"这次调用不知道结果", 不等于 NG —
+                # 来源有 start_cycle 的 v2.7.17 死锁兜底 (每开一个周期都调一次)
+                # 和 D 模式 box gone. 之前一律标 blocked, 导致 E 枪扫码开周期
+                # 当场就挂出"恢复扫码"按钮 (现场实测), 操作员一点就在本单还没
+                # 结算时放行下一码, 闭环破掉. 未知结果只保持灭灯, 不惊动人。
+                if is_good is False and not getattr(conn, '_resume_blocked', False):
+                    conn._resume_blocked = True
+                    print(f"[Scanner] resume_after_cycle(ch={channel_id}) "
+                          f"{conn.name}: resume_on=ok_only 且结果为 NG → 保持灭灯, "
+                          f"等人工恢复 (监控页按钮/触发中心 resume_scanner)",
+                          flush=True)
+                continue
+            # v3.50.0a: ok_only + 广播多工位 — "仅合格"的正确语义是这把枪覆盖的
+            # 所有工位都 OK 才恢复亮灯 (捷昌 B 站: 大件+小件双通道清点同一箱,
+            # 先凑齐的通道不能抢跑亮灯). 已 OK 集合按本轮箱码 (last_scan) 锚定,
+            # 换码自动作废. 单通道枪 len(bound)<=1 不进此分支, 行为零差异.
+            # 任一通道 NG 走上面的 blocked 分支 → 集合永远集不齐 → 等人工恢复.
+            if (not manual
+                    and self._effective_resume_on(conn) == 'ok_only'
+                    and len(set(bound)) > 1):
+                # 分母 = 广播工位里"当前正在检测"的那些; 没在检测的工位永远不会
+                # 出 OK, 不过滤会把灯锁死 (B 站只开一个通道跑时的现场陷阱).
+                _required = self._detecting_channels(bound)
+                _marker = conn.last_scan or ""
+                if getattr(conn, '_ok_ready_marker', None) != _marker:
+                    conn._ok_ready_marker = _marker
+                    conn._ok_ready_channels = set()
+                conn._ok_ready_channels.add(channel_id)
+                _missing = _required - conn._ok_ready_channels
+                if _missing:
+                    print(f"[Scanner] resume_after_cycle(ch={channel_id}) "
+                          f"{conn.name}: resume_on=ok_only 广播枪, 本工位 OK "
+                          f"但工位 {sorted(_missing)} 还没 OK → 继续灭灯等全 OK",
+                          flush=True)
+                    continue
+            conn._ok_ready_marker = None
+            conn._ok_ready_channels = set()
             conn._wait_cycle_resume = False
+            conn._resume_blocked = False
             conn._lon_sent = False
             conn._next_lon_after = 0.0
             resumed.append(conn.name)
+            # v3.50: 重新亮灯时作废旧码 + 重置物理去重缓存
+            if getattr(conn, 'rearm_forget_last', False):
+                self._rearm_forget(conn, channel_id)
         if resumed:
             print(f"[Scanner] resume_after_cycle(ch={channel_id}) → {resumed} "
-                  f"(once_per_cycle/D 模式, 周期或 box 结束恢复扫描)", flush=True)
+                  f"(once_per_cycle/D 模式, 周期或 box 结束恢复扫描"
+                  f"{', 人工恢复' if manual else ''})", flush=True)
         return resumed
+
+    def notify_scan_rejected(self, device_id: int, channel_id: int,
+                             serial_no: str):
+        """v3.51.1: MES 侧扫码拒绝回调 (强制去重/OK冷却/无工位接收等).
+
+        等灯模式(once_per_cycle/D/E)物理层扫到码就灭灯; 若本次派发的**所有**
+        工位都拒绝了这个码 (且各工位无在途工件 — 由 mes_hooks 守门), 说明这
+        个码不会产生任何周期、永远等不来 cycle_end/全OK 闭环出口 → 自动重新
+        亮灯等下一个码. 修复现场"已合格的码重扫一下, 扫码器再也不亮"卡死.
+        """
+        for conn in list(self._connections.values()):
+            if conn.device_id != device_id:
+                continue
+            if (conn.scan_mode or "continuous") not in ("once_per_cycle", "D", "E"):
+                return
+            disp = getattr(conn, "_last_dispatch", None)
+            if not disp or disp.get("serial") != serial_no:
+                return
+            disp["rejected"].add(channel_id)
+            if disp["rejected"] >= disp["channels"]:
+                self._rearm_after_full_reject(conn, serial_no,
+                                              reason="所有工位均拒绝")
+            else:
+                _waiting = sorted(disp["channels"] - disp["rejected"])
+                print(f"[Scanner] {conn.name}: 码 '{serial_no}' 被 ch{channel_id} "
+                      f"拒绝, 还差工位 {_waiting} 表态 → 灯保持现状", flush=True)
+            return
+
+    def _rearm_after_full_reject(self, conn: "ScannerConnection",
+                                 serial_no: str, reason: str = ""):
+        """v3.51.1: 全拒绝 → 清等灯锁, 让 listen loop 自动续 LON."""
+        conn._last_dispatch = None
+        conn._rearm_after_reject_serial = serial_no
+        conn._ok_ready_marker = None
+        conn._ok_ready_channels = set()
+        conn._wait_cycle_resume = False
+        conn._resume_blocked = False
+        conn._lon_sent = False
+        conn._next_lon_after = 0.0
+        print(f"[Scanner] {conn.name}: 码 '{serial_no}' 被拒绝且无在途工件 "
+              f"({reason}) → 自动重新亮灯等下一码", flush=True)
+
+    @staticmethod
+    def _effective_resume_on(conn) -> str:
+        """v3.50.1: E 码-合格-码模式重新亮灯时机强制 ok_only (无视存的 resume_on);
+        其余模式按配置, 缺省 cycle_end。"""
+        if (conn.scan_mode or "") == "E":
+            return "ok_only"
+        return getattr(conn, 'resume_on', 'cycle_end') or 'cycle_end'
+
+    @staticmethod
+    def _effective_scan_required(conn) -> bool:
+        """v3.50.1: E 码-合格-码模式强制按"先扫后检"处理 (无视设备存的
+        scan_required)。E 的语义本来就是"扫到码才开工、合格才放行下一码",
+        灯也只在扫码后才灭 — 没有码在位却开周期计数是自相矛盾的。
+        其余模式按设备配置, 保持零差异。"""
+        if (conn.scan_mode or "") == "E":
+            return True
+        return bool(getattr(conn, 'scan_required', False))
+
+    def _detecting_channels(self, bound) -> set:
+        """v3.50.0a: 广播工位里当前正在检测的子集 (全 OK 亮灯门控的分母).
+
+        ChannelManager 拿不到时退化为全部 bound (宁可多等不可漏等).
+        """
+        try:
+            from backend.api.channel_manager import get_channel_manager
+            cm = get_channel_manager()
+            out = set()
+            for b in bound:
+                mgr = cm.get(b)
+                if mgr is not None and getattr(mgr, 'is_detecting', False):
+                    out.add(b)
+            # 全都没在检测 (理论上到不了这, cycle_end 只会来自 detecting 通道):
+            # 退化为全部 bound, 避免空分母直接放行.
+            return out or set(bound)
+        except Exception:
+            return set(bound)
+
+    def _rearm_forget(self, conn: "ScannerConnection", channel_id: int):
+        """v3.50 rearm_forget_last: 重新亮灯时作废未绑定旧码 + 重置物理去重.
+
+        - 物理去重缓存: conn.last_scan/last_scan_time 归零, 让工人有意重扫同码
+          不被 dedup_interval_sec 吞掉.
+        - 未绑定旧码: mes_hooks.clear_pending_scan(force=False) 清 pending
+          工件/队列/last_scan_event, 已绑入周期的不动.
+        """
+        conn.last_scan = ""
+        conn.last_scan_time = 0
+        try:
+            if self._mes_hook is not None:
+                cleared = self._mes_hook.clear_pending_scan(channel_id, force=False)
+                if cleared.get("pending_workpiece_id") or cleared.get("pending_queue"):
+                    print(f"[Scanner] rearm_forget_last: {conn.name} ch{channel_id} "
+                          f"作废旧码 {cleared}", flush=True)
+        except Exception as e:
+            print(f"[Scanner] rearm_forget_last error ({conn.name} ch{channel_id}): {e}",
+                  flush=True)
+
+    def resume_scanning_manual(self, channel_id: int) -> list[str]:
+        """v3.50 人工恢复扫码 (resume_on='ok_only' 下 NG 的出口).
+
+        监控页按钮 / POST /scanner/resume / 触发中心 resume_scanner 动作共用.
+        """
+        return self.resume_after_cycle(channel_id, manual=True)
+
+    def is_resume_blocked(self, channel_id: int) -> bool:
+        """v3.50: 该工位是否有扫码器因 resume_on='ok_only' + NG 被拦在灭灯态."""
+        for conn in self._connections.values():
+            if conn.device_type != "text_lon":
+                continue
+            if not getattr(conn, '_resume_blocked', False):
+                continue
+            if channel_id in self._resolve_bound_channels(conn):
+                return True
+        return False
 
     def notify_cycle_settled(self, channel_id: int) -> list[int]:
         """v3.1.2: 某工位刚完成结算 → 检查是否要带动其他广播工位强制结算.
@@ -1296,6 +1520,9 @@ class ScannerService:
                 ok_rescan_cooldown_sec=int(getattr(dev, 'ok_rescan_cooldown_sec', 0) or 0),
                 late_scan_bind_window_sec=int(getattr(dev, 'late_scan_bind_window_sec', 3) or 0),
                 scan_pair_max_wait_sec=int(getattr(dev, 'scan_pair_max_wait_sec', 0) or 0),
+                # v3.50: USB 键盘枪无灯控, resume_on/rearm 不适用, 但强制去重
+                # 由 mes_hooks 按连接配置判定, USB 枪同样生效
+                strict_ok_dedup=bool(getattr(dev, 'strict_ok_dedup', False)),
                 status='usb',
                 device_type='usb_hid',
             )
@@ -1348,6 +1575,9 @@ class ScannerService:
             scan_d_line=getattr(dev, 'scan_d_line', None),
             scan_d_zone=getattr(dev, 'scan_d_zone', None),
             scan_d_gone_confirm_frames=int(getattr(dev, 'scan_d_gone_confirm_frames', 30) or 30),
+            resume_on=(getattr(dev, 'resume_on', None) or 'cycle_end'),
+            rearm_forget_last=bool(getattr(dev, 'rearm_forget_last', False)),
+            strict_ok_dedup=bool(getattr(dev, 'strict_ok_dedup', False)),
         )
         conn.device_type = db_device_type
         conn.parse_config["parse_mode"] = dev.parse_mode or "direct"
@@ -1522,15 +1752,18 @@ class ScannerService:
             # v3.4.2: D 模式扫到码后行为同 once_per_cycle (LOFF + 等 cycle_end
             # 由 resume_after_cycle 解锁). 容器模式下还会有 source._scan_d_update
             # 的 box 跨线 send_lon_for_channel 在 cycle 之外提前触发 LON.
-            if mode in ("once_per_cycle", "D"):
-                tag = "once_per_cycle" if mode == "once_per_cycle" else "D 模式"
-                try:
-                    sock.sendall(b"LOFF\r\n")
-                    print(f"[Scanner/text_lon] {conn.name} {tag}: "
-                          f"扫到码后已 LOFF, 等周期结束再开扫", flush=True)
-                except OSError as e:
-                    print(f"[Scanner/text_lon] {conn.name} {tag} LOFF failed: {e}",
-                          flush=True)
+            if mode in ("once_per_cycle", "D", "E"):
+                # v3.51.1: 本码在 _on_data_received 内已被同步判定"全拒绝复灯"
+                # (无任何工位接收) → 不再进入等灯锁, 消费标记后直接续 LON.
+                if (getattr(conn, '_rearm_after_reject_serial', None)
+                        and conn._rearm_after_reject_serial == conn.last_scan):
+                    conn._rearm_after_reject_serial = None
+                    conn._lon_sent = False
+                    conn._wait_cycle_resume = False
+                    return
+                # 灭灯动作统一走 service 方法 (幂等): _on_data_received 已灭过灯,
+                # 这里只是兜底, 不会重复发 LOFF.
+                self._loff_on_code_received(conn)
                 conn._lon_sent = False
                 conn._wait_cycle_resume = True
                 return
@@ -1774,6 +2007,29 @@ class ScannerService:
         logger.info("[Scanner] %s WMax 监听退出，总收 %d 字节，扫码 %d 次",
                     conn.name, recv_total, code_count)
 
+    def _loff_on_code_received(self, conn: "ScannerConnection") -> bool:
+        """v3.50.1: 扫到真码 → 灭灯 + 锁住续 LON ("扫到码灭灯"的 C/D/E 三模式)。
+
+        幂等: 已在"等恢复"态直接返回, 重复调用不重发 LOFF.
+
+        为什么放在 service 方法而不是 listen loop 的闭包里: 监听线程在
+        _init_mes_services 阶段就启动了 (远早于热补丁应用), 已进入循环的线程
+        用的是旧闭包, 重绑 _text_lon_listen_loop 救不到它 — 而本方法由
+        _on_data_received 按实例查找调用, 重绑后当场生效.
+        """
+        if conn.device_type != "text_lon":
+            return False
+        mode = getattr(conn, 'scan_mode', 'continuous') or 'continuous'
+        if mode not in ("once_per_cycle", "D", "E"):
+            return False
+        if getattr(conn, '_wait_cycle_resume', False):
+            return False
+        ok = self._text_lon_send(conn, b"LOFF\r\n",
+                                 f"LOFF (扫到码灭灯, mode={mode})")
+        conn._lon_sent = False
+        conn._wait_cycle_resume = True
+        return ok
+
     def _on_data_received(self, conn: ScannerConnection, raw_data: str):
         """收到扫码数据的处理"""
         now = time.time()
@@ -1790,6 +2046,9 @@ class ScannerService:
                 print(f"[Scanner/recv] {conn.name} during test, ignored (not into MES)",
                       flush=True)
                 return
+        # v3.50.1: 物理层面"扫到码就灭灯", 与去重/绑定结果无关 (与 listen loop
+        # 原语义一致). 提到 dedup 判定之前, 否则去重命中直接 return 就漏灭灯.
+        self._loff_on_code_received(conn)
         if (raw_data == conn.last_scan
                 and (now - conn.last_scan_time) < conn.dedup_interval_sec):
             # v2.7.16: dedup 命中时打印日志, 让用户能区分"扫码器没扫到"和
@@ -1829,6 +2088,7 @@ class ScannerService:
 
         channels = conn.broadcast_channels if conn.broadcast_channels else [conn.channel_id]
 
+        _dispatched = []  # v3.51.1: 真正送进 MES 的工位 (全拒绝自动复灯的分母)
         for ch_id in channels:
             project_id = None
             if self._project_id_getter:
@@ -1856,13 +2116,29 @@ class ScannerService:
                   flush=True)
             if debug_center.is_on("backend.scanner"):
                 debug_center.dbg("backend.scanner", "条码注入 MES", f"channel={ch_id} serial={result.serial_no or '-'} project={project_id} device={conn.device_id}")
-            self._mes_hook.on_scan_received(
+            _accepted = self._mes_hook.on_scan_received(
                 channel_id=ch_id,
                 serial_no=result.serial_no,
                 raw_data=raw_data,
                 project_id=project_id,
                 device_id=conn.device_id,
             )
+            if _accepted is not False:
+                _dispatched.append(ch_id)
+
+        # v3.51.1: 等灯模式记录本次派发面. MES 侧任何拒绝出口 (强制去重/OK冷却/
+        # 已有待检) 会回调 notify_scan_rejected; 全部派发工位都拒绝且无在途工件
+        # → 自动重新亮灯, 否则一个废码就把产线灯锁死.
+        if (conn.scan_mode or "continuous") in ("once_per_cycle", "D", "E"):
+            conn._rearm_after_reject_serial = None  # 新码清残留标记
+            conn._last_dispatch = {"serial": result.serial_no,
+                                   "channels": set(_dispatched),
+                                   "rejected": set()}
+            if not _dispatched:
+                # 一个工位都没送进 MES (项目未激活/工位禁扫等) → 永远等不来
+                # 闭环出口, 当场复灯.
+                self._rearm_after_full_reject(conn, result.serial_no,
+                                              reason="无任何工位接收")
 
         self._inject_barcode_to_external_devices(conn, result.serial_no)
 

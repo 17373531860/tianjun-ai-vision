@@ -1258,6 +1258,8 @@ const initProjectDefaults = (project) => {
     if (step.box_max_height === undefined) step.box_max_height = 0;
     // v3.19.x 满盘门: 堆叠模式只验每盘是否数满 (默认关 = 历史"卡总数"行为)
     if (step.stack_gate_only === undefined) step.stack_gate_only = false;
+    // v3.50 齐件即结算: 确认放入帧数 (默认 1 = 看见即入账)
+    if (step.settle_confirm_frames === undefined) step.settle_confirm_frames = 1;
   });
 
   // v3.7.x (FIX): 清理孤儿步骤 — from_model 既不是 'main' 也对不上当前 extra_models slot.
@@ -1628,6 +1630,14 @@ const initProjectDefaults = (project) => {
   }
   if (project.tracking_gone_confirm_frames === undefined) {
     project.tracking_gone_confirm_frames = pipelineConfig.tracking_gone_confirm_frames || 30;
+  }
+  // v3.50 齐件即结算 (默认关, 老项目零差异)
+  if (project.tracking_settle_on_complete === undefined) {
+    project.tracking_settle_on_complete = pipelineConfig.tracking_settle_on_complete === true;
+  }
+  // v3.50.1 扫码后才计数 (默认关, 老项目零差异)
+  if (project.tracking_scan_gate === undefined) {
+    project.tracking_scan_gate = pipelineConfig.tracking_scan_gate === true;
   }
   if (project.tracking_max_lost_seconds === undefined) {
     project.tracking_max_lost_seconds = 5.0;
@@ -2209,6 +2219,12 @@ const handleSaveProject = async () => {
         tracking_trigger_label: activeProject.value.tracking_trigger_label || '',
         tracking_trigger_min_frames: activeProject.value.tracking_trigger_min_frames || 15,
         tracking_gone_confirm_frames: activeProject.value.tracking_gone_confirm_frames || 30,
+        // v3.50 齐件即结算: 仅 ROI离开/容器两种策略可开, 其他策略强制落 false
+        tracking_settle_on_complete: ['roi_exit', 'container'].includes(activeProject.value.tracking_cycle_strategy)
+          ? (activeProject.value.tracking_settle_on_complete === true)
+          : false,
+        // v3.50.1 扫码后才计数 (跟踪模式通用, 默认关)
+        tracking_scan_gate: activeProject.value.tracking_scan_gate === true,
         tracking_max_lost_seconds: Math.max(5, ...(activeProject.value.steps_config || []).filter(s => s.enabled && s.tracking_max_lost_seconds).map(s => s.tracking_max_lost_seconds)),
         tracking_gone_threshold: 0,
         tracking_check_order: activeProject.value.tracking_check_order || false,

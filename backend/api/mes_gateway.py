@@ -76,17 +76,25 @@ class AsyncDispatchToggle(BaseModel):
     enabled: bool = False
 
 
-# ==================== B1②: 外部 MES 推送并发派发开关 (默认关) ====================
-# 开 → cycle_end 外推甩到"每工位一条"的执行器, 慢/挂的客户 MES 不再堵住整个 hook 队列;
-# 关(默认) → 原内联派发, 与旧版一致。开关存 SystemConfig(mes_async_dispatch), 即时生效。
-@router.get("/async-dispatch")
+# ==================== B1②: 外部 MES 推送并发派发开关 (v3.49 起默认开) ====================
+# 开(默认) → 外推甩到"每工位一条"的执行器, 慢/挂的客户 MES 不再堵住整个 hook 队列,
+#            积压超上限落盘 gateway_spool.jsonl 恢复后补发;
+# 显式关 → 原内联派发, 与旧版一致。开关存 SystemConfig(mes_async_dispatch), 即时生效。
+@router.get("/async-dispatch", summary="读取 MES 外推并发派发开关")
 def get_async_dispatch():
+    """返回 MES 网关外推「并发派发」开关当前值（默认开）。"""
     from backend.services.mes_hooks import get_mes_hook
     return {"enabled": get_mes_hook().get_async_dispatch()}
 
 
-@router.put("/async-dispatch", dependencies=[Depends(require_perm("settings.edit"))])
+@router.put("/async-dispatch", summary="设置 MES 外推并发派发开关",
+            dependencies=[Depends(require_perm("settings.edit"))])
 def set_async_dispatch(body: AsyncDispatchToggle):
+    """开=外推按连接甩到独立执行器，慢/挂的客户 MES 不阻塞 hook 队列，
+    积压超上限落盘 gateway_spool.jsonl 恢复后补发；关=回退旧内联派发。
+
+    存 SystemConfig(mes_async_dispatch)，即时生效无需重启。
+    """
     from backend.services.mes_hooks import get_mes_hook
     hook = get_mes_hook()
     hook.set_async_dispatch(body.enabled)

@@ -7,7 +7,8 @@ from backend.models.models import SystemConfig
 
 
 _KEYS = ["cluster.heartbeat_interval_sec", "cluster.slave_timeout_sec",
-         "cluster.box_scan_interval_sec"]
+         "cluster.box_scan_interval_sec",
+         "cluster.report_timeout_sec", "cluster.report_async"]
 
 
 @pytest.fixture
@@ -30,7 +31,9 @@ def test_defaults_when_unset(db):
     c = get_cluster_collector()
     t = c._read_timing_config(db)
     assert t == {"heartbeat_interval_sec": 5, "slave_timeout_sec": 20,
-                 "box_scan_interval_sec": 30}
+                 "box_scan_interval_sec": 30,
+                 # v3.49: 副机上报超时 + 异步开关 (默认开)
+                 "report_timeout_sec": 10, "report_async": 1}
 
 
 def test_save_and_read_roundtrip(db):
@@ -42,7 +45,8 @@ def test_save_and_read_roundtrip(db):
     })
     db.commit()
     assert out == {"heartbeat_interval_sec": 3, "slave_timeout_sec": 15,
-                   "box_scan_interval_sec": 10}
+                   "box_scan_interval_sec": 10,
+                   "report_timeout_sec": 10, "report_async": 1}
     # 重新读确认落库
     assert c._read_timing_config(db) == out
 

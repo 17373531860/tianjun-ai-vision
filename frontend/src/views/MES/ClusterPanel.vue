@@ -103,6 +103,43 @@
                                size="small" class="!w-full" controls-position="right"
                                @change="saveConfig" />
             </div>
+            <div>
+              <div class="text-xs text-gray-500 mb-1">副机上报超时(秒)</div>
+              <el-input-number v-model="config.report_timeout_sec" :min="1" :max="120"
+                               size="small" class="!w-full" controls-position="right"
+                               data-testid="cluster-report-timeout"
+                               @change="saveConfig" />
+            </div>
+            <div class="col-span-2 flex items-center justify-between px-2">
+              <div>
+                <div class="text-xs text-gray-400">副机上报异步化（v3.49 默认开）</div>
+                <div class="text-[10px] text-gray-500">开 = 独立线程上报 + 断网落盘补发，主机慢不拖累本机扫码结算；关 = 旧同步内联（排查用）</div>
+              </div>
+              <el-switch v-model="config.report_async" size="small"
+                         data-testid="cluster-report-async-switch"
+                         @change="saveConfig" />
+            </div>
+          </div>
+        </div>
+
+        <!-- v3.49: 副机上报链路状态 (仅 slave 角色显示) -->
+        <div v-if="config.role === 'slave'" class="mt-3 pt-3 border-t border-slate-700/50"
+             data-testid="cluster-report-status">
+          <div class="text-xs text-gray-400 mb-2">上报链路状态</div>
+          <div class="flex items-center gap-4 text-xs">
+            <span class="text-gray-500">内存队列
+              <b :class="reportStatus.queued > 0 ? 'text-yellow-300' : 'text-green-400'">{{ reportStatus.queued }}</b>
+            </span>
+            <span class="text-gray-500">落盘积压
+              <b :class="reportStatus.spooled > 0 ? 'text-red-400' : 'text-green-400'">{{ reportStatus.spooled }}</b>
+            </span>
+            <span class="text-gray-500">已补发 <b class="text-gray-300">{{ reportStatus.spool_replayed_total }}</b></span>
+            <span v-if="reportStatus.last_error" class="text-red-400 truncate max-w-[280px]"
+                  :title="reportStatus.last_error">最近错误: {{ reportStatus.last_error }}</span>
+            <span v-else-if="reportStatus.last_ok_at" class="text-green-500">链路正常</span>
+          </div>
+          <div v-if="reportStatus.spooled > 0" class="text-[10px] text-yellow-500 mt-1">
+            主机不可达期间的上报已落盘，恢复连接后将按原顺序自动补发，不丢数据。
           </div>
         </div>
 
@@ -403,7 +440,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  getClusterConfig, updateClusterConfig,
+  getClusterConfig, updateClusterConfig, getReportStatus,
   getClusterBoxes, getBoxDetail, clusterHealth,
   sendHeartbeat, getConnectedSlaves,
   deleteBox, clearBoxes,
@@ -427,6 +464,14 @@ const config = ref({
   heartbeat_interval_sec: 5,
   slave_timeout_sec: 20,
   box_scan_interval_sec: 30,
+  report_timeout_sec: 10,
+  report_async: true,
+})
+
+// v3.49: 副机上报链路状态 (队列/落盘积压/最近错误)
+const reportStatus = ref({
+  queued: 0, spooled: 0, spool_replayed_total: 0,
+  last_error: null, last_ok_at: null,
 })
 
 // 本机多通道场景下，每个视觉通道各自归属哪个站点。
@@ -832,6 +877,15 @@ const loadSlaves = async () => {
   } catch { /* ignore */ }
 }
 
+// v3.49: 副机上报链路状态轮询 (仅 slave 角色需要)
+const loadReportStatus = async () => {
+  if (config.value.role !== 'slave') return
+  try {
+    const res = await getReportStatus()
+    reportStatus.value = { ...reportStatus.value, ...res.data }
+  } catch { /* ignore */ }
+}
+
 const doHeartbeat = async () => {
   if (config.value.role !== 'slave' || !config.value.enabled || !config.value.master_url) return
   try {
@@ -855,21 +909,25 @@ const doHeartbeat = async () => {
 let refreshTimer = null
 let heartbeatTimer = null
 let slaveTimer = null
+let reportStatusTimer = null
 onMounted(async () => {
   await pollingStore.load()
   loadConfig().then(() => {
     doHeartbeat()
     loadSlaves()
+    loadReportStatus()
   })
   loadBoxes()
   refreshTimer = setInterval(loadBoxes, pollingStore.get('cluster_boxes', 5000))
   heartbeatTimer = setInterval(doHeartbeat, pollingStore.get('cluster_heartbeat', 10000))
   slaveTimer = setInterval(loadSlaves, pollingStore.get('cluster_slaves', 5000))
+  reportStatusTimer = setInterval(loadReportStatus, pollingStore.get('cluster_slaves', 5000))
 })
 onUnmounted(() => {
   if (refreshTimer) clearInterval(refreshTimer)
   if (heartbeatTimer) clearInterval(heartbeatTimer)
   if (slaveTimer) clearInterval(slaveTimer)
+  if (reportStatusTimer) clearInterval(reportStatusTimer)
 })
 </script>
 

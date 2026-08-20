@@ -195,6 +195,63 @@ def test_earlier_logs_survive_later_explosion(db_env, monkeypatch):
     assert any(l.success for l in logs), "爆炸前已成功连接的通信日志被回滚丢失"
 
 
+# ==================== v3.49: 单事件重试总耗时预算 ====================
+def test_retry_budget_clamps_total_time(db_env, monkeypatch):
+    """retry_budget_sec 生效: 预算耗尽提前收场, 不再把重试拖成 次数×间隔。"""
+    import time as _time
+
+    s = db_env["factory"]()
+    c = MESConnection(
+        name="慢死端点", adapter_type="rest", enabled=True,
+        config={"url": "http://x/dead", "timeout": 1, "retry_budget_sec": 1},
+        push_events=["cycle_end"], retry_count=10, retry_interval_sec=1,
+    )
+    s.add(c)
+    s.commit()
+    s.close()
+
+    adapter = _ScriptedAdapter()
+    monkeypatch.setattr("backend.services.mes_gateway.get_adapter", lambda t: adapter)
+
+    t0 = _time.monotonic()
+    MESGateway().dispatch("cycle_end", {"cycle": {"result": "OK"}}, channel_id=0)
+    elapsed = _time.monotonic() - t0
+
+    # 无预算时是 10 次重试 × 1s 间隔 ≥ 10s; 预算 1s → 首发后最多再等 <1s
+    assert elapsed < 5, f"重试预算未生效, 耗时 {elapsed:.1f}s"
+    assert len(adapter.sent_urls) <= 2, \
+        f"预算 1s 内不应发出 {len(adapter.sent_urls)} 次请求"
+
+    logs = _logs(db_env["factory"])
+    assert len(logs) == 1 and logs[0].success is False
+    assert "重试预算耗尽" in (logs[0].error_msg or ""), \
+        f"失败日志应标注预算耗尽: {logs[0].error_msg}"
+
+
+def test_retry_budget_zero_keeps_legacy_behavior(db_env, monkeypatch):
+    """retry_budget_sec 缺省/0 → 历史行为不变 (按 retry_count 重试到耗尽)。"""
+    s = db_env["factory"]()
+    c = MESConnection(
+        name="无预算死端点", adapter_type="rest", enabled=True,
+        config={"url": "http://x/dead", "timeout": 1},
+        push_events=["cycle_end"], retry_count=2, retry_interval_sec=0,
+    )
+    s.add(c)
+    s.commit()
+    s.close()
+
+    adapter = _ScriptedAdapter()
+    monkeypatch.setattr("backend.services.mes_gateway.get_adapter", lambda t: adapter)
+
+    MESGateway().dispatch("cycle_end", {"cycle": {"result": "OK"}}, channel_id=0)
+
+    assert len(adapter.sent_urls) == 3, \
+        f"预算=0 应保持 1+retry_count 次请求, 实际 {len(adapter.sent_urls)}"
+    logs = _logs(db_env["factory"])
+    assert len(logs) == 1 and logs[0].success is False
+    assert "重试预算耗尽" not in (logs[0].error_msg or "")
+
+
 # ==================== 过滤路径: 不该推的事件零写入 ====================
 def test_event_filter_no_writes(db_env, monkeypatch):
     s = db_env["factory"]()

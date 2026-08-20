@@ -33,6 +33,9 @@ class ClusterConfigUpdate(BaseModel):
     heartbeat_interval_sec: Optional[int] = None
     slave_timeout_sec: Optional[int] = None
     box_scan_interval_sec: Optional[int] = None
+    # v3.49: 副机上报 HTTP 超时 + 异步上报开关 (同为 SystemConfig KV)
+    report_timeout_sec: Optional[int] = None
+    report_async: Optional[bool] = None
 
 
 class StationReport(BaseModel):
@@ -72,7 +75,8 @@ def update_config(body: ClusterConfigUpdate):
 
         # 计时参数走 SystemConfig KV, 不是 ClusterConfig 列, 单独剥离
         timing_fields = {"heartbeat_interval_sec", "slave_timeout_sec",
-                         "box_scan_interval_sec"}
+                         "box_scan_interval_sec",
+                         "report_timeout_sec", "report_async"}
         data = {k: v for k, v in body.model_dump().items() if v is not None}
         timing_vals = {k: data.pop(k) for k in list(data) if k in timing_fields}
         for k, v in data.items():
@@ -298,6 +302,19 @@ def clear_boxes(
         raise HTTPException(500, f"清空失败: {e}")
     finally:
         db.close()
+
+
+# ---- v3.49: 副机上报链路状态 (异步队列/落盘积压, 给 ClusterPanel 展示) ----
+
+@router.get("/report-status", summary="副机上报链路状态")
+def report_status():
+    """返回副机→主机上报链路的实时状态。
+
+    含内存队列深度(queued)、落盘积压条数(spooled)、累计补发数
+    (spool_replayed_total)等字段，供 ClusterPanel 状态区展示。
+    """
+    collector = get_cluster_collector()
+    return collector.get_report_queue_status()
 
 
 # ---- 健康检查 ----

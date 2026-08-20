@@ -282,6 +282,50 @@
     "title": "AutoResumeConfigRequest",
     "type": "object"
    },
+   "BackfillRequest": {
+    "properties": {
+     "date_from": {
+      "anyOf": [
+       {
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Date From"
+     },
+     "date_to": {
+      "anyOf": [
+       {
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Date To"
+     },
+     "limit": {
+      "default": 500,
+      "maximum": 5000.0,
+      "minimum": 1.0,
+      "title": "Limit",
+      "type": "integer"
+     },
+     "rule_id": {
+      "title": "Rule Id",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "rule_id"
+    ],
+    "title": "BackfillRequest",
+    "type": "object"
+   },
    "BarcodeInject": {
     "properties": {
      "barcode": {
@@ -853,6 +897,11 @@
       "default": 5000,
       "title": "Timeout Ms",
       "type": "integer"
+     },
+     "unified_ok_report": {
+      "default": false,
+      "title": "Unified Ok Report",
+      "type": "boolean"
      }
     },
     "required": [
@@ -898,6 +947,11 @@
       "default": 5000,
       "title": "Timeout Ms",
       "type": "integer"
+     },
+     "unified_ok_report": {
+      "default": false,
+      "title": "Unified Ok Report",
+      "type": "boolean"
      }
     },
     "required": [
@@ -978,6 +1032,17 @@
        }
       ],
       "title": "Timeout Ms"
+     },
+     "unified_ok_report": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Unified Ok Report"
      }
     },
     "title": "ChannelGroupUpdate",
@@ -1187,6 +1252,28 @@
        }
       ],
       "title": "Master Url"
+     },
+     "report_async": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Report Async"
+     },
+     "report_timeout_sec": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Report Timeout Sec"
      },
      "role": {
       "anyOf": [
@@ -2891,6 +2978,39 @@
     "title": "DeviceUpdate",
     "type": "object"
    },
+   "DisplayBounds": {
+    "description": "显示器在扩展桌面坐标系中的矩形。",
+    "properties": {
+     "height": {
+      "description": "显示器高度，必须大于 0",
+      "title": "Height",
+      "type": "integer"
+     },
+     "width": {
+      "description": "显示器宽度，必须大于 0",
+      "title": "Width",
+      "type": "integer"
+     },
+     "x": {
+      "description": "显示器左上角横坐标，可为负数",
+      "title": "X",
+      "type": "integer"
+     },
+     "y": {
+      "description": "显示器左上角纵坐标，可为负数",
+      "title": "Y",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "x",
+     "y",
+     "width",
+     "height"
+    ],
+    "title": "DisplayBounds",
+    "type": "object"
+   },
    "DisplayPayload": {
     "properties": {
      "app_name": {
@@ -2995,6 +3115,62 @@
      "admin_password"
     ],
     "title": "EnableAuthRequest",
+    "type": "object"
+   },
+   "EvidencePackRequest": {
+    "description": "三选一: cycle_ids 直接给 / session_id 整会话 / date 整天。默认只打 NG。",
+    "properties": {
+     "cycle_ids": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cycle Ids"
+     },
+     "date": {
+      "anyOf": [
+       {
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Date"
+     },
+     "limit": {
+      "default": 200,
+      "maximum": 500.0,
+      "minimum": 1.0,
+      "title": "Limit",
+      "type": "integer"
+     },
+     "ng_only": {
+      "default": true,
+      "title": "Ng Only",
+      "type": "boolean"
+     },
+     "session_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Session Id"
+     }
+    },
+    "title": "EvidencePackRequest",
     "type": "object"
    },
    "ExportSettingResponse": {
@@ -4547,6 +4723,57 @@
      }
     },
     "title": "ModelUpdate",
+    "type": "object"
+   },
+   "MultiMonitorConfig": {
+    "description": "多屏工位显示配置。",
+    "properties": {
+     "enabled": {
+      "default": false,
+      "description": "是否启用多屏工位窗口；默认关闭以保持单窗行为",
+      "title": "Enabled",
+      "type": "boolean"
+     },
+     "mapping": {
+      "additionalProperties": {
+       "$ref": "#/components/schemas/MultiMonitorMappingItem"
+      },
+      "description": "工位 ID 到显示器 ID/坐标的映射；非法工位或无效尺寸会被规范化",
+      "title": "Mapping",
+      "type": "object"
+     },
+     "readonly": {
+      "default": true,
+      "description": "工位副屏是否只读；一期默认只读",
+      "title": "Readonly",
+      "type": "boolean"
+     }
+    },
+    "title": "MultiMonitorConfig",
+    "type": "object"
+   },
+   "MultiMonitorMappingItem": {
+    "description": "单个工位绑定的显示器标识和离线降级坐标。",
+    "properties": {
+     "bounds": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/DisplayBounds"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "显示器 ID 变化或枚举失败时使用的持久化坐标"
+     },
+     "display_id": {
+      "default": "",
+      "description": "Electron Display.id 的字符串形式；为空时仅按 bounds 定位",
+      "title": "Display Id",
+      "type": "string"
+     }
+    },
+    "title": "MultiMonitorMappingItem",
     "type": "object"
    },
    "OperatorsOut": {
@@ -8045,6 +8272,182 @@
    },
    "RuleCreate": {
     "properties": {
+     "active_window": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Active Window"
+     },
+     "attach_keyframe": {
+      "default": false,
+      "title": "Attach Keyframe",
+      "type": "boolean"
+     },
+     "bandwidth_limit_kbps": {
+      "anyOf": [
+       {
+        "maximum": 1048576.0,
+        "minimum": 0.0,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Bandwidth Limit Kbps"
+     },
+     "bundle_zip": {
+      "default": false,
+      "title": "Bundle Zip",
+      "type": "boolean"
+     },
+     "channel_filter": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Channel Filter"
+     },
+     "clip_seconds": {
+      "default": 10,
+      "maximum": 600.0,
+      "minimum": 1.0,
+      "title": "Clip Seconds",
+      "type": "integer"
+     },
+     "delete_source_after": {
+      "default": false,
+      "title": "Delete Source After",
+      "type": "boolean"
+     },
+     "description": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Description"
+     },
+     "dest_config": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Dest Config"
+     },
+     "dest_dir": {
+      "maxLength": 500,
+      "minLength": 1,
+      "title": "Dest Dir",
+      "type": "string"
+     },
+     "dest_type": {
+      "default": "local_dir",
+      "pattern": "^(local_dir|ftp|sftp|s3|http|plugin:[A-Za-z0-9_\\-]+)$",
+      "title": "Dest Type",
+      "type": "string"
+     },
+     "enabled": {
+      "default": true,
+      "title": "Enabled",
+      "type": "boolean"
+     },
+     "filename_template": {
+      "default": "{{ workpiece.serial_no | default(cycle.id, true) }}_{{ 'OK' if cycle.is_good else 'NG' }}.mp4",
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Filename Template",
+      "type": "string"
+     },
+     "keyframe_watermark": {
+      "default": true,
+      "title": "Keyframe Watermark",
+      "type": "boolean"
+     },
+     "name": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Name",
+      "type": "string"
+     },
+     "overwrite_policy": {
+      "default": "rename",
+      "pattern": "^(rename|overwrite|skip)$",
+      "title": "Overwrite Policy",
+      "type": "string"
+     },
+     "project_filter": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Project Filter"
+     },
+     "result_filter": {
+      "default": "ng_only",
+      "pattern": "^(all|ng_only|ok_only)$",
+      "title": "Result Filter",
+      "type": "string"
+     },
+     "sidecar_template_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Sidecar Template Id"
+     },
+     "subdir_by_date": {
+      "default": true,
+      "title": "Subdir By Date",
+      "type": "boolean"
+     },
+     "transform": {
+      "default": "none",
+      "pattern": "^(none|clip_tail)$",
+      "title": "Transform",
+      "type": "string"
+     }
+    },
+    "required": [
+     "name",
+     "dest_dir"
+    ],
+    "title": "RuleCreate",
+    "type": "object"
+   },
+   "RuleCreate2": {
+    "properties": {
      "channel_filter": {
       "anyOf": [
        {
@@ -8198,7 +8601,7 @@
     "title": "RuleCreate",
     "type": "object"
    },
-   "RuleCreate2": {
+   "RuleCreate3": {
     "properties": {
      "channel_id": {
       "anyOf": [
@@ -8358,7 +8761,7 @@
     "title": "RuleCreate",
     "type": "object"
    },
-   "RuleCreate3": {
+   "RuleCreate4": {
     "properties": {
      "channel_ids": {
       "anyOf": [
@@ -8513,6 +8916,264 @@
     "type": "object"
    },
    "RuleUpdate": {
+    "properties": {
+     "active_window": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Active Window"
+     },
+     "attach_keyframe": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Attach Keyframe"
+     },
+     "bandwidth_limit_kbps": {
+      "anyOf": [
+       {
+        "maximum": 1048576.0,
+        "minimum": 0.0,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Bandwidth Limit Kbps"
+     },
+     "bundle_zip": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Bundle Zip"
+     },
+     "channel_filter": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Channel Filter"
+     },
+     "clip_seconds": {
+      "anyOf": [
+       {
+        "maximum": 600.0,
+        "minimum": 1.0,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Clip Seconds"
+     },
+     "delete_source_after": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Delete Source After"
+     },
+     "description": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Description"
+     },
+     "dest_config": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Dest Config"
+     },
+     "dest_dir": {
+      "anyOf": [
+       {
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Dest Dir"
+     },
+     "dest_type": {
+      "anyOf": [
+       {
+        "pattern": "^(local_dir|ftp|sftp|s3|http|plugin:[A-Za-z0-9_\\-]+)$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Dest Type"
+     },
+     "enabled": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Enabled"
+     },
+     "filename_template": {
+      "anyOf": [
+       {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Filename Template"
+     },
+     "keyframe_watermark": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Keyframe Watermark"
+     },
+     "name": {
+      "anyOf": [
+       {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Name"
+     },
+     "overwrite_policy": {
+      "anyOf": [
+       {
+        "pattern": "^(rename|overwrite|skip)$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Overwrite Policy"
+     },
+     "project_filter": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Project Filter"
+     },
+     "result_filter": {
+      "anyOf": [
+       {
+        "pattern": "^(all|ng_only|ok_only)$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Result Filter"
+     },
+     "sidecar_template_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Sidecar Template Id"
+     },
+     "subdir_by_date": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Subdir By Date"
+     },
+     "transform": {
+      "anyOf": [
+       {
+        "pattern": "^(none|clip_tail)$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Transform"
+     }
+    },
+    "title": "RuleUpdate",
+    "type": "object"
+   },
+   "RuleUpdate2": {
     "properties": {
      "channel_filter": {
       "anyOf": [
@@ -8758,7 +9419,7 @@
     "title": "RuleUpdate",
     "type": "object"
    },
-   "RuleUpdate2": {
+   "RuleUpdate3": {
     "properties": {
      "channel_id": {
       "anyOf": [
@@ -8976,7 +9637,7 @@
     "title": "RuleUpdate",
     "type": "object"
    },
-   "RuleUpdate3": {
+   "RuleUpdate4": {
     "properties": {
      "channel_ids": {
       "anyOf": [
@@ -9249,6 +9910,17 @@
     "title": "ScanInput",
     "type": "object"
    },
+   "ScanPairNewFirstToggle": {
+    "properties": {
+     "enabled": {
+      "default": true,
+      "title": "Enabled",
+      "type": "boolean"
+     }
+    },
+    "title": "ScanPairNewFirstToggle",
+    "type": "object"
+   },
    "ScanPairStopRequest": {
     "properties": {
      "channel_id": {
@@ -9506,9 +10178,19 @@
       "title": "Primary Settle Min Items",
       "type": "integer"
      },
+     "rearm_forget_last": {
+      "default": false,
+      "title": "Rearm Forget Last",
+      "type": "boolean"
+     },
      "rebind_mode": {
       "default": "rescan",
       "title": "Rebind Mode",
+      "type": "string"
+     },
+     "resume_on": {
+      "default": "cycle_end",
+      "title": "Resume On",
       "type": "string"
      },
      "scan_d_geometry": {
@@ -9558,6 +10240,11 @@
      "scan_required": {
       "default": false,
       "title": "Scan Required",
+      "type": "boolean"
+     },
+     "strict_ok_dedup": {
+      "default": false,
+      "title": "Strict Ok Dedup",
       "type": "boolean"
      },
      "throttle_idle_ms": {
@@ -9876,6 +10563,17 @@
       ],
       "title": "Primary Settle Min Items"
      },
+     "rearm_forget_last": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Rearm Forget Last"
+     },
      "rebind_mode": {
       "anyOf": [
        {
@@ -9886,6 +10584,17 @@
        }
       ],
       "title": "Rebind Mode"
+     },
+     "resume_on": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Resume On"
      },
      "scan_d_geometry": {
       "anyOf": [
@@ -9965,6 +10674,17 @@
        }
       ],
       "title": "Scan Required"
+     },
+     "strict_ok_dedup": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Strict Ok Dedup"
      },
      "throttle_idle_ms": {
       "anyOf": [
@@ -12143,6 +12863,34 @@
        }
       ],
       "title": "Session Id"
+     }
+    },
+    "title": "TestRunRequest",
+    "type": "object"
+   },
+   "TestRunRequest2": {
+    "properties": {
+     "cycle_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cycle Id"
+     },
+     "rule_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Rule Id"
      }
     },
     "title": "TestRunRequest",
@@ -15215,6 +15963,27 @@
     ]
    }
   },
+  "/api/v1/cluster/report-status": {
+   "get": {
+    "description": "返回副机→主机上报链路的实时状态。\n\n含内存队列深度(queued)、落盘积压条数(spooled)、累计补发数\n(spool_replayed_total)等字段，供 ClusterPanel 状态区展示。",
+    "operationId": "report_status_api_v1_cluster_report_status_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "副机上报链路状态",
+    "tags": [
+     "Cluster",
+     "Cluster"
+    ]
+   }
+  },
   "/api/v1/cluster/slaves": {
    "get": {
     "description": "查询当前在线的副机",
@@ -15238,7 +16007,7 @@
   },
   "/api/v1/data/backup/database": {
    "get": {
-    "description": "备份数据库文件，下载 sql_app.db",
+    "description": "备份数据库并下载。\n\n- SQLite: 直接下载 sql_app.db 文件（历史行为不变）。\n- PostgreSQL: 调 pg_dump 导出 custom 格式 (.dump)，可用 pg_restore 恢复。\n  pg_dump 不在 PATH 时返回 500 + 明确指引，绝不静默给出错误备份。",
     "operationId": "backup_database_api_v1_data_backup_database_get",
     "responses": {
      "200": {
@@ -17535,7 +18304,7 @@
      "content": {
       "application/json": {
        "schema": {
-        "$ref": "#/components/schemas/RuleCreate"
+        "$ref": "#/components/schemas/RuleCreate2"
        }
       }
      },
@@ -17673,7 +18442,7 @@
      "content": {
       "application/json": {
        "schema": {
-        "$ref": "#/components/schemas/RuleUpdate"
+        "$ref": "#/components/schemas/RuleUpdate2"
        }
       }
      },
@@ -18142,7 +18911,7 @@
      "content": {
       "application/json": {
        "schema": {
-        "$ref": "#/components/schemas/RuleCreate2"
+        "$ref": "#/components/schemas/RuleCreate3"
        }
       }
      },
@@ -18368,7 +19137,7 @@
      "content": {
       "application/json": {
        "schema": {
-        "$ref": "#/components/schemas/RuleUpdate2"
+        "$ref": "#/components/schemas/RuleUpdate3"
        }
       }
      },
@@ -18999,6 +19768,516 @@
     "summary": "Clone Template",
     "tags": [
      "export"
+    ]
+   }
+  },
+  "/api/v1/export/video-archive/adapter-types": {
+   "get": {
+    "description": "可用目的地类型 (内置 + 插件注册的), 前端下拉数据源。",
+    "operationId": "adapter_types_api_v1_export_video_archive_adapter_types_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Adapter Types Api V1 Export Video Archive Adapter Types Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Adapter Types",
+    "tags": [
+     "video-archive"
+    ]
+   }
+  },
+  "/api/v1/export/video-archive/backfill": {
+   "post": {
+    "description": "历史回补 (四期): 把存量带录像周期按指定规则补归档, 异步执行。\n目标端建议规则用 skip/overwrite 重名策略保证幂等。",
+    "operationId": "backfill_api_v1_export_video_archive_backfill_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/BackfillRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Backfill Api V1 Export Video Archive Backfill Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Backfill",
+    "tags": [
+     "video-archive"
+    ]
+   }
+  },
+  "/api/v1/export/video-archive/evidence-pack": {
+   "post": {
+    "description": "手动证据包 (二期): 勾选周期/会话/日期打 zip, 直接流式下载。\nzip 内每周期一个文件夹: video.mp4 + keyframe.jpg + meta.json。",
+    "operationId": "evidence_pack_api_v1_export_video_archive_evidence_pack_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/EvidencePackRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Evidence Pack",
+    "tags": [
+     "video-archive"
+    ]
+   }
+  },
+  "/api/v1/export/video-archive/logs": {
+   "get": {
+    "operationId": "archive_logs_api_v1_export_video_archive_logs_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "rule_id",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Rule Id"
+      }
+     },
+     {
+      "in": "query",
+      "name": "status",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Status"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 50,
+       "maximum": 500,
+       "minimum": 1,
+       "title": "Limit",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "offset",
+      "required": false,
+      "schema": {
+       "default": 0,
+       "minimum": 0,
+       "title": "Offset",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Archive Logs Api V1 Export Video Archive Logs Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Archive Logs",
+    "tags": [
+     "video-archive"
+    ]
+   }
+  },
+  "/api/v1/export/video-archive/rules": {
+   "get": {
+    "operationId": "list_rules_api_v1_export_video_archive_rules_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response List Rules Api V1 Export Video Archive Rules Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "List Rules",
+    "tags": [
+     "video-archive"
+    ]
+   },
+   "post": {
+    "operationId": "create_rule_api_v1_export_video_archive_rules_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RuleCreate"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Create Rule Api V1 Export Video Archive Rules Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Create Rule",
+    "tags": [
+     "video-archive"
+    ]
+   }
+  },
+  "/api/v1/export/video-archive/rules/{rule_id}": {
+   "delete": {
+    "operationId": "delete_rule_api_v1_export_video_archive_rules__rule_id__delete",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "rule_id",
+      "required": true,
+      "schema": {
+       "title": "Rule Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Delete Rule Api V1 Export Video Archive Rules  Rule Id  Delete",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Delete Rule",
+    "tags": [
+     "video-archive"
+    ]
+   },
+   "get": {
+    "operationId": "get_rule_api_v1_export_video_archive_rules__rule_id__get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "rule_id",
+      "required": true,
+      "schema": {
+       "title": "Rule Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Get Rule Api V1 Export Video Archive Rules  Rule Id  Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Get Rule",
+    "tags": [
+     "video-archive"
+    ]
+   },
+   "put": {
+    "operationId": "update_rule_api_v1_export_video_archive_rules__rule_id__put",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "rule_id",
+      "required": true,
+      "schema": {
+       "title": "Rule Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RuleUpdate"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Update Rule Api V1 Export Video Archive Rules  Rule Id  Put",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Update Rule",
+    "tags": [
+     "video-archive"
+    ]
+   }
+  },
+  "/api/v1/export/video-archive/rules/{rule_id}/toggle": {
+   "post": {
+    "operationId": "toggle_rule_api_v1_export_video_archive_rules__rule_id__toggle_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "rule_id",
+      "required": true,
+      "schema": {
+       "title": "Rule Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Toggle Rule Api V1 Export Video Archive Rules  Rule Id  Toggle Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Toggle Rule",
+    "tags": [
+     "video-archive"
+    ]
+   }
+  },
+  "/api/v1/export/video-archive/status": {
+   "get": {
+    "operationId": "archive_status_api_v1_export_video_archive_status_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Archive Status Api V1 Export Video Archive Status Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Archive Status",
+    "tags": [
+     "video-archive"
+    ]
+   }
+  },
+  "/api/v1/export/video-archive/test-run": {
+   "post": {
+    "operationId": "test_run_api_v1_export_video_archive_test_run_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/TestRunRequest2"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Test Run Api V1 Export Video Archive Test Run Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Test Run",
+    "tags": [
+     "video-archive"
     ]
    }
   },
@@ -20251,6 +21530,7 @@
   },
   "/api/v1/mes/gateway/async-dispatch": {
    "get": {
+    "description": "返回 MES 网关外推「并发派发」开关当前值（默认开）。",
     "operationId": "get_async_dispatch_api_v1_mes_gateway_async_dispatch_get",
     "responses": {
      "200": {
@@ -20262,13 +21542,14 @@
       "description": "Successful Response"
      }
     },
-    "summary": "Get Async Dispatch",
+    "summary": "读取 MES 外推并发派发开关",
     "tags": [
      "MES-Gateway",
      "MES-Gateway"
     ]
    },
    "put": {
+    "description": "开=外推按连接甩到独立执行器，慢/挂的客户 MES 不阻塞 hook 队列，\n积压超上限落盘 gateway_spool.jsonl 恢复后补发；关=回退旧内联派发。\n\n存 SystemConfig(mes_async_dispatch)，即时生效无需重启。",
     "operationId": "set_async_dispatch_api_v1_mes_gateway_async_dispatch_put",
     "requestBody": {
      "content": {
@@ -20300,7 +21581,7 @@
       "description": "Validation Error"
      }
     },
-    "summary": "Set Async Dispatch",
+    "summary": "设置 MES 外推并发派发开关",
     "tags": [
      "MES-Gateway",
      "MES-Gateway"
@@ -24533,6 +25814,66 @@
     ]
    }
   },
+  "/api/v1/projects/activate-config": {
+   "get": {
+    "description": "读激活项目行为配置 (v3.51)",
+    "operationId": "get_activate_config_api_v1_projects_activate_config_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Get Activate Config",
+    "tags": [
+     "projects"
+    ]
+   },
+   "put": {
+    "description": "写激活项目行为配置 (v3.51). body: {\"adopt_unbound\": bool}",
+    "operationId": "put_activate_config_api_v1_projects_activate_config_put",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "additionalProperties": true,
+        "title": "Payload",
+        "type": "object"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Put Activate Config",
+    "tags": [
+     "projects"
+    ]
+   }
+  },
   "/api/v1/projects/active/current": {
    "get": {
     "description": "获取当前激活的项目",
@@ -26145,6 +27486,51 @@
     ]
    }
   },
+  "/api/v1/scanner/resume": {
+   "post": {
+    "description": "v3.50 人工恢复扫码 — `resume_on='ok_only'` 下 NG 保持灭灯的人工出口。\n\n对绑定该工位、处于\"扫到码等恢复\"状态 (once_per_cycle / D 模式) 的\ntext_lon 扫码器无条件解除灭灯锁, 让 listen loop 重新续 LON。\n监控页\"恢复扫码\"按钮与触发中心 `resume_scanner` 动作共用本语义。",
+    "operationId": "resume_scanner_api_v1_scanner_resume_post",
+    "parameters": [
+     {
+      "description": "工位号",
+      "in": "query",
+      "name": "channel_id",
+      "required": false,
+      "schema": {
+       "default": 0,
+       "description": "工位号",
+       "title": "Channel Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "人工恢复扫码 (重新亮灯)",
+    "tags": [
+     "Scanner",
+     "Scanner"
+    ]
+   }
+  },
   "/api/v1/scanner/scan-pair/active": {
    "get": {
     "description": "v3.3.0 查询某工位 scan_pair 模式下当前窗口的开始码 (None 表示未开窗口).\n\n前端 Monitor 页定时拉取 → 决定停止/待机时是否要弹\"丢弃/结算\"提示框.",
@@ -26182,6 +27568,66 @@
      }
     },
     "summary": "Get Scan Pair Active",
+    "tags": [
+     "Scanner",
+     "Scanner"
+    ]
+   }
+  },
+  "/api/v1/scanner/scan-pair/new-code-first": {
+   "get": {
+    "description": "返回 scan_pair 配对模式「新码先上屏」开关当前值（默认开）。",
+    "operationId": "get_scan_pair_new_first_api_v1_scanner_scan_pair_new_code_first_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "读取 scan_pair 新码先上屏开关",
+    "tags": [
+     "Scanner",
+     "Scanner"
+    ]
+   },
+   "put": {
+    "description": "开=新码到达先顶替上屏、旧窗口用显式身份异步结算；关=回退旧序（先结算再上屏）。\n\n存 SystemConfig(scan_pair_new_code_first)，即时生效无需重启。",
+    "operationId": "set_scan_pair_new_first_api_v1_scanner_scan_pair_new_code_first_put",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ScanPairNewFirstToggle"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "设置 scan_pair 新码先上屏开关",
     "tags": [
      "Scanner",
      "Scanner"
@@ -27924,7 +29370,7 @@
      "content": {
       "application/json": {
        "schema": {
-        "$ref": "#/components/schemas/RuleCreate3"
+        "$ref": "#/components/schemas/RuleCreate4"
        }
       }
      },
@@ -28050,7 +29496,7 @@
      "content": {
       "application/json": {
        "schema": {
-        "$ref": "#/components/schemas/RuleUpdate3"
+        "$ref": "#/components/schemas/RuleUpdate4"
        }
       }
      },
@@ -30530,6 +31976,30 @@
     "summary": "Upload Video",
     "tags": [
      "source"
+    ]
+   }
+  },
+  "/api/v1/system/db-info": {
+   "get": {
+    "description": "返回当前数据库 dialect、脱敏 DSN、连接状态与服务端版本。\n\n只读展示用（Settings 数据库卡片）。DSN 中的密码恒不下发。",
+    "operationId": "get_db_info_api_v1_system_db_info_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Get Db Info Api V1 System Db Info Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "当前数据库信息",
+    "tags": [
+     "system"
     ]
    }
   },
@@ -33207,6 +34677,70 @@
      }
     },
     "summary": "Set Workstation Mode",
+    "tags": [
+     "workstations",
+     "workstations"
+    ]
+   }
+  },
+  "/api/v1/workstations/multi-monitor": {
+   "get": {
+    "description": "[内部端点] 读取多屏工位开关、只读策略和显示器映射。\n\n- 配置文件缺失或内容损坏时返回默认关闭、默认只读，不返回错误。",
+    "operationId": "get_multi_monitor_config_api_v1_workstations_multi_monitor_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MultiMonitorConfig"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "读取多屏配置",
+    "tags": [
+     "workstations",
+     "workstations"
+    ]
+   },
+   "put": {
+    "description": "[内部端点] 规范化并保存多屏工位配置，仅替换顶层 multi_monitor 段。\n\n- 请求体字段类型不合法时返回 422。\n- 配置文件无法写入时返回 500，原有其他顶层配置不主动改写。",
+    "operationId": "set_multi_monitor_config_api_v1_workstations_multi_monitor_put",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/MultiMonitorConfig"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MultiMonitorConfig"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "保存多屏配置",
     "tags": [
      "workstations",
      "workstations"

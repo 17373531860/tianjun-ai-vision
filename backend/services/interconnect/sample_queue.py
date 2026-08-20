@@ -4,6 +4,9 @@
 - frames 表: 待发帧 (meta JSON + JPEG BLOB), TTL + 容量上限, 租约防重复发送
 - sample_log 表: 最近样本流水 (pending/sent/failed/dropped), 供互连状态页展示,
   封顶 200 行自动裁剪
+
+WS5(PG) 决策记录: 本队列**刻意不随主库迁 PostgreSQL**，永远是独立本地 SQLite 文件
+(断网缓冲必须独立于业务库存活; BLOB 临时件不参与备份/迁移)。sms_offline_queue 同理。
 """
 from __future__ import annotations
 

@@ -60,6 +60,8 @@ class TrackingMixin:
         # v2.7.4: 堆叠模式 + 最大识别数 (仅 count_mode=track 生效)
         stack_steps = {}              # {label: {'reappear_seconds': float, 'required_count': int}}
         max_recognized_per_label = {}  # {label: N>0}; 0 或缺失 = 无上限
+        # v3.50 齐件即结算: 确认放入帧数 (仅 tracking_settle_on_complete 开启时生效)
+        entry_confirm_frames = {}      # {label: N>1}; 1 或缺失 = 看见即入账 (现状)
         for step in self.project_config.get('steps_config', []):
             if not step.get('enabled', True):
                 continue
@@ -98,6 +100,13 @@ class TrackingMixin:
                         max_recognized_per_label[lbl] = mr
                 except (TypeError, ValueError):
                     pass
+                # v3.50 齐件即结算: 新物品需连续 N 帧被看见才入账 (默认 1 = 现状)
+                try:
+                    scf = int(step.get('settle_confirm_frames', 1) or 1)
+                    if scf > 1:
+                        entry_confirm_frames[lbl] = scf
+                except (TypeError, ValueError):
+                    pass
 
         for lbl, cfg in event_steps.items():
             expected_items[lbl] = cfg['required_count']
@@ -112,6 +121,7 @@ class TrackingMixin:
             'event_steps': event_steps,
             'stack_steps': stack_steps,
             'max_recognized_per_label': max_recognized_per_label,
+            'entry_confirm_frames': entry_confirm_frames,
             'max_lost_sec': max_lost_sec,
         }
 
@@ -314,7 +324,8 @@ class TrackingMixin:
                                    per_class_position_lock, id_lock, id_lock_frames,
                                    appearance_match, max_lost_sec, current_time, cycle_strategy,
                                    seen_track_ids, pos_lock_assigned_dids,
-                                   expected_items, original_frame):
+                                   expected_items, original_frame,
+                                   settle_on_complete=False, entry_confirm_frames=None):
         """Phase 2: 原始 track_id 匹配 (非 position-lock 物品 + position-lock 新增物品)。
 
         子阶段 (按顺序尝试):
@@ -338,6 +349,15 @@ class TrackingMixin:
                 if current_time - self._tracking_transferred_ids[track_id] < max_lost_sec:
                     continue
                 del self._tracking_transferred_ids[track_id]
+
+            # v3.50 齐件即结算: 上一周期结算时仍在场的物品在离场前豁免,
+            # 不再入账/开新周期 (防"凑齐结算后同帧连环开假周期")
+            if settle_on_complete and getattr(self, '_settle_complete_exempt', None):
+                _ex = self._settle_complete_exempt.get(track_id)
+                if _ex is not None:
+                    _ex['ts'] = current_time
+                    _ex['bbox'] = new_bbox
+                    continue
 
             if track_id in self._tracking_objects:
                 obj = self._tracking_objects[track_id]
@@ -475,6 +495,46 @@ class TrackingMixin:
 
             # h) 新分配 display_id + 自动开启周期
             if not merged:
+                # v3.50 齐件即结算 ID 漂移兜底: 新 track 与豁免名单里的旧物品
+                # 位置高度重合 → 视为同一件已结算物品换了 track_id, 豁免转移不入账
+                if settle_on_complete and getattr(self, '_settle_complete_exempt', None):
+                    _hit_tid = None
+                    for _etid, _ex in self._settle_complete_exempt.items():
+                        try:
+                            # v3.51.1: 漂移转移只认同标签 — 旧件拿走后几秒内
+                            # 同位置放上"另一种"新物品, 不能被吞成旧件豁免
+                            # (老条目无 label 视为兼容匹配)
+                            _elbl = _ex.get('label')
+                            if _elbl is not None and _elbl != label:
+                                continue
+                            if self._bbox_iou(_ex.get('bbox') or {}, new_bbox) >= 0.6:
+                                _hit_tid = _etid
+                                break
+                        except Exception:
+                            continue
+                    if _hit_tid is not None:
+                        self._settle_complete_exempt.pop(_hit_tid, None)
+                        self._settle_complete_exempt[track_id] = {
+                            'ts': current_time, 'bbox': new_bbox, 'label': label,
+                        }
+                        continue
+
+                # v3.50 齐件即结算: 确认放入帧数 — 新物品连续 N 帧被看见才入账
+                _need_frames = (entry_confirm_frames or {}).get(label, 1)
+                if settle_on_complete and _need_frames > 1:
+                    _pend = self._tracking_entry_pending.get(track_id)
+                    if _pend is None or _pend.get('label') != label:
+                        self._tracking_entry_pending[track_id] = {
+                            'label': label, 'frames': 1, 'ts': current_time,
+                        }
+                        continue
+                    _pend['frames'] += 1
+                    _pend['ts'] = current_time
+                    if _pend['frames'] < _need_frames:
+                        continue
+                    # 连续帧数达标 → 出缓冲, 走正常入账
+                    self._tracking_entry_pending.pop(track_id, None)
+
                 prefix = self._get_display_prefix(label)
                 current_count = self._tracking_class_counters.get(label, 0)
                 expected_count = expected_items.get(label, 0)
@@ -976,6 +1036,32 @@ class TrackingMixin:
 
         return should_settle
 
+    def _soc_ensure_db_cycle(self, current_time: float) -> bool:
+        """齐件即结算前确保 DB 周期已开 (v3.50.2).
+
+        cycle_uuid 为空说明 start_cycle 从未成功 — 最常见原因: 工位要求先扫码
+        (E 模式 / 先扫后检), 码未到时 start_cycle 被 ScanBind 拦掉, 但内存
+        tracking 周期与账本照跑. 此时若照常结算, 结果挂不到任何周期/工件上:
+        扫码器 resume_after_cycle 拿到"结果未知"保持灭灯, 结算后另开的新周期
+        又把 pending 工件占走 (2026-08-14 捷昌 B 工位现场实录). 处理:
+        先尝试补开周期 (码已扫则能开); 开不出来返回 False, 调用方挂账等待,
+        扫码后下一帧即可正常结算.
+        """
+        if getattr(self, 'current_cycle_uuid', None):
+            return True
+        try:
+            self.start_cycle()
+        except Exception as e:
+            print(f"[Tracking] 齐件即结算: 补开周期失败: {e}", flush=True)
+        if getattr(self, 'current_cycle_uuid', None):
+            return True
+        last = getattr(self, '_soc_wait_cycle_log_ts', 0.0)
+        if current_time - last > 5.0:
+            self._soc_wait_cycle_log_ts = current_time
+            print("[Tracking] 齐件即结算: 已凑齐但周期未开 (等扫码绑定), "
+                  "账本挂起等待, 扫码后自动结算", flush=True)
+        return False
+
     def _update_tracking_stats(self, detections: list, original_frame: np.ndarray):
         """Process detections in tracking mode (物品清点, v2.7.16 P5b 拆分版)。
 
@@ -1000,6 +1086,37 @@ class TrackingMixin:
         appearance_match = pcfg.get('tracking_appearance_match', False)
         id_lock = pcfg.get('tracking_id_lock', False)
         id_lock_frames = pcfg.get('tracking_id_lock_frames', 15)
+        # v3.50 齐件即结算 (默认关): 仅 ROI离开 / 容器模式两种策略生效
+        settle_on_complete = (
+            bool(pcfg.get('tracking_settle_on_complete', False))
+            and cycle_strategy in ('roi_exit', 'container')
+        )
+
+        # v3.50.1 扫码后才计数 (默认关): 码不在位 (没有待检/在检工件) 时不入账 —
+        # 结算后到下一个码之间检测到什么都不算数, 扫到码后从当前画面重新开始看。
+        # 仅在该工位"先扫后检"生效时才有锚点; 容器模式下保留容器标签的检测
+        # (箱子跟踪 + D 模式跨线亮灯不能停), 只滤掉物品; 其余策略整帧跳过。
+        if (bool(pcfg.get('tracking_scan_gate', False))
+                and getattr(self, '_mes_hook', None) is not None):
+            try:
+                _gate = (self._mes_hook.is_scan_required(self.channel_id)
+                         and not self._mes_hook.has_workpiece_in_flight(self.channel_id))
+            except Exception:
+                _gate = False
+            if _gate:
+                if not getattr(self, '_scan_gate_holding', False):
+                    self._scan_gate_holding = True
+                    print(f"[Tracking] ch{self.channel_id} 扫码后才计数: "
+                          f"码不在位, 入账挂起 (等扫码)", flush=True)
+                if self._container_mode and self._container_label:
+                    detections = [d for d in detections
+                                  if d.get('label', '') == self._container_label]
+                else:
+                    return
+            elif getattr(self, '_scan_gate_holding', False):
+                self._scan_gate_holding = False
+                print(f"[Tracking] ch{self.channel_id} 扫码后才计数: "
+                      f"码已在位, 恢复入账", flush=True)
 
         # 1) 解析 steps_config (会把 event/stack 期望数注入 expected_items)
         cfg = self._tracking_load_step_config(expected_items)
@@ -1024,7 +1141,21 @@ class TrackingMixin:
             frame_detections, pos_lock_handled_tids, cfg['per_class_position_lock'],
             id_lock, id_lock_frames, appearance_match, cfg['max_lost_sec'],
             current_time, cycle_strategy, seen_track_ids, pos_lock_assigned_dids,
-            expected_items, original_frame)
+            expected_items, original_frame,
+            settle_on_complete=settle_on_complete,
+            entry_confirm_frames=cfg['entry_confirm_frames'])
+
+        # v3.50 齐件即结算: 待入账缓冲要求"连续"帧 — 本帧没被刷新的条目直接作废;
+        # 豁免名单按 max_lost_sec 过期回收 (物品真正离场后, 同 tid 理论上不会复用)
+        if getattr(self, '_tracking_entry_pending', None):
+            for _tid in [t for t, p in self._tracking_entry_pending.items()
+                         if p.get('ts', 0) < current_time]:
+                self._tracking_entry_pending.pop(_tid, None)
+        if getattr(self, '_settle_complete_exempt', None):
+            _expire_sec = max(2.0, float(cfg['max_lost_sec'] or 5.0))
+            for _tid in [t for t, e in self._settle_complete_exempt.items()
+                         if current_time - e.get('ts', 0) > _expire_sec]:
+                self._settle_complete_exempt.pop(_tid, None)
 
         # 6) Anti-flicker: ID Lock + Swap + Appearance
         self._tracking_apply_anti_flicker(
@@ -1063,6 +1194,7 @@ class TrackingMixin:
         # 每帧检查: 若 expected_items 都被 (tracking + event + stack) 覆盖, sticky 置 True.
         # _settle_counting_cycle 在 scan_pair 路径里按此 flag 判 OK/NG.
         # 仅维护 flag, 不影响 settle 时机.
+        _all_met_now = False
         if expected_items and getattr(self, '_tracking_cycle_active', False):
             try:
                 merged = dict(self._tracking_class_counters)
@@ -1077,10 +1209,67 @@ class TrackingMixin:
                 )
                 if _all_met:
                     self._tracking_was_complete = True
+                    _all_met_now = True
             except Exception:
                 pass
 
+        # v3.50 齐件即结算 (ROI离开, 非容器): 账本凑齐当帧立即结算, 不等消失确认.
+        # 容器模式的齐件即结在 _update_container_grouping 里按箱处理, 不走这里.
+        # 与扫码配对 (scan_pair) 互斥: 该模式下周期节奏由扫码事件主导, 直接跳过.
+        _soc_roi = (settle_on_complete and cycle_strategy == 'roi_exit'
+                    and not self._container_mode)
+        _scan_pair_active = False
+        if _soc_roi:
+            try:
+                from backend.services.mes_hooks import get_mes_hook
+                _mes_mgr = get_mes_hook()
+                if _mes_mgr and getattr(_mes_mgr, 'enabled', False):
+                    _scan_pair_active = _mes_mgr.is_scan_pair_mode(
+                        getattr(self, 'channel_id', 0))
+            except Exception:
+                _scan_pair_active = False
+        if _soc_roi and _all_met_now:
+            if (not _scan_pair_active
+                    and not getattr(self, '_force_settling_in_progress', False)):
+                # v3.50.2 DB 周期守门: cycle_uuid 为空 = start_cycle 从未成功
+                # (最常见: 工位要求先扫码, 码未到被 ScanBind 拦掉). 此时结算出的
+                # 结果挂不到任何周期/工件上 — 先补开周期, 开不出来就挂账等码.
+                if not self._soc_ensure_db_cycle(current_time):
+                    return
+                # 在场物品全部登记豁免名单: 离场前不计入下一周期
+                for _tid, _obj in self._tracking_objects.items():
+                    self._settle_complete_exempt[_tid] = {
+                        'ts': current_time,
+                        'bbox': dict(_obj.get('bbox') or {}),
+                        'label': _obj.get('class_name'),
+                    }
+                print(f"[Tracking] 齐件即结算: expected={expected_items} 全部凑齐 "
+                      f"→ 立即结算 (豁免在场 {len(self._tracking_objects)} 件)",
+                      flush=True)
+                self._settle_counting_cycle(expected_items, check_order, expected_order)
+                return
+
         if not self._tracking_cycle_active:
+            return
+
+        # v3.50.1 齐件即结算: 开关开启 = 取消原 ROI 离开结算路径, 账本挂起等待.
+        # 没凑齐时物品离开画面不出账 (不 OK 不 NG), 周期保持 active 继续等;
+        # 自动出账口只剩三个: 上面的"凑齐即 OK" / 下面的"周期超时兜底 NG" /
+        # 扫到新码强制收旧账 (mes_hooks._settle_stale_on_new_scan → force_settle).
+        # 人工结算 / 触发中心 manual_settle 照常可用.
+        if _soc_roi and not _scan_pair_active:
+            _cmax = float(getattr(self, 'cycle_max_duration', 0) or 0)
+            if (_cmax > 0 and self.cycle_start_time is not None
+                    and current_time - self.cycle_start_time > _cmax
+                    and not getattr(self, '_force_settling_in_progress', False)):
+                # v3.50.2: 超时兜底同样要求 DB 周期已开 — 码没扫周期开不了时,
+                # 超时 NG 同样挂不到工件上, 不出账继续等码 (E 闭环语义).
+                if not self._soc_ensure_db_cycle(current_time):
+                    return
+                print(f"[Tracking] 齐件即结算: 周期超时 "
+                      f"({current_time - self.cycle_start_time:.1f}s > {_cmax}s) "
+                      f"→ 强制结算 (未凑齐判 NG)", flush=True)
+                self._settle_counting_cycle(expected_items, check_order, expected_order)
             return
 
         # 12) 结算判定 → 触发 _settle_counting_cycle

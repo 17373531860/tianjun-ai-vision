@@ -74,12 +74,15 @@ class InferenceLoopMixin:
                 debug_log(f"!!! synthetic 推理耗时: {detect_time:.1f}ms, 检测数={len(detections)}", "INFERENCE")
             if detections:
                 detections = self._map_detections_original_to_display(detections)
-            # 剧本注入固定走非跟踪 / 非分割路径（与 _update_step_stats 对齐）
             # v3.32: synthetic 也过标签区域拆分层 → 全链路可用剧本回归
             detections = self._apply_label_splits(detections)
             self._feed_combo_positional(detections)
             self._tick_combo_guard()
-            return (detections, False, False, t_start)
+            # v3.51.1: 跟踪模式项目也能用剧本回归 —— 剧本 detections 自带 track_id,
+            # logic_mode=tracking 时走 _update_tracking_stats（历史上固定走非跟踪
+            # 路径, 导致捷昌类跟踪模式配置无法虚拟测试）。其余模式行为不变。
+            _synth_logic = (self.project_config or {}).get('logic_mode', 'sequential')
+            return (detections, _synth_logic == 'tracking', False, t_start)
 
         # 主模型的 task_type / logic_mode (对副模型不适用)
         _task_type = self.project_config.get('task_type', 'detection') if self.project_config else 'detection'
@@ -489,6 +492,21 @@ class InferenceLoopMixin:
                     maybe_sample_frame(self, original_frame, detections)
                 except Exception as _e:
                     debug_log(f"!!! interconnect 采样异常 (已隔离): {_e}", "INFERENCE")
+
+                # v3.53 归档 NG 关键帧: end_cycle NG 定案后置的 pending 在此同帧
+                # 消费 (与 interconnect 采样同款时序 — 结算当帧)。热路径只付
+                # 一次 getattr + copy, 画框/JPEG 编码/落盘在独立线程做; 无
+                # attach_keyframe 归档规则时 pending 永不置位 (零开销)。
+                _va_pending = getattr(self, '_archive_ng_frame_pending', None)
+                if _va_pending is not None:
+                    self._archive_ng_frame_pending = None
+                    try:
+                        from backend.services.archive_media import save_keyframe_async
+                        save_keyframe_async(original_frame, detections,
+                                            _va_pending,
+                                            getattr(self, 'drawer', None))
+                    except Exception as _e:
+                        debug_log(f"!!! 归档关键帧采集异常 (已隔离): {_e}", "INFERENCE")
 
                 # 推理节流: 每帧至少 5ms, 防止推理线程吃满 CPU
                 loop_elapsed = time.time() - loop_start

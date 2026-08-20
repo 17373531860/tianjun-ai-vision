@@ -13,8 +13,6 @@ import re
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import func
-
 from backend.models.mes_models import ExternalActiveAlarm
 from backend.core import debug_center
 
@@ -50,10 +48,15 @@ def _split_fields(fields: dict):
 
 
 def _match_col(key: str):
-    """返回某匹配键对应的 SQL 表达式: 原生列直接取列, 扩展维度走 json_extract。"""
+    """返回某匹配键对应的 SQL 表达式: 原生列直接取列, 扩展维度走 JSON path 取值。
+
+    跨方言: SQLAlchemy JSON 列的原生 path 索引在 SQLite 编译为 JSON_EXTRACT、
+    在 PG 编译为 #>>; 缺 key / extra_data 为 NULL 时两边都返回 SQL NULL,
+    与旧 func.json_extract 的 is_(None) / == 比较语义一致 (值经 _norm 恒为字符串)。
+    """
     if key in NATIVE_FIELDS:
         return getattr(ExternalActiveAlarm, key)
-    return func.json_extract(ExternalActiveAlarm.extra_data, f"$.{EXTRA_NS}.{key}")
+    return ExternalActiveAlarm.extra_data[EXTRA_NS][key].as_string()
 
 
 def _match_value(native: dict, extra: dict, key: str):

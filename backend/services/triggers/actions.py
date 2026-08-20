@@ -18,6 +18,8 @@ PLC 规则引擎与统一触发中心共用这一套动作面; 插件注册一�
 - clear_reset     → end_session + reset_stats (等价监控页「清零」)
 - trigger_event   → VSM._trigger_event 事件中心 (报警/语音/计数/插件 hook 全联动)
 - ack_alarm       → external_alarm.clear_all_active_alarms (等价 USB 确认按钮语义)
+- resume_scanner  → ScannerService.resume_scanning_manual (v3.50 人工恢复扫码,
+                    resume_on='ok_only' 下 NG 灭灯的脚踏板/PLC 出口)
 
 动作签名: fn(engine, rule, action, ctx)。engine 只要求鸭子接口:
   .name / .vars / .options / ._log(dir, detail) / ._trigger_alarm(event)
@@ -311,6 +313,26 @@ def _act_trigger_event(engine, rule: dict, action: dict, ctx: dict):
     engine._log("event" if ok else "error",
                 f"trigger_event {event_id} → 工位{ch} "
                 f"{'已触发' if ok else '被抑制/无激活项目'} ({reason})")
+
+
+@register_trigger_action("resume_scanner")
+def _act_resume_scanner(engine, rule: dict, action: dict, ctx: dict):
+    """v3.50 人工恢复扫码 (= 监控页"恢复扫码"按钮 / POST /scanner/resume)。
+
+    resume_on='ok_only' 的扫码器 NG 后保持灭灯, 本动作是脚踏板/PLC/串口等
+    触发源的人工恢复出口。对指定工位所有等待恢复的 text_lon 扫码器解除灭灯锁。
+    """
+    ch = _resolve_channel(action, rule, engine)
+    try:
+        from backend.services.scanner import get_scanner_service
+        resumed = get_scanner_service().resume_scanning_manual(ch)
+    except Exception as e:
+        engine._log("error", f"resume_scanner 工位{ch} 失败: {e}")
+        return
+    if resumed:
+        engine._log("event", f"resume_scanner → 工位{ch} 已恢复 {resumed}")
+    else:
+        engine._log("event", f"resume_scanner → 工位{ch} 无等待恢复的扫码器")
 
 
 @register_trigger_action("ack_alarm")

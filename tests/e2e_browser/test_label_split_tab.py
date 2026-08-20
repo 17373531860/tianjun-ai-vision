@@ -296,10 +296,14 @@ def test_锚点抓取_实时结果为空走单帧推理兜底(page, base_url, ap
             lambda req: infer_calls.append(req.url) if "infer-once" in req.url else None)
     dlg.locator("button:has-text('从当前画面抓取锚点框')").click()
     # 全文件连跑时后端可能还在消化前面 synthetic 用例的收尾, /detection/results
-    # 响应变慢 → 兜底请求晚于固定短等待, 这里轮询等到 10s
+    # 响应变慢 → 兜底请求晚于固定短等待, 这里轮询等到 10s。
+    # ⚠️ 必须用 page.wait_for_timeout 而不是 time.sleep: sync Playwright 只在
+    # 调用其 API 期间分发事件, 纯 time.sleep 期间 page.on("request") 回调
+    # 永远不执行, infer-once 请求实际发出了也收不进 infer_calls (2026-08 实锤,
+    # trace.zip 里请求在、监听空)。
     deadline = time.time() + 10
     while time.time() < deadline and not infer_calls:
-        time.sleep(0.5)
+        page.wait_for_timeout(500)
     assert infer_calls, "实时结果为空时应发起 /detection/infer-once 兜底请求"
 
 

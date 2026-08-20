@@ -289,8 +289,7 @@ class CaptureLoopMixin:
                         if consecutive_errors >= 5:
                             print(f"[RTSP] {consecutive_errors} consecutive frame failures, reconnecting...")
                             try:
-                                if self.capture is not None:
-                                    self.capture.release()
+                                self._release_capture("rtsp-reconnect")
                                 time.sleep(2.0)
                                 # 与 start_rtsp 同理: 打开超时封顶, 防 NVR 掉线时重连把采集线程挂死几分钟
                                 self.capture = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG, [
@@ -375,8 +374,7 @@ class CaptureLoopMixin:
                             except:
                                 print("[Capture] Hikvision camera reconnect failed")
                         else:
-                            if self.capture is not None:
-                                self.capture.release()
+                            self._release_capture("capture-reconnect")
                             if self.source_type == 'rtsp':
                                 print("[RTSP] attempting reconnect...")
                                 time.sleep(2.0)

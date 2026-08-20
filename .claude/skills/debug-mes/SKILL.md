@@ -198,8 +198,30 @@ v3.4.2 promote 均为此修过补丁）。
 - 4 种 `bind_timing`：`mid_cycle`（默认）/ `pre_cycle` / `post_cycle` / `scan_pair`（v3.3.0 见下）
 - `broadcast_channels`（JSON list）：一台扫码器服务多工位；空 → 仅 `channel_id`
 - `broadcast_settle_mode=independent|primary` + `primary_settle_channel`：同一扫码器服务的多工位是否跟随主工位结算
-- `ok_rescan_cooldown_sec`（v2.7.12）：A 扫完 OK，距完成 < N 秒再扫到 A → 静默丢弃；NG 不受冷却
+- `ok_rescan_cooldown_sec`（v2.7.12）：A 扫完 OK，距完成 < N 秒再扫到 A → 拒绝；NG 不受冷却
 - `late_scan_bind_window_sec`（默认 3）：cycle 已结但晚到的扫码事件 ≤N 秒可补绑
+- **v3.50 生命周期三配置**（仅 `text_lon` 且 `scan_mode=once_per_cycle/D` 有意义，面板按此置灰）：
+  - `resume_on`：周期结束亮灯时机。`cycle_end`（默认，OK/NG 都续 LON）/ `ok_only`
+    （仅 OK 自动亮；NG/未知置 `conn._resume_blocked` 保持灭灯，出口三条：监控页
+    "恢复扫码"按钮（`source_routes` 把 `is_resume_blocked` 写进 `mes.scanner_resume_blocked`
+    驱动显示）、`POST /api/v1/scanner/resume`、触发中心 `resume_scanner` 动作。
+    `end_cycle` 现在把结算结果 `is_good` 传给 `resume_after_cycle`；人工恢复
+    `resume_scanning_manual` → `manual=True` 无条件放行）
+  - `rearm_forget_last`：恢复亮灯时 `_rearm_forget` 清 `conn.last_scan`（物理去重缓存）
+    + `mes_hook.clear_pending_scan(force=False)` 作废未绑定旧码，防旧码挂新周期
+  - `strict_ok_dedup`：`_handle_scan` 入口查库，该条码已有 status='ok' 工件 → 永久拒绝。v3.51 起数据中心 clear/all、clear/range 会联动 `_unlock_ok_workpieces`（`sessions_maintenance.py`）把被删周期关联的 ok 工件重置回 registered——客户"删了记录还拒码"先确认版本 ≥3.51 且删的确实是该码关联周期
+    （= ok_rescan_cooldown 的无限版）
+- **v3.50 拒绝路径统一警告 toast**：强制去重拒绝 / OK 冷却拒绝 / duplicate_scan_action=reject
+  三条路径不再静默丢码，走 `_emit_scan_warning(ch, sn, reason)` → `_last_scan_event`
+  带 `scan_warning=True + warn_reason` → 前端 `handleScanToast` 弹警告；scan_pair 重复码
+  警告并入同一字段体系（旧 `scan_pair_dup_warning` 字段保留兼容）
+- **v3.51.1 拒码后重亮灯闭环**（治"扫了已 OK 码后灯永灭产线卡死"）：上面三条拒绝
+  路径除弹警告外还调 `mes_hooks._notify_scan_rejected(device_id, ch, sn)` →
+  `scanner.notify_scan_rejected` 按本次派发通道集合（`_last_dispatch`）聚合，
+  **全部**派发通道都拒绝该码 → `_rearm_after_full_reject` 清 `_wait_cycle_resume`
+  / `_ok_ready_marker` / `_lon_sent` 等等待态并置 `_rearm_after_reject_serial`，
+  `_schedule_next_lon` 据此跳过周期等待立刻重发 LON；只要有任一通道接受了码就
+  不 rearm（不干扰正常在检流程）。排查"拒码后灯不亮"先 grep `全通道拒绝` 日志
 
 ### 4.2 WMax 三端口逆向协议（55266 CMD / 55276 IMG / 55286 RPT）
 
@@ -797,3 +819,36 @@ curl http://localhost:8001/api/v1/cluster/slaves
 - **NG 箱账挂起**（`packaging_flow_coordinator.py`）：NG 事件带「需人工确认」→ 箱账进 `pending_remediation(reason=ng_ack)` 不落账不翻页；确认弹窗二选一（认NG落账进下一箱 / 重做本箱不记NG），`resolve_channel_hold_on_ack` 由 ack 接口统一收口，超时自动确认按"重做"。与 v3.23 少装挂起共用状态位，**按 reason 分流**（前端包装卡已分横幅）。排"箱号翻早了/重做重错箱"先查这里。
 - **工单收尾快照**：完成/作废的工单存 `_last_done`，`get_display_state` 供 UI 轮询返回快照直到新单顶掉；`get_state` 语义不变（在途才有值，扫码/结算判定用）。**别把内部判定改成 display 口径**——会把已收尾工单当在途。
 - **秤串口延迟治本**（`external_device_protocols.py`）：读串口"有多少收多少"（`in_waiting`）+ 帧读取见帧尾立即交货（无分隔符 ~60ms 静默兜底）。现场再报"数值条慢 2 秒"先确认没人把 `ser.read(固定大块)` 改回去。回归：`tests/test_extdev_serial_latency.py`。
+
+---
+
+## v3.49.0 补充：外推并发派发 + scan_pair 新码先上屏（捷昌整改 WS1/WS3）
+
+三个新开关全存 SystemConfig、默认开、即时生效，现场异常可一键回退不用回滚版本：
+
+### 外推并发派发（WS1）
+
+- **旧痛点**：网关外推在 hook 队列内联串行——一个慢/挂的客户 MES 连接堵住全部后续任务（含结算关键路径），"扫码后卡好几秒"的头号嫌疑
+- **机制**（`mes_hooks.py` + `mes_gateway.py`）：开关 `mes_async_dispatch`（`GET/PUT /api/v1/mes/gateway/async-dispatch`）开时外推按**连接**甩独立执行器并发派发；单连接积压超上限落盘 **`gateway_spool.jsonl`** 恢复后补发；box_complete 集群汇总推送同样走异步
+- **每连接重试预算** `retry_budget_sec`：存连接 **config JSON 内**（不是顶层字段！UAT 踩过），GatewayPanel 弹窗可编辑，0=不限预算
+- 排查：外推没到客户 MES → 先看 spool 文件是否堆积（连接一直挂）；再看 `mes_comm_logs`。回归 `tests/test_mes_async_dispatch_b1b.py` + `tests/test_mes_gateway_dispatch_isolation.py`
+
+### scan_pair 新码先上屏（WS3）
+
+- **旧痛点**（捷昌第一工位）：旧序"先结算前一件（含慢 IO）→ 再顶替新码上屏"，前一件结算多慢新码就多久不上屏
+- **新序**：新码到达**先顶替上屏 → 提交扫码状态 → 用显式 `prev_wp_id`/`prev_scanned_at` 异步结算旧窗口**。结算范围用显式身份钳制——顶替之后 `_inspecting_workpiece` 已是新工件，绝不能再从它取"上一件"身份（这是新序最大陷阱）
+- 开关 `scan_pair_new_code_first`（`GET/PUT /api/v1/scanner/scan-pair/new-code-first`，Settings 显示设置页有 UI），关=回退旧序
+- **广播兄弟通道结算串身份修复**（同批 BUG-001）：广播结算身份改 `_inspecting_workpiece.get(channel_id) or entry.get("wp_id")`——老代码统一拿主通道 wp_id，兄弟通道超时/停止结算会记错工件账。改广播结算路径必须保住 per-channel 取身份
+- 金标准回归：`tests/test_scan_pair_three_window_gold.py`（A→B→C 三窗连续 + 新旧序对照 + 超时收窗 + 双通道广播 + 重复扫码/停止丢弃六剧本）+ `tests/test_scan_pair_new_first.py`
+
+### 结算耗时埋点（WS4）
+
+- `debug_center` 新增 **`backend.timing`** 类目：扫码处理/窗口结算/MES 外推分段耗时。现场"卡"不再靠猜——调试日志中心筛 `backend.timing` 直接看哪段吃掉的时间。回归 `tests/test_timing_probe_ws4.py`
+
+## v3.51.5 补充：strict_ok_dedup"全删了还拒码"现场陷阱 + 详细拒码日志
+
+**现场实录（捷昌 B 站 2026-08-15）**："MES 工单/追溯/扫码历史/集群记录全删了，为什么还去重拒码？"——根因不在去重逻辑：去重按 `(serial_no, project_id)` 查 `status='ok'` 的工件，而**前端追溯页默认"仅当前项目"过滤**，多工位下其它工位项目的 ok 工件被藏在列表外，"全选批量删除"删不到它们。v3.51.5 起多工位默认关闭该过滤（见 debug-frontend）。另注意**批量删除只删当前页**（默认 50 条/页），记录多要翻页删。
+
+**详细拒码日志（v3.51.5，编译件随安装包生效）**：拒码行带全量依据——`workpiece#id、channel、project_id、登记时间、最后检测时间、解除方法（追溯页关过滤删工件 / 数据中心清理联动解封）`。排"为什么拒"直接搜 `strict_ok_dedup reject`，不用再对账 DB。
+
+**广播"一拒一收"是设计行为**：去重按项目隔离，同码在 A 项目 ok、B 项目新建，广播枪下 A 工位拒 B 工位收，日志各自留痕。

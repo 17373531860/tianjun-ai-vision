@@ -1,0 +1,110 @@
+{
+  "version": "3.51.1",
+  "date": "2026-08-14",
+  "previous_version": "3.51.0",
+  "summary": "捷昌B站双工位虚拟战役补丁版: 全虚拟双工位环境(synthetic剧本源+假TCP扫码器)60项断言复现现场场景, 揪出并修复6个产品bug(新码强制收旧账失效/拒码后灯不回亮/绑死档超时误播已合格/组级NG覆盖跨轮污染/豁免漂移吞新品种/统一播报弹错Toast)。全部为v3.50/v3.51新功能路径修复, 未开启者零差异。",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "新码强制收旧账对挂账周期完全失效",
+      "symptom": "双工位广播下一箱条码后, 上一箱没凑齐的工位账本不收NG周期一直挂着, 下一箱永远开不出结果, 前端一直显示检测中",
+      "root_cause": "force_settle_pending_cycle非容器分支用current_cycle_uuid守门; v3.50.0a周期守门把DB cycle推迟到结算时才建, 挂账账本uuid恒为None, 守门静默return 0",
+      "fix": "守门改为只认内存账本活跃标志_tracking_cycle_active",
+      "files": ["backend/api/source_session_lifecycle_mixin.py"],
+      "keywords": ["force_settle_pending_cycle", "新码强制收旧账", "挂账周期", "齐件即结算", "current_cycle_uuid", "_tracking_cycle_active", "懒开周期", "检测中卡住", "settle on complete", "force settle"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "扫码器拒码后灯不回亮产线卡死",
+      "symptom": "E模式扫了已OK的码(strict_ok_dedup拒绝)/冷却期重复码/在检期间新码被拒后, 扫码器灯保持灭, 后续正常条码也扫不进, 要人工重启扫码",
+      "root_cause": "mes_hooks._handle_scan三条拒绝路径直接return不通知扫码器服务; scanner侧_wait_cycle_resume等一个永远不来的周期结算, LON永不重发",
+      "fix": "mes_hooks增加_notify_scan_rejected接入三条拒绝路径; scanner增加notify_scan_rejected按派发通道聚合, 全部派发通道都拒绝才_rearm_after_full_reject清空等待状态重发LON",
+      "files": ["backend/services/mes_hooks.py", "backend/services/scanner.py"],
+      "keywords": ["扫码器不亮灯", "拒码", "strict_ok_dedup", "LON", "重亮灯", "notify_scan_rejected", "rearm", "已OK码", "灯不回亮", "scanner relight", "码-合格-码"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "工位组绑死档超时仍播已合格",
+      "symptom": "timeout_action=force_ng时超时, 已OK的工位还收到'等待超时本工位已合格'播报, 与整体NG结论矛盾",
+      "root_cause": "_finalize_aggregation超时分支不区分timeout_action, 一律给ok_members补播合格",
+      "fix": "force_ng档改为对全组统一播报整体NG(event_id=2)并把已到成员cycle组结果回写NG_BY_TIMEOUT; fallback_independent档保持补播不变",
+      "files": ["backend/services/channel_group_coordinator.py"],
+      "keywords": ["force_ng", "超时", "统一播报", "NG_BY_TIMEOUT", "timeout_action", "工位组", "channel group", "unified_ok_report", "绑死"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-004",
+      "title": "组级NG覆盖无过期跨轮污染",
+      "symptom": "某工位收到组内NG广播后周期迟迟不结算, 几分钟后完全无关的下一轮结算被残留NG覆盖改判",
+      "root_cause": "_pending_override是永久字典, 只靠take-once清除, 周期不结算就一直躺着",
+      "fix": "配套_pending_override_deadline(60秒TTL), get_pending_override过期作废打日志, on_channel_removed同步清理",
+      "files": ["backend/services/channel_group_coordinator.py"],
+      "keywords": ["pending_override", "TTL", "跨轮污染", "残留状态", "组级联动", "NG覆盖", "过期"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-005",
+      "title": "豁免漂移兜底不看标签换新品种被吞",
+      "symptom": "齐件即结算后旧箱物品拿走, 几秒内同一位置摆上另一种物品, 新品永不入账账永远凑不齐, 下一次扫码整箱被强制NG",
+      "root_cause": "豁免名单ID漂移兜底只按IoU>=0.6判定同一件, 未校验类别",
+      "fix": "豁免条目登记label, 漂移转移只认同标签(老条目无label兼容匹配)",
+      "files": ["backend/api/source_tracking_mixin.py"],
+      "keywords": ["_settle_complete_exempt", "豁免名单", "ID漂移", "label", "IoU", "原位换料", "不入账", "凑不齐", "齐件即结算", "exempt"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-006",
+      "title": "统一播报全部合格弹红色不合格Toast",
+      "symptom": "两工位都合格统一播报触发时, 前端弹出红色不合格提示, 操作员误判为NG",
+      "root_cause": "统一播报走fire_external_event_response, 其事件日志toast_id默认值写死'ng'(该路径历史上只服务包装/称重类报警事件)",
+      "fix": "默认值按事件类型取: 合格事件(id=1)默认'ok'其余保持'ng'; 事件配置显式toast_id照旧优先",
+      "files": ["backend/api/source_event_trigger_mixin.py"],
+      "keywords": ["toast_id", "fire_external_event_response", "统一播报", "不合格Toast", "红色提示", "合格弹NG", "unified ok report toast"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "synthetic剧本源支持tracking逻辑模式",
+      "symptom": "跟踪模式配置(齐件即结算+扫码门+工位组)无法虚拟回归, synthetic路径固定走非跟踪管线丢弃track_id",
+      "root_cause": "",
+      "fix": "synthetic取帧后按项目logic_mode决定is_tracking, tracking项目走_update_tracking_stats真实管线, 其余模式行为不变",
+      "files": ["backend/api/source_inference_loop_mixin.py"],
+      "keywords": ["synthetic", "剧本源", "tracking", "虚拟测试", "track_id", "logic_mode"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "虚拟双工位UAT剧本归档",
+      "symptom": "",
+      "root_cause": "",
+      "fix": "tests/uat/virtual_dual_station/: 假TCP扫码器(真实E模式LON/LOFF协议)+一键配环境+4个剧本60断言(主链路/删码复活/统一播报/残留大扫除)+README覆盖矩阵",
+      "files": ["tests/uat/virtual_dual_station/README.md", "tests/uat/virtual_dual_station/fake_scanner.py", "tests/uat/virtual_dual_station/scanctl.py", "tests/uat/virtual_dual_station/vhelp.py", "tests/uat/virtual_dual_station/vsetup.py", "tests/uat/virtual_dual_station/vcase1.py", "tests/uat/virtual_dual_station/vcase2.py", "tests/uat/virtual_dual_station/vcase3.py", "tests/uat/virtual_dual_station/vcase4.py"],
+      "keywords": ["虚拟双工位", "UAT", "假扫码器", "fake_scanner", "剧本", "vcase", "广播枪", "捷昌"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-mes", "debug-source", "run-tests"],
+  "files_changed": [
+    "backend/api/source_session_lifecycle_mixin.py",
+    "backend/api/source_tracking_mixin.py",
+    "backend/api/source_event_trigger_mixin.py",
+    "backend/api/source_inference_loop_mixin.py",
+    "backend/services/channel_group_coordinator.py",
+    "backend/services/mes_hooks.py",
+    "backend/services/scanner.py",
+    "tests/test_settle_on_complete.py",
+    "tests/test_fire_external_event.py",
+    "tests/channel_group/test_unified_ok_report_v3_51.py",
+    "tests/uat/virtual_dual_station/"
+  ]
+}

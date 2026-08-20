@@ -812,6 +812,10 @@ def _apply_tracking_mode(h, config, pipeline_config):
     if not (is_tracking or is_mixed_tracking):
         return
     h._reset_counting_cycle()
+    # v3.50 齐件即结算: 换项目/重载配置时豁免名单与等待离场状态整体作废
+    # (它们故意不随 _reset_counting_cycle 清, 这里是唯一的整体清空点)
+    h._settle_complete_exempt = {}
+    h._box_settled_waiting_exit = {}
     h._generate_custom_tracker_yaml(pipeline_config)
     if is_mixed_tracking:
         h._container_label = ''

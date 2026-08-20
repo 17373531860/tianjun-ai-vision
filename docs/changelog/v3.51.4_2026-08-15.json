@@ -1,0 +1,36 @@
+{
+  "version": "3.51.4",
+  "date": "2026-08-15",
+  "previous_version": "3.51.3",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "安装包收编 SQLite→PG 迁移工具 sqlite_to_pg.py（修复 v3.49 起的交付缺口）",
+      "symptom": "客户勾选 PG 组件装出来只能用全新空库——迁移工具从 v3.49 设计之日起就不在打包清单里，保留旧 SQLite 数据无工具可用",
+      "root_cause": "electron-builder extraResources 只收 backend/前端/插件文档，scripts/ 目录从不在清单；v3.51.3 成品解剖审计才发现",
+      "fix": "extraResources 新增 scripts/db/sqlite_to_pg.py（落位 resources\\scripts\\db\\，脚本向上三级找根正好指到 resources、backend 可导入、psycopg2 齐备零改动可跑）；CI Verify packaged resources 必检清单加入该文件缺失红灯",
+      "files": ["electron/package.json", ".github/workflows/build.yml"],
+      "keywords": ["sqlite_to_pg", "迁移工具", "PG 迁移", "extraResources", "打包清单", "交付缺口", "数据搬迁", "打包资源自检"],
+      "breaking": false
+    },
+    {
+      "type": "skill",
+      "id": "SKILL-001",
+      "title": "run-tests 新增「捷昌 v3.51.3 交付审计逃逸复盘」+ build-release 发版清单加成品解剖强制项",
+      "symptom": "",
+      "root_cause": "",
+      "fix": "三条规矩：写了代码≠交付了（成品解剖清点完整链路文件，innoextract PR#210 用法）；开发机不存在的故障形态要主动注入真样本；定稿回归跑动中不许改代码（inspect 行号伪失败）",
+      "files": [".claude/skills/run-tests/SKILL.md", ".claude/skills/build-release/SKILL.md"],
+      "keywords": ["交付审计", "成品解剖", "innoextract", "安装包丢件", "测试逃逸", "复盘"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["run-tests", "build-release"],
+  "files_changed": [
+    "electron/package.json",
+    ".github/workflows/build.yml",
+    ".claude/skills/run-tests/SKILL.md",
+    ".claude/skills/build-release/SKILL.md"
+  ]
+}

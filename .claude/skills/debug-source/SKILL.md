@@ -92,7 +92,9 @@ backend/api/source.py (~1573 行)         主类 VideoSourceManager
      ├── _check_events 内匹配条件 → _trigger_event
      ├── _force_timeout_ng（步骤 max_duration 超时 / cycle_max_duration 超时）
      ├── 空闲超时（idle_timeout_seconds）→ _settle_*_cycle → _trigger_event
-     └── 容器模式 cluster_collector 等待超时
+     ├── 容器模式 cluster_collector 等待超时
+     └── v3.50 齐件即结算（tracking_settle_on_complete=true，仅 roi_exit/container；
+         凑齐即调 _finish_tracking_cycle / 容器整箱即结，scan_pair 通道运行时跳过）
 
   → _trigger_event(event_id, reason)（中心 hook，§四）
        ├── settle_dedup 守门
@@ -103,7 +105,8 @@ backend/api/source.py (~1573 行)         主类 VideoSourceManager
        │     ├── UPDATE DetectionCycle (end_time, duration, is_good, event_*, step_sequence)
        │     ├── _mes_hook.on_cycle_end
        │     ├── _check_periodic_actions(cycle.step_sequence, is_good)  ← v3.5.0
-       │     ├── scanner.resume_after_cycle
+       │     ├── scanner.resume_after_cycle(is_good=…)  ← v3.50 传结算结果,
+       │     │     resume_on='ok_only' 的枪 NG 保持灭灯等人工恢复
        │     ├── _box_objects.clear() （容器模式清残留）
        │     ├── notify_cycle_settled （v3.1.2 多工位广播）
        │     └── current_cycle_id = None / current_cycle_uuid = None
@@ -1114,3 +1117,24 @@ if (self.project_config or {}).get('logic_mode') == 'per_item':
 
 测试入口：`pytest tests/test_combo_table.py`（16 用例：归一化/查表语义/positional 引擎/命中 OK/未命中 NG/accept_once 豁免/零差异守门）。
 实战对照档案（与外部工具逐周期对齐的完整实验，含参数）：`/tmp/cs_tool/对照报告.md`（2026-08-10，装配线缸体判型）。
+
+## v3.50 补充：齐件即结算（tracking_settle_on_complete，捷昌二期）
+
+**仅 `roi_exit` / `container` 两种跟踪策略可开**（触发标签=操作员信号语义冲突、全部消失多批误结风险，前端不渲染开关、后端保存时也强制 false）。默认关，不开零差异。
+
+| 状态变量 | 归属 | 语义 | 清理时机 |
+|---|---|---|---|
+| `_tracking_entry_pending` | roi_exit | 新目标连续在场帧计数，满 `settle_confirm_frames`（步骤级，默认 1）才入 `_tracking_objects` | 每周期 `_reset_counting_cycle` 清；当帧未见到即回退 |
+| `_settle_complete_exempt` | roi_exit | 已结算但仍在场目标的豁免名单（防残留二次入账/幽灵开周期），含 ID 漂移 IoU 合并转移。**v3.51.1 起条目带 `label`，漂移转移只认同标签**——旧件拿走后几秒内同位置放"另一种"新品不再被吞（老 bug：IoU≥0.6 直接吞成旧件、新品永不入账账凑不齐） | **跨周期保留**，目标真离场删除 + max_lost_sec 过期回收；项目切换（`source_project_config_apply`）重置 |
+| `_container_entry_pending` | container | 箱内物品 N 帧确认（同款缓冲） | 同 `_tracking_entry_pending` |
+| `_box_settled_waiting_exit` | container | "已结算等离开"箱状态机（对齐 scan_d 已扫等消失设计）：期间不重建 ledger 不入账，含 ID 漂移转移 + `gone_frames` 确认离场清除 | **跨周期保留**；离场确认/项目切换清 |
+
+排查模板：
+- 凑齐没立即结算 → 先看开关有没有进 pcfg（`/detection/results` 的 project_config），再看是不是 scan_pair 通道（运行时互斥直接 continue），最后查 `settle_confirm_frames` 是否过大（N 帧没满就被遮挡打断会重计）
+- 结算后残留物品又开新周期 → `_settle_complete_exempt` 是否被误清（只有项目切换才能清）、ID 漂移合并的 IoU 阈值是否没匹配上
+- 容器同一箱结算两次 → `_box_settled_waiting_exit` 是否漏登记 / gone 确认过早
+- 扫新码旧账不收（挂账一直"检测中"）→ v3.51.1 前 `force_settle_pending_cycle`
+  非容器分支用 `current_cycle_uuid` 守门，挂账周期懒开 uuid 恒 None 被静默跳过；
+  v3.51.1 起改认 `_tracking_cycle_active`。确认版本或 grep `[ForceSettle]` 日志
+- 单测：`pytest tests/test_settle_on_complete.py`（21 用例 + v3.51.1 追加 4 条：豁免同标签×2 / 挂账强制收账×2）；BDD：`tests/features/settle_scan_lifecycle.feature`
+- 全虚拟复现（无摄像头/无扫码枪跑真实 tracking 管线 + E 模式协议）：`tests/uat/virtual_dual_station/`（见其 README，60 断言覆盖扫码门/统一播报/残留/亮灯闭环）

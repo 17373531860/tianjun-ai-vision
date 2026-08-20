@@ -357,7 +357,10 @@ jobs:
           $extraMust = @(
             "$base\docs\plugin-system\plugin.schema.json",
             "$base\docs\plugin-system\customer-codes.md",
-            "$base\backend\main.py"
+            "$base\backend\main.py",
+            # v3.51.4: PG 组件的配套迁移工具 (v3.49~v3.51.3 从没进过包,
+            # 客户勾了 PG 也没法搬旧数据 — 解剖成品安装包才发现)
+            "$base\scripts\db\sqlite_to_pg.py"
           )
           foreach ($f in $extraMust) {
             if (Test-Path $f) { Write-Host "OK  extraResource: $f" }
@@ -391,6 +394,45 @@ jobs:
           echo "Available languages:"
           Get-ChildItem "C:\Program Files (x86)\Inno Setup 6\Languages" -Filter "*.isl" | Select-Object Name
 
+      - name: Stage PostgreSQL portable (WS5 嵌入式 PG 组件)
+        shell: pwsh
+        run: |
+          # v3.51.3: 把 PG Windows 便携包铺到 electron\dist\pg-portable\,
+          # 配合 ISCC /DIncludePostgres 让安装包真正带出 PG 可选组件.
+          # 历史教训: v3.49 只写了 installer.iss 的 #ifdef, CI 从没传过开关,
+          # 导致 v3.49~v3.51.2 发出去的安装包里根本没有 PG 选项.
+          $url = "https://get.enterprisedb.com/postgresql/postgresql-16.15-1-windows-x64-binaries.zip"
+          $zip = "$env:RUNNER_TEMP\pg-binaries.zip"
+          $ok = $false
+          foreach ($i in 1..3) {
+            try {
+              Invoke-WebRequest -Uri $url -OutFile $zip -TimeoutSec 600
+              $ok = $true; break
+            } catch {
+              echo "PG download attempt $i failed: $_"
+              Start-Sleep -Seconds 10
+            }
+          }
+          if (-not $ok) { echo "::error::PostgreSQL 便携包下载失败 — 阻断发版 (不允许再次静默发出无 PG 的包)"; exit 1 }
+          
+          $extract = "$env:RUNNER_TEMP\pg-extract"
+          Expand-Archive -Path $zip -DestinationPath $extract -Force
+          $pgsql = Join-Path $extract "pgsql"
+          if (-not (Test-Path "$pgsql\bin\initdb.exe")) { echo "::error::解压后缺 pgsql\bin\initdb.exe"; exit 1 }
+          
+          # 裁掉服务端用不到的大头 (pgAdmin/StackBuilder/符号/文档/头文件), 只留 bin/lib/share
+          foreach ($d in @("pgAdmin 4", "StackBuilder", "symbols", "doc", "include")) {
+            $p = Join-Path $pgsql $d
+            if (Test-Path $p) { Remove-Item -Recurse -Force $p }
+          }
+          
+          $dest = "electron\dist\pg-portable"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          Move-Item -Path "$pgsql\*" -Destination $dest
+          if (-not (Test-Path "$dest\bin\initdb.exe")) { echo "::error::pg-portable 铺设失败: 缺 bin\initdb.exe"; exit 1 }
+          $size = [math]::Round((Get-ChildItem $dest -Recurse | Measure-Object Length -Sum).Sum / 1MB, 0)
+          echo "PG portable staged: $dest ($size MB)"
+
       - name: Build Installer with Inno Setup
         shell: pwsh
         run: |
@@ -420,7 +462,9 @@ jobs:
           echo "Converted ISS to CRLF + UTF-8"
           
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-          & $iscc /DMyAppVersion="$version" "electron\build\installer.iss"
+          # v3.51.3: /DIncludePostgres 让 installer.iss 的 PG 可选组件真正编进安装包
+          # (前置 Stage PostgreSQL portable 步骤已把文件铺到 dist\pg-portable\)
+          & $iscc /DMyAppVersion="$version" /DIncludePostgres "electron\build\installer.iss"
           
           echo "=== Installer output ==="
           Get-ChildItem "electron\dist" -Filter "*.exe" | Select-Object Name, Length

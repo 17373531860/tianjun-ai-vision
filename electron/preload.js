@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 设置 → 显示设置里的"最小化界面" / "全屏" 按钮调这两个
   minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
   setFullScreen: (fullscreen) => ipcRenderer.invoke('window:set-fullscreen', !!fullscreen),
+  getDisplays: () => ipcRenderer.invoke('multi-monitor:get-displays'),
+  applyMultiMonitor: (config) => ipcRenderer.invoke('multi-monitor:apply', config || {}),
   // 调试设置页"打开日志目录": logs/ 下有 electron.log(主进程) + backend.log(后端全量)
   openLogsDir: () => ipcRenderer.invoke('app:open-logs-dir'),
   platform: process.platform,

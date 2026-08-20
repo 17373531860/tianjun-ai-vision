@@ -24,6 +24,9 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7, mcp__sentry"
   2. 如果 DirectShow 拿不到 MJPG → 实测 DirectShow vs MSMF 帧率，自动选快的
   3. Linux: V4L2 重试
 - **常见问题:** 部分 USB 摄像头通过 DirectShow 只能拿到 YUY2（未压缩），导致 1280x720 只有 ~10fps。MSMF 通常能正确协商 MJPG 达到 30fps
+- **枚举（v3.51.3 起）:** `_detect_cameras_windows`（source_routes.py）Windows 上优先用打包内 ffmpeg `-list_devices -f dshow` 列设备——快、带设备真名、不试开；再按 USB 设备路径解析出的 `(vid, pid, serial)` 去重同一物理机的重复 DirectShow filter（复合设备 IR 副摄/驱动重复注册会让一台机器占两个 index；两台同型号相机 serial 不同不会误合并）。ffmpeg 不可用/解析失败/非 Windows 自动回退老的逐 index 试开法。"使用中"标记看全部工位（`_camera_indexes_in_use`），不再只看 ch0
+- **跨工位抢相机（v3.51.3 起）:** `_start_camera_locked` 打开前先做跨通道占用预检（`_find_camera_index_conflict`），别的工位正持有同一 device_index 时毫秒级抛"摄像头 N 正在被工位 X 使用"，不进 3 轮 DSHOW/MSMF 重试循环；预检挡在 `self.stop()` 之前，不会误停本工位旧源
+- **诊断"枚举重复/双工位同选超时":** 列表出现同名或连续可开的可疑 index → 查后端日志 `[Camera] 枚举去重` / `[Camera] ffmpeg 列设备失败, 回退试开法枚举` 看走的是 ffmpeg 路径还是回退试开路径；回退路径无法物理去重是已知限制（ffmpeg 缺失才会发生）
 
 ### 2. 海康工业相机 (hikvision)
 - **启动:** `VideoSourceManager.start_hikvision(serial_number)`
@@ -116,6 +119,15 @@ class FFmpegRecorder:
 3. 检查 `self.current_frame` 是否为 None
 4. RTSP: 检查 `hotfix.py` 是否正确替换了 `start_rtsp`
 5. HCNetSDK: 检查 `HCNetSession.login()` 是否成功
+6. **启动"成功"但永远 No Source 的僵尸态**（v3.51.2 BUG-001）：接口 200、
+   `is_running=True`、心跳照跳，但快照恒 ~10KB 占位图 → 开
+   `backend.capture` 调试 flag 看采集摘要——若"采集=0.0fps 读帧均耗=0.0ms"
+   说明句柄是死的（`isOpened()=False` 但 `capture is not None`，采集循环
+   `read()` 立即 False 空转）。历史成因：格式探测 Strategy 3 在 macOS 误入
+   V4L2 重开（守门已收紧仅 Linux）；v3.51.2 起启动尾部有终检，死句柄会
+   显式抛"打开后句柄失效"而不是静默僵尸。真机回归剧本
+   `tests/uat/mac_camera_sim/`。注意心跳日志的 `FPS=` 是 `fps_actual`
+   旧值残留（只在成功读帧时刷新），不能当读帧活着的证据
 
 ### 画面卡顿 / 帧率低
 1. 检查采集FPS vs 显示FPS（`device_config.json` 的 `target_stream_fps`）
@@ -193,3 +205,8 @@ class FFmpegRecorder:
 - **OpenCV 4.11 ABI**: 打包环境中 `opencv-contrib-python>=4.11` 与 `numpy<2.0` 不兼容，必须限制 `<4.11`
 - **conda numpy ABI**: conda-pack 后 numpy 是 conda 编译的，与 pip opencv 不兼容。CI 必须 `--force-reinstall` numpy。客户端修复必须物理删除再重装
 - 实际采集帧率比 benchmark 低 ~30%（benchmark 只做 `cap.read()`，实际还有 MJPEG 编码 + 帧拷贝 + 线程同步 ~15ms/帧）
+## v3.51.5 补充：枚举回退留痕 + 开机恢复模型直载/用户否决
+
+1. **ffmpeg 枚举回退不再静默**：`_list_dshow_devices_ffmpeg` 解析为空时打印 stderr 头部 8 行；`_detect_cameras_windows` 走老试开法兜底时明示（设备名"摄像头 N"式=在走兜底，搜 `[Camera]` 前缀即知走的哪条路）。
+2. **启动直载转换引擎**：`main.py` `_resolve_startup_model_path` 按 `project.model_format` 解析 ModelConversion 表的转换引擎（GPU 架构匹配才用），`_load_channel_model_with_fallback` 引擎失败回退 `.pt`——治启动先载 .pt 再重载 TRT 的双重加载慢启动。
+3. **自动恢复用户否决**：`_restore_detection_pass` 记录自动拉起通道的 capture 线程 id，下轮检测停了而线程未变=用户手动停，记 `user_vetoed` 不再拉起；线程换了（源真重启）照常恢复。单测 `tests/test_boot_restore_v3515.py`。

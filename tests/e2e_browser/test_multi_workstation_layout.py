@@ -63,7 +63,9 @@ def test_grid_overview_pagination_and_zoom(page, base_url, channel_count_guard):
 
     # —— 总览 (默认 auto → 6 工位取 3x3, 单页) ——
     assert page.locator("text=多工位总览").count() == 1
-    assert page.locator("text=/^工位\\d+$/").count() == 6
+    # 卡片左上角标签是"工位N"+可选项目名后缀 (激活项目会同步到各通道并上角标),
+    # 不能用 ^工位\d+$ 精确匹配 —— 用前缀正则数卡片数
+    assert page.locator("text=/^工位\\d+/").count() == 6
 
     # —— 切 2x2 → 2 页 ——
     page.get_by_role("button", name="2×2", exact=True).click()
@@ -73,11 +75,11 @@ def test_grid_overview_pagination_and_zoom(page, base_url, channel_count_guard):
     page.wait_for_timeout(1000)
     assert page.locator("text=— 空 —").count() == 2  # 第 2 页: 工位5/6 + 2 空位
 
-    # —— 点击工位5 → 放大详情 ——
+    # —— 点击工位5 → 放大详情 (v3.52 起放大详情复用 SingleChannelMonitor 组件) ——
     page.locator("text=工位5").first.click()
     page.wait_for_timeout(1000)
     assert page.get_by_role("button", name="‹ 返回总览").count() == 1
-    assert page.locator("text=SOP 流程").count() == 1
+    assert page.get_by_test_id("single-channel-monitor").count() == 1
 
     # —— 下一路: 5 → 6 → 回卷 1; 上一路: 1 → 6 ——
     page.get_by_role("button", name="下一路 ›").click()

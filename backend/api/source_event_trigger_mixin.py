@@ -336,6 +336,21 @@ class EventTriggerMixin:
         require_ack = bool(event.get('require_ack', False))
         ack_timeout_sec = max(0, int(event.get('ack_timeout_sec', 0) or 0))
 
+        # v3.51 工位组统一播报: 本通道在开启 unified_ok_report 的 synchronized_all_ok
+        # 组里时, 个体 OK 的用户感知面 (toast/语音/报警灯) 抑制 — 结算/计数/落库/MES
+        # 全部照旧, 等组聚齐全 OK 后由 ChannelGroupCoordinator 统一播一次。
+        # NG 永不抑制 (安全侧)。默认关 = 零差异。
+        _unify_ok_suppress = False
+        if is_good:
+            try:
+                from backend.services.channel_group_coordinator import get_coordinator as _get_cg
+                _unify_ok_suppress = _get_cg().should_unify_ok_report(self.channel_id)
+            except Exception:
+                _unify_ok_suppress = False
+            if _unify_ok_suppress:
+                print(f"[ChannelGroup] ch{self.channel_id} OK 个体播报已抑制 "
+                      f"(统一播报待组聚齐), reason={reason}")
+
         # 记录事件
         self._event_seq += 1
         self.events_log.append({
@@ -344,7 +359,8 @@ class EventTriggerMixin:
             'event_name': event.get('name', ''),
             'reason': reason,
             'timestamp': time.time(),
-            'show_notification': event.get('show_notification', False),
+            'show_notification': (False if _unify_ok_suppress
+                                  else event.get('show_notification', False)),
             'toast_id': event.get('toast_id', 'ok' if event.get('id') == 1 else 'ng' if event.get('id') == 2 else 'ok'),
             'had_workpiece': had_workpiece,
             'should_warn_no_barcode': should_warn_no_barcode,
@@ -410,7 +426,7 @@ class EventTriggerMixin:
         # 测试可静态扫描 + 单独覆盖 alarm 触发逻辑.
         # 无插件场景下 suppress_alarm=False, _dispatch_event_alarm 与 M1.2c 重构前的
         # 274-280 行严格等价 (基线测试 test_trigger_event_baseline_M1_2c.py 守护).
-        if not suppress_alarm:
+        if not suppress_alarm and not _unify_ok_suppress:
             self._dispatch_event_alarm(current_event_id)
 
         # feat/multi-model-roi-link: 通知 InferenceRouter, 让监听本事件的副模型下次跑一次.
@@ -502,7 +518,10 @@ class EventTriggerMixin:
             'reason': reason,
             'timestamp': time.time(),
             'show_notification': event.get('show_notification', False),
-            'toast_id': event.get('toast_id', 'ng'),
+            # v3.51.1: 合格事件默认走 ok Toast — 统一播报(工位组全员合格)借这条路,
+            # 原默认 'ng' 会让"全部合格"弹红色不合格 Toast (真机截图抓到的 bug)
+            'toast_id': event.get('toast_id',
+                                  'ok' if str(current_event_id) == '1' else 'ng'),
             'had_workpiece': False,
             'should_warn_no_barcode': False,
             'require_ack': require_ack and not remind_only,

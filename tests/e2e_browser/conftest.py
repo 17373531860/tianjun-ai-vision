@@ -113,6 +113,18 @@ def _cleanup_resources(api_url: str):
         print(f"[cleanup] rules 清理失败: {e}")
 
     try:
+        r = requests.get(f"{api_url}/api/v1/export/video-archive/rules", timeout=5)
+        if r.status_code == 200:
+            for rule in _list_field(r.json()):
+                if (rule.get("name") or "").startswith(E2E_PREFIX):
+                    requests.delete(
+                        f"{api_url}/api/v1/export/video-archive/rules/{rule['id']}",
+                        timeout=5,
+                    )
+    except Exception as e:
+        print(f"[cleanup] 归档规则清理失败: {e}")
+
+    try:
         r = requests.get(f"{api_url}/api/v1/sms-report/rules", timeout=5)
         if r.status_code == 200:
             for rule in (r.json() or {}).get("rules", []):
@@ -147,6 +159,18 @@ def _cleanup_resources(api_url: str):
                     )
     except Exception as e:
         print(f"[cleanup] projects 清理失败: {e}")
+
+    try:
+        r = requests.get(f"{api_url}/api/v1/scanner/devices", timeout=5)
+        if r.status_code == 200:
+            for dev in _list_field(r.json()):
+                if (dev.get("name") or "").startswith(E2E_PREFIX):
+                    requests.delete(
+                        f"{api_url}/api/v1/scanner/devices/{dev['id']}",
+                        timeout=5,
+                    )
+    except Exception as e:
+        print(f"[cleanup] scanners 清理失败: {e}")
 
 
 def _ensure_active_project(api_url: str):

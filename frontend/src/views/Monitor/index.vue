@@ -8,11 +8,11 @@
   <!-- 插件整页覆盖时吃掉 Layout section 的 px-4/pt-4, 左右顶满给画面更多宽度 -->
   <!-- tj-layout-body-override: 稳定类名, 供插件 theme.css 选做全屏化 (盖掉宿主导航栏, 与插件其它整页覆盖页视觉连续) -->
   <div
-    v-if="layoutBodyOverride"
+    v-if="effectiveLayoutBodyOverride"
     class="tj-layout-body-override relative -mx-4 -mt-4 h-[calc(100vh-6.25rem)] min-h-0 w-[calc(100%+2rem)] overflow-hidden"
   >
     <component
-      :is="layoutBodyOverride"
+      :is="effectiveLayoutBodyOverride"
       :channel-count="channelCount"
       :multi-channel-data="multiChannelData"
       :selected-channel="selectedChannel"
@@ -151,6 +151,105 @@
       @clear="clearRecordingFailures" />
   </div>
 
+  <!-- 主屏放大态与副屏 kiosk 共用同一套单工位监看组件；组件只消费父级轮询/画布。 -->
+  <SingleChannelMonitor
+    v-else-if="singleChannelViewActive"
+    :channel-id="activeSingleChannel"
+    :channel-data="multiChannelData[activeSingleChannel]"
+    :model-stats="channelModelStats[activeSingleChannel]"
+    :readonly="singleChannelReadonly"
+    :kiosk="kioskMode"
+    :has-project="!!(multiChannelData[activeSingleChannel]?.project || multiChannelData[activeSingleChannel]?._pollProjectConfig || currentProject)"
+    :display-ct="getDisplayCT(multiChannelData[activeSingleChannel])"
+    :show-fps="systemStore.display.monitor.showFps !== false"
+    :show-latency="systemStore.display.monitor.showLatency !== false"
+    :show-step-strip="systemStore.display.monitor.stepStrip !== false"
+    :show-stats-panel="systemStore.display.monitor.statsPanel !== false"
+    :show-defect-chart="systemStore.display.monitor.defectChart !== false"
+    :show-capacity-chart="systemStore.display.monitor.capacityChart !== false"
+    :show-step-table="systemStore.display.monitor.stepTable !== false"
+    :step-table-columns="systemStore.display.monitor.stepTableColumns || {}"
+    :default-counters="systemStore.display.monitor.defaultCounters || {}"
+    :show-ng-top3="systemStore.display.monitor.ngTop3 !== false"
+    :ng-top-display-mode="systemStore.display.monitor.ngTopDisplayMode"
+    :get-step-pt="label => getStepPT(multiChannelData[activeSingleChannel], label)"
+    :register-video-canvas="el => { multiVideoCanvasRefs[activeSingleChannel] = el }"
+    :register-overlay-canvas="el => { multiCanvasRefs[activeSingleChannel] = el }"
+    @back="exitZoom"
+    @previous="zoomStep(-1)"
+    @next="zoomStep(1)"
+    @start="startDetectionForChannel(activeSingleChannel)"
+    @stop="stopDetectionForChannel(activeSingleChannel)"
+    @standby="standbyForChannel(activeSingleChannel)"
+    @reset="resetCountersForChannel(activeSingleChannel)"
+    @toggle-ng-top-mode="toggleNgTopMode()"
+  >
+    <template #context-bar>
+      <!-- kiosk 不装载写入口；主屏放大态恢复原 4+ 详情的 MES 完整信息条。 -->
+      <div
+        v-if="!kioskMode && shouldShowMesBarFor(activeSingleChannel)"
+        class="flex flex-shrink-0 flex-wrap items-center gap-3 rounded-lg border border-cyan-800/50 bg-slate-900 px-3 py-1 text-xs"
+        data-testid="single-channel-context-bar"
+      >
+        <div v-if="!isScanDisabledFor(activeSingleChannel) && getDisplayWorkpieceFor(activeSingleChannel)" class="flex min-w-0 items-center gap-1.5">
+          <span class="font-bold text-cyan-400">工件:</span>
+          <span class="truncate font-mono text-white" :title="getDisplayWorkpieceFor(activeSingleChannel).serial_no">{{ getDisplayWorkpieceFor(activeSingleChannel).serial_no }}</span>
+          <el-tag :type="getDisplayWorkpieceFor(activeSingleChannel).status === 'ok' ? 'success' : getDisplayWorkpieceFor(activeSingleChannel).status === 'ng' ? 'danger' : getDisplayWorkpieceFor(activeSingleChannel).status === 'inspecting' ? 'warning' : 'info'" size="small">
+            {{ { registered: '已登记', queued: '排队', inspecting: '检测中', ok: '合格', ng: '不良' }[getDisplayWorkpieceFor(activeSingleChannel).status] || getDisplayWorkpieceFor(activeSingleChannel).status }}
+          </el-tag>
+        </div>
+        <div v-if="!isScanDisabledFor(activeSingleChannel) && hasScannerFor(activeSingleChannel) && getMesDataFor(activeSingleChannel)?.warn_no_barcode" class="warn-no-barcode-blink flex items-center gap-1 rounded border border-yellow-500 bg-yellow-600/30 px-2 py-0.5">
+          <span class="font-bold text-yellow-300">⚠ 未绑码</span>
+          <span class="text-yellow-200">请扫描工件条码</span>
+        </div>
+        <div v-else-if="!isScanDisabledFor(activeSingleChannel) && hasScannerFor(activeSingleChannel) && !getDisplayWorkpieceFor(activeSingleChannel) && !getMesDataFor(activeSingleChannel)?.order" class="text-gray-500">等待扫码...</div>
+        <div v-if="isScanDisabledFor(activeSingleChannel)" class="flex items-center gap-1 italic text-gray-400">
+          <span>⛔ 扫码已禁用 · 走项目原生结算</span>
+        </div>
+        <div v-if="getMesDataFor(activeSingleChannel)?.order && taskInfoDisplay.show_order_chip" class="ml-auto flex items-center gap-1 border-l border-cyan-800/40 pl-2 text-[0.625rem]">
+          <span class="text-cyan-400">工单:</span>
+          <span class="max-w-[80px] truncate text-white" :title="getMesDataFor(activeSingleChannel).order.order_no">{{ getMesDataFor(activeSingleChannel).order.order_no }}</span>
+          <span class="text-gray-400">{{ getMesDataFor(activeSingleChannel).order.completed_qty }}/{{ getMesDataFor(activeSingleChannel).order.planned_qty }}</span>
+        </div>
+        <div v-if="getTaskInfoItemsFor(activeSingleChannel).length" class="flex items-center gap-1 border-l border-cyan-800/40 pl-2 text-[0.625rem]">
+          <template v-for="item in getTaskInfoItemsFor(activeSingleChannel)" :key="item.label">
+            <span class="text-cyan-400">{{ item.label }}:</span>
+            <span class="max-w-[72px] truncate text-white" :title="item.value">{{ item.value }}</span>
+          </template>
+        </div>
+        <el-button v-if="systemStore.display.monitor.showScanButtons !== false && hasScannerFor(activeSingleChannel) && !isScanDisabledFor(activeSingleChannel)" :class="getMesDataFor(activeSingleChannel)?.order ? '' : 'ml-auto'" size="small" type="warning" plain @click.stop="clearPendingScan(activeSingleChannel)">清除本次扫码</el-button>
+        <el-button v-if="systemStore.display.monitor.showScanButtons !== false && hasScannerFor(activeSingleChannel)" size="small" :type="isScanDisabledFor(activeSingleChannel) ? 'success' : 'danger'" plain :loading="scannerDisableStore.toggling" @click.stop="toggleScanDisableFor(activeSingleChannel)">
+          {{ isScanDisabledFor(activeSingleChannel) ? '启用扫码' : '禁用扫码' }}
+        </el-button>
+      </div>
+    </template>
+    <template #video-overlay>
+      <template v-for="position in ['top-right', 'top-left', 'bottom-right', 'bottom-left', 'center']" :key="position">
+        <div class="absolute z-50 pointer-events-none flex flex-col gap-2" :class="getMultiPositionClass(position)">
+          <transition-group name="toast">
+            <TjSlot
+              v-for="toast in (multiActiveToasts[activeSingleChannel] || []).filter(t => t.position === position)"
+              :key="toast.id"
+              name="cycle-result.indicator"
+              :toast="toast"
+              :channel-id="activeSingleChannel"
+            >
+              <div
+                class="px-4 py-3 rounded-xl shadow-2xl text-white font-bold pointer-events-auto text-center"
+                :style="{ backgroundColor: toast.color, fontSize: (toast.fontSize / 16) + 'rem' }"
+              >
+                <div class="flex items-center gap-2 justify-center">
+                  <el-icon :size="20"><component :is="toast.icon" /></el-icon>
+                  <div><div class="font-bold">{{ toast.title }}</div><div v-if="toast.subtitle" class="text-sm opacity-80">{{ toast.subtitle }}</div></div>
+                </div>
+              </div>
+            </TjSlot>
+          </transition-group>
+        </div>
+      </template>
+    </template>
+  </SingleChannelMonitor>
+
   <!-- ===== DUAL WORKSTATION MODE (2 channels) ===== -->
   <div v-else-if="channelCount === 2" class="grid grid-cols-2 gap-2 h-[calc(100vh-7.25rem)] p-2 relative">
     <div v-for="ch in 2" :key="ch - 1" class="flex flex-col gap-1.5 min-h-0 overflow-hidden relative">
@@ -163,7 +262,9 @@
         :selected="selectedChannel === (ch - 1)"
         :register-video-canvas="el => { multiVideoCanvasRefs[ch - 1] = el }"
         :register-overlay-canvas="el => { multiCanvasRefs[ch - 1] = el }"
-        @select="selectedChannel = ch - 1"
+        :zoomable="multiMonitorRuntime.enabled"
+        @select="selectOverviewChannel(ch - 1)"
+        @zoom="zoomChannel(ch - 1)"
       />
       <!-- v3.1.3: per-channel MES 信息条 (工件号 / 未绑码警告 / 等待扫码 / 清除按钮) -->
       <div v-if="shouldShowMesBarFor(ch - 1)"
@@ -179,7 +280,7 @@
           <span class="text-yellow-300 font-bold">⚠ 未绑码</span>
           <span class="text-yellow-200">请扫描工件条码</span>
         </div>
-        <div v-else-if="!isScanDisabledFor(ch - 1) && !getDisplayWorkpieceFor(ch - 1) && !getMesDataFor(ch - 1)?.order" class="text-gray-500">等待扫码...</div>
+        <div v-else-if="!isScanDisabledFor(ch - 1) && hasScannerFor(ch - 1) && !getDisplayWorkpieceFor(ch - 1) && !getMesDataFor(ch - 1)?.order" class="text-gray-500">等待扫码...</div>
         <!-- v3.4.2 禁用扫码态: 显示小提示, 整栏其它工件/警告/等待全部隐藏 -->
         <div v-if="isScanDisabledFor(ch - 1)" class="flex items-center gap-1 text-gray-400 italic">
           <span>⛔ 扫码已禁用 · 走项目原生结算</span>
@@ -197,7 +298,7 @@
           </template>
         </div>
         <el-tooltip
-          v-if="systemStore.display.monitor.showScanButtons !== false && !isScanDisabledFor(ch - 1)"
+          v-if="systemStore.display.monitor.showScanButtons !== false && hasScannerFor(ch - 1) && !isScanDisabledFor(ch - 1)"
           :content="getDisplayWorkpieceFor(ch - 1) && getDisplayWorkpieceFor(ch - 1).status === 'inspecting'
             ? '本次工件已开始检测，点击可作废本次检测、回到等待扫码状态'
             : '清除待检/扫码状态，让操作员重扫一次条码'"
@@ -215,7 +316,7 @@
         </el-tooltip>
         <!-- v3.4.2 按工位禁用扫码 -->
         <el-tooltip
-          v-if="systemStore.display.monitor.showScanButtons !== false"
+          v-if="systemStore.display.monitor.showScanButtons !== false && hasScannerFor(ch - 1)"
           :content="isScanDisabledFor(ch - 1)
             ? '点击启用扫码：扫码器恢复工作，按扫码器配置的结算方式 (scan_pair / mid_cycle 等) 工作'
             : '点击禁用扫码：扫码器熄灯，所有联动工位回退到项目原生结算方式 (tracking → 全部消失，容器 → 箱子离开)'"
@@ -350,7 +451,9 @@
           :selected="selectedChannel === (ch - 1)"
           :register-video-canvas="el => { multiVideoCanvasRefs[ch - 1] = el }"
           :register-overlay-canvas="el => { multiCanvasRefs[ch - 1] = el }"
-          @select="selectedChannel = ch - 1"
+          :zoomable="multiMonitorRuntime.enabled"
+          @select="selectOverviewChannel(ch - 1)"
+          @zoom="zoomChannel(ch - 1)"
         />
       </div>
       <!-- 中: 检测数据面板 -->
@@ -388,7 +491,7 @@
             <span class="text-yellow-300 font-bold">⚠ 未绑码</span>
             <span class="text-yellow-200">请扫描工件条码</span>
           </div>
-          <div v-else-if="!isScanDisabledFor(ch - 1) && !getDisplayWorkpieceFor(ch - 1) && !getMesDataFor(ch - 1)?.order" class="text-gray-500">等待扫码...</div>
+          <div v-else-if="!isScanDisabledFor(ch - 1) && hasScannerFor(ch - 1) && !getDisplayWorkpieceFor(ch - 1) && !getMesDataFor(ch - 1)?.order" class="text-gray-500">等待扫码...</div>
           <div v-if="isScanDisabledFor(ch - 1)" class="flex items-center gap-1 text-gray-400 italic">
             <span>⛔ 扫码已禁用 · 走项目原生结算</span>
           </div>
@@ -403,10 +506,10 @@
               <span class="text-white truncate max-w-[72px]" :title="it.value">{{ it.value }}</span>
             </template>
           </div>
-          <el-button v-if="systemStore.display.monitor.showScanButtons !== false && !isScanDisabledFor(ch - 1)"
+          <el-button v-if="systemStore.display.monitor.showScanButtons !== false && hasScannerFor(ch - 1) && !isScanDisabledFor(ch - 1)"
             :class="getMesDataFor(ch - 1)?.order ? '' : 'ml-auto'" size="small" type="warning" plain
             @click.stop="clearPendingScan(ch - 1)">清除</el-button>
-          <el-button v-if="systemStore.display.monitor.showScanButtons !== false"
+          <el-button v-if="systemStore.display.monitor.showScanButtons !== false && hasScannerFor(ch - 1)"
             size="small" :type="isScanDisabledFor(ch - 1) ? 'success' : 'danger'" plain
             :loading="scannerDisableStore.toggling"
             @click.stop="toggleScanDisableFor(ch - 1)">
@@ -568,6 +671,7 @@
         </div>
       </div>
       <!-- 网格: 当前页工位卡片 (缩小视频流 + 简略数据) -->
+      <!-- v3.47 起网格整卡点击=放大单路, 多屏开关不得改变此行为 (存量客户依赖); zoom 按钮仅是多屏开启时的显式入口 -->
       <div class="flex-1 grid gap-2 min-h-0"
         :style="{ gridTemplateColumns: `repeat(${gridDims.cols}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${gridDims.rows}, minmax(0, 1fr))` }">
         <ChannelVideoCard
@@ -578,9 +682,11 @@
           :ch-data="multiChannelData[ch]"
           :model-stats="channelModelStats[ch]"
           :selected="false"
+          :zoomable="multiMonitorRuntime.enabled"
           :register-video-canvas="el => { multiVideoCanvasRefs[ch] = el }"
           :register-overlay-canvas="el => { multiCanvasRefs[ch] = el }"
-          @select="zoomChannel(ch)">
+          @select="zoomChannel(ch)"
+          @zoom="zoomChannel(ch)">
           <!-- MES 迷你条: 工件号 / 未绑码 / 等待扫码 -->
           <div v-if="shouldShowMesBarFor(ch)"
                class="absolute top-7 left-1 right-1 bg-slate-900/85 border border-cyan-800/50 rounded px-1.5 py-0.5 flex items-center gap-1.5 text-[0.625rem] z-10">
@@ -595,7 +701,7 @@
             <template v-else-if="hasScannerFor(ch) && getMesDataFor(ch)?.warn_no_barcode">
               <span class="warn-no-barcode-blink text-yellow-300 font-bold w-full text-center">⚠ 未绑码 请扫描</span>
             </template>
-            <template v-else>
+            <template v-else-if="hasScannerFor(ch)">
               <span class="text-gray-400 w-full text-center">等待扫码...</span>
             </template>
           </div>
@@ -618,219 +724,6 @@
         <div v-for="i in gridEmptySlots" :key="'empty-' + i"
           class="border-2 border-dashed border-slate-800 rounded-lg flex items-center justify-center text-slate-700 text-xs select-none">
           — 空 —
-        </div>
-      </div>
-    </template>
-
-    <!-- —— 放大详情模式 (单路大视频 + 详细数据 + 上一路/下一路) —— -->
-    <template v-else>
-      <!-- 顶部: 返回 + 标题 + 控制 + 路切换 -->
-      <div class="flex items-center gap-2 flex-shrink-0 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 flex-wrap">
-        <button @click="exitZoom"
-          class="px-2.5 py-1 rounded text-xs font-bold border bg-slate-800 border-slate-600 text-gray-200 hover:border-cyan-500 hover:text-cyan-300">‹ 返回总览</button>
-        <span class="text-cyan-400 font-bold text-base">工位 {{ zoomedChannel + 1 }}</span>
-        <span v-if="multiChannelData[zoomedChannel]?.projectName" class="text-xs text-gray-400 truncate max-w-[10rem]">{{ multiChannelData[zoomedChannel].projectName }}</span>
-        <span class="text-[0.625rem] px-2 py-0.5 rounded font-bold"
-          :class="multiChannelData[zoomedChannel]?.isDetecting ? 'bg-green-600/90 text-white' : multiChannelData[zoomedChannel]?.isRunning ? 'bg-yellow-600/90 text-white' : 'bg-gray-600/90 text-white'">
-          {{ multiChannelData[zoomedChannel]?.isDetecting ? '检测中' : multiChannelData[zoomedChannel]?.isRunning ? '待机' : '停止' }}
-        </span>
-        <span class="text-[0.625rem] bg-slate-700 px-2 py-0.5 rounded text-gray-300">CT: {{ getDisplayCT(multiChannelData[zoomedChannel]) }}</span>
-        <div class="ml-auto flex items-center gap-1.5">
-          <button @click="startDetectionForChannel(zoomedChannel)" :disabled="(!multiChannelData[zoomedChannel]?.project && !currentProject) || multiChannelData[zoomedChannel]?.isDetecting"
-            class="bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-2.5 py-1 rounded text-xs font-bold">开始</button>
-          <button @click="stopDetectionForChannel(zoomedChannel)" :disabled="!multiChannelData[zoomedChannel]?.isRunning"
-            class="bg-red-600 hover:bg-red-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-2.5 py-1 rounded text-xs font-bold">停止</button>
-          <button @click="standbyForChannel(zoomedChannel)" :disabled="!multiChannelData[zoomedChannel]?.isDetecting"
-            class="bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-2.5 py-1 rounded text-xs font-bold">待机</button>
-          <button @click="resetCountersForChannel(zoomedChannel)" :disabled="multiChannelData[zoomedChannel]?.isDetecting"
-            class="bg-cyan-500 hover:bg-cyan-400 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-2.5 py-1 rounded text-xs font-bold">清零</button>
-          <span class="h-4 w-px bg-slate-600 mx-1"></span>
-          <button @click="zoomStep(-1)"
-            class="px-2.5 py-1 rounded text-xs font-bold border bg-slate-800 border-slate-600 text-gray-200 hover:border-cyan-500 hover:text-cyan-300">‹ 上一路</button>
-          <button @click="zoomStep(1)"
-            class="px-2.5 py-1 rounded text-xs font-bold border bg-slate-800 border-slate-600 text-gray-200 hover:border-cyan-500 hover:text-cyan-300">下一路 ›</button>
-        </div>
-      </div>
-      <!-- MES 完整信息条 -->
-      <div v-if="shouldShowMesBarFor(zoomedChannel)"
-           class="bg-slate-900 border border-cyan-800/50 rounded-lg px-3 py-1 flex items-center gap-3 text-xs flex-shrink-0 flex-wrap">
-        <div v-if="!isScanDisabledFor(zoomedChannel) && getDisplayWorkpieceFor(zoomedChannel)" class="flex items-center gap-1.5 min-w-0">
-          <span class="text-cyan-400 font-bold">工件:</span>
-          <span class="font-mono text-white truncate" :title="getDisplayWorkpieceFor(zoomedChannel).serial_no">{{ getDisplayWorkpieceFor(zoomedChannel).serial_no }}</span>
-          <el-tag :type="getDisplayWorkpieceFor(zoomedChannel).status === 'ok' ? 'success' : getDisplayWorkpieceFor(zoomedChannel).status === 'ng' ? 'danger' : getDisplayWorkpieceFor(zoomedChannel).status === 'inspecting' ? 'warning' : 'info'" size="small">
-            {{ { registered: '已登记', queued: '排队', inspecting: '检测中', ok: '合格', ng: '不良' }[getDisplayWorkpieceFor(zoomedChannel).status] || getDisplayWorkpieceFor(zoomedChannel).status }}
-          </el-tag>
-        </div>
-        <div v-if="!isScanDisabledFor(zoomedChannel) && hasScannerFor(zoomedChannel) && getMesDataFor(zoomedChannel)?.warn_no_barcode" class="warn-no-barcode-blink flex items-center gap-1 bg-yellow-600/30 border border-yellow-500 rounded px-2 py-0.5">
-          <span class="text-yellow-300 font-bold">⚠ 未绑码</span>
-          <span class="text-yellow-200">请扫描工件条码</span>
-        </div>
-        <div v-else-if="!isScanDisabledFor(zoomedChannel) && !getDisplayWorkpieceFor(zoomedChannel) && !getMesDataFor(zoomedChannel)?.order" class="text-gray-500">等待扫码...</div>
-        <div v-if="isScanDisabledFor(zoomedChannel)" class="flex items-center gap-1 text-gray-400 italic">
-          <span>⛔ 扫码已禁用 · 走项目原生结算</span>
-        </div>
-        <div v-if="getMesDataFor(zoomedChannel)?.order && taskInfoDisplay.show_order_chip" class="flex items-center gap-1 text-[0.625rem] ml-auto pl-2 border-l border-cyan-800/40">
-          <span class="text-cyan-400">工单:</span>
-          <span class="text-white truncate max-w-[80px]" :title="getMesDataFor(zoomedChannel).order.order_no">{{ getMesDataFor(zoomedChannel).order.order_no }}</span>
-          <span class="text-gray-400">{{ getMesDataFor(zoomedChannel).order.completed_qty }}/{{ getMesDataFor(zoomedChannel).order.planned_qty }}</span>
-        </div>
-        <div v-if="getTaskInfoItemsFor(zoomedChannel).length" class="flex items-center gap-1 text-[0.625rem] pl-2 border-l border-cyan-800/40">
-          <template v-for="it in getTaskInfoItemsFor(zoomedChannel)" :key="it.label">
-            <span class="text-cyan-400">{{ it.label }}:</span>
-            <span class="text-white truncate max-w-[72px]" :title="it.value">{{ it.value }}</span>
-          </template>
-        </div>
-        <el-button v-if="systemStore.display.monitor.showScanButtons !== false && !isScanDisabledFor(zoomedChannel)"
-          :class="getMesDataFor(zoomedChannel)?.order ? '' : 'ml-auto'" size="small" type="warning" plain
-          @click.stop="clearPendingScan(zoomedChannel)">清除本次扫码</el-button>
-        <el-button v-if="systemStore.display.monitor.showScanButtons !== false"
-          size="small" :type="isScanDisabledFor(zoomedChannel) ? 'success' : 'danger'" plain
-          :loading="scannerDisableStore.toggling"
-          @click.stop="toggleScanDisableFor(zoomedChannel)">
-          {{ isScanDisabledFor(zoomedChannel) ? '启用扫码' : '禁用扫码' }}
-        </el-button>
-      </div>
-      <!-- 主体: 左大视频 + 右详细数据 -->
-      <div class="flex-1 flex gap-2 min-h-0">
-        <div class="relative min-h-0 min-w-0" style="flex: 3 1 0%;">
-          <!-- :key 强制随路切换重建卡片, 让 canvas 注册回调重新按新工位号回注父级字典 -->
-          <ChannelVideoCard
-            :key="'zoom-' + zoomedChannel"
-            class="h-full"
-            :ch="zoomedChannel"
-            :ch-data="multiChannelData[zoomedChannel]"
-            :model-stats="channelModelStats[zoomedChannel]"
-            :selected="false"
-            :register-video-canvas="el => { multiVideoCanvasRefs[zoomedChannel] = el }"
-            :register-overlay-canvas="el => { multiCanvasRefs[zoomedChannel] = el }"
-            @select="() => {}"
-          />
-          <!-- 放大工位 Toast (定位上下文 = 视频区) -->
-          <template v-for="position in ['top-right', 'top-left', 'bottom-right', 'bottom-left', 'center']" :key="position">
-            <div class="absolute z-50 pointer-events-none flex flex-col gap-2" :class="getMultiPositionClass(position)">
-              <transition-group name="toast">
-                <TjSlot
-                  v-for="toast in (multiActiveToasts[zoomedChannel] || []).filter(t => t.position === position)"
-                  :key="toast.id"
-                  name="cycle-result.indicator"
-                  :toast="toast"
-                  :channel-id="zoomedChannel"
-                >
-                  <div
-                    class="px-4 py-3 rounded-xl shadow-2xl text-white font-bold pointer-events-auto transform transition-all duration-300 text-center"
-                    :style="{ backgroundColor: toast.color, fontSize: (toast.fontSize / 16) + 'rem' }">
-                    <div class="flex items-center gap-2 justify-center">
-                      <el-icon :size="20"><component :is="toast.icon" /></el-icon>
-                      <div><div class="font-bold">{{ toast.title }}</div><div v-if="toast.subtitle" class="text-sm opacity-80">{{ toast.subtitle }}</div></div>
-                    </div>
-                  </div>
-                </TjSlot>
-              </transition-group>
-            </div>
-          </template>
-        </div>
-        <!-- 右: 详细数据列 -->
-        <div class="flex flex-col gap-1.5 min-w-0 overflow-hidden" style="flex: 1 1 0%;">
-          <!-- 计数 2x2 -->
-          <div class="grid grid-cols-2 gap-1.5 flex-shrink-0">
-            <div class="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-center">
-              <div class="text-[0.625rem] text-gray-400">总产量</div>
-              <div class="text-2xl font-bold font-mono text-white">{{ multiChannelData[zoomedChannel]?.total ?? 0 }}</div>
-            </div>
-            <div class="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-center">
-              <div class="text-[0.625rem] text-gray-400">合格</div>
-              <div class="text-2xl font-bold font-mono text-green-400">{{ multiChannelData[zoomedChannel]?.ok ?? 0 }}</div>
-            </div>
-            <div class="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-center">
-              <div class="text-[0.625rem] text-gray-400">不良</div>
-              <div class="text-2xl font-bold font-mono text-red-400">{{ multiChannelData[zoomedChannel]?.ng ?? 0 }}</div>
-            </div>
-            <div class="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-center">
-              <div class="text-[0.625rem] text-gray-400">合格率</div>
-              <div class="text-2xl font-bold font-mono" :class="(multiChannelData[zoomedChannel]?.yieldRate ?? 0) >= 90 ? 'text-green-400' : (multiChannelData[zoomedChannel]?.yieldRate ?? 0) >= 70 ? 'text-yellow-400' : 'text-red-400'">
-                {{ multiChannelData[zoomedChannel]?.yieldRate ?? 0 }}%
-              </div>
-            </div>
-          </div>
-          <!-- 合格率进度 + 运行指标 -->
-          <div class="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 flex-shrink-0">
-            <div class="w-full bg-slate-700 rounded-full h-2">
-              <div class="h-2 rounded-full transition-all" :class="(multiChannelData[zoomedChannel]?.yieldRate ?? 0) >= 90 ? 'bg-green-500' : (multiChannelData[zoomedChannel]?.yieldRate ?? 0) >= 70 ? 'bg-yellow-500' : 'bg-red-500'"
-                :style="{ width: (multiChannelData[zoomedChannel]?.yieldRate ?? 0) + '%' }"></div>
-            </div>
-            <div class="flex items-center gap-3 mt-1 text-[0.625rem] text-gray-400">
-              <span v-if="systemStore.display.monitor.showFps !== false">FPS: <span class="text-cyan-400 font-mono">{{ multiChannelData[zoomedChannel]?.fps ?? 0 }}</span></span>
-              <span v-if="systemStore.display.monitor.showLatency !== false">延迟: <span class="text-cyan-400 font-mono">{{ multiChannelData[zoomedChannel]?.latency ?? 0 }}ms</span></span>
-              <span class="ml-auto"><span class="text-green-400">{{ multiChannelData[zoomedChannel]?.ok ?? 0 }}</span> / <span class="text-white">{{ multiChannelData[zoomedChannel]?.total ?? 0 }}</span></span>
-            </div>
-          </div>
-          <!-- CT 指标行 -->
-          <div class="grid grid-cols-3 gap-1.5 flex-shrink-0">
-            <div class="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-center">
-              <div class="text-[0.625rem] text-gray-400">平均 CT</div>
-              <div class="text-sm font-bold font-mono text-cyan-400">{{ (multiChannelData[zoomedChannel]?.avgCycleTime ?? 0) ? (multiChannelData[zoomedChannel].avgCycleTime.toFixed(1) + 's') : '--' }}</div>
-            </div>
-            <div class="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-center">
-              <div class="text-[0.625rem] text-gray-400">上次 CT</div>
-              <div class="text-sm font-bold font-mono text-white">{{ (multiChannelData[zoomedChannel]?.lastCycleTime ?? 0) ? (multiChannelData[zoomedChannel].lastCycleTime.toFixed(1) + 's') : '--' }}</div>
-            </div>
-            <div class="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-center">
-              <div class="text-[0.625rem] text-gray-400">当前周期</div>
-              <div class="text-sm font-bold font-mono text-yellow-400">{{ (multiChannelData[zoomedChannel]?.currentCycleTime ?? 0) ? (multiChannelData[zoomedChannel].currentCycleTime.toFixed(1) + 's') : '--' }}</div>
-            </div>
-          </div>
-          <!-- SOP 流程 (竖排自适应拉伸: 行数少也不留白; 含序号/大缩略图/单步 PT/状态) -->
-          <div class="flex-1 min-h-0 bg-slate-900 border border-slate-700 rounded overflow-hidden flex flex-col">
-            <div class="bg-slate-800 px-2 py-0.5 text-cyan-400 text-xs font-bold border-b border-slate-700 flex-shrink-0 flex items-center justify-between">
-              <span>SOP 流程</span>
-              <span class="text-[0.625rem] text-gray-400 font-normal">
-                {{ (multiChannelData[zoomedChannel]?.steps || []).filter(s => s.status === 'completed').length }} / {{ (multiChannelData[zoomedChannel]?.steps || []).length }} 步
-              </span>
-            </div>
-            <div class="flex-1 min-h-0 flex flex-col gap-1 p-1.5 overflow-auto">
-              <div v-for="(step, idx) in (multiChannelData[zoomedChannel]?.steps || [])" :key="idx"
-                class="flex-1 min-h-[2.75rem] flex items-center gap-2 px-2 rounded border"
-                :class="step.status === 'completed' ? 'border-green-500 bg-green-900/30' : step.status === 'active' ? 'border-cyan-500 bg-cyan-900/30' : 'border-slate-600 bg-slate-800'">
-                <span class="w-5 text-center text-sm font-bold flex-shrink-0"
-                  :class="step.status === 'completed' ? 'text-green-400' : step.status === 'active' ? 'text-cyan-400' : 'text-gray-600'">{{ idx + 1 }}</span>
-                <div class="w-16 h-[2.35rem] flex-shrink-0 rounded overflow-hidden bg-slate-950/50 flex items-center justify-center">
-                  <img v-if="step.screenshot" :src="step.screenshot" class="w-full h-full object-cover" />
-                  <el-icon v-else :size="14" class="text-slate-600"><Picture /></el-icon>
-                </div>
-                <div class="flex-1 min-w-0">
-                  <div class="text-xs font-bold truncate"
-                    :class="step.status === 'completed' ? 'text-green-300' : step.status === 'active' ? 'text-cyan-300 animate-pulse' : 'text-gray-500'">
-                    {{ step.name }}
-                  </div>
-                  <div v-if="systemStore.display.monitor.stepTableColumns?.showPt !== false" class="text-[0.625rem] text-gray-500 font-mono">
-                    PT: {{ getStepPT(multiChannelData[zoomedChannel], step.label) }}
-                  </div>
-                </div>
-                <span class="text-sm flex-shrink-0" :class="step.status === 'completed' ? 'text-green-400' : step.status === 'active' ? 'text-cyan-400' : 'text-gray-600'">
-                  {{ step.status === 'completed' ? '✓' : step.status === 'active' ? '···' : '—' }}
-                </span>
-              </div>
-              <div v-if="!multiChannelData[zoomedChannel]?.steps?.length" class="text-gray-600 text-xs text-center mt-2">等待检测</div>
-            </div>
-          </div>
-          <!-- NG TOP3 -->
-          <div v-if="systemStore.display.monitor.ngTop3 !== false" class="max-h-32 flex flex-col flex-shrink-0 bg-slate-900 border border-slate-700 rounded p-1.5">
-            <div class="flex items-center justify-between mb-1">
-              <span class="text-[0.625rem] text-cyan-400 font-bold">NG 步骤 TOP3</span>
-              <span class="text-[0.5625rem] text-gray-500 cursor-pointer hover:text-cyan-400 select-none" @click="toggleNgTopMode()">
-                {{ systemStore.display.monitor.ngTopDisplayMode === 'percentage' ? '百分比' : '次数' }}
-              </span>
-            </div>
-            <div class="flex-1 overflow-auto space-y-1">
-              <div v-for="(item, idx) in (multiChannelData[zoomedChannel]?.ngStepRanking || [])" :key="item.step"
-                class="flex items-center gap-1.5 bg-slate-800/50 px-1.5 py-0.5 rounded text-xs">
-                <span class="text-sm font-bold w-4 text-white text-center">{{ idx + 1 }}</span>
-                <span class="flex-1 text-gray-300 truncate">{{ item.step }}</span>
-                <span class="text-sm font-bold text-white">{{ systemStore.display.monitor.ngTopDisplayMode === 'count' ? item.count : item.rate.toFixed(0) + '%' }}</span>
-              </div>
-              <div v-if="!multiChannelData[zoomedChannel]?.ngStepRanking?.length" class="text-center text-gray-600 text-xs py-1">暂无数据</div>
-            </div>
-          </div>
         </div>
       </div>
     </template>
@@ -1274,7 +1167,9 @@
       </div>
 
       <!-- MES 信息条 -->
-      <div v-if="displayWorkpiece || mesData?.order || mesData?.warn_no_barcode || workpieceOverride === null || isScanDisabledFor(selectedChannel) || systemStore.display.monitor.showBypassSn" class="bg-slate-900 border border-cyan-800/50 rounded-lg px-3 py-2 flex items-center gap-6 text-sm">
+      <!-- v3.50: scanner_resume_blocked 必须算进显示条件, 否则 NG 后无工件/工单时
+           整条信息条不渲染, "恢复扫码"人工出口按钮出不来 -->
+      <div v-if="displayWorkpiece || mesData?.order || mesData?.warn_no_barcode || mesData?.scanner_resume_blocked || workpieceOverride === null || isScanDisabledFor(selectedChannel) || systemStore.display.monitor.showBypassSn" class="bg-slate-900 border border-cyan-800/50 rounded-lg px-3 py-2 flex items-center gap-6 text-sm">
         <!-- 扫码器旁路当前 SN (系统设置 showBypassSn 打开后才显示; 无 SN 时 placeholder 等待扫码) -->
         <div v-if="systemStore.display.monitor.showBypassSn" class="flex items-center gap-2">
           <span class="text-cyan-400 font-bold">旁路SN:</span>
@@ -1327,13 +1222,14 @@
           <span class="text-yellow-300 font-bold text-base">⚠ 未绑码</span>
           <span class="text-yellow-200 text-sm">请扫描工件条码</span>
         </div>
-        <div v-else-if="!isScanDisabledFor(selectedChannel) && !displayWorkpiece && !mesData?.order && !systemStore.display.monitor.showBypassSn" class="text-gray-500 text-xs">等待扫码...</div>
+        <div v-else-if="!isScanDisabledFor(selectedChannel) && hasScannerFor(selectedChannel) && !displayWorkpiece && !mesData?.order && !systemStore.display.monitor.showBypassSn" class="text-gray-500 text-xs">等待扫码...</div>
         <div v-if="isScanDisabledFor(selectedChannel)" class="flex items-center gap-2 text-gray-400 italic">
           <span class="text-base">⛔ 扫码已禁用</span>
           <span class="text-xs">所有联动工位走项目原生结算 (跟踪→全部消失，容器→箱子离开)</span>
         </div>
-        <!-- 清除本次扫码 + 禁用/启用扫码 (v3.39: 操作员不碰软件的部署可在系统设置隐藏) -->
-        <div v-if="systemStore.display.monitor.showScanButtons !== false" class="ml-auto flex items-center gap-2">
+        <!-- 清除本次扫码 + 禁用/启用扫码 (v3.39: 操作员不碰软件的部署可在系统设置隐藏;
+             v3.53: 无扫码器时整组不渲染, 与 mes.scanner_present 钉死) -->
+        <div v-if="systemStore.display.monitor.showScanButtons !== false && hasScannerFor(selectedChannel)" class="ml-auto flex items-center gap-2">
           <el-tooltip
             v-if="!isScanDisabledFor(selectedChannel)"
             :content="displayWorkpiece && displayWorkpiece.status === 'inspecting'
@@ -1348,6 +1244,21 @@
               @click="clearPendingScan(selectedChannel)"
             >
               清除本次扫码
+            </el-button>
+          </el-tooltip>
+          <!-- v3.50: resume_on='ok_only' 下 NG 保持灭灯, 人工恢复出口 -->
+          <el-tooltip
+            v-if="mesData?.scanner_resume_blocked"
+            content="扫码器因 NG 结算保持灭灯（重新亮灯时机=仅合格），点击人工恢复扫码"
+            placement="top"
+          >
+            <el-button
+              size="small"
+              type="success"
+              data-testid="resume-scanner-btn"
+              @click="resumeScannerFor(selectedChannel)"
+            >
+              恢复扫码
             </el-button>
           </el-tooltip>
           <el-tooltip
@@ -1388,12 +1299,20 @@
          <!-- Pie Chart -->
          <div v-if="systemStore.display.monitor.defectChart" class="bg-slate-900 border border-slate-700 rounded-lg p-2 relative">
             <h3 class="text-cyan-400 text-base font-bold absolute top-1.5 left-2">良品/不良统计</h3>
-            <div ref="defectChartRef" class="w-full h-full"></div>
+            <GoodBadPieChart
+              :good-count="primaryGaugeGoodCount"
+              :bad-count="primaryDefectBadCount"
+              test-id="primary-good-bad-chart"
+            />
          </div>
          <!-- Yield Rate Gauge -->
          <div v-if="systemStore.display.monitor.capacityChart" class="bg-slate-900 border border-slate-700 rounded-lg p-2 relative">
             <h3 class="text-cyan-400 text-base font-bold absolute top-1.5 left-2">合格率</h3>
-            <div ref="capacityGaugeRef" class="w-full h-full"></div>
+            <YieldRateGauge
+              :good-count="primaryGaugeGoodCount"
+              :total-count="primaryGaugeTotalCount"
+              test-id="primary-yield-rate-gauge"
+            />
          </div>
          <!-- v3.8+: per_item 模式专属 - 逐件实时反馈 (排他 NG TOP3) -->
          <div v-if="isPerItemMode" class="bg-slate-900 border border-slate-700 rounded-lg p-2 flex flex-col">
@@ -1641,7 +1560,7 @@
     <!-- 触发条件: 任一通道 pendingAck.active=true → 弹覆盖层, 显示需确认的工位编号 -->
     <!-- 多通道场景: 只显示一个工位 (优先当前选中, 其次最早阻塞的), 工人逐个确认 -->
     <div
-      v-if="pendingAckDisplay"
+      v-if="!kioskMode && pendingAckDisplay"
       class="absolute inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
       @click.stop
     >
@@ -1752,7 +1671,7 @@
     <!-- 只校验一次管理员账密 + 权限解除阻塞, 不创建登录会话、不改当前登录身份 -->
     <!-- 取消 = 关本窗回到上面的人工确认覆盖层 (pendingAck 未清, 覆盖层仍在) -->
     <div
-      v-if="elevateDialog.visible"
+      v-if="!kioskMode && elevateDialog.visible"
       class="absolute inset-0 z-[70] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
       @click.stop
     >
@@ -1806,6 +1725,7 @@
 
   <!-- 录像异常入口+详情面板（M-1 外置, 原同构块消重） -->
   <RecordingFailureOverlay
+    v-if="!kioskMode"
     v-model:visible="showRecordingFailurePanel"
     :rows="recordingFailureRows"
     :loading="recordingFailureLoading"
@@ -1815,7 +1735,7 @@
   <!-- v3.13 M2.2b: monitor.layout.footer slot — 客户插件可在视频区底部叠加全局状态条 / 通知 / 控制按钮.
        默认不渲染任何内容 (主程序原行为, 字节级零差异). -->
   <component
-    v-if="layoutFooterOverride"
+    v-if="!kioskMode && layoutFooterOverride"
     :is="layoutFooterOverride"
     :channel-count="channelCount"
     :multi-channel-data="multiChannelData"
@@ -1825,6 +1745,7 @@
        主程序默认实现: 横幅式列表 (max 3 个, FIFO 上限). 客户插件可覆盖整段展示.
        后端 /api/v1/workpiece-flows/{id}/state 提供轮询数据源. -->
   <TjSlot
+    v-if="!kioskMode"
     name="monitor.workpiece-flow.indicator"
     :channel-count="channelCount"
     :selected-channel="selectedChannel"
@@ -1832,12 +1753,13 @@
 
   <!-- 外部生产管控系统「在途报警」持续横幅: 报警推给中控后一直挂屏顶, 中控回推消除命令即自动撤.
        惰性: 后端未配报警台账 → 无数据 → 永不出现 (字节级零打扰)。 -->
-  <ExternalAlarmBanner />
+  <ExternalAlarmBanner v-if="!kioskMode" />
+
 </template>
 
 <script setup>
 import { onMounted, onUnmounted, ref, watch, nextTick, computed, h } from 'vue';
-import * as echarts from 'echarts';
+import { useRoute } from 'vue-router';
 import { useProjectStore } from '@/store/useProjectStore';
 import { useSystemStore } from '@/store/useSystemStore';
 import { useSourceStore } from '@/store/useSourceStore';
@@ -1845,7 +1767,7 @@ import { useScannerDisableStore } from '@/store/useScannerDisableStore';
 import { usePluginThemeStore } from '@/store/usePluginThemeStore';
 import { Check, Folder, Picture, CircleCheck, CircleClose, Warning, Lock, User } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { startDetection as apiStartDetection, stopDetection as apiStopDetection, pauseDetection, resumeDetection, standbyDetection, resumeInference, resetDetection, resetDetectionStats, resetPeriodicAction, getDetectionResults, getSourceStatus, setProjectConfig, getWorkstations, getScanPairActive, settleScanPairForStop, ackPendingEvent, ackPendingEventElevated } from '@/api/detection';
+import { startDetection as apiStartDetection, stopDetection as apiStopDetection, pauseDetection, resumeDetection, standbyDetection, resumeInference, resetDetection, resetDetectionStats, resetPeriodicAction, getDetectionResults, getSourceStatus, setProjectConfig, getWorkstations, getMultiMonitorConfig, getScanPairActive, settleScanPairForStop, ackPendingEvent, ackPendingEventElevated } from '@/api/detection';
 import { getModelDetail, resolveModelPath as apiResolveModelPath } from '@/api/model';
 import { getProjectDetail } from '@/api/project';
 import api, { getBackendHost } from '@/api/index';
@@ -1860,6 +1782,9 @@ import RecordingFailureOverlay from './RecordingFailureOverlay.vue';
 import SopStepPanel from './SopStepPanel.vue';
 import CustomMixItemPanel from './CustomMixItemPanel.vue';
 import ChannelVideoCard from './ChannelVideoCard.vue';
+import GoodBadPieChart from './GoodBadPieChart.vue';
+import SingleChannelMonitor from './SingleChannelMonitor.vue';
+import YieldRateGauge from './YieldRateGauge.vue';
 import { createFramePump } from './framePump';
 import { listPackagingFlows, getPackagingFlowState } from '@/api/packaging_flow';
 import { getTriggers } from '@/api/triggers';
@@ -1872,9 +1797,14 @@ const systemStore = useSystemStore();
 const sourceStore = useSourceStore();
 const scannerDisableStore = useScannerDisableStore();
 const pluginThemeStore = usePluginThemeStore();
+const route = useRoute();
+const kioskMode = computed(() => route.query.kiosk === '1');
+// 一期默认只读；只有 Electron 明确传 readonly=0 才放开现有控制 actions。
+const kioskReadonly = computed(() => route.query.readonly !== '0');
 
 // v3.13 M2.2b: layout slot 覆盖 (整体 layout / 底栏). 没插件时永远是 null = 走原 layout.
 const layoutBodyOverride = computed(() => pluginThemeStore.getSlotComponent('monitor.layout.body'));
+const effectiveLayoutBodyOverride = computed(() => kioskMode.value ? null : layoutBodyOverride.value);
 const layoutFooterOverride = computed(() => pluginThemeStore.getSlotComponent('monitor.layout.footer'));
 
 /** layout.body 插件内渲染主程序 TjSlot（步骤表 PT/结果列等） */
@@ -2005,7 +1935,12 @@ const isScanDisabledFor = (ch) => scannerDisableStore.isChannelDisabled(ch);
 // 检测中心就不该再弹"⚠ 未绑码"信息条/toast.
 // 后端在 mes.scanner_present 字段透出该状态; 老后端/未启用 MES 时
 // 字段缺失, 此处默认按"有"处理保持向后兼容(即原有行为不变).
-const hasScannerFor = (ch) => getMesDataFor(ch)?.scanner_present !== false;
+const hasScannerFor = (ch) => {
+  const mes = getMesDataFor(ch);
+  // scanner_resume_blocked 只有真有扫码器才会出现 (码-合格-码灭灯态),
+  // 它本身就是"扫码器在场"的证据 — 别把人工恢复按钮一起藏掉
+  return mes?.scanner_present !== false || !!mes?.scanner_resume_blocked;
+};
 async function toggleScanDisableFor(ch) {
   if (scannerDisableStore.toggling) return;
   const targetDisabled = !isScanDisabledFor(ch);
@@ -2029,12 +1964,6 @@ const detectionCanvas = ref(null);
 // SOP 面板（M-2 外置 SopStepPanel.vue）: 滚动容器/卡片 ref/滚动游标随组件下沉,
 // 父级轮询经 sopPanelRef 驱动 scrollToCard / resetScroll
 const sopPanelRef = ref(null);
-
-// Chart Refs
-const defectChartRef = ref(null);
-const capacityGaugeRef = ref(null);
-let pieChartInstance = null;
-let gaugeChartInstance = null;
 
 // State
 const steps = ref([]);
@@ -2165,6 +2094,7 @@ const bypassSnFor = (ch) => {
 };
 
 onMounted(async () => {
+  if (kioskMode.value) return;
   loadTaskInfoDisplay();
   await loadPackagingConfigs();
   if (packagingConfigs.value.length > 0) {
@@ -2176,6 +2106,10 @@ onMounted(async () => {
 watch(
   () => systemStore.display.monitor.showBypassSn,
   (enabled) => {
+    if (kioskMode.value) {
+      stopBypassPolling();
+      return;
+    }
     if (enabled) startBypassPolling();
     else stopBypassPolling();
   },
@@ -2419,6 +2353,31 @@ const GRID_LAYOUT_KEY = 'monitor_grid_layout';
 const gridLayout = ref(localStorage.getItem(GRID_LAYOUT_KEY) || 'auto');  // 'auto' | '2x2' | '3x3' | '4x4'
 const gridPage = ref(0);
 const zoomedChannel = ref(null);  // null = 总览网格; 数字 = 放大的工位
+const requestedKioskChannel = computed(() => {
+  const value = Number.parseInt(String(route.query.channel ?? '0'), 10);
+  return Number.isFinite(value) ? value : 0;
+});
+const kioskChannel = computed(() => Math.min(Math.max(requestedKioskChannel.value, 0), Math.max(0, channelCount.value - 1)));
+const activeSingleChannel = computed(() => kioskMode.value ? kioskChannel.value : Math.min(Math.max(zoomedChannel.value ?? 0, 0), Math.max(0, channelCount.value - 1)));
+const singleChannelViewActive = computed(() => kioskMode.value || (channelCount.value > 1 && zoomedChannel.value !== null));
+const singleChannelReadonly = computed(() => kioskMode.value ? kioskReadonly.value : false);
+
+// 主屏总览是否需要为多屏模式让出 MJPEG 长连接；配置获取失败保持默认关闭。
+const multiMonitorRuntime = ref({ enabled: false, readonly: true, mapping: {} });
+const loadMultiMonitorRuntime = async () => {
+  try {
+    const response = await getMultiMonitorConfig();
+    multiMonitorRuntime.value = {
+      enabled: response?.data?.enabled === true,
+      readonly: response?.data?.readonly !== false,
+      mapping: response?.data?.mapping || {},
+    };
+  } catch (error) {
+    multiMonitorRuntime.value = { enabled: false, readonly: true, mapping: {} };
+    console.warn('[MultiMonitor] 配置加载失败，按标准单窗模式运行:', error?.message || error);
+  }
+  if (multiStreamRunning) await nextTick(() => syncMultiStreams());
+};
 
 const gridDims = computed(() => {
   let l = gridLayout.value;
@@ -2447,14 +2406,25 @@ const gridPrevPage = () => { if (gridPage.value > 0) gridPage.value--; };
 const gridNextPage = () => { if (gridPage.value < gridPageCount.value - 1) gridPage.value++; };
 
 const zoomChannel = (ch) => {
-  zoomedChannel.value = ch;
-  selectedChannel.value = ch;  // 与插件 slot / 老 selectedChannel 语义保持同步
+  const next = Math.min(Math.max(Number(ch) || 0, 0), Math.max(0, channelCount.value - 1));
+  zoomedChannel.value = next;
+  selectedChannel.value = next;  // 与插件 slot / 老 selectedChannel 语义保持同步
+  nextTick(() => syncMultiStreams());
+};
+const selectOverviewChannel = (ch) => {
+  if (multiMonitorRuntime.value.enabled) {
+    zoomChannel(ch);
+  } else {
+    selectedChannel.value = ch;
+  }
 };
 const exitZoom = () => {
   const ch = zoomedChannel.value;
   zoomedChannel.value = null;
   if (ch !== null) gridPage.value = Math.floor(ch / gridDims.value.pageSize);  // 返回总览停在该工位所在页
+  nextTick(() => syncMultiStreams());
 };
+
 const zoomStep = (delta) => {
   const n = channelCount.value || 1;
   if (zoomedChannel.value === null || n < 1) return;
@@ -2463,9 +2433,14 @@ const zoomStep = (delta) => {
 
 // 翻页 / 换布局 / 进出放大 → 收放可见工位的 MJPEG 流 (等新卡片挂载注册 canvas 后再连)
 watch([gridPage, () => gridDims.value.pageSize, zoomedChannel], () => {
-  if ((channelCount.value || 1) > 3 && !layoutBodyOverride.value) {
+  if ((channelCount.value || 1) > 1 && !effectiveLayoutBodyOverride.value) {
     nextTick(() => syncMultiStreams());
   }
+});
+watch(kioskChannel, (ch) => {
+  if (!kioskMode.value) return;
+  selectedChannel.value = ch;
+  nextTick(() => syncMultiStreams());
 });
 watch(gridPageCount, (n) => { if (gridPage.value >= n) gridPage.value = 0; });
 // ==================== End v3.47 多工位布局状态 ====================
@@ -2585,9 +2560,10 @@ const HEADER_END = '\r\n\r\n';
 // 省的只是不可见通道的 MJPEG 带宽与 JPEG 解码开销。
 const visibleStreamChannels = () => {
   const n = channelCount.value || 1;
+  if (kioskMode.value) return [kioskChannel.value];
+  if (zoomedChannel.value !== null) return [zoomedChannel.value];
   if (n <= 1) return [];
   if (n <= 3) return Array.from({ length: n }, (_, i) => i);
-  if (zoomedChannel.value !== null) return [zoomedChannel.value];
   return gridPageChannels.value;
 };
 
@@ -2656,7 +2632,8 @@ const stopSnapshotPolling = () => {
 const syncMultiStreams = () => {
   if (!multiStreamRunning) return;
   const visible = visibleStreamChannels();
-  const useSnapshotAll = visible.length > MAX_MJPEG_STREAMS;
+  const useSnapshotAll = visible.length > MAX_MJPEG_STREAMS
+    || (multiMonitorRuntime.value.enabled && !kioskMode.value && zoomedChannel.value === null);
   const snapWant = visible.filter(
     (ch) => useSnapshotAll || (mjpegZeroFrameFails[ch] || 0) >= MJPEG_FALLBACK_FAILS
   );
@@ -2690,7 +2667,7 @@ const _registerMjpegDeath = (ch, gotFrame) => {
 
 const startMultiStreams = () => {
   // layout.body 插件独占 MJPEG: 任何误调都直接拒绝, 防竞态漏网
-  if (layoutBodyOverride.value) {
+  if (effectiveLayoutBodyOverride.value) {
     stopMultiStreams();
     return;
   }
@@ -2859,6 +2836,20 @@ const stopMultiStreams = () => {
 
 const processChannelResult = (ch, d) => {
   const chData = multiChannelData.value[ch] || {};
+  // v3.51.5: 工位源"从停到跑"的瞬间强制重连该路视频流 — 开机恢复要 30s+ 的现场
+  // (捷昌 B 站), 页面挂载时源还没起来, MJPEG 零帧断流两次就永久降级快照、或旧连接
+  // 对着停掉的源干等; 源恢复后没人负责把流拉回来, 表现为"画面加载完还得切页
+  // 再切回来才有画面"。数据轮询本来就 150ms 一拍知道 is_running, 在这里补上闭环。
+  const wasRunning = chData.isRunning === true;
+  if (!wasRunning && d.is_running && multiStreamRunning) {
+    mjpegZeroFrameFails[ch] = 0;
+    if (multiStreamAborts[ch]) {
+      try { multiStreamAborts[ch].abort(); } catch {}
+      delete multiStreamAborts[ch];
+    }
+    syncMultiStreams();
+    console.log(`[MultiStream] ch${ch} 源已恢复运行, 重连视频流`);
+  }
   chData.isRunning = d.is_running;
   chData.isDetecting = d.is_detecting;
   chData.sourceType = d.source_type || '';
@@ -2904,6 +2895,7 @@ const processChannelResult = (ch, d) => {
   chData.lastCycleTime = d.last_cycle_time || 0;
   chData.lastCycleTimeWithNg = d.last_cycle_time_with_ng || 0;
   chData.currentCycleTime = d.current_cycle_time || 0;
+  chData.stepIntervals = d.step_intervals || {};
   chData.lastStepDurations = d.last_step_durations || {};
   chData.stepDurations = d.step_durations || {};
   chData.avgStepDurations = d.avg_step_durations || {};
@@ -2945,10 +2937,10 @@ const processChannelResult = (ch, d) => {
   chData.mes = d.mes || null;
   if (d.mes) {
     if (d.mes.scan_event) {
-      handleScanToast(d.mes.scan_event, ch);
+      if (!kioskMode.value) handleScanToast(d.mes.scan_event, ch);
     }
     if (d.mes.rebind_prompt) {
-      handleRebindPrompt(d.mes.rebind_prompt, ch);
+      if (!kioskMode.value) handleRebindPrompt(d.mes.rebind_prompt, ch);
     }
     // v3.4.2 hotfix: 后端 reload / 别终端切换"扫码禁用"时, 把状态同步进 store,
     // 让 isScanDisabledFor / 守门 / 按钮文字 / 信息条都跟上.
@@ -3144,7 +3136,7 @@ const processChannelResult = (ch, d) => {
 
   // layout.body 插件: native overlay canvas 不在 DOM，每轮 polling 主动画到插件 canvas
   // (不能只靠插件 watch detections — 换页/重进 Monitor 时 prop 时序会丢帧)
-  if (layoutBodyOverride.value) {
+  if (effectiveLayoutBodyOverride.value) {
     const paintPluginOverlay = () => {
       const overlays = document.querySelectorAll('canvas.fjjl-det-overlay');
       const pluginCanvas = overlays[ch];
@@ -3173,7 +3165,10 @@ const startMultiPolling = () => {
     multiPollingInProgress = true;
     try {
       const promises = [];
-      for (let ch = 0; ch < channelCount.value; ch++) {
+      const pollChannels = kioskMode.value
+        ? [kioskChannel.value]
+        : Array.from({ length: channelCount.value }, (_, ch) => ch);
+      for (const ch of pollChannels) {
         promises.push(
           getDetectionResults(ch)
             .then(res => processChannelResult(ch, res.data))
@@ -3804,6 +3799,7 @@ const fetchChannelCount = async () => {
     const res = await getWorkstations();
     const count = res.data.channel_count || 1;
     channelCount.value = count;
+    if (kioskMode.value) selectedChannel.value = kioskChannel.value;
     if (selectedChannel.value >= count) {
       selectedChannel.value = 0;
     }
@@ -3812,7 +3808,7 @@ const fetchChannelCount = async () => {
       zoomedChannel.value = null;
       gridPage.value = 0;
     }
-    if (count > 1 || layoutBodyOverride.value) {
+    if (count > 1 || effectiveLayoutBodyOverride.value || kioskMode.value) {
       // D2 启动竞态修复: 工位数是唯一真相源。进入多工位前必须显式停掉单工位那套
       // (单工位轮询 + 单工位 MJPEG 流), 否则 onMounted 里 getSourceStatus 若先于本函数
       // 解析、彼时 channelCount 仍是默认 1 → 误起单工位流, 随后本函数又起多工位流,
@@ -3832,7 +3828,7 @@ const fetchChannelCount = async () => {
       // 原生双缓冲取流会和插件 <img> 抢同一通道的 MJPEG 连接 (后端每通道只保留最新
       // 一条连接, 旧连接主动让位), 先连的被踢断 → 画面冻在第一帧、而检测框叠加层走
       // 独立轮询照常更新。覆盖生效时跳过原生取流, 仅保留轮询 (叠加层画框/计数都靠它)。
-      if (!layoutBodyOverride.value) startMultiStreams();
+      if (!effectiveLayoutBodyOverride.value) startMultiStreams();
       startMultiPolling();
       loadPerChannelDetectionSettings(res.data.source_configs || {});
     } else {
@@ -3845,6 +3841,12 @@ const fetchChannelCount = async () => {
     stopMultiPolling();
     stopMultiStreams();
     resetMultiRuntimeState(true);
+    // v3.51.5: 开机竞态 — 打包版页面加载常早于后端就绪 (CUDA 预热十几秒),
+    // 此时本函数失败会把页面锁死在单工位态, 双工位卡片根本不渲染, 直到用户
+    // 切页重进。失败后自动重试直到拿到真实工位数。
+    if (monitorMounted) {
+      setTimeout(() => { if (monitorMounted) fetchChannelCount(); }, 3000);
+    }
   }
 };
 
@@ -3852,7 +3854,7 @@ const fetchChannelCount = async () => {
 // 往往还是 null, 单工位机器按"无插件"走了单工位轮询+单工位流。插件就绪的瞬间
 // 重跑一次, 让单工位也切到 multi 轮询 (看板徽章/检测框/计数都吃它) 并停掉宿主
 // 取流 (插件 <img> 独占 MJPEG)。插件被停用时同样重跑恢复原生路径。
-watch(layoutBodyOverride, (nv, ov) => {
+watch(effectiveLayoutBodyOverride, (nv, ov) => {
   if (!!nv === !!ov || !monitorMounted) return;
   // 插件刚挂上: 立刻掐断宿主多路流, 再走 fetchChannelCount 正规路径
   // (仅靠 fetch 内判断会漏掉「override 到位前已 startMultiStreams」的窗口)
@@ -3863,6 +3865,7 @@ watch(layoutBodyOverride, (nv, ov) => {
 const loadPerChannelDetectionSettings = async (sourceConfigs) => {
   for (const [chStr, cfg] of Object.entries(sourceConfigs)) {
     const chId = parseInt(chStr);
+    if (kioskMode.value && chId !== kioskChannel.value) continue;
     const pid = cfg?.project_id;
     if (!pid) continue;
     try {
@@ -3936,7 +3939,7 @@ const armStreamWatchdog = (timeoutMs) => {
 
 const connectStream = () => {
   // layout.body 插件自己用 <img> 吃 /video_feed; 宿主再连会踢断插件流 → 画面冻帧。
-  if (layoutBodyOverride.value) {
+  if (effectiveLayoutBodyOverride.value) {
     disconnectStream();
     return;
   }
@@ -3951,7 +3954,7 @@ const connectStream = () => {
   streamKey.value++;
   nextTick(() => {
     if (!monitorMounted) return;
-    if (layoutBodyOverride.value) return;
+    if (effectiveLayoutBodyOverride.value) return;
     streamSrc0.value = buildStreamUrl();
     activeStream.value = 0;
     armStreamWatchdog(STREAM_FIRST_FRAME_TIMEOUT_MS);
@@ -4196,9 +4199,10 @@ function shouldShowMesBarFor(ch) {
   if (mes?.order) return true;
   if (mes?.warn_no_barcode && hasScannerFor(ch)) return true;
   if (workpieceOverridesByCh.value[ch] === null) return true;  // 显示"等待扫码"
-  // v3.1.3: 多工位下只要工位在跑就显示信息条 (默认 "等待扫码..."),
-  // 让客户能直观看到这一栏的存在 (单工位另有路径已显示)
-  if (channelCount.value > 1) {
+  // v3.1.3: 多工位下只要工位在跑就显示信息条 (默认 "等待扫码...");
+  // v3.53: 无扫码器 (scanner_present=false) 时这条兜底不生效 —
+  // 没有扫码器的产线画"等待扫码"是误导 (v3.47 布局重构丢过这道守门)
+  if (channelCount.value > 1 && hasScannerFor(ch)) {
     const ch_data = multiChannelData.value[ch];
     if (ch_data?.isRunning || ch_data?.isDetecting) return true;
   }
@@ -4210,10 +4214,14 @@ const displayWorkpiece = computed(() => {
 });
 
 // 真实工件变化（新扫码绑了新工件）立即恢复默认显示，清掉残留的 override
+// v3.49 WS3: 记录"新码刚上屏"时刻——scan_pair 新序下新码先显示、旧周期结果后到,
+// 结果盖章逻辑据此跳过, 避免把上一箱的 OK/NG 贴到新码头上 / 把新码压回"等待扫码"。
+let lastWpSnChange = { sn: null, at: 0 };
 watch(
   () => mesData.value?.workpiece?.serial_no,
   (newSn, oldSn) => {
     if (newSn && newSn !== oldSn) {
+      lastWpSnChange = { sn: newSn, at: Date.now() };
       if (workpieceOverrideTimer) { clearTimeout(workpieceOverrideTimer); workpieceOverrideTimer = null; }
       if (workpieceHideTimer) { clearTimeout(workpieceHideTimer); workpieceHideTimer = null; }
       workpieceOverride.value = undefined;
@@ -4298,6 +4306,11 @@ const counters = computed(() => {
   
   return [...defaultCounters, ...customCounters];
 });
+
+// 原单工位与多屏共用同一个合格率仪表盘；数据仍来自本轮计数器的 OK/总产量。
+const primaryGaugeGoodCount = computed(() => counters.value.find(c => c.name === '合格总数')?.value || 0);
+const primaryDefectBadCount = computed(() => counters.value.find(c => c.name === '不良总数')?.value || 0);
+const primaryGaugeTotalCount = computed(() => counters.value.find(c => c.name === '总产量')?.value || 0);
 
 // 三个内置计数器（检测次数、OK次数、NG次数）并排
 const BUILTIN_THREE = ['总产量', '合格总数', '不良总数'];
@@ -4508,6 +4521,8 @@ const getMultiPositionClass = (position) => {
 };
 
 const showMultiToast = (ch, toastId, eventName, reason = '', eventId = null) => {
+  // kiosk 一期只读且各副窗独立 renderer，禁止重复播报/堆叠全局交互提示。
+  if (kioskMode.value) return;
   const det = systemStore.getChannelDetection(ch);
   const config = getToastConfig(toastId, ch);
   const icons = { ok: CircleCheck, ng: CircleClose, custom: Warning };
@@ -5206,100 +5221,7 @@ watch(() => currentProject.value, (newProject, oldProject) => {
     cycleResult: null
   }));
   
-  nextTick(() => {
-    updateCharts();
-  });
-
 }, { immediate: true, deep: true });
-
-// Initialize Charts
-const initCharts = () => {
-  if (pieChartInstance && !pieChartInstance.isDisposed()) {
-    pieChartInstance.dispose();
-  }
-  pieChartInstance = null;
-  
-  if (gaugeChartInstance && !gaugeChartInstance.isDisposed()) {
-    gaugeChartInstance.dispose();
-  }
-  gaugeChartInstance = null;
-
-  if (defectChartRef.value) {
-    pieChartInstance = echarts.init(defectChartRef.value);
-    updatePieChart();
-  }
-
-  if (capacityGaugeRef.value) {
-    gaugeChartInstance = echarts.init(capacityGaugeRef.value);
-    updateGaugeChart();
-  }
-};
-
-// 更新饼图
-const updatePieChart = () => {
-  if (!pieChartInstance || pieChartInstance.isDisposed()) return;
-  
-  const goodCount = counters.value.find(c => c.name === '合格总数')?.value || 0;
-  const badCount = counters.value.find(c => c.name === '不良总数')?.value || 0;
-  
-  pieChartInstance.setOption({
-    color: ['#10b981', '#ef4444'],
-    series: [{
-      type: 'pie',
-      radius: ['40%', '70%'],
-      center: ['50%', '55%'],
-      label: { show: false },
-      data: [
-        { value: goodCount || 1, name: '良品' },
-        { value: badCount, name: '不良' }
-      ]
-    }]
-  });
-};
-
-// 更新仪表盘
-const updateGaugeChart = () => {
-  if (!gaugeChartInstance || gaugeChartInstance.isDisposed()) return;
-  
-  const goodCount = counters.value.find(c => c.name === '合格总数')?.value || 0;
-  const totalCount = counters.value.find(c => c.name === '总产量')?.value || 0;
-  const yieldRate = totalCount > 0 ? (goodCount / totalCount * 100) : 0;
-  
-  gaugeChartInstance.setOption({
-    series: [{
-      type: 'gauge',
-      center: ['50%', '60%'],
-      radius: '80%',
-      startAngle: 180,
-      endAngle: 0,
-      min: 0,
-      max: 100,
-      splitNumber: 5,
-      itemStyle: { color: yieldRate >= 90 ? '#10b981' : yieldRate >= 70 ? '#f59e0b' : '#ef4444' },
-      progress: { show: true, width: 10 },
-      pointer: { show: false },
-      axisLine: { lineStyle: { width: 10, color: [[1, '#334155']] } },
-      axisTick: { show: false },
-      splitLine: { show: false },
-      axisLabel: { show: false },
-      detail: { 
-        valueAnimation: true, 
-        offsetCenter: [0, '20%'],
-        fontSize: 24,
-        fontWeight: 'bold',
-        color: '#fff',
-        formatter: '{value}%'
-      },
-      data: [{ value: yieldRate.toFixed(1) }]
-    }]
-  });
-};
-
-// 更新所有图表
-const updateCharts = () => {
-  updatePieChart();
-  updateGaugeChart();
-};
 
 // 检测结果轮询定时器
 let pollingTimer = null;
@@ -5608,8 +5530,6 @@ let lastSingleCycleId = null;
 // Periodic double-buffer swap to release Chromium native decoder memory
 let streamSwapCounter = 0;
 const STREAM_SWAP_INTERVAL = 600;
-let lastChartUpdate = 0;
-const CHART_UPDATE_INTERVAL = 2000; // 图表最多每2秒更新一次
 let lastScreenshotUpdate = 0;
 const SCREENSHOT_UPDATE_INTERVAL = 1000;
 let pollingInProgress = false; // 防止轮询重叠
@@ -5653,6 +5573,19 @@ const startPolling = () => {
       fps.value = data.fps || 0;
       latency.value = data.latency || 0;
       detectionCount.value = (data.detections || []).length;
+
+      // start API 可能已在后端启动成功，但 HTTP promise 因现场网络/壳层异常迟迟不返回。
+      // 仅在「正处于操作 + 前端尚未 detecting + 后端已 detecting」这一启动达成态释放锁；
+      // stop/standby pending 进入时前端 detecting=true，不会误触发。
+      if (isOperating.value && !isDetecting.value && data.is_detecting === true) {
+        dbg('monitor.poll', '后端已达成启动，释放前端操作锁');
+        isRunning.value = typeof data.is_running === 'boolean' ? data.is_running : true;
+        isDetecting.value = true;
+        isPaused.value = false;
+        projectStore.setRunningStatus(isRunning.value);
+        if (channelCount.value <= 1) systemStore.setDetecting(true);
+        isOperating.value = false;
+      }
 
       // v3.40 川南反馈: 检测由后端自行拉起/停下时 (开工报文自动开始检测等),
       // 前端按钮灰度/状态章跟不上 → 轮询循环里以后端为真相源同步运行/检测态。
@@ -5805,7 +5738,6 @@ const startPolling = () => {
       }
       
       if (isRunning.value) {
-        const shouldUpdateCharts = (now - lastChartUpdate >= CHART_UPDATE_INTERVAL);
         const countersWithCycle = data.counters || {};
         countersWithCycle._currentCycleSteps = data.current_cycle_steps || [];
         countersWithCycle._backupCoveredLabels = data.backup_covered_labels || [];
@@ -5814,12 +5746,8 @@ const startPolling = () => {
           data.step_counts || {}, 
           data.detections || [],
           countersWithCycle,
-          data.recent_events || [],
-          shouldUpdateCharts
+          data.recent_events || []
         );
-        if (shouldUpdateCharts) {
-          lastChartUpdate = now;
-        }
       }
       
       if (data.detections) {
@@ -5929,11 +5857,14 @@ const shownEventIds = ref(new Set());
 // 扫码提示去重 — 按通道独立记录时间戳
 const lastScanToastTs = {};
 const handleScanToast = (scanEvent, ch = 0) => {
-  // v3.3.0 码-码闭环: 同码二次扫的软警告 (后端在 _last_scan_event 里写 scan_pair_dup_warning=true)
-  if (scanEvent.scan_pair_dup_warning) {
+  // v3.50 拒绝路径统一警告 (强制去重/OK冷却/重复拒绝/scan_pair 重复码):
+  // 后端在 _last_scan_event 里写 scan_warning=true + warn_reason。
+  // v3.3.0 的 scan_pair_dup_warning 老字段一并兼容 (老后端只有该字段)。
+  if (scanEvent.scan_warning || scanEvent.scan_pair_dup_warning) {
     if (scanEvent.timestamp <= (lastScanToastTs[ch] || 0)) return;
     lastScanToastTs[ch] = scanEvent.timestamp;
-    const msg = `重复扫码: ${scanEvent.serial_no} - 等待新码`;
+    const reason = scanEvent.warn_reason || '重复扫码，等待新码';
+    const msg = `${scanEvent.serial_no}: ${reason}`;
     if (channelCount.value > 1) {
       ElMessage.warning(`工位 ${ch + 1} ${msg}`);
     } else {
@@ -6043,6 +5974,21 @@ const clearPendingScan = async (ch) => {
   }
 };
 
+// v3.50 人工恢复扫码 — resume_on='ok_only' 下 NG 保持灭灯的人工出口
+const resumeScannerFor = async (ch) => {
+  try {
+    const res = await api.post('/scanner/resume', null, { params: { channel_id: ch } });
+    const resumed = res.data?.resumed || [];
+    if (resumed.length) {
+      ElMessage.success(`已恢复扫码: ${resumed.join(', ')}`);
+    } else {
+      ElMessage.info(res.data?.message || '该工位没有等待恢复的扫码器');
+    }
+  } catch (e) {
+    ElMessage.error('恢复扫码失败: ' + (e.response?.data?.detail || e.message || '未知错误'));
+  }
+};
+
 // 缓存上一次截图 base64，避免重复创建 data URL
 const cachedScreenshotUrls = {};
 
@@ -6054,7 +6000,7 @@ let lastNgCount = -1;
 const processedEventIds = new Set();
 
 // 从后端数据更新步骤状态
-const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, recentEvents, shouldUpdateCharts = true) => {
+const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, recentEvents) => {
   const detectingLabels = new Set(currentDetections.map(d => d.label));
   // v3.32 区域事件模式: 步骤行是"动作规则名"(测硬度), 画面检测框是"模型类别名"(测硬度笔),
   // 两者永远对不上 → "进行中"判定不能看 detectingLabels, 改看后端 in-flight PT
@@ -6109,17 +6055,27 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
     // 当作"上限". 现在改为"至少持续到下一轮真正开始".
 
     // 工件卡片：把"检测中"替换成本轮最终结果(OK/NG)保留一会儿，之后清空回到"等待扫码..."
+    // v3.49 WS3: scan_pair 新序下新码先上屏、旧周期结果后到——此刻 mesData.workpiece
+    // 已是新码, 结果不属于它: 既不能把 OK/NG 贴到新码头上, 也不能到点强制"等待扫码"
+    // 把新码压掉。判据: 当前 sn 就是"刚换上的新码"(5s 内) → 跳过盖章, 保持新码显示。
     const cycleIsNg = lastNgCount >= 0 && currentNg > lastNgCount;
     const realWp = mesData.value?.workpiece;
-    if (realWp) {
+    const wpJustRotated = realWp && realWp.serial_no
+      && realWp.serial_no === lastWpSnChange.sn
+      && (Date.now() - lastWpSnChange.at) < 5000;
+    if (realWp && !wpJustRotated) {
       if (workpieceOverrideTimer) { clearTimeout(workpieceOverrideTimer); workpieceOverrideTimer = null; }
       if (workpieceHideTimer) { clearTimeout(workpieceHideTimer); workpieceHideTimer = null; }
+      const overrideSn = realWp.serial_no;
       workpieceOverride.value = {
         ...realWp,
         status: cycleIsNg ? 'ng' : 'ok',
       };
       workpieceHideTimer = setTimeout(() => {
-        workpieceOverride.value = null; // 清空 → 模板显示"等待扫码..."
+        // 守护: 若真实工件已换成新码 (override 挂着期间轮转), 跟随真实数据显示新码,
+        // 不再强制"等待扫码"。
+        const curSn = mesData.value?.workpiece?.serial_no;
+        workpieceOverride.value = (curSn && curSn !== overrideSn) ? undefined : null;
         workpieceHideTimer = null;
       }, WORKPIECE_RESULT_HOLD_MS);
     }
@@ -6424,9 +6380,6 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
     }
   }
   
-  if (shouldUpdateCharts) {
-    updateCharts();
-  }
 };
 
 // 停止轮询
@@ -6573,7 +6526,6 @@ const resetCounters = async () => {
   trackingSettledOk.value = 0;
   trackingSettledNg.value = 0;
   
-  updateCharts();
   ElMessage.success('计数器已清零');
 };
 
@@ -6721,7 +6673,6 @@ const triggerEvent = (eventId) => {
     }
   }
   
-  updateCharts();
 };
 
 // 自动恢复输入源（返回是否成功恢复）
@@ -6742,6 +6693,20 @@ const autoRestoreSource = async () => {
       return true;
     }
   } catch { /* 后端不可达, 继续用 localStorage 兜底 */ }
+
+  // v3.51.5: localStorage 单工位兜底只允许在单工位模式跑 — 多工位开机时它会抢在
+  // 后端逐工位恢复之前, 把"最后一次单工位用过的相机"怼到 ch0 上: ch0 被占成错误
+  // 相机 (后端恢复见已在跑不纠正), 真正配这台相机的工位撞"使用中"快速失败,
+  // 现场表现为左工位显示右工位画面 + 右工位黑屏 (2026-08-15 捷昌 B 站双 USB 相机实录)。
+  // 多工位的开机恢复由后端 auto_restore_video_sources 按 workstation_config 逐工位
+  // 执行, 前端一律不插手; channel_count 以后端为准 (本地 ref 此刻可能还没加载完)。
+  try {
+    const ws = await api.get('/workstations');
+    if ((ws?.data?.channel_count || 1) > 1) {
+      console.log('[AutoRestore] 多工位模式, 跳过 localStorage 单工位兜底 (交给后端逐工位恢复)');
+      return false;
+    }
+  } catch { /* 拿不到工位数: 后端不可达, 下面的兜底 POST 同样会失败, 不额外拦 */ }
 
   sourceStore.loadConfig();
   if (!localStorage.getItem('source_config')) return false;
@@ -6953,8 +6918,11 @@ onMounted(async () => {
   // D2 启动竞态修复: 先 await 工位数 (唯一真相源) 再走下面依赖 channelCount 的取流分支,
   // 避免 getSourceStatus 在 channelCount 还是默认 1 时误起单工位流 (双工位机器上会和
   // 多工位流并存抢 MJPEG)。fetchChannelCount 内部已对单/多两套做"起新套前停旧套"。
+  await loadMultiMonitorRuntime();
   await fetchChannelCount();
   if (!monitorMounted) return;
+  // kiosk 仅保留自己的 multi 轮询与一路视频；不启动扫码、自动恢复、全局看门狗等写通路。
+  if (kioskMode.value) return;
   loadExtraFieldsSchema();
   scannerDisableStore.loadStatus();
 
@@ -6973,7 +6941,6 @@ onMounted(async () => {
   streamErrorCount = 0;
   
   nextTick(() => {
-    initCharts();
     resizeCanvas();
   });
   
@@ -7007,7 +6974,7 @@ onMounted(async () => {
 
     if (res.data.is_running) {
       // layout.body: 取流/轮询由 fetchChannelCount 的 multi 路径负责, 禁止再起单工位流
-      if (channelCount.value <= 1 && !layoutBodyOverride.value) {
+      if (channelCount.value <= 1 && !effectiveLayoutBodyOverride.value) {
         startPolling();
         forceReconnectStream();
       }
@@ -7018,7 +6985,7 @@ onMounted(async () => {
       isPaused.value = true;
       // D3: 多工位时不拉单工位预览流(多工位由 startMultiStreams 负责),
       //     否则双工位仍会叠一路单工位流, 白占带宽/解码。
-      if (channelCount.value <= 1 && !layoutBodyOverride.value) forceReconnectStream();
+      if (channelCount.value <= 1 && !effectiveLayoutBodyOverride.value) forceReconnectStream();
     }
     
     if (!res.data.source_type) {
@@ -7026,7 +6993,7 @@ onMounted(async () => {
       if (!monitorMounted) return;
     } else if (res.data.source_type && !res.data.is_running) {
       // D3: 同上; layout.body 插件独占 MJPEG
-      if (channelCount.value <= 1 && !layoutBodyOverride.value) forceReconnectStream();
+      if (channelCount.value <= 1 && !effectiveLayoutBodyOverride.value) forceReconnectStream();
     }
   }).catch(() => {
   });
@@ -7036,12 +7003,6 @@ let canvasResizeObserver = null;
 
 const handleResize = () => {
   resizeCanvas();
-  if (pieChartInstance && !pieChartInstance.isDisposed()) {
-    pieChartInstance.resize();
-  }
-  if (gaugeChartInstance && !gaugeChartInstance.isDisposed()) {
-    gaugeChartInstance.resize();
-  }
 };
 
 onUnmounted(() => {
@@ -7062,34 +7023,9 @@ onUnmounted(() => {
   
   disconnectStream();
   
-  if (counterWatchTimer) {
-    clearTimeout(counterWatchTimer);
-    counterWatchTimer = null;
-  }
-  
   systemStore.setDetecting(false);
   projectStore.setRunningStatus(false);
-  
-  if (pieChartInstance) {
-    pieChartInstance.dispose();
-    pieChartInstance = null;
-  }
-  if (gaugeChartInstance) {
-    gaugeChartInstance.dispose();
-    gaugeChartInstance = null;
-  }
 });
-
-// 监听计数器变化更新图表（节流：最多每2秒更新一次）
-let counterWatchTimer = null;
-watch(counters, () => {
-  if (!counterWatchTimer) {
-    counterWatchTimer = setTimeout(() => {
-      updateCharts();
-      counterWatchTimer = null;
-    }, 2000);
-  }
-}, { deep: true });
 
 // 暴露触发事件方法供测试
 defineExpose({ triggerEvent, showToast });

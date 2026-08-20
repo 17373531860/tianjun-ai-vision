@@ -55,6 +55,66 @@ def get_projects(
     
     return ProjectListResponse(total=total, items=items)
 
+
+# ==================== v3.51: 激活项目收养策略 (必须声明在 /{project_id} 之前) ====================
+# 背景 (2026-08-14 捷昌 B 站): 多工位下某通道绑定曾被 bug 抹掉后, 任何一次"启用项目"
+# 都会把该无绑定通道收养进当前项目并写死持久化绑定 (v3.32.1 行为), 现场感知为
+# "删了个标签, 两个工位的项目都变成小件了"。此开关关掉后, 激活只同步"已绑定本项目"
+# 的通道, 不收养无绑定通道、不改写任何绑定 — 多工位多项目部署建议关闭。
+# 默认开 (保持 v3.32.1 以来行为, 单工位/单项目部署零差异)。
+
+_ADOPT_UNBOUND_KEY = "activate.adopt_unbound"
+
+
+def _get_adopt_unbound(db: Optional[Session] = None) -> bool:
+    """读"激活项目收养未绑定工位"开关, 默认 True (存量行为)."""
+    from backend.models.models import SystemConfig
+    try:
+        if db is not None:
+            row = db.query(SystemConfig).filter(
+                SystemConfig.key == _ADOPT_UNBOUND_KEY).first()
+        else:
+            from backend.db.database import SessionLocal
+            _db = SessionLocal()
+            try:
+                row = _db.query(SystemConfig).filter(
+                    SystemConfig.key == _ADOPT_UNBOUND_KEY).first()
+            finally:
+                _db.close()
+        if row is None or row.value is None or row.value == "":
+            return True
+        return str(row.value).strip().lower() not in ("0", "false", "off")
+    except Exception as e:
+        print(f"[激活项目] 读取收养开关失败 (按默认开处理): {e}")
+        return True
+
+
+@router.get("/activate-config")
+def get_activate_config(db: Session = Depends(get_db)):
+    """读激活项目行为配置 (v3.51)"""
+    return {"adopt_unbound": _get_adopt_unbound(db)}
+
+
+@router.put("/activate-config",
+            dependencies=[Depends(require_perm("settings.edit"))])
+def put_activate_config(payload: dict, db: Session = Depends(get_db)):
+    """写激活项目行为配置 (v3.51). body: {"adopt_unbound": bool}"""
+    from backend.models.models import SystemConfig
+    if "adopt_unbound" not in payload:
+        raise HTTPException(status_code=400, detail="缺少 adopt_unbound 字段")
+    val = "1" if bool(payload["adopt_unbound"]) else "0"
+    row = db.query(SystemConfig).filter(
+        SystemConfig.key == _ADOPT_UNBOUND_KEY).first()
+    if row:
+        row.value = val
+    else:
+        db.add(SystemConfig(key=_ADOPT_UNBOUND_KEY, value=val,
+                            description="激活项目是否收养未绑定工位 (v3.51)"))
+    db.commit()
+    print(f"[激活项目] 收养未绑定工位开关 → {val}")
+    return {"status": "ok", "adopt_unbound": bool(payload["adopt_unbound"])}
+
+
 @router.get("/{project_id}", response_model=ProjectResponse)
 def get_project(project_id: int, db: Session = Depends(get_db)):
     """获取项目详情"""
@@ -253,18 +313,41 @@ def _channels_bound_to_other(channel_manager, sources: dict, project: Project) -
     "全局启用"就是用户眼里的唯一真相; 残留的旧绑定只会让重启后 auto_load_active_project
     悄悄恢复另一个项目+另一个模型, 造成"项目页显示启用 A, 工位实际跑 B"。
     多工位 (>=2) 保持原语义: 各工位自己绑定的项目优先, 全局激活不跨越。
+
+    v3.49: 绑定指向**已删除项目**的通道不算"绑定其它项目"——否则删掉某工位
+    绑定的项目后, 残留绑定让该工位从此吃不到任何 activate 配置同步,
+    mgr.project_config 永远停在已删项目上: SQLite 下悄悄产出孤儿 session,
+    PostgreSQL 下 FK 直接拒绝、session 建不出来 (db-matrix PG 扩容实锤)。
     """
     if len(channel_manager.channels) <= 1:
         return set()
-    bound = set()
+    bound_pids: dict[int, int] = {}
     for ch_str, ch_cfg in sources.items():
         pid = ch_cfg.get("project_id")
         if pid and pid != project.id:
             try:
-                bound.add(int(ch_str))
+                bound_pids[int(ch_str)] = int(pid)
             except (TypeError, ValueError):
                 continue
-    return bound
+    if not bound_pids:
+        return set()
+    # 校验绑定的项目还存在: 已删项目的残留绑定视为无效, 不阻挡配置同步
+    try:
+        from backend.db.database import SessionLocal
+        db = SessionLocal()
+        try:
+            alive = {row[0] for row in db.query(Project.id).filter(
+                Project.id.in_(set(bound_pids.values()))).all()}
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[激活项目] 绑定项目存在性校验失败 (按全部有效处理): {e}")
+        alive = set(bound_pids.values())
+    stale = {ch for ch, pid in bound_pids.items() if pid not in alive}
+    if stale:
+        print(f"[激活项目] 通道 {sorted(stale)} 的绑定指向已删项目, "
+              f"视为未绑定并参与本次配置同步")
+    return {ch for ch, pid in bound_pids.items() if pid in alive}
 
 
 def _sync_project_config_to_channels(project: Project) -> None:
@@ -285,6 +368,14 @@ def _sync_project_config_to_channels(project: Project) -> None:
     bound_to_other = _channels_bound_to_other(channel_manager, sources, project)
 
     remaining = [cid for cid in channel_manager.channels if cid not in bound_to_other]
+    # v3.51: 收养开关关闭时, 只同步"已显式绑定本项目"的通道 —
+    # 无绑定通道不收养 (不同步配置 / 不改写绑定), 防止多工位互踩。
+    if not _get_adopt_unbound():
+        remaining = [
+            cid for cid in remaining
+            if (sources.get(str(cid)) or {}).get("project_id") == project.id
+        ]
+        print(f"[激活项目] 收养开关=关, 仅同步已绑定本项目的通道: {remaining}")
     if not remaining:
         print("[激活项目] 所有通道都已绑定其它项目，跳过配置同步")
         return
@@ -341,6 +432,13 @@ def _reload_model_for_active_project(db: Session, project: Project) -> None:
     bound_to_other = _channels_bound_to_other(channel_manager, sources, project)
 
     remaining = [cid for cid in channel_manager.channels if cid not in bound_to_other]
+    # v3.51: 收养开关关闭时只给"已绑定本项目"的通道换模型 (与配置同步同一语义)
+    if not _get_adopt_unbound(db):
+        remaining = [
+            cid for cid in remaining
+            if (sources.get(str(cid)) or {}).get("project_id") == project.id
+        ]
+        print(f"[激活项目] 收养开关=关, 仅给已绑定本项目的通道重载模型: {remaining}")
     if not remaining:
         print("[激活项目] 所有通道都已绑定其它项目，跳过模型重载")
         return

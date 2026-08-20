@@ -47,6 +47,10 @@ class ScannerCreate(BaseModel):
     scan_d_line: Optional[dict] = None
     scan_d_zone: Optional[list] = None
     scan_d_gone_confirm_frames: int = 30
+    # v3.50 扫码器生命周期 (默认值 = 现状行为)
+    resume_on: str = "cycle_end"
+    rearm_forget_last: bool = False
+    strict_ok_dedup: bool = False
 
 
 class ScannerUpdate(BaseModel):
@@ -81,6 +85,10 @@ class ScannerUpdate(BaseModel):
     scan_d_line: Optional[dict] = None
     scan_d_zone: Optional[list] = None
     scan_d_gone_confirm_frames: Optional[int] = None
+    # v3.50 扫码器生命周期
+    resume_on: Optional[str] = None
+    rearm_forget_last: Optional[bool] = None
+    strict_ok_dedup: Optional[bool] = None
 
 
 class ScannerSimulate(BaseModel):
@@ -120,6 +128,10 @@ def _serialize_device(d):
         "scan_d_line": getattr(d, 'scan_d_line', None),
         "scan_d_zone": getattr(d, 'scan_d_zone', None),
         "scan_d_gone_confirm_frames": int(getattr(d, 'scan_d_gone_confirm_frames', 30) or 30),
+        # v3.50 扫码器生命周期
+        "resume_on": getattr(d, 'resume_on', 'cycle_end') or 'cycle_end',
+        "rearm_forget_last": bool(getattr(d, 'rearm_forget_last', False)),
+        "strict_ok_dedup": bool(getattr(d, 'strict_ok_dedup', False)),
     }
 
 
@@ -338,6 +350,24 @@ def simulate_scan(body: ScannerSimulate):
     return result
 
 
+@router.post("/resume", summary="人工恢复扫码 (重新亮灯)")
+def resume_scanner(channel_id: int = Query(0, description="工位号")):
+    """v3.50 人工恢复扫码 — `resume_on='ok_only'` 下 NG 保持灭灯的人工出口。
+
+    对绑定该工位、处于"扫到码等恢复"状态 (once_per_cycle / D 模式) 的
+    text_lon 扫码器无条件解除灭灯锁, 让 listen loop 重新续 LON。
+    监控页"恢复扫码"按钮与触发中心 `resume_scanner` 动作共用本语义。
+    """
+    svc = get_scanner_service()
+    resumed = svc.resume_scanning_manual(channel_id)
+    return {
+        "success": True,
+        "resumed": resumed,
+        "message": (f"已恢复 {len(resumed)} 台扫码器: {', '.join(resumed)}"
+                    if resumed else "该工位没有等待恢复的扫码器"),
+    }
+
+
 @router.get("/status")
 def get_all_status():
     svc = get_scanner_service()
@@ -492,6 +522,34 @@ def settle_scan_pair_for_stop(req: ScanPairStopRequest):
         return {"settled_count": int(n), "discarded": req.discard}
     except Exception as e:
         raise HTTPException(500, f"settle_scan_pair_for_stop failed: {e}")
+
+
+# ==================== v3.49 WS3: scan_pair 新码先上屏开关 (默认开) ====================
+# 开(默认) → 扫码 B 到达先开新窗 + promote 上屏, 再结算上一窗口 (结算身份显式钳制);
+# 显式关 → 旧序 (先结算后上屏), 排查回退用。存 SystemConfig(scan_pair_new_code_first)。
+
+class ScanPairNewFirstToggle(BaseModel):
+    enabled: bool = True
+
+
+@router.get("/scan-pair/new-code-first", summary="读取 scan_pair 新码先上屏开关")
+def get_scan_pair_new_first():
+    """返回 scan_pair 配对模式「新码先上屏」开关当前值（默认开）。"""
+    from backend.services.mes_hooks import get_mes_hook
+    return {"enabled": get_mes_hook().get_scan_pair_new_first()}
+
+
+@router.put("/scan-pair/new-code-first", summary="设置 scan_pair 新码先上屏开关",
+            dependencies=[Depends(require_perm("settings.edit"))])
+def set_scan_pair_new_first(body: ScanPairNewFirstToggle):
+    """开=新码到达先顶替上屏、旧窗口用显式身份异步结算；关=回退旧序（先结算再上屏）。
+
+    存 SystemConfig(scan_pair_new_code_first)，即时生效无需重启。
+    """
+    from backend.services.mes_hooks import get_mes_hook
+    hook = get_mes_hook()
+    hook.set_scan_pair_new_first(body.enabled)
+    return {"status": "success", "enabled": hook.get_scan_pair_new_first()}
 
 
 # ==================== v3.4.2 "禁用扫码"按工位开关 ====================

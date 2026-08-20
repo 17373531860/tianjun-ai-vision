@@ -164,6 +164,7 @@ spawn(pythonPath, ['-m', 'uvicorn', 'backend.main:app',
 - 输出：`TianJun-AI-Vision-{#MyAppVersion}-Setup.exe`，64-bit + LZMA2 压缩，约 3.75 GB
 - 装机前自动备份 `license.lic`，装机后恢复（防升级丢激活）
 - 可选安装 CH340 驱动
+- **嵌入式 PostgreSQL 可选组件（v3.51.3 起真正带出）**：installer.iss 的 `#ifdef IncludePostgres` 组件（initdb → 注册 Windows 服务 → 建库 → 写 db_config.json）需要两个配套条件同时成立——① CI 先把 PG 16.15 官方便携包铺到 `electron\dist\pg-portable\`（build.yml "Stage PostgreSQL portable" 步骤：下载 3 次重试**失败硬红阻断发版**、裁掉 pgAdmin/StackBuilder/symbols/doc/include、校验 `bin\initdb.exe`）；② ISCC 编译传 `/DIncludePostgres`。**血泪教训（v3.49~v3.51.2）**：只写了 #ifdef、CI 从未传开关也从未铺过文件，三个大版本的安装包里根本没有 PG 选项且无人发现——`#ifdef` 型可选组件必须配 CI 侧存在性校验，不允许静默缺失。安装项默认不勾选，不勾=行为与历史版本完全一致
 
 ---
 
@@ -322,8 +323,9 @@ img = np.zeros((100,100,3), dtype=np.uint8); cv2.resize(img,(50,50))
 ### CI 阶段（约 45-60 min）
 - [ ] `gh run list --limit 3` 确认 push main + push tag 各触发一条 run
 - [ ] `gh run view <id>` 各步骤全绿，特别是 Inno Setup 步的 tag/version 一致性校验
-- [ ] Artifact 下到本地，文件名前缀必须 `TianJun-AI-Vision-X.Y.Z-Setup.exe`，体积 ~3.75 GB
+- [ ] Artifact 下到本地，文件名前缀必须 `TianJun-AI-Vision-X.Y.Z-Setup.exe`，体积 ~3.75 GB（v3.51.3 起带 PG 约 4.1 GB）
 - [ ] Release：`gh release view vX.Y.Z --repo 17373531860/tianjun-releases` 应有 N 个 `.part` + `checksums.txt` + `merge_installer.bat`
+- [ ] **成品解剖清点（本版新增/改动了交付物时强制）**：分卷校验合并后用 innoextract `--list` 列包内清单，逐项确认本版新增能力的**完整链路文件**都在（组件本体/初始化/配套工具/文档）。Mac 上主线 innoextract 不支持 Inno 6.5+（报 loader revision: 2），用 PR#210 分支编（conda-forge 拿 cmake/boost-cpp/xz）；`--extract` 对 >2GB 包尾部报 "cannot change slices" 是工具限制非包损坏。血泪：v3.49~v3.51.2 PG 选项静默缺失三个版本、v3.51.3 迁移工具缺失，都是没做这步（详见 run-tests skill「捷昌 v3.51.3 交付审计逃逸复盘」）
 
 ### Gitee 同步（手动）
 - [ ] `gh workflow run gitee-upload.yml -f version=vX.Y.Z`，等绿

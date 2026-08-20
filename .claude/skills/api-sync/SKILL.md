@@ -40,7 +40,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 |---|---|---|---|
 | `/source/*` | `source.py`（router 容器）+ `source_routes.py` | `detection.js` | 视频源采集 + 推理状态机核心 API（⚠ 没有 source.js） |
 | `/data/*` | `sessions.py` + `sessions_export.py` + `sessions_stats.py` + `sessions_maintenance.py`（+ `showcase_stats.py` 只读统计共用前缀） | `data.js` | session/cycle/step + CSV 导出 + 数据维护 |
-| `/projects/*` | `projects.py` | `project.js` | 项目 CRUD + 激活 + `/active/current` |
+| `/projects/*` | `projects.py` | `project.js` | 项目 CRUD + 激活 + `/active/current`；v3.51 加 `GET/PUT /activate-config`（激活收养开关 adopt_unbound，声明在 `/{project_id}` 之前防路由吞噬） |
 | `/models/*` | `models.py` | `model.js` | 模型上传/转换/标签解析 |
 | `/tasks/*` | `tasks.py` | 无（`task.js` 已删） | 离线推理任务（前端无入口，仅 API 在线） |
 | `/reports/*` | `reports.py` | 无（`report.js` 已删） | 趋势/日报/导出（报表展示由 Data 页接管） |
@@ -49,8 +49,8 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `/alarm/*` | `alarm.py` | 无封装（Alarm 视图直调） | 灯塔 / 蜂鸣器 / 共享灯柱 |
 | `/sms/*` | `sms.py` | `sms.js` | 系统级统一短信通道 + NG 汇总通知（config/ports/test；通道五选一 at_modem/generic_http/wxpusher/aliyun/tencent，日报共用此配置，默认关） |
 | `/sms-report/*` | `sms_report.py` | `smsReport.js` | v3.46 每日短信日报（规则 CRUD/试发/预览/日志 + `/providers` 只读通道信息；通道配置走 `/sms/config`） |
-| `/workstations/*` | `channel_manager.py` | `detection.js`（混在其中） | 多工位 + GPU 分配 |
-| `/scanner/*` | `scanner.py` | `scanner.js` | 扫码器 CRUD + scan_pair + disable-toggle |
+| `/workstations/*` | `channel_manager.py` | `detection.js`（混在其中） | 多工位 + GPU 分配；v3.52 新增 GET/PUT `/multi-monitor`（多屏工位显示配置段，PUT 挂 `settings.edit`，前端 `getMultiMonitorConfig`/`setMultiMonitorConfig`） |
+| `/scanner/*` | `scanner.py` | `scanner.js` | 扫码器 CRUD + scan_pair + disable-toggle + resume（v3.50 人工恢复） |
 | `/scanner/wmax/*` | `wmax.py` | `wmax.js` | WMax 三端口协议（35+ 端点） |
 | `/external-devices/*` | `external_device.py` | `external_device.js` | 称重器/串口外设（list/create **要尾斜杠**） |
 | `/cluster/*` | `cluster.py` | `cluster.js` | 集群主从 + 心跳 + box 聚合 |
@@ -63,7 +63,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `/roles/*` | `roles.py` | `auth.js`（同文件封装） | v3.10.0 角色 CRUD + 权限编辑 |
 | `/api-keys/*` | `api_keys.py` | `auth.js`（同文件封装） | v3.10.0 M2M API Key（SHA256 + scope） |
 | `/export/*` | `export_custom.py` + `export_realtime.py` + `export_scheduled.py`（**三文件共用前缀**） | `export.js` | v3.5.0 自定义导出 + 实时规则 + v3.8 定时导出 |
-| `/channel-groups/*` | `channel_groups.py` | `channel_group.js` | v3.13.1 工位组（RFC 10 并行联动） |
+| `/channel-groups/*` | `channel_groups.py` | `channel_group.js` | v3.13.1 工位组（RFC 10 并行联动）；v3.51 Schema 加 `unified_ok_report`（存 plugin_data，synchronized_all_ok 组统一播报） |
 | `/workpiece-flows/*` | `workpiece_flows.py` | —（Project 视图直调） | v3.14 串行流水线结算（RFC 11） |
 | `/packaging-flows/*` | `packaging_flows.py` | `packaging_flow.js` | v3.21+ 包装箱结算（上银包装线） |
 | `/weighing/*` | `weighing.py` | `weighing.js` | ★ v3.31 称重投料模式（前置选择/扫码/去皮/记录查询/虚拟喂重）；v3.45 加 `/weighing/operators`（作业员名单下拉取数，只暴露启用账号显示名，不挂用户管理权限） |
@@ -239,6 +239,7 @@ export function getBackendHost() {
 ### 4.3 scanner / wmax / mes / gateway
 
 - 所有 scanner 状态查询（`/status` `/latest/{ch}` `/logs` `/check-container-mode` `/scan-pair/*` `/disable-*`）都在静态路径区；具体设备 CRUD 走 `/devices/{id}`。
+- `POST /scanner/resume?channel_id=N`（v3.50）— 人工恢复扫码（`resume_on='ok_only'` 下 NG 灭灯的出口）。前端在 `Monitor/index.vue` 直接 `api.post` 调用（未进 `scanner.js` 封装）；同能力还有触发中心 `resume_scanner` 动作。设备三个新字段 `resume_on / rearm_forget_last / strict_ok_dedup` 走既有 `/devices` CRUD。
 - `/mes/gateway/connections/by-channel?channel=N` 是 v2.6.0 新增，按通道查绑定的连接。
 - `/mes/orders/{id}/extra-data`（PUT）— 工单自定义字段，前端 `mes.js::updateOrderExtraData`。
 
@@ -252,6 +253,7 @@ export function getBackendHost() {
 - `GET/POST/PUT/DELETE /export/realtime-rules` `/realtime-rules/{id}/toggle` `/test-run` `/logs`
 - `GET /export/run-logs` — 全部触发日志
 - `GET /export/scanner-bypass/status` — 扫码器旁路 SN 监控状态（v3.38，只读内存快照，可带 `channel_id`；前端 `export.js` 有封装）
+- **v3.53 录像归档子前缀 `/export/video-archive/*`**（后端 `api/video_archive.py`，前端 **`videoArchive.js`** 独立客户端）：`GET/POST /rules` `PUT/DELETE /rules/{id}` `/rules/{id}/toggle`、`GET /status`、`GET /logs`、`POST /test-run`、`GET /adapter-types`、`POST /backfill`、`POST /evidence-pack`（blob 下载）。注意 dest_config 敏感字段 API 回显恒为 `******`，前端回传 `******` = 不修改
 
 ---
 
@@ -316,6 +318,7 @@ rg -n "channel_id=|channel=" frontend/src/api/*.js backend/api/*.py
 - **v3.5.0**：`/export/*` 整组（自定义导出 + 实时规则 + 字段树）；`source.py` 周期性强制动作；session/cycle 置信度聚合（`/data/stats/*`）。
 - **v3.5.1（线上）**：CSV 导出加 `pt_mode/ct_mode`；操作手册补完。
 - **v3.5.2（未发）**：扫码器列表为空时静默"⚠ 未绑码"；海康相机 NameError；检测框三层 clip。
+- **v3.49.0**：捷昌整改批次四组新端点——`GET/PUT /mes/gateway/async-dispatch`（MES 外推并发派发开关，SystemConfig `mes_async_dispatch`）；`GET/PUT /scanner/scan-pair/new-code-first`（scan_pair 新码先上屏开关，SystemConfig `scan_pair_new_code_first`）；`GET /cluster/report-status`（副机上报链路状态：queued/spooled/spool_replayed_total，ClusterPanel 状态区）；`GET /system/db-info`（数据库 dialect/脱敏位置/版本/连接池，Settings 数据库卡片）。`/cluster/config` 增 `report_timeout_sec`/`report_async` 字段。⚠️ 网关连接的 `retry_budget_sec` 存 **config JSON 内**不是顶层字段，前端 GatewayPanel 与 UAT 都按 config 取。前端封装：`api/cluster.js`（report-status）、Settings/GatewayPanel/ClusterPanel 直调。
 
 ---
 

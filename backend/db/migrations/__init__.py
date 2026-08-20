@@ -14,6 +14,17 @@
 1. 改 ORM 模型
 2. 在本目录新建 m<下一个编号>_<语义名>.py::apply(engine) 写对应 DDL/数据回填
 3. 把模块名追加到下面 _MIGRATION_MODULES（显式注册，不做目录扫描——兼容 Nuitka 编译形态）
+
+WS5(PG) 迁移体系定论（2026-08，双方言口径）：
+- **SQLite 与 PostgreSQL 走同一条运行时路径**：main.py create_all（建缺失表）
+  + 本 runner apply_pending（补列/索引/数据回填）。不给 PG 单开 alembic 修订流。
+- alembic 只承担两件事：① CI 校验 ORM↔schema 一致性（PG 基线迁移 job）
+  ② sqlite_to_pg 迁移工具建 schema 的可选入口（后端首启 create_all 是另一条等价路径）。
+  alembic versions 不追加增量修订。
+- 因此**每个 mXXXX 迁移必须双方言可用**：要么用双方言兼容语法
+  （CREATE INDEX IF NOT EXISTS / ADD COLUMN <基本类型>），要么按
+  get_dialect() 分支（参考 m0000 的类型翻译、m0002 的 PG 分支）。
+  SQLite 专属写法（AUTOINCREMENT、PRAGMA、json_extract）禁止直接出现在迁移里。
 """
 from __future__ import annotations
 
@@ -35,6 +46,7 @@ _MIGRATION_MODULES = [
     # SY9 分支原编号 m0006 与主线 sms 迁移撞号, 合入时重编号 m0009
     # (apply 幂等补列, 上银现场老库若已按旧 ID 记账, 重跑也零影响)
     "m0009_pkg_tail_paper_only_after_awaiting",
+    "m0010_scanner_lifecycle",
 ]
 
 # m0000 不看记账、每次启动都幂等跑（老库任意版本起跳的安全网）

@@ -79,7 +79,7 @@
       "uniqueItems": true,
       "items": {
         "type": "string",
-        "description": "枚举见 design/01 §3.4: theme.css, theme.logo, theme.favicon, theme.app_title, theme.css_variables, theme.hidden_menus, frontend.routes, frontend.menus, frontend.stores, frontend.i18n, frontend.static, backend.routers, backend.adapters, backend.hooks, backend.tables, backend.threads, backend.export.templates, backend.export.realtime_rules, backend.export.field_resolvers, backend.export.renderers, backend.export.triggers, runtime.alarm_trigger, runtime.event_trigger, runtime.mes_push, runtime.system_config_write, runtime.step_field_write, runtime.channel_group_broadcast, runtime.workpiece_flow_observe"
+        "description": "枚举见 design/01 §3.4: theme.css, theme.logo, theme.favicon, theme.app_title, theme.css_variables, theme.hidden_menus, frontend.routes, frontend.menus, frontend.stores, frontend.i18n, frontend.static, backend.routers, backend.adapters, backend.hooks, backend.tables, backend.threads, backend.export.templates, backend.export.realtime_rules, backend.export.field_resolvers, backend.export.renderers, backend.export.triggers, runtime.alarm_trigger, runtime.event_trigger, runtime.mes_push, runtime.system_config_write, runtime.step_field_write, runtime.channel_group_broadcast, runtime.workpiece_flow_observe, runtime.archive_adapter"
       }
     },
     "main_version_min": {

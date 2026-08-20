@@ -220,7 +220,96 @@ def _apply_exposure_setting(cap, auto_exposure: bool, exposure_value: float,
         }
 
 
+# device_index → 上次成功打开它的 cv2 后端常量 (进程内, 机器级资源所以不挂实例)。
+_LAST_OK_CAMERA_BACKEND: dict = {}
+
+# channel_id → 输入源启停互斥锁 (可重入: start_* 内部会先 stop)。
+# 放模块级而不是 VideoSourceManager.__init__ 的实例字段, 是因为 source.py
+# 出厂是编译过的 .pyd, 热补丁替不掉它的 __init__；本文件是源码出厂。
+_LIFECYCLE_LOCKS: dict = {}
+_LIFECYCLE_LOCKS_GUARD = threading.Lock()
+
+
+def get_lifecycle_lock(channel_id: int):
+    """取某通道的输入源启停锁 (没有就建)。"""
+    with _LIFECYCLE_LOCKS_GUARD:
+        lock = _LIFECYCLE_LOCKS.get(channel_id)
+        if lock is None:
+            lock = threading.RLock()
+            _LIFECYCLE_LOCKS[channel_id] = lock
+        return lock
+
+
+def _open_camera_capture(device_index: int, max_rounds: int = 3):
+    """按"后端候选 × 退避重试"打开相机, 返回 (capture, backend_id)。
+
+    打不开返回 (None, None), 由调用方决定怎么报错。
+
+    Windows 上原来只试 DirectShow 且三次重试挤在 1.5s 内, 现场因此丢过源:
+    相机被"项目二次激活"停掉后马上重开, DSHOW 偶发拿不到 index
+    (VIDEOIO(DSHOW): can't be used to capture by index) 就三连失败,
+    视频源恢复直接放弃 → 监控页黑屏只能人工重选输入源。同一台相机 MSMF
+    能开, 所以候选里兜一发 MSMF, 并记住上次成功的后端优先试。
+    """
+    if platform.system() == "Windows":
+        candidates = [cv2.CAP_DSHOW, cv2.CAP_MSMF]
+        last_ok = _LAST_OK_CAMERA_BACKEND.get(device_index)
+        if last_ok in candidates:
+            candidates.remove(last_ok)
+            candidates.insert(0, last_ok)
+    else:
+        candidates = [None]
+
+    for rnd in range(max_rounds):
+        for backend in candidates:
+            cap = (cv2.VideoCapture(device_index) if backend is None
+                   else cv2.VideoCapture(device_index, backend))
+            if cap.isOpened():
+                if backend is not None:
+                    _LAST_OK_CAMERA_BACKEND[device_index] = backend
+                return cap, backend
+            cap.release()
+        if rnd < max_rounds - 1:
+            # 递增退避: Windows 释放 UVC 句柄要时间, 固定 0.5s 常常还没放开
+            wait = 0.5 * (rnd + 1)
+            print(f"[Camera] 打开摄像头 {device_index} 失败 (候选后端"
+                  f" {len(candidates)} 个都试过), {wait:.1f}s 后重试"
+                  f" {rnd + 2}/{max_rounds}...")
+            time.sleep(wait)
+    return None, None
+
+
+def _find_camera_index_conflict(device_index: int, self_channel_id: int):
+    """查其他工位是否正持有同一个摄像头 index。返回冲突的 channel_id 或 None。
+
+    v3.51.3: 双工位误选同一台相机时，老流程会走满 3 轮 DSHOW+MSMF 退避重试
+    + FPS 探测，最长逼近前端 60s 超时才报笼统的"被占用"。这里在打开前做
+    跨通道预检，秒级失败并明确指出被哪个工位占用。
+    """
+    try:
+        from backend.api.channel_manager import channel_manager
+        for cid, mgr in list(channel_manager.channels.items()):
+            if cid == self_channel_id:
+                continue
+            try:
+                if getattr(mgr, 'source_type', None) == 'camera' \
+                        and getattr(mgr, 'capture', None) is not None \
+                        and getattr(mgr, 'camera_index', None) == device_index:
+                    return cid
+            except Exception:
+                continue
+    except Exception:
+        # channel_manager 未初始化（单测/极早期）→ 不拦，交给原有打开流程
+        return None
+    return None
+
+
 class CameraStartMixin:
+    @property
+    def _source_lifecycle_lock(self):
+        """本通道的输入源启停锁 (stop / start_camera 共用)。"""
+        return get_lifecycle_lock(self.channel_id)
+
     def start_camera(self, device_index: int = 0, width: int = 1280, height: int = 720, fps: int = 60,
                      auto_exposure: bool = True, exposure_value: float = -6.0):
         """启动摄像头.
@@ -228,30 +317,35 @@ class CameraStartMixin:
         v3.1.2 新增 auto_exposure / exposure_value: 关掉自动曝光防止 UVC 摄像头
         在光线变暗时把帧率从 30fps 自驱降到 10fps. 默认 auto_exposure=True
         保持向后兼容, 只有客户在 UI 显式关闭时才生效.
+
+        整段持 _source_lifecycle_lock: 打开过程里有 release + 换后端重开
+        (DirectShow/MSMF 实测选优), 中途被别的线程 stop 会抽走句柄。
         """
+        with self._source_lifecycle_lock:
+            return self._start_camera_locked(
+                device_index=device_index, width=width, height=height, fps=fps,
+                auto_exposure=auto_exposure, exposure_value=exposure_value,
+            )
+
+    def _start_camera_locked(self, device_index: int = 0, width: int = 1280, height: int = 720, fps: int = 60,
+                             auto_exposure: bool = True, exposure_value: float = -6.0):
+        """start_camera 的实现体（调用方必须已持 _source_lifecycle_lock）。"""
+        # v3.51.3: 跨工位同 index 预检——秒级失败, 不进重试循环
+        conflict_ch = _find_camera_index_conflict(device_index, self.channel_id)
+        if conflict_ch is not None:
+            raise Exception(
+                f"摄像头 {device_index} 正在被工位 {conflict_ch + 1} 使用，"
+                f"请先停止该工位或选择其他摄像头")
+
         self.stop(release_model=False)
         
         # 等待一小段时间确保之前的资源已释放
         time.sleep(0.2)
         
-        # 尝试打开摄像头（支持重试）
-        max_retries = 3
-        for attempt in range(max_retries):
-            # Windows 上使用 DirectShow，Linux 上使用 V4L2
-            import platform
-            if platform.system() == "Windows":
-                self.capture = cv2.VideoCapture(device_index, cv2.CAP_DSHOW)
-            else:
-                self.capture = cv2.VideoCapture(device_index)
-            
-            if self.capture.isOpened():
-                break
-            
-            if attempt < max_retries - 1:
-                print(f"[Camera] 打开摄像头失败，重试 {attempt + 2}/{max_retries}...")
-                time.sleep(0.5)
-        
-        if not self.capture.isOpened():
+        # 尝试打开摄像头（后端候选 + 退避重试）
+        self.capture, opened_backend = _open_camera_capture(device_index)
+        if self.capture is None or not self.capture.isOpened():
+            self.capture = None
             raise Exception(f"无法打开摄像头 {device_index}，请检查设备是否被其他程序占用")
         
         fourcc_mjpg = cv2.VideoWriter_fourcc('M', 'J', 'P', 'G')
@@ -296,8 +390,10 @@ class CameraStartMixin:
         print(f"[Camera] 首次实测: {cc_str} @ {initial_bench_fps:.0f}fps (阈值 {bench_fps_threshold:.0f}fps)")
 
         # Strategy 2: 格式非 MJPG 或 实测 FPS 低于阈值, 实测对比各后端选最快
+        # 只有 DirectShow 开成功时才做"DSHOW vs MSMF"选优: 走到 MSMF 兜底说明
+        # DSHOW 这会儿根本开不了, 再按老流程释放去比一轮会把唯一能用的句柄丢掉。
         need_backend_probe = (cc_str != 'MJPG') or (initial_bench_fps < bench_fps_threshold)
-        if need_backend_probe and platform.system() == "Windows":
+        if need_backend_probe and opened_backend == cv2.CAP_DSHOW:
             dshow_fps = initial_bench_fps
             print(f"[Camera] DirectShow({cc_str}) 采用首次实测 {dshow_fps:.0f}fps")
 
@@ -327,8 +423,12 @@ class CameraStartMixin:
             else:
                 if msmf_cap.isOpened():
                     msmf_cap.release()
-                # 重新打开 DirectShow
-                self.capture = cv2.VideoCapture(device_index, cv2.CAP_DSHOW)
+                # 重新打开 DirectShow (刚才成功过, 但释放后偶发抢不回来 —
+                # 走候选兜底而不是拿一个没打开的 capture 往下跑成黑屏)
+                self.capture, opened_backend = _open_camera_capture(device_index)
+                if self.capture is None:
+                    raise Exception(
+                        f"无法重新打开摄像头 {device_index}，请检查设备是否被其他程序占用")
                 self.capture.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)
                 self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
                 self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
@@ -377,8 +477,13 @@ class CameraStartMixin:
 
                 _v4l2_safe_bufsize_1(self.capture)
         
-        # Strategy 3: If still not MJPG on Linux, try without explicit backend
-        if cc_str != 'MJPG' and platform.system() != "Windows":
+        # Strategy 3: If still not MJPG on Linux, try reopening via V4L2.
+        # v3.51.2: 守门从"非 Windows"收紧为"仅 Linux" — macOS 会误入此分支:
+        # AVFoundation 句柄好端端 30fps 出帧, 却因 fourcc 非 MJPG 被 release,
+        # 再用 mac 上不存在的 CAP_V4L2 重开必失败, 留下 isOpened()=False 的
+        # 死句柄继续往下走 → 接口全报成功/is_running=True, 但 read() 永远
+        # False, 监控页永远 "No Source"(检测在跑画面出不来的同款症状).
+        if cc_str != 'MJPG' and platform.system() == "Linux":
             print(f"[Camera] V4L2 返回 {cc_str}，尝试重新打开...")
             self.capture.release()
             self.capture = cv2.VideoCapture(device_index, cv2.CAP_V4L2)
@@ -388,6 +493,21 @@ class CameraStartMixin:
                 self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
                 self.capture.set(cv2.CAP_PROP_FPS, fps)
                 cc_str = _get_fourcc_str(self.capture)
+            else:
+                # 重开失败不能揣着死句柄往下跑黑屏 — 走候选兜底拿回摄像头
+                self.capture, opened_backend = _open_camera_capture(device_index)
+                if self.capture is None:
+                    raise Exception(
+                        f"无法重新打开摄像头 {device_index}，请检查设备是否被其他程序占用")
+                cc_str = _get_fourcc_str(self.capture)
+
+        # v3.51.2 终检: 任何策略分支走完, 句柄必须活着且能出一帧 —
+        # 否则宁可明确报错, 也不进入"接口成功但永远 No Source"的僵尸态.
+        if self.capture is None or not self.capture.isOpened():
+            self.capture = None
+            raise Exception(
+                f"摄像头 {device_index} 打开后句柄失效（格式探测阶段被释放且重开失败），"
+                f"请检查设备是否被其他程序占用")
         
         actual_fps = self.capture.get(cv2.CAP_PROP_FPS)
         actual_w = int(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH))

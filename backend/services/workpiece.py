@@ -126,7 +126,21 @@ class WorkpieceService:
 
     def link_to_cycle(self, db: Session, workpiece_id: int, cycle_id: int,
                       session_id: int = None, channel_id: int = None) -> WorkpieceInspection:
-        """创建工件-检测周期关联记录"""
+        """创建工件-检测周期关联记录（同一 workpiece+cycle 幂等）
+
+        (workpiece_id, cycle_id) 有唯一约束。重复 link 曾直接抛 IntegrityError
+        冒到 _handle_cycle_start，把已 pop 的 pending 工件卡死在"既不在 pending
+        也不在 inspecting"的空档（现场表现：前端一直提示未绑码）。
+        """
+        existing = (
+            db.query(WorkpieceInspection)
+            .filter(WorkpieceInspection.workpiece_id == workpiece_id,
+                    WorkpieceInspection.cycle_id == cycle_id)
+            .first()
+        )
+        if existing is not None:
+            return existing
+
         wp = db.query(Workpiece).filter(Workpiece.id == workpiece_id).first()
         seq = wp.inspection_count if wp else 1
 

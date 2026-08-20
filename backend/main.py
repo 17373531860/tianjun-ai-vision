@@ -50,6 +50,8 @@ from backend.models import notify_models as _notify_models  # noqa: F401
 from backend.models import plc_models as _plc_models  # noqa: F401
 # RFC 14 统一触发中心: trigger_channels 表
 from backend.models import trigger_models as _trigger_models  # noqa: F401
+# v3.53 录像归档: video_archive_rules / video_archive_logs 两张表
+from backend.models import archive_models as _archive_models  # noqa: F401
 # 路由挂载统一走 router_manifest（OVERLAP-3 治理）; 这里只保留非路由用途的 import
 from backend.api.router_manifest import mount_all_routers
 from backend.api.source import get_video_manager
@@ -76,7 +78,54 @@ if _DIALECT == "sqlite":
         print(f"[DIAG] main.py: DB file size: {os.path.getsize(_db_path)} bytes")
 
 # Create database tables
-Base.metadata.create_all(bind=engine)
+def _quarantine_sqlite_sidecars(db_path: str) -> list:
+    """把 SQLite 的 -wal/-shm 侧车文件挪到 .corrupt-<时间戳>（保留现场，不删）。
+
+    返回被隔离的文件路径列表。主库文件不动：它包含最后一次 checkpoint 前的
+    全部数据，只有 WAL 里未合并的最近几笔写入随隔离文件保留待人工救援。
+    """
+    import time as _time
+    moved = []
+    ts = _time.strftime("%Y%m%d_%H%M%S")
+    for suffix in ("-wal", "-shm"):
+        p = db_path + suffix
+        try:
+            if os.path.exists(p):
+                quarantine = f"{p}.corrupt-{ts}"
+                os.replace(p, quarantine)
+                moved.append(quarantine)
+        except Exception as _e:
+            print(f"[DIAG] 隔离 {p} 失败（继续）: {_e}")
+    return moved
+
+
+def _create_all_with_sqlite_selfheal():
+    """建表；SQLite 下带 disk I/O error 自愈重试。
+
+    现场强杀（taskkill /f）/断电后 -wal/-shm 可能半写入损坏，之后任何连接
+    一碰库就报 "disk I/O error"，后端 import 期在这里挂死，表现为"软件拉
+    不起来"。自愈：隔离侧车文件再试一次，起得来远好于起不来（v3.51.3）。
+    """
+    from sqlalchemy.exc import DBAPIError
+    # Windows 上侧车损坏报 "disk I/O error"（捷昌现场原文），POSIX 上同类
+    # 损坏（-wal 不可读等）映射为 "unable to open database file"，两种都收。
+    _HEALABLE = ("disk i/o error", "unable to open database file")
+    try:
+        Base.metadata.create_all(bind=engine)
+        return
+    except DBAPIError as e:
+        msg = str(e).lower()
+        if _DIALECT != "sqlite" or not any(h in msg for h in _HEALABLE):
+            raise
+        print(f"[DIAG] create_all 报可自愈的 SQLite I/O 故障，尝试 WAL 自愈: {e}")
+    engine.dispose()
+    moved = _quarantine_sqlite_sidecars(os.path.join(DATA_DIR, 'sql_app.db'))
+    print(f"[DIAG] 已隔离疑似损坏侧车文件: {moved or '（无侧车文件，可能是磁盘级故障）'}")
+    Base.metadata.create_all(bind=engine)
+    print("[DIAG] SQLite WAL 自愈成功，后端继续启动")
+
+
+_create_all_with_sqlite_selfheal()
 if _DIALECT == "sqlite":
     print(f"[DIAG] main.py: create_all done, DB file size: {os.path.getsize(_db_path) if os.path.exists(_db_path) else 'N/A'}")
 else:
@@ -470,6 +519,49 @@ def _build_project_config(project) -> dict:
     }
 
 
+def _resolve_startup_model_path(db, model, model_format: str) -> str:
+    """v3.51.5: 按项目 model_format 解析开机该加载的模型文件。
+
+    以前开机恢复一律加载原始 .pt, 前端随后又按项目格式重载 TensorRT 引擎 —
+    同一模型开机装两遍 + 双份 warm-up (捷昌 B 站 34s 恢复里白吃十几秒)。
+    与 /models/{id}/resolve-path 同判据: 转换记录 ready + 文件在 → 用转换产物;
+    否则回退原始 .pt (与老行为零差异)。开机装对格式后, 前端的重载请求会命中
+    load_model_for_channel 的幂等守门直接 skip。
+    """
+    fmt = model_format or "pytorch_fp32"
+    if fmt == "pytorch_fp32":
+        return model.file_path
+    try:
+        from backend.models.models import ModelConversion
+        from backend.api.models import _get_gpu_info
+        lookup_arch = None
+        if fmt.startswith("tensorrt"):
+            _, _, lookup_arch = _get_gpu_info()
+        conv = db.query(ModelConversion).filter(
+            ModelConversion.model_id == model.id,
+            ModelConversion.format == fmt,
+            ModelConversion.gpu_arch == lookup_arch,
+        ).first()
+        if (conv and conv.status == "ready" and conv.file_path
+                and os.path.exists(conv.file_path)):
+            print(f"[启动] 模型 '{model.name}' 按项目格式 {fmt} 解析到转换产物: "
+                  f"{os.path.basename(conv.file_path)}")
+            return conv.file_path
+    except Exception as e:
+        print(f"[启动] 模型格式解析失败, 回退原始模型: {e}")
+    return model.file_path
+
+
+def _load_channel_model_with_fallback(channel_manager, ch_id: int, model,
+                                      resolved_path: str, device: str) -> bool:
+    """先装解析出的文件, 转换产物加载失败再回退原始 .pt (不比老行为差)。"""
+    ok = channel_manager.load_model_for_channel(ch_id, resolved_path, device)
+    if not ok and resolved_path != model.file_path:
+        print(f"[启动] ch{ch_id} 转换产物加载失败, 回退原始模型重试: {model.file_path}")
+        ok = channel_manager.load_model_for_channel(ch_id, model.file_path, device)
+    return ok
+
+
 def auto_load_active_project():
     """Backend startup: auto-load projects per channel.
 
@@ -509,8 +601,10 @@ def auto_load_active_project():
                     if model and model.file_path and os.path.exists(model.file_path):
                         # or 兜底: 配置条目存在但值为 None 时也回落 auto (dict.get
                         # 的 default 只管键缺失, None 值曾漏成 device=None → mps)
-                        success = channel_manager.load_model_for_channel(
-                            ch_id, model.file_path,
+                        resolved = _resolve_startup_model_path(
+                            db, model, proj.model_format)
+                        success = _load_channel_model_with_fallback(
+                            channel_manager, ch_id, model, resolved,
                             ch_cfg.get("gpu_device") or "auto")
                         if success:
                             print(f"[启动] ch{ch_id} 加载模型: {model.name}")
@@ -527,12 +621,14 @@ def auto_load_active_project():
                 if fallback_project.default_model_id:
                     model = db.query(Model).filter(Model.id == fallback_project.default_model_id).first()
                     if model and model.file_path and os.path.exists(model.file_path):
+                        resolved = _resolve_startup_model_path(
+                            db, model, fallback_project.model_format)
                         all_ok = True
                         for ch_id in remaining:
                             # 兜底路径同样尊重该通道 gpu_device (与上面绑定项目路径一致);
                             # 漏传曾让 mac 开发机 ch1 落到 MPS, 停检测触发 Metal 断言崩后端
-                            ok = channel_manager.load_model_for_channel(
-                                ch_id, model.file_path,
+                            ok = _load_channel_model_with_fallback(
+                                channel_manager, ch_id, model, resolved,
                                 (sources.get(str(ch_id)) or {}).get("gpu_device") or "auto")
                             all_ok = all_ok and ok
                             print(f"[启动] 兜底: ch{ch_id} 模型 '{model.name}' "
@@ -625,6 +721,49 @@ if not os.environ.get("BACKEND_SKIP_INIT"):
         print(f"[启动] PackagingFlowCoordinator 加载失败 (隔离, 不影响主流程): {_e}")
 
 
+def _restore_one_video_source(ch_id: int, ch_cfg: dict, mgr) -> None:
+    """按配置把一个通道的视频源开起来 (抛异常由调用方处理)。"""
+    import os
+    src_type = ch_cfg.get("source_type")
+    if src_type == "camera":
+        dev_idx = ch_cfg.get("device_index", 0)
+        if isinstance(dev_idx, str):
+            parts = dev_idx.split("_")
+            dev_idx = int(parts[-1]) if parts[-1].isdigit() else 0
+        res = ch_cfg.get("resolution", "1280x720")
+        w, h = (int(x) for x in res.split("x")) if "x" in str(res) else (1280, 720)
+        fps = ch_cfg.get("fps", 60)
+        auto_exp = ch_cfg.get("auto_exposure", True)
+        exp_val = ch_cfg.get("exposure_value", -6.0)
+        mgr.start_camera(dev_idx, w, h, fps,
+                         auto_exposure=auto_exp,
+                         exposure_value=exp_val)
+        print(f"[启动] ch{ch_id} 自动恢复摄像头: device={dev_idx}, "
+              f"auto_exposure={auto_exp}, exposure={exp_val}")
+    elif src_type == "rtsp":
+        url = ch_cfg.get("url", "")
+        if url:
+            fps = ch_cfg.get("rtsp_fps", 25)
+            mgr.start_rtsp(url, fps)
+            print(f"[启动] ch{ch_id} 自动恢复RTSP: {url}")
+    elif src_type == "hcnetsdk":
+        ip = ch_cfg.get("hcnet_ip")
+        if ip:
+            port = ch_cfg.get("hcnet_port", 8000)
+            user = ch_cfg.get("hcnet_username", "admin")
+            pwd = ch_cfg.get("hcnet_password", "")
+            ch_no = ch_cfg.get("hcnet_channel", 1)
+            stream = ch_cfg.get("hcnet_stream_type", 1)
+            hc_fps = ch_cfg.get("hcnet_fps", 25)
+            mgr.start_hcnetsdk(ip, port, user, pwd, ch_no, stream, hc_fps)
+            print(f"[启动] ch{ch_id} 自动恢复海康SDK: {ip}")
+    elif src_type == "video":
+        vf = ch_cfg.get("video_file", "")
+        if vf and os.path.isfile(vf):
+            mgr.start_video(vf)
+            print(f"[启动] ch{ch_id} 自动恢复视频: {vf}")
+
+
 def auto_restore_video_sources():
     """后端启动时根据 workstation_config.json 自动恢复视频流 + GPU分配 + 检测状态"""
     from backend.api.channel_manager import channel_manager
@@ -633,6 +772,7 @@ def auto_restore_video_sources():
         sources = channel_manager.get_channel_sources()
         if not sources:
             return
+        failed: list = []   # 首轮起不来的通道, 整轮结束后隔几秒再补一次
         for ch_str, ch_cfg in sources.items():
             ch_id = int(ch_str)
             src_type = ch_cfg.get("source_type")
@@ -648,47 +788,46 @@ def auto_restore_video_sources():
                 print(f"[启动] ch{ch_id} GPU 恢复: {gpu}")
 
             if mgr.is_running:
+                # v3.51.5: 已在跑就跳过, 但相机与存档不符时要留痕 — 前端 localStorage
+                # 单工位兜底等路径可能抢跑把错误相机怼上本通道 (捷昌 B 站: ch0 被怼成
+                # ch1 的相机, ch1 恢复撞"使用中"三轮全灭)。本轮不强行纠正 (也可能是
+                # 用户刚手动换的源), 只打日志供现场定位。
+                try:
+                    if (ch_cfg.get("source_type") == "camera"
+                            and getattr(mgr, 'source_type', None) == 'camera'):
+                        saved_idx = ch_cfg.get("device_index", 0)
+                        if isinstance(saved_idx, str):
+                            _p = saved_idx.split("_")
+                            saved_idx = int(_p[-1]) if _p[-1].isdigit() else 0
+                        cur_idx = getattr(mgr, 'camera_index', None)
+                        if cur_idx is not None and cur_idx != saved_idx:
+                            print(f"[启动] ⚠ ch{ch_id} 已在跑但相机与存档不符: "
+                                  f"实际 index={cur_idx}, 存档 index={saved_idx} "
+                                  f"— 疑似被其他恢复路径抢占, 本轮不纠正")
+                except Exception:
+                    pass
                 continue
             try:
-                if src_type == "camera":
-                    dev_idx = ch_cfg.get("device_index", 0)
-                    if isinstance(dev_idx, str):
-                        parts = dev_idx.split("_")
-                        dev_idx = int(parts[-1]) if parts[-1].isdigit() else 0
-                    res = ch_cfg.get("resolution", "1280x720")
-                    w, h = (int(x) for x in res.split("x")) if "x" in str(res) else (1280, 720)
-                    fps = ch_cfg.get("fps", 60)
-                    auto_exp = ch_cfg.get("auto_exposure", True)
-                    exp_val = ch_cfg.get("exposure_value", -6.0)
-                    mgr.start_camera(dev_idx, w, h, fps,
-                                     auto_exposure=auto_exp,
-                                     exposure_value=exp_val)
-                    print(f"[启动] ch{ch_id} 自动恢复摄像头: device={dev_idx}, "
-                          f"auto_exposure={auto_exp}, exposure={exp_val}")
-                elif src_type == "rtsp":
-                    url = ch_cfg.get("url", "")
-                    if url:
-                        fps = ch_cfg.get("rtsp_fps", 25)
-                        mgr.start_rtsp(url, fps)
-                        print(f"[启动] ch{ch_id} 自动恢复RTSP: {url}")
-                elif src_type == "hcnetsdk":
-                    ip = ch_cfg.get("hcnet_ip")
-                    if ip:
-                        port = ch_cfg.get("hcnet_port", 8000)
-                        user = ch_cfg.get("hcnet_username", "admin")
-                        pwd = ch_cfg.get("hcnet_password", "")
-                        ch_no = ch_cfg.get("hcnet_channel", 1)
-                        stream = ch_cfg.get("hcnet_stream_type", 1)
-                        hc_fps = ch_cfg.get("hcnet_fps", 25)
-                        mgr.start_hcnetsdk(ip, port, user, pwd, ch_no, stream, hc_fps)
-                        print(f"[启动] ch{ch_id} 自动恢复海康SDK: {ip}")
-                elif src_type == "video":
-                    vf = ch_cfg.get("video_file", "")
-                    if vf and os.path.isfile(vf):
-                        mgr.start_video(vf)
-                        print(f"[启动] ch{ch_id} 自动恢复视频: {vf}")
+                _restore_one_video_source(ch_id, ch_cfg, mgr)
             except Exception as e:
+                failed.append(ch_id)
                 print(f"[启动] ch{ch_id} 视频源恢复失败: {e}")
+
+        # 首轮失败的隔几秒补一次: 前端首屏这会儿也在激活绑定项目, 激活会停输入源,
+        # 跟本函数抢同一台相机, 抢输了原来就直接放弃 → 监控页黑屏要人工重选源。
+        if failed:
+            import time as _t
+            _t.sleep(4)
+            for ch_id in failed:
+                mgr = channel_manager.channels.get(ch_id)
+                ch_cfg = sources.get(str(ch_id)) or {}
+                if not mgr or mgr.is_running or not ch_cfg.get("source_type"):
+                    continue
+                try:
+                    _restore_one_video_source(ch_id, ch_cfg, mgr)
+                    print(f"[启动] ch{ch_id} 视频源二次恢复成功")
+                except Exception as e:
+                    print(f"[启动] ch{ch_id} 视频源二次恢复仍失败: {e}")
 
         # v3.22.x: 开机自动恢复检测开关 (默认 true). 关掉时只恢复项目+视频源,
         # 停在待机, 由工人手动点开始 — 项目/源恢复不受影响。
@@ -698,6 +837,17 @@ def auto_restore_video_sources():
 
         import time
         time.sleep(0.5)
+
+        # v3.51.5: 多轮自动开始检测之间要认用户的账 — 捷昌 B 站现场: 恢复全程 30s+,
+        # 工人在这期间点"停止/待机", 重试轮和收尾兜底轮不看不问又把检测拉起来,
+        # 跟人抢按钮 ("我很难把它停下来")。
+        # 判据: 上一轮是本函数拉起的检测, 这一轮发现检测被关了、而采集线程还是
+        # 同一根 (id 相同 → 源全程没断) → 只有待机/停止检测会留下这个状态,
+        # 认定用户手动干预, 该通道后续轮次不再自动开始。
+        # 反例守护: 激活项目抢相机是把源整个停掉再拉起, 采集线程已换新,
+        # 不落入此判据, 收尾兜底照常把检测补起来 (保持 v3.51 行为)。
+        auto_started: dict = {}     # ch_id -> 拉起检测时采集线程 id
+        user_vetoed: set = set()
 
         def _restore_detection_pass(label: str):
             # v3.22.x: 开关开启时【无条件】自动开始检测 — 不再看上次是否在检测
@@ -710,8 +860,18 @@ def auto_restore_video_sources():
                     continue
                 if mgr.is_detecting:
                     continue
+                if ch_id in user_vetoed:
+                    continue
+                cur_thread_id = id(getattr(mgr, '_thread', None))
+                if auto_started.get(ch_id) == cur_thread_id:
+                    # 我们拉起检测后源没断过, 检测却停了 → 用户手动停止/待机
+                    user_vetoed.add(ch_id)
+                    print(f"[启动] ch{ch_id} 检测到用户手动停止/待机, "
+                          f"后续轮次不再自动开始 ({label})")
+                    continue
                 try:
                     mgr.start_detection()
+                    auto_started[ch_id] = id(getattr(mgr, '_thread', None))
                     print(f"[启动] ch{ch_id} 开机自动开始检测 ({label})")
                 except Exception as e:
                     print(f"[启动] ch{ch_id} 自动开始检测失败 ({label}): {e}")
@@ -720,6 +880,24 @@ def auto_restore_video_sources():
         # 工控机模型加载慢时, 0.5s 后模型可能仍未就绪 — 3s 后再试一轮
         time.sleep(3.0)
         _restore_detection_pass("重试")
+
+        # v3.51: 收尾兜底 — 前端首屏"激活项目"会停输入源, 与本恢复线程抢同一台
+        # 相机, 竞争窗口 = 整个恢复过程 (现场实测 18s), 上面的 4s 二次恢复兜不住
+        # (2026-08-14 捷昌 B 站: ch0 恢复被打断后再没起来, 开机监控页黑屏)。
+        # 恢复流程全部走完后再等几秒, 把"已配源但没在跑"的通道最后拉一次,
+        # 检测同理。幂等: 都在跑时本段零动作。
+        time.sleep(5.0)
+        for ch_str, ch_cfg in sources.items():
+            ch_id = int(ch_str)
+            mgr = channel_manager.channels.get(ch_id)
+            if not mgr or mgr.is_running or not ch_cfg.get("source_type"):
+                continue
+            try:
+                _restore_one_video_source(ch_id, ch_cfg, mgr)
+                print(f"[启动] ch{ch_id} 视频源收尾兜底恢复成功")
+            except Exception as e:
+                print(f"[启动] ch{ch_id} 视频源收尾兜底恢复失败: {e}")
+        _restore_detection_pass("收尾兜底")
 
     except Exception as e:
         print(f"[启动] 视频源自动恢复整体失败: {e}")
@@ -1076,7 +1254,17 @@ def cleanup_on_exit():
         print(f"[退出钩子] 清理时出错: {e}")
         import traceback
         traceback.print_exc()
-    
+
+    # v3.51.3: SQLite 收尾 checkpoint——把 WAL 未合并写入落回主库并截断，
+    # 缩小之后被强杀（Electron 兜底 taskkill /f）/断电时留下损坏 WAL 的窗口。
+    try:
+        if _DIALECT == "sqlite":
+            with engine.connect() as _conn:
+                _conn.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE);")
+            print("[退出钩子] SQLite WAL checkpoint 完成")
+    except Exception as _e:
+        print(f"[退出钩子] WAL checkpoint 失败（已忽略）: {_e}")
+
     print("[退出钩子] 清理完成")
 
 # 注册退出钩子
@@ -1301,8 +1489,10 @@ def _start_scanner_bypass_monitor():
 _start_scanner_bypass_monitor()
 
 
-# 热补丁加载器 (create-hotfix 体系, v3.48.1a 起恢复): backend/hotfix.py 存在则在
-# 全部 router/static/插件挂载完成后加载并 apply(app); 不存在 = 静默跳过零开销。
+# 热补丁加载器 (create-hotfix 体系): backend/hotfix.py 存在则在全部 router/
+# static/插件挂载完成后加载并 apply(app); 不存在 = 静默跳过零开销。
+# 历史: v3.48.1a 补丁引入但只活在补丁包里没回流仓库, v3.49/v3.50 出厂包因此
+# 没有热补丁入口, 每次打补丁都要连 main.py 一起换 — v3.50.0a 起回流常驻。
 # 补丁自身任何异常必须隔离, 不能拖垮主程序启动 (与插件加载同一底线)。
 def _apply_hotfix_after_app():
     _hf = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hotfix.py")

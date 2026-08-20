@@ -13,6 +13,7 @@
          本组件根节点是它们的 absolute 定位上下文。 -->
   <div class="relative bg-black border-2 rounded-lg overflow-hidden min-h-0"
     :class="selected ? (compact ? 'border-cyan-500 shadow-[0_0_8px_rgba(6,182,212,0.4)]' : 'border-cyan-500') : (compact ? 'border-slate-700 hover:border-slate-500' : 'border-slate-700')"
+    :data-testid="`channel-card-${ch}`"
     @click="$emit('select')">
     <canvas :ref="onVideoCanvas" class="absolute inset-0 w-full h-full"></canvas>
     <canvas :ref="onOverlayCanvas" class="absolute inset-0 w-full h-full pointer-events-none"></canvas>
@@ -29,6 +30,17 @@
       ]">
       {{ chData?.isDetecting ? '检测中' : chData?.isRunning ? '待机' : '停止' }}
     </div>
+    <button
+      v-if="zoomable"
+      type="button"
+      class="absolute z-10 rounded bg-slate-900/80 px-2 py-1 text-[0.6875rem] text-cyan-300 hover:bg-cyan-900/90 hover:text-white"
+      :class="compact ? 'right-1 top-8' : 'right-1.5 top-9'"
+      :data-testid="`channel-zoom-${ch}`"
+      :aria-label="`放大工位 ${ch + 1}`"
+      @click.stop="$emit('zoom')"
+    >
+      放大
+    </button>
     <!-- 底部统计条: 双工位带 backdrop-blur + 模型名, 四工位紧凑仅色块+fps -->
     <div v-if="!compact" class="absolute bottom-0 left-0 right-0 bg-black/70 backdrop-blur-sm px-2 py-1 flex gap-3 text-xs items-center">
       <span class="text-white font-mono">总: <span class="text-cyan-400 font-bold">{{ chData?.total ?? 0 }}</span></span>
@@ -78,11 +90,13 @@ const props = defineProps({
   selected: { type: Boolean, default: false },
   // false=双工位档(大字号/带模型名) true=四工位档(紧凑/仅色块)
   compact: { type: Boolean, default: false },
+  // 主屏总览可选放大入口；默认 false 保持旧调用行为不变。
+  zoomable: { type: Boolean, default: false },
   // 画布回注: 父级把 per-channel 画布字典的写入函数传进来, 与原模板 :ref 回调同构
   registerVideoCanvas: { type: Function, required: true },
   registerOverlayCanvas: { type: Function, required: true },
 });
-defineEmits(['select']);
+defineEmits(['select', 'zoom']);
 
 // 与原 index.vue 模板 :ref="el => { if (el) refs[ch] = el }" 逐字同构: el 为空不回调
 const onVideoCanvas = (el) => { if (el) props.registerVideoCanvas(el); };

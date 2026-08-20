@@ -711,9 +711,11 @@ def get_cycles_by_serial(
         return {"items": [], "total": 0, "matched_workpieces": []}
 
     # 模糊匹配 serial (默认开), 严格 fuzzy=False 时只命中完全相等
+    # ilike: SQLite 的 LIKE 对 ASCII 本就不分大小写, PG 的 LIKE 区分 —
+    # 用 ilike 让双方言行为一致 (与 services/workpiece.py 的搜索口径相同)
     if fuzzy:
         wp_q = db.query(Workpiece).filter(
-            Workpiece.serial_no.like(f"%{serial_no}%")
+            Workpiece.serial_no.ilike(f"%{serial_no}%")
         )
     else:
         wp_q = db.query(Workpiece).filter(Workpiece.serial_no == serial_no)

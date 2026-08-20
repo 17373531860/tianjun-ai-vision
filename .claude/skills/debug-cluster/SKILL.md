@@ -108,6 +108,7 @@ allowed-tools: "Read, Grep, Glob, Bash, mcp__sequential-thinking, mcp__sentry"
 | GET | `/aggregations/{box_serial}` | 单 box 详情 |
 | GET | `/summaries` | 历史 box_summary 列表 |
 | POST | `/test-push` | 测试 MES Gateway 连通 |
+| GET | `/report-status` | **v3.49+ 副机上报链路状态**（内存队列深度/落盘积压/累计补发，ClusterPanel 状态区数据源） |
 | ... | （以代码为准 grep `^@router.`） | |
 
 ---
@@ -233,3 +234,22 @@ frontend/src/api/cluster.js             前端 API 客户端
 3. **副机模式仍要本机配置 MES Gateway**：因为 master 主推 box_complete，但**部分事件**（如 cycle_end 单工件实时）按设计仍可能从副机推（看具体 mes_hooks 实现，慎判）
 4. **cluster 单例**：进程重启后 `BoxAggregation` 仍在 DB，可恢复，但内存中的活性状态会重置——`record_slave_heartbeat` 重新建立后才知道副机存活
 5. **超时未齐的 box**：`timeout_push=true` 时会推不完整数据；`timeout_push=false` 时只产生 BoxSummary 但不推 MES
+
+---
+
+## 十、v3.49.0 补充：副机上报异步化 + 落盘重放（捷昌整改 WS2）
+
+**动机**：老路径副机→主机上报是结算路径内联 HTTP——主机慢/断网直接拖垮副机结算节奏，断网期间上报数据丢失。
+
+**机制**（`cluster_collector.py`）：
+
+- 上报走**独立发送线程 + 内存队列**，结算路径只入队即返回；`report_async`（默认开）配置进 `/cluster/config`，显式关=回退旧内联同步
+- 发送超时 `report_timeout_sec` 可配（默认 10s，旧版硬编码）
+- 发送失败落盘 **`cluster_report_spool.jsonl`**（数据目录下），主机恢复后按序重放，重放计数进 `spool_replayed_total`
+- 可观测：`GET /api/v1/cluster/report-status` 返回 `queued`（内存队列深度）/ `spooled`（落盘积压条数）/ `spool_replayed_total`（累计补发）；ClusterPanel「上报链路状态」区展示同口径三数字
+
+**排查口径**：
+
+- 副机"结算又开始卡" → 先查 `report_async` 是否被关回同步；再看 `report-status` 的 `queued` 是否持续增长（主机吞吐跟不上）
+- 断网恢复后主机数据缺一段 → 看副机 `spooled` 是否清零、`spool_replayed_total` 是否增长；spool 文件残留=重放失败，看副机日志
+- 回归测试：`tests/test_cluster_report_async.py`（异步入队/落盘/重放）+ `tests/test_cluster_timing_b2.py`

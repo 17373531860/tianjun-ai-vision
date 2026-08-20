@@ -13,14 +13,14 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 
 ## 0. 一眼看懂当前的数据库（v3.48 真相）
 
-- **52 张表 = 13 + 20 + 4 + 5 + 4 + 1 + 3 + 1 + 1**，分布在 **九个** ORM 文件（models / mes_models / export_models / auth_models / plugin_models / weighing_models / notify_models / plc_models / trigger_models）
+- **54 张表 = 13 + 20 + 4 + 5 + 4 + 1 + 3 + 1 + 1 + 2**，分布在 **十个** ORM 文件（models / mes_models / export_models / auth_models / plugin_models / weighing_models / notify_models / plc_models / trigger_models / archive_models）
 - **迁移已版本化（2026-07 治理）**：运行时迁移在 `backend/db/migrations/`（注册表 + runner + `schema_migrations` 记账表）；alembic 仅服务 PG 工程（db-matrix CI），不进客户机运行时
 - 数据库是单文件 SQLite (`sql_app.db`)，开 WAL + busy_timeout=15s
 - 启动时序：`Base.metadata.create_all()` 建新表 → `apply_pending(engine)` 按序应用迁移（老库补列在 m0000 基线里） → `fix_orphan_*()` 清孤儿
 - **旧版交接文档写的"22 张表 / `MLModel` 类名 / 表名 `ml_models`"全是过时信息，以代码为准**（该手册已于 2026-06-26 删除）
 - `Operator`/`operators` 表已随 v3.10.0 用户系统移除（端点 410 Gone），别再引用
 
-## 1. 九个 models 文件的 52 张表清单
+## 1. 十个 models 文件的 54 张表清单
 
 ### 1.1 `backend/models/models.py`（13 张，核心检测）
 
@@ -118,6 +118,15 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | ORM 类 | 表名 | 一句话 |
 |---|---|---|
 | `TriggerChannel` | `trigger_channels` | 一行 = 一个触发源实例：type（pixel_region/hid_key/http/serial_pattern/timer/mock）+ params/rules/options 三个 JSON 列；create_all 自建无迁移 |
+
+### 1.10 `backend/models/archive_models.py`（2 张，v3.53 录像归档）
+
+| ORM 类 | 表名 | 一句话 |
+|---|---|---|
+| `VideoArchiveRule` | `video_archive_rules` | 一行 = 一条归档规则：筛选（result_filter/channel_filter/project_filter）+ 目的地（dest_type/dest_dir/dest_config 敏感字段 Fernet 密文）+ 命名（filename_template Jinja2/subdir_by_date/overwrite_policy）+ 证据（attach_keyframe/keyframe_watermark/sidecar_template_id/bundle_zip/transform/clip_seconds）+ 治理（active_window/bandwidth_limit_kbps/delete_source_after）+ 运行统计快照；create_all 自建无迁移 |
+| `VideoArchiveLog` | `video_archive_logs` | 归档台账：一行 = 一次搬运（cycle_id/src_path/dest_path/status success·failed·skipped/error/file_size/duration_ms）；export_context 反查 `cycle.archived_*` 字段的数据源 |
+
+> ⚠️ 新 ORM 文件三处注册缺一不可（BUG-003 血泪）：`backend/main.py` 显式 import + `tests/conftest.py` try 块 import + `alembic/env.py` import。只靠 router import 链兜底会在测试库漏表。
 
 ## 2. 关键命名陷阱（别再写错了）
 
@@ -389,5 +398,6 @@ JSON 子键链: <set_project_config + 视图 + Navbar 默认值> （仅 JSON）
 | v3.38.0 | `step_records.cycle_id` + `video_clips.related_id` 加索引（热路径查询，迁移 `m0001_hot_path_indexes.py`——版本化迁移体系第一号，新迁移照它抄）|
 | v3.43.0 | `packaging_flow_configs` 加 4 列（重扫拦截 m0002 + 缺工单判定 m0003）|
 | v3.45.0 | `packaging_flow_configs` 加 10 列（箱标签扫码授权 9 列 m0004 + 工单同步开关 m0005，后者默认开 NULL 视为开）|
+| v3.50.0 | `ScannerDevice` 加生命周期 3 列（迁移 m0010）：`resume_on VARCHAR(16) DEFAULT 'cycle_end'`（周期结束亮灯时机，'ok_only'=NG 灭灯等人工恢复）、`rearm_forget_last BOOLEAN DEFAULT 0`（亮灯作废旧码）、`strict_ok_dedup BOOLEAN DEFAULT 0`（已 OK 条码永久拒绝）；PG 布尔默认值分道 `FALSE` |
 
 > 完整 changelog 在 `docs/changelog/` 下，每个 .md 都标了 BUG/FEAT/HOTFIX。

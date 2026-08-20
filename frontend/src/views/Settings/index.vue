@@ -301,6 +301,35 @@
             </div>
           </el-card>
 
+          <!-- v3.51: 激活项目收养策略 (多工位多项目部署建议关) -->
+          <el-card shadow="never" class="bg-slate-800 border-slate-700">
+            <template #header>
+              <div class="flex items-center gap-2">
+                <el-icon class="text-cyan-400"><Connection /></el-icon>
+                <span class="font-bold text-white">启用项目时自动接管未绑定工位</span>
+              </div>
+            </template>
+            <div class="mb-3 text-xs text-gray-500">
+              在项目管理页「启用」一个项目时，未绑定任何项目的工位如何处理。<br>
+              开启（默认）= 未绑定工位被自动接管进该项目，并<b>写死绑定</b>（单项目部署方便）；<br>
+              关闭 = 启用项目只影响<b>已绑定该项目</b>的工位，未绑定工位不动 —— <b>多工位跑不同项目/不同模型时强烈建议关闭</b>，
+              防止在某个项目里改配置后另一个工位的项目被顶掉。
+            </div>
+            <div class="space-y-2">
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="flex flex-col">
+                  <span class="text-gray-300">自动接管未绑定工位</span>
+                  <span class="text-[10px] text-gray-500">多工位多项目部署建议关闭</span>
+                </div>
+                <el-switch
+                  v-model="adoptUnboundEnabled"
+                  data-testid="adopt-unbound-switch"
+                  @change="onAdoptUnboundChange"
+                />
+              </div>
+            </div>
+          </el-card>
+
           <!-- v3.23.x: 加深启动就绪门槛 (默认关) -->
           <el-card shadow="never" class="bg-slate-800 border-slate-700">
             <template #header>
@@ -330,7 +359,7 @@
             </div>
           </el-card>
 
-          <!-- B1②: MES 外推并发派发 (默认关) -->
+          <!-- B1②: MES 外推并发派发 (v3.49 起默认开) -->
           <el-card shadow="never" class="bg-slate-800 border-slate-700">
             <template #header>
               <div class="flex items-center gap-2">
@@ -340,20 +369,32 @@
             </template>
             <div class="mb-3 text-xs text-gray-500">
               控制把检测结果推送给外部 MES 系统的方式。<br>
-              关闭（默认）= 在统一队列里<b>顺序推送</b>，与旧版一致；若客户 MES 系统响应慢或断连，重试期间会拖慢扫码配对等其它处理。<br>
-              开启 = 每个工位<b>独立线程推送</b>，同工位严格保序，<b>某个工位的 MES 慢/断连不再拖累其它工位和扫码流程</b>；适合多工位且 MES 偶发卡顿的现场。<br>
+              开启（默认，v3.49 起）= 每个工位<b>独立线程推送</b>，同工位严格保序，<b>某个工位的 MES 慢/断连不再拖累其它工位和扫码流程</b>；长时间断连时积压推送自动落盘，恢复后补发不丢单。<br>
+              关闭 = 在统一队列里<b>顺序推送</b>，与旧版一致；若客户 MES 系统响应慢或断连，重试期间会拖慢扫码配对等其它处理，仅在需要严格复现旧行为时使用。<br>
               修改后<b>立即生效</b>。
             </div>
             <div class="space-y-2">
               <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
                 <div class="flex flex-col">
                   <span class="text-gray-300">每工位独立线程推送外部 MES</span>
-                  <span class="text-[10px] text-gray-500">关闭 = 统一队列顺序推；开启 = 慢 MES 不拖累其它工位</span>
+                  <span class="text-[10px] text-gray-500">开启（默认）= 慢 MES 不拖累其它工位，断连积压落盘补发；关闭 = 统一队列顺序推（旧行为）</span>
                 </div>
                 <el-switch
                   v-model="mesAsyncDispatchEnabled"
                   data-testid="mes-async-dispatch-switch"
                   @change="onMesAsyncDispatchChange"
+                />
+              </div>
+              <!-- v3.49 WS3: scan_pair 新码先上屏 -->
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="flex flex-col">
+                  <span class="text-gray-300">扫码配对：新条码立即上屏</span>
+                  <span class="text-[10px] text-gray-500">开启（默认）= 扫到新码先显示、上一箱结算在后台完成，工人不用等；关闭 = 先结算完上一箱再显示新码（旧行为，排查用）</span>
+                </div>
+                <el-switch
+                  v-model="scanPairNewFirstEnabled"
+                  data-testid="scan-pair-new-first-switch"
+                  @change="onScanPairNewFirstChange"
                 />
               </div>
             </div>
@@ -402,6 +443,88 @@
               </div>
               <div v-if="!isElectronEnv" class="text-[10px] text-amber-400">
                 ⚠ 当前在浏览器中预览, 窗口控制按钮仅在打包桌面版下可用。
+              </div>
+            </div>
+          </el-card>
+
+          <!-- 一期多屏工位显示：配置持久化在后端，窗口由 Electron 主进程编排。 -->
+          <el-card shadow="never" class="bg-slate-800 border-slate-700" data-testid="multi-monitor-card">
+            <template #header>
+              <div class="flex items-center gap-2">
+                <el-icon class="text-cyan-400"><Monitor /></el-icon>
+                <span class="font-bold text-white">多屏工位显示（一期）</span>
+                <el-tag size="small" type="info">桌面版</el-tag>
+              </div>
+            </template>
+            <div class="mb-3 text-xs leading-5 text-gray-500">
+              主屏保留总览，各工位可绑定到独立显示器并全屏监看。默认关闭、工位副屏默认只读。<br>
+              显示器 ID 可能因异显坞重插而变化；已保存的 ID 失联时仍保留，并由桌面版优先按记忆坐标降级定位。
+            </div>
+            <div class="space-y-2" v-loading="multiMonitorLoading">
+              <div class="flex items-center justify-between rounded border border-slate-800 bg-slate-900 p-3">
+                <div class="flex flex-col">
+                  <span class="text-gray-300">启用多屏工位显示</span>
+                  <span class="text-[10px] text-gray-500">关闭时与现有单窗口完全一致；开启后按下方映射创建副屏窗口</span>
+                </div>
+                <el-switch v-model="multiMonitorForm.enabled" data-testid="multi-monitor-enabled-switch" />
+              </div>
+              <div class="flex items-center justify-between rounded border border-slate-800 bg-slate-900 p-3">
+                <div class="flex flex-col">
+                  <span class="text-gray-300">副屏只读</span>
+                  <span class="text-[10px] text-gray-500">一期建议保持开启；关闭后复用 Monitor 已有控制动作，为二期预留</span>
+                </div>
+                <el-switch v-model="multiMonitorForm.readonly" data-testid="multi-monitor-readonly-switch" />
+              </div>
+
+              <div class="rounded border border-slate-800 bg-slate-900 p-3">
+                <div class="mb-2 flex items-center justify-between gap-2">
+                  <span class="text-sm font-bold text-gray-300">工位 → 显示器映射</span>
+                  <el-button size="small" :loading="multiMonitorDisplayLoading" data-testid="multi-monitor-refresh" @click="refreshMultiMonitorDisplays">
+                    <el-icon class="mr-1"><Refresh /></el-icon>刷新显示器
+                  </el-button>
+                </div>
+                <div
+                  v-for="channelId in multiMonitorChannelIds"
+                  :key="channelId"
+                  class="mb-2 flex items-center gap-3 last:mb-0"
+                  :data-testid="`multi-monitor-channel-row-${channelId}`"
+                >
+                  <span class="w-20 flex-shrink-0 text-xs text-gray-400">工位 {{ channelId + 1 }}</span>
+                  <el-select
+                    class="flex-1"
+                    clearable
+                    placeholder="不创建副屏窗口"
+                    :model-value="multiMonitorForm.mapping[String(channelId)]?.display_id || ''"
+                    :data-testid="`multi-monitor-display-${channelId}`"
+                    @change="value => onMultiMonitorDisplayChange(channelId, value)"
+                  >
+                    <el-option
+                      v-for="display in multiMonitorDisplays"
+                      :key="display.id"
+                      :label="formatDisplayLabel(display)"
+                      :value="String(display.id)"
+                      :disabled="display.isMainWindowDisplay === true"
+                    />
+                    <el-option
+                      v-if="missingDisplayId(channelId)"
+                      :label="`失联显示器 ${missingDisplayId(channelId)}（按记忆坐标降级）`"
+                      :value="missingDisplayId(channelId)"
+                    />
+                  </el-select>
+                </div>
+                <div v-if="!isElectronEnv" class="mt-2 text-[10px] text-amber-400" data-testid="multi-monitor-browser-hint">
+                  当前为浏览器环境：可保存映射，但无法枚举或立即应用物理显示器；桌面版启动后生效。
+                </div>
+                <div v-else-if="multiMonitorDisplayError" class="mt-2 text-[10px] text-amber-400">
+                  显示器枚举失败：{{ multiMonitorDisplayError }}。已有映射会保留，桌面版可按记忆坐标或手工 bounds 降级。
+                </div>
+              </div>
+
+              <div class="flex items-center justify-between gap-3">
+                <div class="text-[10px] text-gray-500" data-testid="multi-monitor-apply-result">{{ multiMonitorApplySummary }}</div>
+                <el-button type="primary" :loading="multiMonitorSaving" data-testid="multi-monitor-save" @click="saveAndApplyMultiMonitor">
+                  保存并应用
+                </el-button>
               </div>
             </div>
           </el-card>
@@ -977,6 +1100,49 @@
       <!-- Performance Settings Tab -->
       <el-tab-pane label="性能设置">
         <div class="space-y-6 p-4">
+          <!-- WS5(PG): 数据库信息卡片 (只读展示) -->
+          <el-card shadow="never" class="bg-slate-800 border-slate-700">
+            <template #header>
+              <div class="flex items-center gap-2">
+                <el-icon class="text-green-400"><Coin /></el-icon>
+                <span class="font-bold text-white">数据库</span>
+                <el-tag v-if="dbInfo" size="small" :type="dbInfo.dialect === 'postgresql' ? 'success' : 'info'" data-testid="db-dialect-tag">
+                  {{ dbInfo.dialect === 'postgresql' ? 'PostgreSQL' : 'SQLite' }}
+                </el-tag>
+                <el-button size="small" text class="ml-auto" @click="loadDbInfo">刷新</el-button>
+              </div>
+            </template>
+            <div v-if="dbInfo" class="space-y-2 text-sm">
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <span class="text-gray-400">位置</span>
+                <span class="text-gray-200 font-mono text-xs break-all">{{ dbInfo.location || '—' }}</span>
+              </div>
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <span class="text-gray-400">服务端版本</span>
+                <span class="text-gray-200">{{ dbInfo.server_version || '—' }}</span>
+              </div>
+              <div v-if="dbInfo.dialect !== 'postgresql' && dbInfo.file_size_bytes != null"
+                   class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <span class="text-gray-400">文件大小（含 WAL）</span>
+                <span class="text-gray-200">{{ (dbInfo.file_size_bytes / 1024 / 1024).toFixed(1) }} MB</span>
+              </div>
+              <div v-if="dbInfo.pool" class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <span class="text-gray-400">连接池</span>
+                <span class="text-gray-200">{{ dbInfo.pool.checked_out }} 使用中 / {{ dbInfo.pool.size }} 池容量（溢出 {{ dbInfo.pool.overflow }}）</span>
+              </div>
+              <el-alert v-if="dbInfo.dialect !== 'postgresql'" type="info" :closable="false" show-icon>
+                <template #default>
+                  <div class="text-xs text-gray-300">
+                    切换 PostgreSQL：在用户数据目录放置 <code>db_config.json</code>（内容
+                    <code>{"database_url": "postgresql+psycopg2://用户:密码@主机:端口/库名"}</code>），
+                    先用迁移工具搬数据并校验，再重启应用生效。
+                  </div>
+                </template>
+              </el-alert>
+            </div>
+            <div v-else class="text-gray-500 text-sm p-3">数据库信息加载中…</div>
+          </el-card>
+
           <!-- 视频流设置 -->
           <el-card shadow="never" class="bg-slate-800 border-slate-700">
             <template #header>
@@ -1880,10 +2046,11 @@ import { useSystemStore } from '@/store/useSystemStore';
 import { useProjectStore } from '@/store/useProjectStore';
 import { usePluginStore } from '@/store/usePluginStore';
 import { usePluginThemeStore } from '@/store/usePluginThemeStore';
-import { Top, Monitor, Box, Bell, Edit, VideoCamera, Cpu, Refresh, DataLine, Lightning, Aim, User, Plus, Close, Minus, Loading } from '@element-plus/icons-vue';
+import { Top, Monitor, Box, Bell, Edit, VideoCamera, Cpu, Refresh, DataLine, Lightning, Aim, User, Plus, Close, Minus, Loading, Coin, Connection } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { getProjectDetail } from '@/api/project';
 import api from '@/api/index';
+import { getMultiMonitorConfig, setMultiMonitorConfig } from '@/api/detection';
 import AuthPanel from './AuthPanel.vue';
 import WorkpieceFlowPanel from './WorkpieceFlowPanel.vue';
 import ChannelGroupPanel from './ChannelGroupPanel.vue';
@@ -2539,6 +2706,32 @@ async function onAutoResumeChange(val) {
   }
 }
 
+// ========== v3.51: 激活项目收养未绑定工位开关 ==========
+// 存 SystemConfig KV activate.adopt_unbound。默认开 (存量行为)。
+const adoptUnboundEnabled = ref(true);
+
+async function loadAdoptUnboundConfig() {
+  try {
+    const res = await api.get('/projects/activate-config');
+    adoptUnboundEnabled.value = res?.data?.adopt_unbound !== false;
+  } catch (e) {
+    console.warn('加载激活收养配置失败:', e?.message);
+  }
+}
+
+async function onAdoptUnboundChange(val) {
+  dbg('settings.ops', '切换激活收养未绑定工位', `adopt_unbound=${!!val}`);
+  try {
+    await api.put('/projects/activate-config', { adopt_unbound: !!val });
+    ElMessage.success(val
+      ? '已开启: 启用项目时自动接管未绑定工位'
+      : '已关闭: 启用项目只影响已绑定该项目的工位');
+  } catch (e) {
+    ElMessage.error('保存失败: ' + (e?.response?.data?.detail || e?.message || ''));
+    adoptUnboundEnabled.value = !val;
+  }
+}
+
 // ========== v3.23.x: 加深启动就绪门槛开关 ==========
 // 落盘 workstation_config.json 顶层 startup_ready_gate 段, 下次开机由 Electron 读。
 const startupReadyGateEnabled = ref(false);   // 默认关 (首屏失败自动重试已是保底)
@@ -2563,9 +2756,21 @@ async function onStartupReadyGateChange(val) {
   }
 }
 
-// ========== B1②: MES 外推并发派发开关 (默认关) ==========
+// ========== WS5(PG): 数据库信息卡片 ==========
+const dbInfo = ref(null);
+
+async function loadDbInfo() {
+  try {
+    const res = await api.get('/system/db-info');
+    dbInfo.value = res?.data || null;
+  } catch (e) {
+    console.warn('加载数据库信息失败:', e?.message);
+  }
+}
+
+// ========== B1②: MES 外推并发派发开关 (v3.49 起默认开) ==========
 // 后端 SystemConfig(mes_async_dispatch) 为准, 立即生效。
-const mesAsyncDispatchEnabled = ref(false);
+const mesAsyncDispatchEnabled = ref(true);
 
 async function loadMesAsyncDispatchConfig() {
   try {
@@ -2587,9 +2792,182 @@ async function onMesAsyncDispatchChange(val) {
   }
 }
 
+// ========== v3.49 WS3: scan_pair 新码先上屏开关 (默认开) ==========
+// 后端 SystemConfig(scan_pair_new_code_first) 为准, 立即生效。
+const scanPairNewFirstEnabled = ref(true);
+
+async function loadScanPairNewFirstConfig() {
+  try {
+    const res = await api.get('/scanner/scan-pair/new-code-first');
+    scanPairNewFirstEnabled.value = res?.data?.enabled === true;
+  } catch (e) {
+    console.warn('加载扫码配对新码先上屏配置失败:', e?.message);
+  }
+}
+
+async function onScanPairNewFirstChange(val) {
+  dbg('settings.ops', '切换扫码配对新码先上屏', `enabled=${!!val}`);
+  try {
+    await api.put('/scanner/scan-pair/new-code-first', { enabled: !!val });
+    ElMessage.success(val ? '已开启, 扫到新码立即上屏, 上一箱结算后台完成' : '已关闭, 恢复先结算后上屏 (旧行为)');
+  } catch (e) {
+    ElMessage.error('保存扫码配对新码先上屏配置失败: ' + (e?.response?.data?.detail || e?.message || ''));
+    scanPairNewFirstEnabled.value = !val;
+  }
+}
+
 // ========== v3.10.x: 主窗口模式 (Electron) ==========
 const windowFullscreen = ref(false);
 const isElectronEnv = computed(() => !!(typeof window !== 'undefined' && window.electronAPI?.isElectron));
+
+// ========== 一期多屏工位显示 ==========
+const multiMonitorLoading = ref(false);
+const multiMonitorSaving = ref(false);
+const multiMonitorDisplayLoading = ref(false);
+const multiMonitorDisplayError = ref('');
+const multiMonitorApplySummary = ref('');
+const multiMonitorDisplays = ref([]);
+const multiMonitorForm = reactive({ enabled: false, readonly: true, mapping: {} });
+const multiMonitorChannelIds = computed(() =>
+  Array.from({ length: Math.max(1, transformTotalChannels.value || 1) }, (_, channelId) => channelId)
+);
+
+const normalizeDisplayBounds = (bounds) => {
+  if (!bounds) return null;
+  const normalized = {
+    x: Number(bounds.x),
+    y: Number(bounds.y),
+    width: Number(bounds.width),
+    height: Number(bounds.height),
+  };
+  return Number.isFinite(normalized.x) && Number.isFinite(normalized.y)
+    && Number.isFinite(normalized.width) && normalized.width > 0
+    && Number.isFinite(normalized.height) && normalized.height > 0
+    ? normalized
+    : null;
+};
+
+const applyNormalizedMultiMonitor = (config) => {
+  multiMonitorForm.enabled = config?.enabled === true;
+  multiMonitorForm.readonly = config?.readonly !== false;
+  Object.keys(multiMonitorForm.mapping).forEach((key) => delete multiMonitorForm.mapping[key]);
+  Object.entries(config?.mapping || {}).forEach(([channelId, item]) => {
+    const displayId = String(item?.display_id || '');
+    const bounds = normalizeDisplayBounds(item?.bounds);
+    if (!displayId && !bounds) return;
+    multiMonitorForm.mapping[String(channelId)] = {
+      display_id: displayId,
+      ...(bounds ? { bounds } : {}),
+    };
+  });
+};
+
+const formatDisplayLabel = (display) => {
+  const bounds = display?.bounds || {};
+  const title = display?.label || `显示器 ${display?.id}`;
+  const mainWindow = display?.isMainWindowDisplay ? ' · 主窗口（保留总览，不可绑定）' : '';
+  const primary = display?.isPrimary ? ' · OS 主屏' : '';
+  return `${title}${mainWindow}${primary} · ${bounds.width || '?'}×${bounds.height || '?'} @ ${bounds.x ?? '?'},${bounds.y ?? '?'}`;
+};
+
+const isMainWindowDisplayId = (displayId) => multiMonitorDisplays.value.some((display) => (
+  display?.isMainWindowDisplay === true && String(display.id) === String(displayId)
+));
+
+const missingDisplayId = (channelId) => {
+  const saved = multiMonitorForm.mapping[String(channelId)]?.display_id;
+  if (!saved) return '';
+  return multiMonitorDisplays.value.some((display) => String(display.id) === String(saved)) ? '' : String(saved);
+};
+
+async function refreshMultiMonitorDisplays() {
+  multiMonitorDisplayError.value = '';
+  if (!isElectronEnv.value || !window.electronAPI?.getDisplays) {
+    multiMonitorDisplays.value = [];
+    return;
+  }
+  multiMonitorDisplayLoading.value = true;
+  try {
+    const result = await window.electronAPI.getDisplays();
+    if (!result?.ok) throw new Error(result?.error || '未知错误');
+    multiMonitorDisplays.value = Array.isArray(result.displays) ? result.displays : [];
+  } catch (error) {
+    multiMonitorDisplays.value = [];
+    multiMonitorDisplayError.value = error?.message || String(error);
+  } finally {
+    multiMonitorDisplayLoading.value = false;
+  }
+}
+
+function onMultiMonitorDisplayChange(channelId, displayId) {
+  const key = String(channelId);
+  if (!displayId) {
+    delete multiMonitorForm.mapping[key];
+    return;
+  }
+  const selected = multiMonitorDisplays.value.find((display) => String(display.id) === String(displayId));
+  if (selected?.isMainWindowDisplay) {
+    ElMessage.warning('主窗口所在显示器必须保留总览，请选择其他显示器');
+    return;
+  }
+  const remembered = multiMonitorForm.mapping[key]?.bounds;
+  const bounds = normalizeDisplayBounds(selected?.bounds) || normalizeDisplayBounds(remembered);
+  multiMonitorForm.mapping[key] = {
+    display_id: String(displayId),
+    ...(bounds ? { bounds } : {}),
+  };
+}
+
+async function loadMultiMonitorConfig() {
+  multiMonitorLoading.value = true;
+  try {
+    const response = await getMultiMonitorConfig();
+    applyNormalizedMultiMonitor(response?.data || {});
+  } catch (error) {
+    ElMessage.warning('多屏工位配置加载失败，已按默认关闭显示');
+    applyNormalizedMultiMonitor({ enabled: false, readonly: true, mapping: {} });
+  } finally {
+    multiMonitorLoading.value = false;
+  }
+}
+
+async function saveAndApplyMultiMonitor() {
+  multiMonitorSaving.value = true;
+  multiMonitorApplySummary.value = '';
+  try {
+    const payload = {
+      enabled: !!multiMonitorForm.enabled,
+      readonly: multiMonitorForm.readonly !== false,
+      mapping: Object.fromEntries(Object.entries(multiMonitorForm.mapping)
+        .filter(([, item]) => !isMainWindowDisplayId(item?.display_id))
+        .map(([channelId, item]) => [channelId, {
+          display_id: String(item?.display_id || ''),
+          ...(normalizeDisplayBounds(item?.bounds) ? { bounds: normalizeDisplayBounds(item.bounds) } : {}),
+        }])),
+    };
+    const response = await setMultiMonitorConfig(payload);
+    const normalized = response?.data || payload;
+    applyNormalizedMultiMonitor(normalized);
+    if (isElectronEnv.value && window.electronAPI?.applyMultiMonitor) {
+      const result = await window.electronAPI.applyMultiMonitor(normalized);
+      const warnings = Array.isArray(result?.warnings) ? result.warnings : [];
+      const windows = Array.isArray(result?.windows) ? result.windows : [];
+      multiMonitorApplySummary.value = result?.ok
+        ? `已应用：${windows.length} 个工位窗口${warnings.length ? `；${warnings.join('；')}` : ''}`
+        : `配置已保存，但应用失败：${result?.error || warnings.join('；') || '未知错误'}`;
+      if (result?.ok && !warnings.length) ElMessage.success('多屏配置已保存并应用');
+      else if (result?.ok) ElMessage.warning(multiMonitorApplySummary.value);
+      else ElMessage.warning(multiMonitorApplySummary.value);
+    } else {
+      multiMonitorApplySummary.value = '已保存；请在桌面版中应用或重启后生效';
+      ElMessage.success('多屏配置已保存，桌面版生效');
+    }
+  } catch (error) {
+    ElMessage.error('保存多屏配置失败: ' + (error?.response?.data?.detail || error?.message || ''));
+  } finally {
+    multiMonitorSaving.value = false;
+  }
+}
 
 async function loadWindowConfig() {
   try {
@@ -2725,10 +3103,15 @@ onMounted(async () => {
   loadTransformConfig();
   loadSplashCameraConfig();
   loadWindowConfig();   // v3.10.x: 主窗口模式
+  loadMultiMonitorConfig();
+  refreshMultiMonitorDisplays();
   loadAutoResumeConfig();  // v3.22.x: 开机自动恢复检测开关
+  loadAdoptUnboundConfig();  // v3.51: 激活收养未绑定工位开关
   loadStartupReadyGateConfig();  // v3.23.x: 加深启动就绪门槛开关
   loadPolling();  // B3: 各管理面板轮询间隔
   loadMesAsyncDispatchConfig();  // B1②: MES 外推并发派发开关
+  loadScanPairNewFirstConfig();  // v3.49 WS3: 扫码配对新码先上屏开关
+  loadDbInfo();  // WS5(PG): 数据库信息卡片
   await loadProjectDetection();
 });
 

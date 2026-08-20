@@ -16,6 +16,25 @@
 > - **`models/plc_models.py`（新，47 行）**：`plc_connections` 表（RFC 13）——name/driver（8 选一）/conn_params JSON/points JSON（点位清单：地址+类型+字节序+scale）/rules JSON（触发规则）/write_backs JSON（事件写回）/enabled。整表 JSON 配置化，加点位/规则不动 schema。
 > - **`models/trigger_models.py`（新，27 行）**：`trigger_channels` 表（RFC 14）——name/source_type（6 选一）/params JSON/actions JSON（动作链）/enabled/channel_id。
 > - 迁移 **`m0009_pkg_tail_paper_only_after_awaiting`**：`packaging_flow_configs` 加 `tail_paper_only_after_awaiting` 列（SY9 分支原编号 m0006，吸收时因与主线 m0006_sms_report_content_template 撞号改 m0009）。plc/trigger 两张新表由 `Base.metadata.create_all` 建，无需迁移。
+>
+> **v3.49 补账（2026-08-12，捷昌整改批次；本版无 schema 迁移）**：
+> - `api/sessions.py`：模糊匹配 `.like()` → `.ilike()`（PG 大小写敏感语义对齐 SQLite 旧行为）。
+> - `api/sessions_maintenance.py`：备份链路 PG 化——dialect=postgresql 时走 **`pg_dump -Fc`** 出 `.dump`（子进程 + 临时文件原子落位），SQLite 保持文件级备份不变。
+> - `api/projects.py`：`_channels_bound_to_other` **幽灵绑定 stale 忽略**——绑定判定前 `Project.id IN (...)` 查存活，已删项目的工位绑定不再算"被占用"（PG 外键暴露的历史脏数据路径：`detection_sessions_project_id_fkey` 违规拦激活）。
+> - `api/source_session_lifecycle_mixin.py`：`settle_for_scan_pair` / `_ensure_cycle_for_scan_pair_settle` 加**显式 `prev_wp_id`/`prev_scanned_at`** 形参——WS3 新码先上屏后，结算范围用显式身份钳制（顶替后不能再从 `_inspecting_workpiece` 回读"上一件"），见 02 册 mes_hooks v3.49 条。
+> - `services/export_context.py`：SQLite 特有 `func.strftime`/`func.date` 聚合改走 `sql_compat.hour_minute/date_str/sum_bool` 方言助手（见 05 册 sql_compat 条）。
+> - `plugins-examples/sensor-clean/backend/hooks.py`：插件建表 DDL 方言化示范——`INTEGER PRIMARY KEY AUTOINCREMENT`（SQLite 专有）改方言安全 identity 写法，插件平台 PG 兼容样板。
+> - `database.py` 生态补充：官方 PG 建库路径定论 **`create_all + apply_pending`**（alembic 仅做 CI 基线校验），决策记录在 `backend/db/migrations/__init__.py` 模块 docstring；短信离线队列/互连采样队列保持**本地 SQLite** 不随 DATABASE_URL 走（旁路解耦决策，见各文件头注释）。
+>
+> **v3.50 补账（2026-08-12，捷昌二期）**：
+> - 迁移 **`m0010_scanner_lifecycle`**：`scanner_devices` 加 3 列——`resume_on VARCHAR(16) DEFAULT 'cycle_end'` / `rearm_forget_last BOOLEAN DEFAULT 0` / `strict_ok_dedup BOOLEAN DEFAULT 0`（PG 布尔默认值分道 FALSE；三列默认=现状零差异）。列语义与运行时行为见 02 册 v3.50 补账（scanner.py / mes_hooks.py）。
+> - `pipeline_config` 新键 `tracking_settle_on_complete`（bool，默认缺省=关）+ `steps_config[]` 新键 `settle_confirm_frames`（int 默认 1）——JSON 配置扩展无 schema 迁移，config-dict 生成物已刷新。
+>
+> **v3.51 补账（2026-08-14，捷昌 B 站双工位整改；无 schema 迁移）**：
+> - `api/projects.py`：激活收养开关 `activate.adopt_unbound`（SystemConfig KV，默认 '1'）+ `GET/PUT /projects/activate-config`——详见 02 册 v3.51 补账。
+> - `api/sessions_maintenance.py`：clear/all、clear/range 联动 `_unlock_ok_workpieces` 解封 ok 工件回 registered——详见 02 册 v3.51 补账。
+> - `channel_groups.plugin_data` 新用途：`unified_ok_report`（bool，工位组统一播报开关，v3.51 FEAT-009）——存 JSON 命名空间不动主 schema。
+> - `pipeline_config` 新键（v3.50.0a 收编）：`tracking_scan_gate`（bool 默认关，「扫码后才计数」——码不在位不计数/不开周期/不进账本，仅工位扫码器先扫后检生效）。
 
 ---
 

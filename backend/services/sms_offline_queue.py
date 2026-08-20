@@ -1,4 +1,10 @@
-"""generic_http 短信的独立 SQLite 离线补发队列。"""
+"""generic_http 短信的独立 SQLite 离线补发队列。
+
+WS5(PG) 决策记录: 本队列**刻意不随主库迁 PostgreSQL**，永远是独立本地 SQLite 文件。
+理由: 这是"网络断时的本地磁盘缓冲"，语义上必须独立于业务库存活
+(PG 连不上时短信队列反而更要能写)；数据是临时补发件，无跨表关系，不参与备份/迁移。
+interconnect/sample_queue.py 同理。
+"""
 
 from __future__ import annotations
 

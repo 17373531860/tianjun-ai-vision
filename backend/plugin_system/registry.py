@@ -716,6 +716,45 @@ class PluginHost:
             )
             return False
 
+    def register_archive_adapter(self, name: str, deliver_fn) -> bool:
+        """注册自定义录像归档 adapter (v3.53 四期).
+
+        归档规则的目的地类型选 ``plugin:<name>`` 时, 归档 worker 会把文件
+        交给 deliver_fn 投递 (客户私有协议 / 私有对象存储等走这里).
+
+        参数:
+            name: adapter 名 (不带 plugin: 前缀); 建议带客户码前缀防撞名
+            deliver_fn(src_path, subdir, filename, cfg, throttle_kbps) -> str
+                cfg = 规则 dest_config (敏感字段已解密);
+                返回最终地址串 (进归档台账); 抛异常 = 本次投递失败
+                (PermanentDeliveryError = 不重试, 其它异常 = 回 spool 重试)
+
+        注意:
+            - 注册为进程级 (与 hook 同寿命, 插件启停需重启生效)
+            - deliver_fn 在归档 worker 线程执行, 阻塞只影响归档不影响检测
+        """
+        self._require_capability("runtime.archive_adapter")
+        try:
+            from backend.services.archive_adapters import register_archive_adapter
+            register_archive_adapter(name, deliver_fn)
+            self._audit_log(
+                action="register_archive_adapter",
+                status="success",
+                message=f"name={name}",
+            )
+            return True
+        except Exception as exc:
+            self._audit_log(
+                action="register_archive_adapter",
+                status="failed",
+                message=f"name={name} err={exc}",
+            )
+            log.warning(
+                "[Plugin][%s] register_archive_adapter 异常 (已 swallow): %s",
+                self.customer_code, exc,
+            )
+            return False
+
     def trigger_event(self, channel_id: int, event_id, reason: str = "") -> bool:
         """触发主程序"事件响应" (走 VideoSourceManager.fire_external_event_response).
 

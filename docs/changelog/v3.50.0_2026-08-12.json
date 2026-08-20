@@ -1,0 +1,97 @@
+{
+  "version": "3.50.0",
+  "date": "2026-08-12",
+  "previous_version": "3.49.0",
+  "summary": "捷昌二期批次：跟踪模式齐件即结算（ROI离开/容器凑齐立即出结果，步骤级确认放入帧数，豁免名单/等离开状态机防二次入账）+ 扫码器生命周期码-合格-码闭环（仅OK重新亮灯/亮灯作废旧码/强制去重，人工恢复三通道出口，拒绝路径统一警告toast）。全部默认关，零差异。",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "跟踪模式「全部合格立即结算」（齐件即结算）",
+      "symptom": "捷昌装配线物品放齐后要等物品/箱子物理离开视野才结算，节拍被离开动作拖慢；期望放齐并稳定后立即出 OK 驱动扫码器进入下一循环",
+      "root_cause": "roi_exit/container 两种跟踪策略的结算触发点均为『离开确认』，无『凑齐即结』分支；若直接加会有三个坑：手部遮挡瞬时凑齐误结算、已结算残留物品二次入账、已结算箱子被重建 ledger",
+      "fix": "pipeline_config.tracking_settle_on_complete 开关（仅 roi_exit/container，默认关）+ 步骤级 settle_confirm_frames 连续 N 帧确认放入（_tracking_entry_pending/_container_entry_pending 缓冲）+ ROI 离开 _settle_complete_exempt 豁免名单（ID 漂移 IoU 合并）防残留二次入账 + 容器 _box_settled_waiting_exit 已结算等离开状态机（对齐 scan_d 设计，gone_frames 确认离场后清除）+ scan_pair 运行时互斥守门；豁免/等离开状态跨周期保留，仅项目切换重置",
+      "files": [
+        "backend/api/source_tracking_mixin.py",
+        "backend/api/source_container_grouping_mixin.py",
+        "backend/api/source_state_init.py",
+        "backend/api/source.py",
+        "backend/api/source_project_config_apply.py",
+        "frontend/src/views/Project/LogicConfigTab.vue",
+        "frontend/src/views/Project/StepsConfigTab.vue",
+        "frontend/src/views/Project/index.vue"
+      ],
+      "keywords": ["齐件即结算", "全部合格立即结算", "settle on complete", "tracking_settle_on_complete", "settle_confirm_frames", "确认放入帧数", "roi_exit", "container", "容器模式", "豁免名单", "_settle_complete_exempt", "_box_settled_waiting_exit", "已结算等离开", "二次入账", "ID漂移", "scan_pair互斥", "捷昌", "跟踪模式", "凑齐即结"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "扫码器生命周期可配置（仅OK亮灯/亮灯作废旧码/强制去重）",
+      "symptom": "捷昌二期要求码-合格-码一一对应：NG 后扫码器不能自动亮灯继续扫（防 NG 件未处置被下一码顶掉），旧码不得挂新周期，已合格的码不得复用；且冷却/重复等拒绝路径静默丢码，操作员不知道扫码被拒",
+      "root_cause": "resume_after_cycle 不感知结算结果（OK/NG 都恢复亮灯）；重新亮灯时不清 pending 旧码和物理去重缓存；已 OK 条码只有限时冷却无永久拒绝；mes_hooks 三条拒绝路径 return 前不发任何前端事件",
+      "fix": "scanner_devices 加 resume_on/rearm_forget_last/strict_ok_dedup 三列（m0010 迁移，默认=现状）；end_cycle 传 is_good 给 resume_after_cycle，ok_only 且非 OK 置 _resume_blocked 保持灭灯；人工出口三通道（POST /scanner/resume 端点 + 监控页恢复扫码按钮（scanner_resume_blocked 进 MES payload，信息条 v-if 补该条件）+ 触发中心 resume_scanner 动作）；_rearm_forget 恢复时清 last_scan + clear_pending_scan；strict_ok_dedup 查库已 OK 即拒；_emit_scan_warning 统一 scan_warning/warn_reason 警告事件，前端 handleScanToast 渲染警告 toast；ScannerPanel 按 text_lon+C/D 模式条件解锁",
+      "files": [
+        "backend/models/mes_models.py",
+        "backend/db/migrations/m0010_scanner_lifecycle.py",
+        "backend/db/migrations/__init__.py",
+        "backend/api/scanner.py",
+        "backend/services/scanner.py",
+        "backend/services/mes_hooks.py",
+        "backend/api/source_session_lifecycle_mixin.py",
+        "backend/api/source_routes.py",
+        "backend/services/triggers/actions.py",
+        "frontend/src/views/MES/ScannerPanel.vue",
+        "frontend/src/views/Monitor/index.vue"
+      ],
+      "keywords": ["扫码器生命周期", "scanner lifecycle", "resume_on", "ok_only", "仅合格亮灯", "重新亮灯时机", "rearm_forget_last", "亮灯作废旧码", "strict_ok_dedup", "强制去重", "恢复扫码", "scanner_resume_blocked", "POST /scanner/resume", "resume_scanner", "触发中心", "scan_warning", "warn_reason", "警告toast", "_emit_scan_warning", "m0010", "码-合格-码", "捷昌", "NG灭灯", "人工恢复"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "TEST-001",
+      "title": "四层测试：单测37 + BDD 8场景 + 浏览器E2E 6用例 + 可见浏览器UAT 12项",
+      "symptom": "",
+      "root_cause": "",
+      "fix": "tests/test_settle_on_complete.py + tests/test_scanner_lifecycle.py 单测；tests/features/settle_scan_lifecycle.feature BDD；tests/e2e_browser/test_settle_scan_lifecycle.py 浏览器E2E；tests/uat/uat_settle_scan_lifecycle.py 可见浏览器UAT（三件套证据落盘）；存量回归93 passed",
+      "files": [
+        "tests/test_settle_on_complete.py",
+        "tests/test_scanner_lifecycle.py",
+        "tests/features/settle_scan_lifecycle.feature",
+        "tests/step_defs/test_settle_scan_lifecycle.py",
+        "tests/e2e_browser/test_settle_scan_lifecycle.py",
+        "tests/uat/uat_settle_scan_lifecycle.py"
+      ],
+      "keywords": ["BDD", "E2E", "UAT", "settle_scan_lifecycle", "四层测试"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-mes", "debug-source", "modify-model", "api-sync", "debug-triggers"],
+  "files_changed": [
+    "backend/api/scanner.py",
+    "backend/api/source.py",
+    "backend/api/source_container_grouping_mixin.py",
+    "backend/api/source_project_config_apply.py",
+    "backend/api/source_routes.py",
+    "backend/api/source_session_lifecycle_mixin.py",
+    "backend/api/source_state_init.py",
+    "backend/api/source_tracking_mixin.py",
+    "backend/db/migrations/__init__.py",
+    "backend/db/migrations/m0010_scanner_lifecycle.py",
+    "backend/models/mes_models.py",
+    "backend/services/mes_hooks.py",
+    "backend/services/scanner.py",
+    "backend/services/triggers/actions.py",
+    "frontend/src/views/MES/ScannerPanel.vue",
+    "frontend/src/views/Monitor/index.vue",
+    "frontend/src/views/Project/LogicConfigTab.vue",
+    "frontend/src/views/Project/StepsConfigTab.vue",
+    "frontend/src/views/Project/index.vue",
+    "tests/test_settle_on_complete.py",
+    "tests/test_scanner_lifecycle.py",
+    "tests/features/settle_scan_lifecycle.feature",
+    "tests/step_defs/test_settle_scan_lifecycle.py",
+    "tests/e2e_browser/test_settle_scan_lifecycle.py",
+    "tests/uat/uat_settle_scan_lifecycle.py"
+  ]
+}

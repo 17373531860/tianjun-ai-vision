@@ -306,3 +306,15 @@ class ChannelManager:
 ---
 
 **最后更新**：2026-05-07（v3.5.x 主线 / 实测代码核对）
+
+## 十三、v3.51.5 补充：channel-config 部分更新 merge 语义 + [ChannelCfg] 写盘日志
+
+**血泪（捷昌 B 站）**：`PUT /workstations/channel-config` 曾固定 `merge=False` 整写——前端"绑定项目"只发 `{project_id}`，把该工位 `source_type/device_index/resolution` 整段抹掉，重启后相机不恢复黑屏。v3.51.5 起 `save_channel_config` 按请求体**有无 `source_type`** 判定：有=完整源配置整写（老语义），没有=部分更新转 `merge=True` 只动给的键。回归 `tests/test_channel_manager_multi.py` 两条（只带 project_id 不抹配置 / 带 source_type 保持整写）。
+
+**排查工具**：每次写盘打 `[ChannelCfg]` 日志——`整写 keys=[...] 丢弃旧键=[...]` / `合并写 keys=[...]`。再遇"配置莫名丢了"直接搜该前缀看是谁整写丢的键。
+
+## 十四、v3.52.0 补充：multi_monitor 顶层段 + _save_config merge 保留
+
+**新配置段**：`workstation_config.json` 顶层新增 `multi_monitor`（`enabled`/`readonly`/`mapping{channel_id→{display_id,bounds}}`），读写走 `GET/PUT /api/v1/workstations/multi-monitor`（PUT 挂 `settings.edit` 权限）。`set_multi_monitor_config` 只替换本段（不变量 17 分段写入），规范化丢弃越界工位（0..MAX_CHANNELS）与非法 bounds（宽高≤0），损坏/缺失时读回默认 `enabled=false, readonly=true`。回归 `tests/test_multi_monitor_config.py`。
+
+**存量隐患修复**：`_save_config`（工位数变更写盘）原先整写文件只留 `channel_count`+`channels`，会静默抹掉 `startup_ready_gate`/`multi_monitor` 等其他顶层段——v3.52 起改为读旧文件 merge 两键、其余段原样保留。再遇"某顶层段莫名消失"先排查是否有旧版本或旁路代码整写该文件。

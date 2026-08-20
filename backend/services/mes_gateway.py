@@ -457,6 +457,15 @@ class MESGateway:
         retry_backoff = str(config.get("retry_backoff") or "fixed").lower()
         # 是否对 4xx 重试 (默认 True = 历史行为; 川南 §5.1 要求仅 5xx/超时重试 → 设 False)
         retry_on_4xx = config.get("retry_on_4xx", True)
+        # v3.49: 单事件重试总耗时预算 (秒, 0=不限=历史行为)。MES 长时间不通时,
+        # 防止 重试次数×(间隔+请求超时) 把一次推送拖成几十秒 (捷昌: 3×5s+超时≈20s/箱)。
+        # 预算耗尽 → 提前收场记失败, 熔断/失败日志逻辑照常走。
+        try:
+            retry_budget_sec = float(config.get("retry_budget_sec") or 0)
+        except (TypeError, ValueError):
+            retry_budget_sec = 0
+        dispatch_started = time.monotonic()
+        budget_exhausted = False
         last_result = None
 
         if debug_center.is_on("backend.gateway"):
@@ -465,6 +474,16 @@ class MESGateway:
             if attempt > 0:
                 delay = retry_interval * (2 ** (attempt - 1)) \
                     if retry_backoff == "exponential" else retry_interval
+                if retry_budget_sec > 0 and \
+                        (time.monotonic() - dispatch_started) + delay >= retry_budget_sec:
+                    budget_exhausted = True
+                    print(f"[MES Gateway] retry budget exhausted "
+                          f"({retry_budget_sec}s), giving up: {conn.name}", flush=True)
+                    if debug_center.is_on("backend.gateway"):
+                        debug_center.dbg("backend.gateway", "重试预算耗尽",
+                                         f"conn={getattr(conn, 'name', None) or conn.id} event={event_type} "
+                                         f"budget={retry_budget_sec}s attempt={attempt}/{retry_count}")
+                    break
                 time.sleep(delay)
                 print(f"[MES Gateway] retry {attempt}/{retry_count}: {conn.name}", flush=True)
                 if debug_center.is_on("backend.gateway"):
@@ -505,6 +524,8 @@ class MESGateway:
         error_msg = last_result.get("error") if last_result else "未知错误"
         if not error_msg and last_result:
             error_msg = f"HTTP {last_result.get('status_code')}: 响应校验失败"
+        if budget_exhausted:
+            error_msg = f"重试预算耗尽({retry_budget_sec}s): {error_msg}"
         self._log(
             db, conn.id, event_type, "push",
             method=config.get("method", "POST"),

@@ -1041,6 +1041,61 @@
               <el-input-number v-model="project.tracking_gone_confirm_frames" :min="0" :step="5" :precision="2" size="small" class="!w-28" />
             </div>
 
+            <!-- v3.50: 齐件即结算 (仅 ROI离开 / 容器模式) -->
+            <div v-if="['roi_exit', 'container'].includes(project.tracking_cycle_strategy)"
+              class="flex items-start gap-3 text-xs bg-slate-800/60 rounded p-2.5 border border-slate-700">
+              <div class="flex items-center gap-1.5 shrink-0">
+                <el-tooltip placement="top">
+                  <template #content>
+                    <div style="max-width:320px;line-height:1.5">
+                      <b>全部合格立即结算</b>：开启后<b>取代</b>本策略原有的全部结算路径——
+                      物品账本凑齐（每类都达到期望数量）的当帧立即判 OK；
+                      没凑齐时物品/箱子离开画面<b>不出账</b>（不 OK 不 NG），账本挂起继续等。<br/>
+                      · <b>ROI离开</b>：凑齐即结算整个周期；结算时仍在画面里的物品会被豁免，
+                      离开前不会重复计入下一周期。<br/>
+                      · <b>容器模式</b>：凑齐即结算该箱（转入"已结算等离开"，离开前不二次入账）；
+                      未凑齐的箱子离开只挂账，不判 NG。<br/>
+                      · 挂起账本的收场出口：<b>扫到新码</b>（强制把旧账判 NG 收场，新码开新周期）/
+                      <b>周期超时</b>（配了超时秒数则到点判 NG）/ <b>人工结算</b>。<br/>
+                      · 开启后可在「步骤设置」为每个物品配置<b>确认放入帧数</b>（连续 N 帧看见才入账，
+                      抑制误检瞬时凑数）。<br/>
+                      · 与扫码器"扫码配对"绑定时机<b>互斥</b>：扫码配对通道本开关不生效。
+                    </div>
+                  </template>
+                  <span class="text-gray-400 cursor-help border-b border-dashed border-gray-500">全部合格立即结算</span>
+                </el-tooltip>
+                <el-switch v-model="project.tracking_settle_on_complete" size="small" data-testid="settle-on-complete-switch" />
+              </div>
+              <span v-if="project.tracking_settle_on_complete" class="text-[10px] text-amber-400/90 leading-relaxed">
+                已开启：凑齐当帧判 OK 是唯一自动出账口——没凑齐就离开不判 NG、账本挂起，由下一个码强制收账判 NG（或周期超时 / 人工结算）。入账门槛见「步骤设置 → 确认放入帧数」（默认 1 帧）。与"扫码配对"互斥。建议配合"周期超时"设置兜底秒数，防账本永久挂起。
+              </span>
+            </div>
+
+            <!-- v3.50.1: 扫码后才计数 (跟踪模式通用) -->
+            <div class="flex items-start gap-3 text-xs bg-slate-800/60 rounded p-2.5 border border-slate-700">
+              <div class="flex items-center gap-1.5 shrink-0">
+                <el-tooltip placement="top">
+                  <template #content>
+                    <div style="max-width:320px;line-height:1.5">
+                      <b>扫码后才计数</b>：开启后，工位上<b>没有码在位</b>（上一单已结算、
+                      下一个码还没扫）期间检测到的东西<b>一律不入账</b>——不计数、不开周期、
+                      不进任何账本；扫到码后从当前画面重新开始看（此刻仍在画面/箱内的物品
+                      会当帧重新入账，不会丢件）。<br/>
+                      · 关闭（默认）＝现状：扫码前检测到的物品先记内存账，扫码后并入周期。<br/>
+                      · 仅在该工位扫码器开了<b>「先扫后检」</b>时生效（没有扫码器或没开先扫后检时
+                      本开关不起作用）。<br/>
+                      · 容器模式下箱子本身照常跟踪（D 模式跨线亮灯不受影响），只拦物品入账。
+                    </div>
+                  </template>
+                  <span class="text-gray-400 cursor-help border-b border-dashed border-gray-500">扫码后才计数</span>
+                </el-tooltip>
+                <el-switch v-model="project.tracking_scan_gate" size="small" data-testid="scan-gate-switch" />
+              </div>
+              <span v-if="project.tracking_scan_gate" class="text-[10px] text-amber-400/90 leading-relaxed">
+                已开启：结算后到下一个码之间检测到什么都不算数，只有扫码之后的检测才入账。需该工位扫码器开启「先扫后检」；容器模式下箱子跟踪与跨线亮灯照常。
+              </span>
+            </div>
+
             <!-- Row 3: switches in one line -->
             <div class="flex items-center gap-5 text-xs flex-wrap">
               <div class="flex items-center gap-1.5">

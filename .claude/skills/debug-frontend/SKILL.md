@@ -343,3 +343,20 @@ v3.7.3 起 IoU / 优先级 / FP16 收进"高级参数 ▾"折叠区（默认收�
 **排查要点**：客户报"后端在跑前端没反应"先看这两处是否被绕过（如新加的启动路径没走 `getSourceStatus` 暴露 `is_running`）；回归护栏 `tests/e2e_browser/test_idle_watchdog_adopt.py` + UAT `tests/uat/uat_20260716_cn_idle_autostart_adopt.py`。
 **关联但独立**：末步结果列随余像闪烁回退是另一个修复（`_posDone` 权威 PT 锁定，UAT `uat_20260716_cn_last_step_flicker.py`），后端侧还有严格前缀守门（见 `debug-source` v3.40 节）。
 
+
+## v3.51.5 补充：多工位启动恢复三修（捷昌 B 站现场）
+
+1. **多工位禁用单工位 localStorage 兜底**：`Monitor/index.vue` `autoRestoreSource()` 先查后端 `channel_count`，>1 直接跳过 localStorage 恢复——旧缓存的 `device_index` 会与后端多通道恢复赛跑抢相机，酿成"左工位显示右工位的流+模型、右工位黑屏"串位事故。单工位行为不变。回归护栏 `tests/e2e_browser/test_monitor_autorestore_guard.py`。
+2. **is_running 跳变强制重连流**：`processChannelResult` 检测到某通道 `is_running` false→true（后端迟到恢复），重置 `mjpegZeroFrameFails`、断开旧 MJPEG、`syncMultiStreams()` 重连——治"视频源加载完还要切页才出画面"。
+3. **fetchChannelCount 失败重试**：进页时后端未就绪导致 `getWorkstations` 失败，3 秒后重试而不是锁死单工位模式。
+4. **WorkpiecePanel 多工位默认关"仅当前项目"**：多工位下"当前项目"只是最后激活的项目，默认过滤会藏其它工位项目的工件 → 操作员批量删除删不干净 → `strict_ok_dedup` 拒码找不到原因。`channel_count>1` 时 `onlyCurrentProject` 默认 false。回归 `tests/e2e_browser/test_workpiece_panel_multiws_v3515.py`。
+
+## v3.52.0 补充：多屏工位显示一期（Monitor kiosk 模式 + 多屏流控）
+
+**架构**：主屏放大态与副屏 kiosk 共用 `SingleChannelMonitor.vue`（只消费父级轮询数据与 canvas 注册，不自行取流）；kiosk 由 Electron 子窗加载同一 `/monitor` 路由 + `?kiosk=1&channel=N&readonly=0/1` query。
+
+1. **kiosk 写通路全屏蔽**：`kioskMode` 下不渲染 Toast/人工确认覆盖层/权限提升弹窗/录像异常面板/插件 layout 覆盖/工件流指示/外部报警横幅，`onMounted` 提前 return（不起扫码、自动恢复、看门狗），`showMultiToast` 直接 return。只轮询 `kioskChannel` 一个工位 + 一路视频。排查"副屏怎么不弹 XX"先想到这是设计不是 bug。
+2. **多屏流控**（后端每通道只保留最新一条 MJPEG 连接）：多屏开启时主屏总览强制快照轮询（`syncMultiStreams` 的 `useSnapshotAll`）为副屏让出长连接；主屏放大只拉目标工位一路——**会踢掉该工位副屏的 MJPEG**，副屏靠 v3.48.1 零帧检测降级快照。客户报"副屏画面变卡"先问主屏是不是停在放大态。
+3. **⚠️ 不变量：网格总览整卡点击=放大单路（v3.47 交付行为），多屏开关不得改变**。v3.52 合并审计拦下过一次"多屏关闭时误改为仅选中"的回归；2/3 工位整卡点击=选中不变。双向守门：`tests/e2e_browser/test_multi_workstation_layout.py::test_grid_overview_pagination_and_zoom` + `test_multi_monitor_phase1.py::test_disabled_workstations_keep_legacy_selection`。
+4. **kiosk 路由不污染主窗记忆**：`router/index.js` `isMultiMonitorRoute` 守门——kiosk query 不触发冷启动路由恢复、不写 `LAST_ROUTE_KEY`；`layout/index.vue` kiosk 下隐藏导航/底栏且不启 `startScanGun()`（⚠️ 现场焦点落副屏时 USB 扫码枪输入会丢，部署交代主屏持焦）。
+5. **start 迟返操作锁释放**：单工位 `startPolling` 里"正操作 + 前端未 detecting + 后端 `is_detecting=true`"三条件齐 → 释放 `isOperating` 并对齐运行态（治 start HTTP promise 不返回按钮转圈）。
