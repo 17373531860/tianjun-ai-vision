@@ -200,7 +200,7 @@ M1 的动作注册表上移是全局收益：此后插件注册一个动作，PL
 | 管理器 | `backend/services/triggers/manager.py`（单例、热重载、共享动作线程、`on_channel_removed` 挂入 channel_manager、main.py 启停接线） | ✅ |
 | API | `backend/api/triggers.py` + `schemas/triggers.py`（CRUD/启停/live/history/logs/test/mock-fire/mock-level/calibrate/fire/{key}/导入导出），`router_manifest.py` 登记 `/api/v1/triggers` | ✅ |
 | 模板库 | `backend/services/triggers/presets.py`（虚拟按钮→结算 / 脚踏板→结算 / HTTP→开工 / 串口→事件 / 每日清零 / mock 演示） | ✅ |
-| 前端 | `frontend/src/api/triggers.js` + `views/Settings/TriggerPanel.vue`（卡片+实时状态+历史+日志+试触发+mock 注入+**画面标定器**拖拽框选），系统设置页「触发中心」tab；轮询默认 trigger_status/trigger_live + 日志条数 trigger 三处登记 | ✅ |
+| 前端 | `frontend/src/api/triggers.js` + `views/Settings/TriggerPanel.vue`（卡片+实时状态+历史+日志+试触发+mock 注入+**画面标定器**拖拽框选），系统设置页「触发中心」tab；轮询默认 trigger_status/trigger_live + 日志条数 trigger 三处登记（2026-08 信息架构重构后面板已迁 `views/MES/TriggerPanel.vue`，入口=MES 管理页「触发中心」tab） | ✅ |
 | 依赖 | `pynput>=1.7.6` 进 requirements（惰性 import，缺库只影响 hid_key） | ✅ |
 | 测试 | `tests/test_trigger_hub.py` 13 项（参数校验/注册表共享/脉冲/边沿+min_interval/试触发/HTTP 鉴权/导入导出）+ `tests/e2e_browser/test_trigger_panel.py` 3 项 CI e2e + `tests/manual_uat/trigger_hub_uat.py` 可见浏览器 UAT 11 步全过 | ✅ |
 | 文档 | 操作手册 §4.7「触发中心」+ `debug-triggers` skill + api-sync 35 组登记 + AGENTS.md 路由/触发表 | ✅ |

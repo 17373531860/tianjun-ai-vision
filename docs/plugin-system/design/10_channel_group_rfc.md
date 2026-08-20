@@ -245,6 +245,7 @@ if coordinator:
 ### 6.2 前端
 
 新增页面：`frontend/src/views/Settings/ChannelGroupPanel.vue`，作为 Settings 页的一个 tab（与"账号鉴权 Tab"同级）。
+（2026-08 信息架构重构后已迁 `views/Source/ChannelGroupPanel.vue`，入口=「工位与输入源」页「工位组互通」tab。）
 
 Pinia store：新增 `useChannelGroupStore.js`。
 

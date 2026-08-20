@@ -414,13 +414,13 @@ display.monitor.defaultCounters.{ showTotal, showGood, showBad, showNgSteps }
 - ⚠️ 7 个主程序 slot 接入点见 v3.13.1（settings/project tab、cycle-result.indicator、step-cell.duration/status、layout.body/footer）
 - ⚠️ **v3.18.0 (RFC12 整页覆盖)**：`*.layout.body` 整页覆盖挂载点已从「仅 Monitor」扩展到**全部 8 个主视图**（Monitor/Project/Settings/Source/Model/Data/Alarm/MES 各有 `<TjSlot name="<view>.layout.body">` 包住整个页面 body）。无插件注册时 TjSlot 回退默认内容=原生整页，**零差异**；与局部 slot（如 `project.step-cell.durations` 三档列）**正交共存**——单 active 插件设计下，整页覆盖型插件（如 showcase）与局部增强型插件（如金龙三档）不会同时生效，不互相干扰。改这 8 个视图的最外层模板结构时，注意别破坏 `*.layout.body` TjSlot 的开闭包裹（详见 `docs/plugin-system/design/12_full_page_override_rfc.md`）。
 
-### 17.2 设置页新增一个 Tab 配置面板
+### 17.2 给某页新增一个 Tab 配置面板
 
-仿 `WorkpieceFlowPanel.vue` / `ChannelGroupPanel.vue` 三件套：
+仿 `WorkpieceFlowPanel.vue` / `ChannelGroupPanel.vue` 三件套（⚠️ 信息架构重构后这两个面板在 `views/Source/`，包装结算/触发中心在 `views/MES/`——新面板先按域归位：工位协同进 Source、生产对接进 MES、纯系统级才进 Settings，见 AGENTS.md 产品决策原则）：
 
 1. `frontend/src/api/<name>.js` — CRUD axios 封装（`import api from './index'`）
-2. `frontend/src/views/Settings/<Name>Panel.vue` — 列表 + 新建/编辑 `el-dialog`（成员多选/策略 `el-select`/启用 `el-switch`）
-3. `frontend/src/views/Settings/index.vue` — `import` 面板 + 加 `<el-tab-pane label="..."><XxxPanel /></el-tab-pane>`
+2. `frontend/src/views/<域>/<Name>Panel.vue` — 列表 + 新建/编辑 `el-dialog`（成员多选/策略 `el-select`/启用 `el-switch`）
+3. 对应页 `index.vue` — `import` 面板 + 加 `<el-tab-pane label="..."><XxxPanel /></el-tab-pane>`（MES 页是分组按钮式 tab，见 `views/MES/index.vue` 的 `tabGroups`）
 
 - 后端路由可能早已存在（如「工位组互通」R4 的 `/channel-groups` 在 v3.13.1/v3.15.5 已有），只是缺前端入口——**先确认后端有没有，别重造**
 - `el-select` 单选别绑 boolean（见第 9 节）；对话框关闭重置表单避免脏数据残留

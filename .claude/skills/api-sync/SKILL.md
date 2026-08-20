@@ -70,7 +70,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `/plugins/*` | `plugins.py` | `plugins.js` | 插件安装/激活/清单/client-log |
 | `/interconnect/*` | `interconnect.py` | `interconnect.js` | ★ v3.47 YoloVision 训练平台互连：`/models/push` 接收模型包 + 拉取分发游标轮询 + 现场帧采样回流配置/状态/流水（互连设置页） |
 | `/plc/*` | `plc.py` | `plc.js` | ★ v3.48 RFC 13 通用 PLC 连接器：连接 CRUD/启停/测试 + 驱动清单 + 方案模板 + 点位实时值/手动写/IO 日志 + mock-set 联调 + 配置导入导出（MES 页「PLC 对接」tab） |
-| `/triggers/*` | `triggers.py` | `triggers.js` | ★ v3.48 RFC 14 统一触发中心：触发源实例 CRUD/启停 + 类型/动作/模板清单 + 实时状态/触发历史/日志 + 试触发/mock 注入 + 像素标定 + `fire/{key}` HTTP 触发入口 + 导入导出（系统设置页「触发中心」tab） |
+| `/triggers/*` | `triggers.py` | `triggers.js` | ★ v3.48 RFC 14 统一触发中心：触发源实例 CRUD/启停 + 类型/动作/模板清单 + 实时状态/触发历史/日志 + 试触发/mock 注入 + 像素标定 + `fire/{key}` HTTP 触发入口 + 导入导出（MES 管理页「触发中心」tab，信息架构重构自系统设置迁入） |
 | `/debug/*` | `debug.py` | 无封装（手测用） | 通道诊断 + 调试日志中心 |
 | `/test/synthetic/*` | `test_runtime_routes.py` | —（测试专用） | 仅 `RUNTIME_MODE=test` 挂载：虚拟剧本源 |
 
@@ -96,7 +96,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `smsReport.js` | ★ v3.46 在用（Data 页短信日报对话框：`/sms-report/*`） |
 | `interconnect.js` | ★ v3.47 在用（互连设置页：连接/采样规则/模型拉取/运行状态与采样流水） |
 | `plc.js` | ★ v3.48 在用（MES 页 PLC 对接 tab：`/plc/*` 全组封装） |
-| `triggers.js` | ★ v3.48 在用（系统设置页触发中心 tab：`/triggers/*` 全组封装） |
+| `triggers.js` | ★ v3.48 在用（MES 管理页触发中心 tab：`/triggers/*` 全组封装） |
 | `auth.js` | 在用（一个文件封装 `/auth` `/users` `/roles` `/api-keys` 四组） |
 | `plugins.js` / `channel_group.js` / `packaging_flow.js` | 在用 |
 | `export.js` | 在用（v3.5.0 自定义导出 + 实时规则） |

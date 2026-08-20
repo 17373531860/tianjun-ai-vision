@@ -7,6 +7,12 @@
 覆盖范围：`frontend/src/` 与 `electron/` 核心壳文件；vendor/splash 第三方资源仅记用途。
 下文带行号的旧版本补账只用于历史定位，当前实现统一按文件与函数名查找。
 
+> ⚠️ **2026-08 信息架构重构后文件搬家**（下文历史笔记中的旧路径按此换算）：
+> `Settings/ChannelGroupPanel.vue`、`Settings/WorkpieceFlowPanel.vue` → `views/Source/`（「工位与输入源」页 tab）；
+> `Settings/PackagingFlowPanel.vue`、`Settings/TriggerPanel.vue` → `views/MES/`（MES 管理页「包装结算 / 触发中心」tab）；
+> 多屏工位显示卡自 `Settings/DisplaySettingsTab.vue` 抽为 `views/Source/MultiMonitorPanel.vue`；
+> 容器装箱清点块自 `Project/LogicConfigTab.vue` 抽为 `Project/CustomMixBoxTab.vue`（「装箱清点」条件 tab）。
+
 ## 当前多屏工位显示指针
 
 一期使用同一个 `/monitor` hash 路由承载主屏放大态与副屏 kiosk，不新增平行页面。

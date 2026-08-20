@@ -699,7 +699,7 @@ curl http://localhost:8001/api/v1/cluster/slaves
 
 **关键文件**：`backend/services/packaging_flow_coordinator.py`（状态机）+ `backend/api/packaging_flows.py`
 （CRUD + 扫码 + 处置端点）+ `backend/models/mes_models.py: PackagingFlowConfig / PackagingFlowRun` +
-`frontend/src/views/Settings/PackagingFlowPanel.vue`（配置）+ `frontend/src/views/Monitor/PackagingFlowCard.vue`（监控卡）。
+`frontend/src/views/MES/PackagingFlowPanel.vue`（配置，信息架构重构自 Settings/ 迁入，入口=MES 管理页「包装结算」tab）+ `frontend/src/views/Monitor/PackagingFlowCard.vue`（监控卡）。
 
 **两种计数口径**：`count_unit='trays'`（v3.21 原行为）/ `'sliders'`（v3.22，一个检测周期=一个箱，
 进箱滑块数由检测层 `slider_count` 带入）。`get_state(config_id)` 直接返回内存 run dict，run 里加什么字段前端就能看到什么。
