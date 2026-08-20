@@ -19,152 +19,23 @@
     <div class="flex-1 flex gap-4 overflow-hidden">
       <!-- Project List & Context Sidebar -->
       <div class="w-80 flex flex-col gap-4">
-        <!-- Project List -->
-        <div class="bg-slate-900 rounded-lg border border-slate-700 flex flex-col overflow-hidden transition-all duration-300"
-             :class="activeProject && (activeTab === 'logic' || activeTab === 'events') ? 'h-1/2' : 'h-full'">
-          <div class="p-3 border-b border-slate-800 bg-slate-950/50">
-            <el-input v-model="searchQuery" placeholder="搜索项目..." prefix-icon="Search" size="small" />
-          </div>
-          <div v-loading="loading" class="flex-1 overflow-y-auto p-2 space-y-2 custom-scrollbar">
-            <div v-if="filteredProjects.length === 0" class="text-center text-gray-500 py-8">
-              暂无项目
-            </div>
-            <div 
-              v-for="item in filteredProjects" 
-              :key="item.id"
-              @click="selectProject(item)"
-              class="p-4 rounded-lg border cursor-pointer transition-all group hover:border-cyan-500/50"
-              :class="activeProject?.id === item.id ? 'border-cyan-500 bg-cyan-900/20' : 'border-slate-800 bg-slate-900 hover:bg-slate-800'"
-            >
-              <div class="flex justify-between items-start mb-2">
-                <span class="font-bold text-gray-200 group-hover:text-white">{{ item.name }}</span>
-                <el-tag size="small" :type="item.is_active ? 'success' : 'info'" effect="dark">
-                  {{ item.is_active ? '运行中' : (item.task_type || 'detection').toUpperCase() }}
-                </el-tag>
-              </div>
-              <div class="text-xs text-gray-500 flex justify-between">
-                <span>模型: {{ item.model_name || '未配置' }}</span>
-                <span>{{ formatDate(item.updated_at) }}</span>
-              </div>
-            </div>
-          </div>
-        </div>
+        <!-- Project List（已外置 ProjectListPanel.vue，2026-08 拆分批次） -->
+        <ProjectListPanel
+          :projects="projects"
+          :loading="loading"
+          :active-project="activeProject"
+          :active-tab="activeTab"
+          @select="selectProject" />
 
-        <!-- Logic Mode Context (Shows when Logic Tab is active) -->
-        <div v-if="activeProject && activeTab === 'logic'" class="h-1/2 bg-slate-900 rounded-lg border border-slate-700 flex flex-col overflow-hidden">
-          <div class="p-3 border-b border-slate-800 bg-slate-950/50 font-bold text-white">任务类型与逻辑模式</div>
-          <div class="flex-1 overflow-y-auto p-4 custom-scrollbar">
-            <!-- Task Type Selector -->
-            <div class="mb-4 p-3 bg-slate-800 rounded border border-slate-700">
-              <span class="text-sm font-bold text-cyan-400 block mb-2">任务类型</span>
-              <div class="flex gap-3">
-                <label class="flex items-center gap-2 cursor-pointer px-3 py-1.5 rounded transition-colors" :class="activeProject.task_type === 'detection' ? 'bg-cyan-600/20 border border-cyan-500' : 'bg-slate-700 border border-slate-600 hover:border-cyan-500/50'">
-                  <input type="radio" v-model="activeProject.task_type" value="detection" class="accent-cyan-500">
-                  <span class="text-sm text-white">目标检测</span>
-                </label>
-                <label class="flex items-center gap-2 cursor-pointer px-3 py-1.5 rounded transition-colors" :class="activeProject.task_type === 'segmentation' ? 'bg-cyan-600/20 border border-cyan-500' : 'bg-slate-700 border border-slate-600 hover:border-cyan-500/50'">
-                  <input type="radio" v-model="activeProject.task_type" value="segmentation" class="accent-cyan-500">
-                  <span class="text-sm text-white">图像分割</span>
-                </label>
-              </div>
-              <p class="text-[11px] text-gray-500 mt-1">{{ activeProject.task_type === 'segmentation' ? '使用实例分割模型，提供像素级轮廓' : '使用目标检测模型，提供边界框' }}。跟踪模式下自动适配。</p>
-            </div>
+        <!-- Logic Mode Context (Shows when Logic Tab is active)（已外置 LogicModeContextPanel.vue，2026-08 拆分批次） -->
+        <LogicModeContextPanel v-if="activeProject && activeTab === 'logic'" :project="activeProject" />
 
-            <!-- Logic Mode Options -->
-            <span class="text-sm font-bold text-cyan-400 block mb-2">逻辑模式</span>
-            <div class="space-y-3">
-              <label class="flex items-start p-3 bg-slate-800 rounded border border-slate-700 cursor-pointer hover:border-cyan-500/50 transition-colors">
-                <input type="radio" v-model="activeProject.logic_mode" value="sequential" class="mt-1 accent-cyan-500">
-                <div class="ml-3 flex-1">
-                  <span class="font-bold text-white block">顺序模式</span>
-                  <span class="text-xs text-gray-400 block mt-1">必须严格按照设定顺序执行。全部完成→事件1；跳步/乱序→事件2</span>
-                </div>
-              </label>
-
-              <label class="flex items-start p-3 bg-slate-800 rounded border border-slate-700 cursor-pointer hover:border-cyan-500/50 transition-colors">
-                <input type="radio" v-model="activeProject.logic_mode" value="detection" class="mt-1 accent-cyan-500">
-                <div class="ml-3 flex-1">
-                  <span class="font-bold text-white block">检测模式</span>
-                  <span class="text-xs text-gray-400 block mt-1">不强制顺序，只识别目标。集齐所有启用步骤→事件1</span>
-                </div>
-              </label>
-
-              <label class="flex items-start p-3 bg-slate-800 rounded border border-slate-700 cursor-pointer hover:border-cyan-500/50 transition-colors">
-                <input type="radio" v-model="activeProject.logic_mode" value="custom" class="mt-1 accent-cyan-500">
-                <div class="ml-3 flex-1">
-                  <span class="font-bold text-white block">自定义模式</span>
-                  <span class="text-xs text-gray-400 block mt-1">基于顺序/检测模式，可添加自定义条件触发特定事件</span>
-                </div>
-              </label>
-
-              <label class="flex items-start p-3 bg-slate-800 rounded border border-slate-700 cursor-pointer hover:border-cyan-500/50 transition-colors">
-                <input type="radio" v-model="activeProject.logic_mode" value="tracking" class="mt-1 accent-cyan-500">
-                <div class="ml-3 flex-1">
-                  <span class="font-bold text-white block">跟踪模式</span>
-                  <span class="text-xs text-gray-400 block mt-1">{{ activeProject.task_type === 'segmentation' ? '分割+跟踪' : '检测+跟踪' }}：为每个物品分配ID(A1,A2,B1...)，支持装箱清点与数量校验</span>
-                </div>
-              </label>
-
-              <label class="flex items-start p-3 bg-slate-800 rounded border border-slate-700 cursor-pointer hover:border-cyan-500/50 transition-colors">
-                <input type="radio" v-model="activeProject.logic_mode" value="per_item" class="mt-1 accent-cyan-500">
-                <div class="ml-3 flex-1">
-                  <span class="font-bold text-white block">逐件模式</span>
-                  <span class="text-xs text-gray-400 block mt-1">画面里有 N 个固定位置的同类物件，每件都要被某个动作覆盖一次（例：每颗螺丝都要被打/划过）。全部覆盖→事件1，超时未覆盖→事件2</span>
-                </div>
-              </label>
-
-              <label class="flex items-start p-3 bg-slate-800 rounded border border-slate-700 cursor-pointer hover:border-cyan-500/50 transition-colors">
-                <input type="radio" v-model="activeProject.logic_mode" value="weighing" class="mt-1 accent-cyan-500">
-                <div class="ml-3 flex-1">
-                  <span class="font-bold text-white block">称重投料模式</span>
-                  <span class="text-xs text-gray-400 block mt-1">连接电子秤，按型号给每道料(如钢帽/钢脚水泥)设标准量。放件自动去皮→投料→对比标准量，缺料/超量报警，逐件记录。需先选人员/型号。配置在「称重配置」页签</span>
-                </div>
-              </label>
-
-              <label class="flex items-start p-3 bg-slate-800 rounded border border-slate-700 cursor-pointer hover:border-cyan-500/50 transition-colors">
-                <input type="radio" v-model="activeProject.logic_mode" value="region_events" class="mt-1 accent-cyan-500">
-                <div class="ml-3 flex-1">
-                  <span class="font-bold text-white block">区域事件模式</span>
-                  <span class="text-xs text-gray-400 block mt-1">模型只检测"物"（工具/工件/手），动作由时序规则判定：工具与工件重叠 N 帧→事件（如测硬度/扫码），对象出区消失→结算周期（如下工件）。规则在「逻辑设置」页签配置</span>
-                </div>
-              </label>
-            </div>
-          </div>
-        </div>
-
-        <!-- Counters Context (Shows when Events Tab is active) -->
-        <div v-if="activeProject && activeTab === 'events'" class="h-1/2 bg-slate-900 rounded-lg border border-slate-700 flex flex-col overflow-hidden">
-          <div class="p-3 border-b border-slate-800 bg-slate-950/50 flex justify-between items-center">
-            <span class="font-bold text-white">计数器定义</span>
-            <el-button type="primary" size="small" link @click="addCounter">+ 新增计数器</el-button>
-          </div>
-          <div class="flex-1 overflow-y-auto p-4 custom-scrollbar">
-            <div class="space-y-2">
-              <!-- 系统默认计数器 -->
-              <div class="text-xs text-gray-500 mb-1">系统默认：</div>
-              <div v-for="(counter, idx) in defaultCounters" :key="'default-'+idx" class="flex items-center gap-2 bg-slate-800/50 p-2 rounded border border-slate-700">
-                <span class="flex-1 text-gray-300 text-sm">{{ counter.name }}</span>
-                <el-input-number v-model="counter.value" size="small" :min="0" :precision="2" class="w-24" controls-position="right" />
-                <span class="text-[10px] text-gray-500 bg-slate-700 px-1 rounded">默认</span>
-              </div>
-              <!-- 用户自定义计数器 -->
-              <div v-if="customCounters.length > 0" class="text-xs text-gray-500 mt-3 mb-1">
-                自定义：
-                <span class="text-[10px] text-gray-600 ml-1">（默认不在监控页显示，需勾选"显示"才会出现在右上角统计板块）</span>
-              </div>
-              <div v-for="(counter, idx) in customCounters" :key="'custom-'+idx" class="flex items-center gap-2 bg-slate-800 p-2 rounded">
-                <el-input v-model="counter.name" size="small" placeholder="计数器名称" class="flex-1" />
-                <el-input-number v-model="counter.value" size="small" :min="0" :precision="2" class="w-24" controls-position="right" />
-                <!-- v3.8.x: 默认不显示, 用户主动勾选才在 Monitor 顶部统计板块出现。
-                     旧项目数据 counter.show_in_monitor 缺省 → undefined → 隐藏 (符合"默认不显示"语义)。 -->
-                <el-tooltip content="是否在监控页右上角统计板块显示该计数器" placement="top">
-                  <el-checkbox v-model="counter.show_in_monitor" size="small" class="!mr-0">显示</el-checkbox>
-                </el-tooltip>
-                <el-button type="danger" size="small" link @click="removeCounter(idx + 3)">×</el-button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <!-- Counters Context (Shows when Events Tab is active)（已外置 CountersContextPanel.vue，2026-08 拆分批次） -->
+        <CountersContextPanel
+          v-if="activeProject && activeTab === 'events'"
+          :project="activeProject"
+          :default-counters="defaultCounters"
+          :custom-counters="customCounters" />
       </div>
 
       <!-- Config Area -->
@@ -186,309 +57,15 @@
           
           <!-- Tab 1: Basic Settings -->
           <el-tab-pane label="基础设置" name="basic">
-            <div class="h-full overflow-y-auto p-4 custom-scrollbar">
-              <div class="max-w-3xl space-y-6">
-                <!-- Basic Info -->
-                <el-card shadow="never" class="bg-slate-800 border-slate-700 text-gray-300">
-                  <template #header><span class="font-bold text-white">基本信息</span></template>
-                  <el-form label-position="top">
-                    <el-form-item label="项目名称">
-                      <el-input v-model="activeProject.name" />
-                    </el-form-item>
-                    <el-form-item label="任务类型">
-                      <el-select v-model="activeProject.task_type" class="w-full">
-                        <el-option label="目标检测 (Object Detection)" value="detection" />
-                        <el-option label="图像分割 (Instance Segmentation)" value="segmentation" />
-                      </el-select>
-                    </el-form-item>
-                  </el-form>
-                </el-card>
-
-                <!-- Model Config -->
-                <el-card shadow="never" class="bg-slate-800 border-slate-700 text-gray-300">
-                  <template #header>
-                    <div class="flex justify-between items-center">
-                      <span class="font-bold text-white">模型配置</span>
-                      <div class="flex gap-2">
-                        <el-button v-if="activeProject.default_model_id" size="small" plain @click="openFormatSelect">切换格式</el-button>
-                        <el-button type="primary" size="small" plain @click="showModelSelect = true">选择模型</el-button>
-                      </div>
-                    </div>
-                  </template>
-                  <div class="flex items-center gap-4">
-                    <div class="w-16 h-16 bg-slate-700 rounded flex items-center justify-center">
-                      <el-icon :size="24"><Cpu /></el-icon>
-                    </div>
-                    <div>
-                      <p class="text-white font-bold">{{ activeProject.model_name || '未配置模型' }}<span v-if="activeProject.model_version" class="text-gray-400 font-normal ml-2">v{{ activeProject.model_version }}</span></p>
-                      <p class="text-xs text-gray-500">Labels: {{ (activeProject.model_labels || []).length }} 个类别 · 步骤: {{ (activeProject.steps_config || []).length }} 个
-                        <el-tag v-if="activeProject.default_model_id" size="small" class="ml-2" :type="activeProject.model_format === 'pytorch_fp32' ? 'info' : 'success'">{{ getFormatDisplayName(activeProject.model_format || 'pytorch_fp32') }}</el-tag>
-                      </p>
-                      <div class="mt-2 flex gap-2 flex-wrap">
-                        <el-tag v-for="label in (activeProject.model_labels || []).slice(0, 8)" :key="label" size="small" type="info">{{ label }}</el-tag>
-                        <span v-if="(activeProject.model_labels || []).length > 8" class="text-xs text-gray-500">+{{ activeProject.model_labels.length - 8 }}</span>
-                      </div>
-                    </div>
-                  </div>
-                </el-card>
-
-                <!-- Step 8 (feat/multi-model-roi-link): 附加模型 (多模型 ROI) -->
-                <el-card shadow="never" class="bg-slate-800 border-slate-700 text-gray-300">
-                  <template #header>
-                    <div class="flex justify-between items-center">
-                      <span class="font-bold text-white">附加模型 (多模型 ROI)</span>
-                      <el-button type="primary" size="small" plain @click="addExtraModel"
-                        :disabled="(activeProject?.extra_models?.length || 0) >= 4">
-                        <el-icon class="mr-1"><Plus /></el-icon>添加副模型
-                      </el-button>
-                    </div>
-                  </template>
-                  <div class="text-xs text-gray-400 mb-3 leading-relaxed">
-                    在主模型基础上叠加最多 4 个独立模型，每个可以指定 ROI 区域、检测频率、独立颜色。
-                    适合主模型管 SOP 步骤、副模型在指定区域检测产品状态等场景。
-                    <br />
-                    <span class="text-amber-400">提示</span>: 多模型同时跑会增加 GPU 显存压力，
-                    4-5 GB 显存建议最多 2 个 (主+1 副)；模型加载时跨通道串行 warmup，避免 OOM。
-                  </div>
-                  <div v-if="!activeProject?.extra_models?.length" class="text-center text-gray-500 py-6 text-sm">
-                    暂无副模型，点击右上角"添加副模型"配置
-                  </div>
-                  <div v-else class="space-y-3">
-                    <div v-for="(slot, idx) in activeProject.extra_models" :key="idx"
-                      class="bg-slate-900/60 border border-slate-700 rounded-lg p-3 space-y-2">
-                      <!-- 行 1: name + 模型 + 颜色 + 删除 -->
-                      <div class="flex items-center gap-3 flex-wrap">
-                        <div class="flex items-center gap-2">
-                          <span class="text-xs text-gray-400">slot 名</span>
-                          <el-input v-model="slot.name" size="small" style="width: 7.5rem"
-                            placeholder="aux" />
-                        </div>
-                        <div class="flex items-center gap-2 flex-1 min-w-[12rem]">
-                          <span class="text-xs text-gray-400">模型</span>
-                          <span v-if="slot.model_name"
-                            class="text-sm text-white truncate flex-1">
-                            {{ slot.model_name }}<span v-if="slot.model_version"
-                              class="text-gray-500 ml-1">v{{ slot.model_version }}</span>
-                          </span>
-                          <span v-else class="text-sm text-gray-500 flex-1">未选择</span>
-                          <!-- v3.7.x: 副模型格式 tag + 切换格式按钮 (与主模型对齐) -->
-                          <el-tag v-if="slot.model_id"
-                            size="small"
-                            :type="(slot.model_format || 'pytorch_fp32') === 'pytorch_fp32' ? 'info' : 'success'">
-                            {{ getFormatDisplayName(slot.model_format || 'pytorch_fp32') }}
-                          </el-tag>
-                          <el-button v-if="slot.model_id" size="small" plain
-                            @click="openExtraModelFormatSelect(idx)">
-                            切换格式
-                          </el-button>
-                          <el-button size="small" plain @click="openExtraModelSelect(idx)">
-                            选择
-                          </el-button>
-                        </div>
-                        <div class="flex items-center gap-2">
-                          <span class="text-xs text-gray-400">颜色</span>
-                          <el-color-picker v-model="slot.display_color" size="small" />
-                        </div>
-                        <el-button type="danger" size="small" plain
-                          @click="removeExtraModel(idx)">
-                          <el-icon><Delete /></el-icon>
-                        </el-button>
-                      </div>
-                      <!-- 行 2: 置信度 (常用, 多数客户只调这个) + 高级参数折叠按钮 -->
-                      <div class="flex items-center gap-3 flex-wrap">
-                        <div class="flex items-center gap-2">
-                          <span class="text-xs text-gray-400">置信度</span>
-                          <el-input-number v-model="slot.conf" :min="0.05" :max="1"
-                            :step="0.05" :precision="2" size="small"
-                            style="width: 7rem" />
-                          <el-tooltip placement="top" effect="dark">
-                            <template #content>
-                              模型对一个识别有多确定. 0.25 = 至少 25% 把握才认.<br/>
-                              真正卡 OK/NG 的是"步骤详情"里每个 label 的 threshold(%),<br/>
-                              这里只是模型层的"地板", 一般留 0.25 即可.
-                            </template>
-                            <el-icon class="text-gray-500 cursor-help"><QuestionFilled /></el-icon>
-                          </el-tooltip>
-                        </div>
-                        <el-button size="small" text type="info" @click="slot._adv_open = !slot._adv_open">
-                          高级参数 {{ slot._adv_open ? '▴' : '▾' }}
-                        </el-button>
-                      </div>
-                      <!-- 行 2.5: 高级参数 (IoU / 优先级 / FP16), 默认折叠 -->
-                      <div v-show="slot._adv_open"
-                        class="flex items-center gap-3 flex-wrap bg-slate-900/40 rounded p-2 border border-slate-700/50">
-                        <div class="flex items-center gap-2">
-                          <span class="text-xs text-gray-400">IoU</span>
-                          <el-input-number v-model="slot.iou" :min="0.1" :max="1"
-                            :step="0.05" :precision="2" size="small"
-                            style="width: 7rem" />
-                          <el-tooltip placement="top" effect="dark">
-                            <template #content>
-                              NMS 阈值: 同一个东西被模型框了好几次时, 重叠超过此比例算同一个,<br/>
-                              合并保留最好的. 0.45 = 重叠 45% 以上合并.<br/>
-                              · 数字大 → 不积极合并, 可能同物多框<br/>
-                              · 数字小 → 积极合并, 不同物体可能被错合<br/>
-                              一般留 0.45, 出现重复框/漏框再调.
-                            </template>
-                            <el-icon class="text-gray-500 cursor-help"><QuestionFilled /></el-icon>
-                          </el-tooltip>
-                        </div>
-                        <div class="flex items-center gap-2">
-                          <span class="text-xs text-gray-400">优先级</span>
-                          <el-input-number v-model="slot.priority" :min="0" :max="100"
-                            :step="10" :precision="0" size="small"
-                            style="width: 7rem" />
-                          <el-tooltip placement="top" effect="dark">
-                            <template #content>
-                              多个模型同时跑时谁先抢 GPU. 主模型默认 100, 副模型默认 50.<br/>
-                              副模型多到 GPU 抢不过来时才调; 单副模型留 50 不动.
-                            </template>
-                            <el-icon class="text-gray-500 cursor-help"><QuestionFilled /></el-icon>
-                          </el-tooltip>
-                        </div>
-                        <!-- v3.7.x: FP16 只对 .pt 推理生效. 选了 TensorRT/ONNX 后,
-                             精度由编译文件决定, 此开关被后端无视 -> UX 上 disable. -->
-                        <div class="flex items-center gap-2">
-                          <el-tooltip placement="top" effect="dark"
-                            :disabled="(slot.model_format || 'pytorch_fp32') === 'pytorch_fp32'">
-                            <template #content>
-                              当前格式 [{{ getFormatDisplayName(slot.model_format || 'pytorch_fp32') }}]
-                              已固化精度, 这个开关无效.<br/>
-                              要 FP16 推理请用上面的 "切换格式".
-                            </template>
-                            <span>
-                              <el-checkbox v-model="slot.use_half" class="!text-gray-300"
-                                :disabled="(slot.model_format || 'pytorch_fp32') !== 'pytorch_fp32'">
-                                FP16
-                              </el-checkbox>
-                            </span>
-                          </el-tooltip>
-                          <el-tooltip placement="top" effect="dark">
-                            <template #content>
-                              "半精度推理": 用一半小数位算, 速度快/省显存, 精度稍降.<br/>
-                              仅对 .pt (PyTorch FP32) 模型生效.<br/>
-                              选了 TensorRT/PyTorch FP16 后精度已固化, 此开关失效.
-                            </template>
-                            <el-icon class="text-gray-500 cursor-help"><QuestionFilled /></el-icon>
-                          </el-tooltip>
-                        </div>
-                      </div>
-                      <!-- 行 3: schedule -->
-                      <div class="flex items-center gap-3 flex-wrap">
-                        <span class="text-xs text-gray-400">检测频率</span>
-                        <el-radio-group v-model="slot.schedule_type" size="small">
-                          <el-radio-button label="every_frame">每帧</el-radio-button>
-                          <el-radio-button label="every_n_frames">间隔 N 帧</el-radio-button>
-                          <el-radio-button label="on_event">按事件</el-radio-button>
-                        </el-radio-group>
-                        <el-input-number v-if="slot.schedule_type === 'every_n_frames'"
-                          v-model="slot.schedule_n" :min="1" :max="100" :step="1"
-                          :precision="0" size="small" style="width: 6rem" />
-                        <span v-if="slot.schedule_type === 'every_n_frames'"
-                          class="text-xs text-gray-500">
-                          (每 {{ slot.schedule_n }} 帧跑一次, 减小 GPU 占用)
-                        </span>
-                        <!-- c1+: on_event 模式下选事件 (从 events_config 拉) -->
-                        <el-select v-if="slot.schedule_type === 'on_event'"
-                          v-model="slot.schedule_events" multiple collapse-tags collapse-tags-tooltip
-                          size="small" style="min-width: 14rem"
-                          placeholder="选触发事件 (空 = 永不触发)">
-                          <el-option v-for="ev in (activeProject.events_config || [])"
-                            :key="ev.id" :label="`${ev.name} (id=${ev.id})`" :value="ev.id" />
-                        </el-select>
-                        <span v-if="slot.schedule_type === 'on_event' && !(slot.schedule_events?.length)"
-                          class="text-xs text-amber-400">
-                          ⚠ 未选事件, 副模型永不会跑
-                        </span>
-                      </div>
-                      <!-- 行 4: ROI -->
-                      <div class="flex items-start gap-3 flex-wrap">
-                        <span class="text-xs text-gray-400 mt-1.5">ROI 区域</span>
-                        <div class="flex flex-col gap-1">
-                          <div class="flex items-center gap-2">
-                            <el-button size="small" type="primary" plain
-                              @click="openExtraModelRoiEditor(idx)">
-                              {{ slot.roi && slot.roi.length >= 3 ? '重新绘制' : '设置区域' }}
-                            </el-button>
-                            <el-button v-if="slot.roi && slot.roi.length >= 3"
-                              size="small" type="danger" plain @click="clearExtraModelRoi(idx)">
-                              清除
-                            </el-button>
-                            <span v-if="slot.roi && slot.roi.length >= 3"
-                              class="text-xs text-green-400">
-                              已设置 {{ slot.roi.length }} 个顶点
-                            </span>
-                            <span v-else class="text-xs text-gray-500">
-                              未设置 (空 = 全画面)
-                            </span>
-                          </div>
-                          <!-- b2: ROI mini preview (16:9 SVG, 192x108).
-                               用 viewBox="0 0 1 1" 让归一化坐标直接当 path. -->
-                          <svg v-if="slot.roi && slot.roi.length >= 3"
-                            width="192" height="108" viewBox="0 0 1 1"
-                            preserveAspectRatio="none"
-                            class="border border-slate-700 bg-slate-950 rounded">
-                            <polygon
-                              :points="(slot.roi || []).map(p => `${p[0]},${p[1]}`).join(' ')"
-                              :fill="slot.display_color || '#f59e0b'"
-                              fill-opacity="0.25"
-                              :stroke="slot.display_color || '#f59e0b'"
-                              stroke-width="0.005"
-                              stroke-linejoin="round" />
-                          </svg>
-                        </div>
-                      </div>
-                      <!-- 行 5: class_filter (可选, 留空 = 模型全标签).
-                           d2: 优先用 slot.available_labels (选模型时自动拉), 兜底显示已选 class_filter. -->
-                      <div class="flex items-start gap-3">
-                        <span class="text-xs text-gray-400 mt-1.5 w-16 shrink-0">类别白名单</span>
-                        <el-select v-model="slot.class_filter" multiple filterable
-                          allow-create default-first-option :reserve-keyword="false"
-                          :placeholder="slot.available_labels?.length
-                            ? `留空 = 模型全部 ${slot.available_labels.length} 类`
-                            : '留空 = 模型全部类别 (可手输)'"
-                          size="small" class="flex-1">
-                          <el-option v-for="lbl in extraModelSlotOptions(slot)" :key="lbl"
-                            :label="lbl" :value="lbl" />
-                        </el-select>
-                      </div>
-                    </div>
-                  </div>
-                </el-card>
-
-                <!-- Shift Split Config -->
-                <el-card shadow="never" class="bg-slate-800 border-slate-700 text-gray-300">
-                  <template #header><span class="font-bold text-white">班次拆分</span></template>
-                  <el-form label-position="top">
-                    <el-form-item>
-                      <div class="flex items-center gap-3">
-                        <el-switch v-model="activeProject.shift_split_enabled" />
-                        <span class="text-sm text-gray-300">启用跨班次自动拆分会话</span>
-                      </div>
-                      <div class="text-xs text-gray-500 mt-1">开启后，检测会话在班次切换时自动结束并创建新会话（类似跨日拆分）。</div>
-                    </el-form-item>
-                    <template v-if="activeProject.shift_split_enabled">
-                      <!-- v3.35.1 自定义班次列表: 每班只填开始时刻, 持续到下一班开始 (跨天自动衔接) -->
-                      <div v-for="(s, i) in (activeProject.shifts || [])" :key="i"
-                           class="flex items-center gap-2 mb-2">
-                        <el-input v-model="s.name" size="small" placeholder="班次名，如 白班" style="width: 140px" />
-                        <el-time-picker v-model="s.start" size="small" format="HH:mm" value-format="HH:mm"
-                          placeholder="开始时刻" style="width: 120px" />
-                        <span class="text-xs text-gray-500">{{ shiftRangeHint(i) }}</span>
-                        <el-button v-if="(activeProject.shifts || []).length > 2" size="small" type="danger" plain
-                          @click="activeProject.shifts.splice(i, 1)">删</el-button>
-                      </div>
-                      <el-button size="small" @click="(activeProject.shifts = activeProject.shifts || []).push({ name: '', start: '00:00' })">
-                        + 加班次
-                      </el-button>
-                      <div class="text-xs text-gray-500 mt-2">
-                        每班只填<b>开始时刻</b>，持续到下一班开始（按时刻排序、跨天自动衔接）；某时刻属于"最近一个已开始的班次"——如 白班08:00/晚班20:00 时，20:01 的周期归晚班。数据中心"时间段"下拉与检测中心班次显示都按这份列表走。
-                      </div>
-                    </template>
-                  </el-form>
-                </el-card>
-              </div>
-            </div>
+            <!-- 基础设置 Tab 已外置（2026-08 拆分批次） -->
+            <BasicSettingsTab
+              :project="activeProject"
+              @open-format-select="openFormatSelect"
+              @open-model-select="showModelSelect = true"
+              @open-extra-model-format-select="openExtraModelFormatSelect"
+              @open-extra-model-select="openExtraModelSelect"
+              @open-extra-model-roi-editor="openExtraModelRoiEditor"
+              @remove-extra-model="removeExtraModel" />
           </el-tab-pane>
 
           <!-- Tab 2: Step Settings -->
@@ -628,10 +205,15 @@ import ModelSelectDialog from './ModelSelectDialog.vue';
 import FormatSelectDialog from './FormatSelectDialog.vue';
 import RoiEditorDialog from './RoiEditorDialog.vue';
 import LabelSplitDialog from './LabelSplitDialog.vue';
+// 2026-08 拆分批次: 项目列表卡 / 两个侧栏上下文卡 / 基础设置 Tab 外置
+import ProjectListPanel from './ProjectListPanel.vue';
+import LogicModeContextPanel from './LogicModeContextPanel.vue';
+import CountersContextPanel from './CountersContextPanel.vue';
+import BasicSettingsTab from './BasicSettingsTab.vue';
 import { createDefaultSplitRule, validateSplitRules, syncSplitVirtualSteps } from './labelSplit';
 import { getFormatDisplayName } from './modelFormats';
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
-import { Plus, Search, EditPen, FolderAdd, Upload, InfoFilled, Check, Cpu, Delete, QuestionFilled } from '@element-plus/icons-vue';
+import { Plus, EditPen, FolderAdd, Check } from '@element-plus/icons-vue';
 import { useProjectStore } from '@/store/useProjectStore';
 import { useSystemStore } from '@/store/useSystemStore';
 import { usePluginThemeStore } from '@/store/usePluginThemeStore';
@@ -649,7 +231,7 @@ const pluginThemeStore = usePluginThemeStore();
 // v3.13 M2.2b: 客户插件注入的项目配置 Tab 列表
 const pluginProjectTabs = computed(() => pluginThemeStore.projectTabs || []);
 // hasDurationsSlot（插件"耗时统计"列探测）已随步骤设置 Tab 外置到 StepsConfigTab.vue（P-5）。
-const searchQuery = ref('');
+// searchQuery / filteredProjects / formatDate 已随项目列表卡外置到 ProjectListPanel.vue（2026-08）。
 const activeProject = ref(null);
 const activeTab = ref('basic');
 const createDialogVisible = ref(false);
@@ -764,16 +346,6 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   stopConversionPolling();
 });
-
-const filteredProjects = computed(() => {
-  return projects.value.filter(p => p.name.toLowerCase().includes(searchQuery.value.toLowerCase()));
-});
-
-const formatDate = (dateStr) => {
-  if (!dateStr) return '';
-  const date = new Date(dateStr);
-  return date.toLocaleDateString();
-};
 
 // getLabelsCount 已随模型选择对话框外置到 ModelSelectDialog.vue（P-2）
 
@@ -1113,18 +685,7 @@ const _sanitizeRegionEvents = (re) => {
 // 初始化项目默认配置
 // ==================== 称重投料模式配置 ====================
 // 编辑交互已外置到 WeighingConfigTab.vue（2026-07 拆分批次 P-1）；
-// v3.35.1 班次行提示: 本班覆盖 [本班开始, 按时刻排序的下一班开始)
-const shiftRangeHint = (idx) => {
-  const list = (activeProject.value?.shifts || []).filter(s => s.start);
-  const cur = activeProject.value?.shifts?.[idx];
-  if (!cur || !cur.start || list.length < 2) return '';
-  const sorted = [...list].sort((a, b) => (a.start < b.start ? -1 : 1));
-  const pos = sorted.findIndex(s => s === cur);
-  if (pos === -1) return '';
-  const next = sorted[(pos + 1) % sorted.length];
-  return `覆盖 ${cur.start} ~ ${next.start}${pos === sorted.length - 1 ? '（跨天）' : ''}`;
-};
-
+// v3.35.1 班次行提示 shiftRangeHint 已随基础设置 Tab 外置到 BasicSettingsTab.vue（2026-08）。
 // 父级只保留默认值注入 ensureWeighingDefaults（加载/切模式链路用）。
 // 只在称重模式才往项目里注入 weighing 默认配置。非称重项目绝不碰其 pipeline_config，零污染。
 const ensureWeighingDefaults = (project) => {
@@ -2978,60 +2539,9 @@ const selectModel = (model) => {
 };
 
 // Step 8 (feat/multi-model-roi-link): 副模型管理方法
-const generateExtraModelDefaultName = () => {
-  const existing = new Set((activeProject.value?.extra_models || []).map(m => m.name));
-  if (!existing.has('aux')) return 'aux';
-  for (let i = 2; i < 100; i++) {
-    const candidate = `aux${i}`;
-    if (!existing.has(candidate)) return candidate;
-  }
-  return `aux_${Date.now() % 10000}`;
-};
-
-const EXTRA_MODEL_PALETTE = ['#f59e0b', '#3b82f6', '#a855f7', '#ec4899', '#14b8a6', '#facc15'];
-
-const addExtraModel = () => {
-  if (!activeProject.value) return;
-  if (!activeProject.value.extra_models) activeProject.value.extra_models = [];
-  const list = activeProject.value.extra_models;
-  if (list.length >= 4) {
-    ElMessage.warning('副模型最多 4 个 (考虑 GPU 显存限制)');
-    return;
-  }
-  list.push({
-    name: generateExtraModelDefaultName(),
-    model_id: null,
-    model_name: '',
-    model_version: '',
-    model_format: 'pytorch_fp32',  // v3.7.x: 副模型推理格式 (与主模型对齐, 可切 TensorRT FP16 提速)
-    conf: 0.25,
-    iou: 0.45,
-    roi: null,
-    schedule_type: 'every_n_frames',
-    schedule_n: 5,
-    schedule_events: [],   // c1+: on_event 模式监听的事件 id 列表
-    class_filter: [],
-    available_labels: [],  // d2: 选模型后自动填充 (UI 候选列表)
-    priority: 50,
-    display_color: EXTRA_MODEL_PALETTE[list.length % EXTRA_MODEL_PALETTE.length],
-    use_half: false,
-  });
-};
-
-// d2: 计算 class_filter el-select 的候选项 = available_labels ∪ 已选 class_filter (去重保序).
-// 老项目没有 available_labels 时, 至少显示已选标签让用户能看到/删除.
-const extraModelSlotOptions = (slot) => {
-  const set = new Set();
-  const out = [];
-  for (const lbl of (slot.available_labels || [])) {
-    if (lbl && !set.has(lbl)) { set.add(lbl); out.push(lbl); }
-  }
-  for (const lbl of (slot.class_filter || [])) {
-    if (lbl && !set.has(lbl)) { set.add(lbl); out.push(lbl); }
-  }
-  return out;
-};
-
+// addExtraModel / generateExtraModelDefaultName / extraModelSlotOptions / clearExtraModelRoi
+// 已随基础设置 Tab 外置到 BasicSettingsTab.vue（2026-08）；removeExtraModel 因依赖
+// _purgeStepsByFromModel（与 selectModel 共用）留父级，由子组件 emit 触发。
 const removeExtraModel = async (idx) => {
   if (!activeProject.value?.extra_models) return;
   const slot = activeProject.value.extra_models[idx];
@@ -3080,11 +2590,6 @@ const openExtraModelRoiEditor = async (idx) => {
   stepRoiEditingStepId.value = null;
   extraModelRoiEditingIdx.value = idx;
   await _openRoiDialog(activeProject.value?.extra_models?.[idx]?.roi);
-};
-
-const clearExtraModelRoi = (idx) => {
-  const slot = activeProject.value?.extra_models?.[idx];
-  if (slot) slot.roi = null;
 };
 
 const openStepRoiEditor = async (step) => {
@@ -3454,18 +2959,8 @@ watch(() => activeProject.value?.settlement_mode, (mode) => {
 // onStepEnabledChange（步骤启用状态清理/恢复）已随步骤设置 Tab 外置到 StepsConfigTab.vue（P-5）。
 
 // 计数器操作
-const addCounter = () => {
-  dbg('project.config', '点击「添加计数器」', `当前数量=${activeProject.value?.counters_config?.length ?? 0}`);
-  if (!activeProject.value.counters_config) activeProject.value.counters_config = [];
-  // v3.8.x: 新增自定义计数器默认 show_in_monitor=false (Monitor 页统计板块不显示),
-  // 客户在事件配置/逻辑里用计数器, 不必全部都堆在监控页上。需要时手动勾"显示"。
-  activeProject.value.counters_config.push({ name: '新计数器', value: 0, show_in_monitor: false });
-};
-
-const removeCounter = (idx) => {
-  dbg('project.config', '点击「删除计数器」', `idx=${idx} name=${activeProject.value?.counters_config?.[idx]?.name}`);
-  activeProject.value.counters_config.splice(idx, 1);
-};
+// addCounter / removeCounter 已随计数器侧栏外置到 CountersContextPanel.vue（2026-08）；
+// defaultCounters / customCounters 切片 computed 留父级（EventsConfigTab 与侧栏共用）。
 
 // 事件操作
 // addEvent / removeEvent / addEventAction 已随事件设置 Tab 外置到 EventsConfigTab.vue（P-3）；
