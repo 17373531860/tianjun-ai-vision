@@ -42,7 +42,8 @@ class ComboPositionalCounter:
     """
 
     def __init__(self, labels, iou=0.4, ema_alpha=0.6, min_consecutive=3,
-                 pending_ttl=10, perish_ticks=0, idle_reset_ticks=0):
+                 pending_ttl=10, perish_ticks=0, idle_reset_ticks=0,
+                 per_label=None):
         self.labels = set(labels)
         self.iou = float(iou)
         self.ema_alpha = float(ema_alpha)
@@ -50,7 +51,16 @@ class ComboPositionalCounter:
         self.pending_ttl = max(1, int(pending_ttl))
         self.perish_ticks = max(0, int(perish_ticks))
         self.idle_reset_ticks = max(0, int(idle_reset_ticks))
+        # v3.49 二期: 追踪参数按标签覆盖 {label: {六参数任意子集}}, 缺省回落全局
+        self.per_label = per_label if isinstance(per_label, dict) else {}
         self.reset()
+
+    def _p(self, label, key):
+        """标签级参数查找: per_label 覆盖 > 全局值 (解析层已 clamp)。"""
+        ov = self.per_label.get(label)
+        if ov is not None and key in ov:
+            return ov[key]
+        return getattr(self, key)
 
     def reset(self):
         """周期结算 / 项目切换时清池 (对齐原工具清除步骤)。"""
@@ -62,6 +72,24 @@ class ComboPositionalCounter:
 
     def counts(self) -> dict:
         return dict(self._counts)
+
+    def rois(self) -> list:
+        """锁定/候选 ROI 快照 (Monitor 画常驻锁框用, 归一化 xyxy)。
+
+        locked: 已计数位置 (seq=该标签第几个, 从 1 起); pending: 候选确认中
+        (seen/need 供前端画虚线+进度)。GIL 下浅读, 与 feed 并发安全。
+        """
+        out = []
+        for label, tlist in self._tracked.items():
+            for trk in tlist:
+                out.append({'label': label, 'box': list(trk['box']),
+                            'state': 'locked', 'seq': trk.get('seq', 0)})
+        for label, plist in self._pending.items():
+            for pnd in plist:
+                out.append({'label': label, 'box': list(pnd['box']),
+                            'state': 'pending', 'seen': pnd['seen'],
+                            'need': self._p(label, 'min_consecutive')})
+        return out
 
     @staticmethod
     def _to_xyxy(det):
@@ -94,6 +122,9 @@ class ComboPositionalCounter:
             if box is None:
                 continue
             self._last_label_seen[label] = tick
+            iou_th = self._p(label, 'iou')
+            a = self._p(label, 'ema_alpha')
+            min_consec = self._p(label, 'min_consecutive')
 
             # 1) 已确认 ROI 匹配 → 同位置, EMA 跟随, 不重计
             tlist = self._tracked[label]
@@ -102,8 +133,7 @@ class ComboPositionalCounter:
                 v = _iou(box, trk['box'])
                 if v > best_v:
                     best_i, best_v = i, v
-            if best_i >= 0 and best_v > self.iou:
-                a = self.ema_alpha
+            if best_i >= 0 and best_v > iou_th:
                 ob = tlist[best_i]['box']
                 tlist[best_i]['box'] = tuple(
                     a * box[k] + (1 - a) * ob[k] for k in range(4))
@@ -117,43 +147,48 @@ class ComboPositionalCounter:
                 v = _iou(box, pnd['box'])
                 if v > best_v:
                     best_i, best_v = i, v
-            if best_i >= 0 and best_v > self.iou:
+            if best_i >= 0 and best_v > iou_th:
                 pnd = plist[best_i]
-                a = self.ema_alpha
                 ob = pnd['box']
                 pnd['box'] = tuple(
                     a * box[k] + (1 - a) * ob[k] for k in range(4))
                 pnd['seen'] += 1
                 pnd['last_seen'] = tick
-                if pnd['seen'] >= self.min_consecutive:
-                    tlist.append({'box': pnd['box'], 'last_seen': tick})
+                if pnd['seen'] >= min_consec:
                     self._counts[label] += 1
+                    tlist.append({'box': pnd['box'], 'last_seen': tick,
+                                  'seq': self._counts[label]})
                     del plist[best_i]
                 continue
 
             # 3) 全新候选 (min_consecutive=1 时首帧即确认)
-            if self.min_consecutive <= 1:
-                tlist.append({'box': box, 'last_seen': tick})
+            if min_consec <= 1:
                 self._counts[label] += 1
+                tlist.append({'box': box, 'last_seen': tick,
+                              'seq': self._counts[label]})
             else:
                 plist.append({'box': box, 'seen': 1, 'last_seen': tick})
 
-        # 候选过期清理
-        expire = tick - self.pending_ttl
-        for plist in self._pending.values():
+        # 候选过期清理 (ttl 按标签取)
+        for label, plist in self._pending.items():
+            expire = tick - self._p(label, 'pending_ttl')
             plist[:] = [p for p in plist if p['last_seen'] > expire]
 
         # 可选: 消失超时 / 间隔重置 (缺省 0 = 原工具默认配置, 池常驻)
-        if self.perish_ticks or self.idle_reset_ticks:
+        if (self.perish_ticks or self.idle_reset_ticks or
+                any(('perish_ticks' in ov or 'idle_reset_ticks' in ov)
+                    for ov in self.per_label.values())):
             for label, tlist in self._tracked.items():
-                if self.idle_reset_ticks:
+                idle = self._p(label, 'idle_reset_ticks')
+                if idle:
                     last = self._last_label_seen.get(label, 0)
-                    if tick - last > self.idle_reset_ticks:
+                    if tick - last > idle:
                         tlist.clear()
                         continue
-                if self.perish_ticks:
+                perish = self._p(label, 'perish_ticks')
+                if perish:
                     tlist[:] = [t for t in tlist
-                                if tick - t['last_seen'] <= self.perish_ticks]
+                                if tick - t['last_seen'] <= perish]
 
 
 def build_combo_positional(combo_table):
@@ -169,4 +204,8 @@ def build_combo_positional(combo_table):
         pending_ttl=tr.get('pending_ttl', 10),
         perish_ticks=tr.get('perish_ticks', 0),
         idle_reset_ticks=tr.get('idle_reset_ticks', 0),
+        per_label=combo_table.get('tracking_per_label') or None,
     )
+
+
+# 切步数量门 (step_guard) 引擎在 source_combo_guard.py (v3.49)。

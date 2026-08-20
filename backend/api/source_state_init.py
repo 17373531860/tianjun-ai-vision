@@ -142,6 +142,9 @@ def _init_step_state(h):
     h._combo_table = None
     h._combo_last_tag = None  # 最近一次命中行的机型 tag (进检测结果透出)
     h._combo_positional = None  # count_mode='positional' 的位置去重计数引擎
+    h._combo_guard = None       # v3.49 切步数量门引擎 (combo_table.step_guard)
+    h._combo_guard_last = None  # 最近一次数量门违规 (Monitor 透出)
+    h._combo_settle_hold = None  # v3.49 二期 结算挂起等补 {since, reason} (hold 档)
     h.step_conf_thresholds = {}
     # v3.10+ 步骤级 box 尺寸过滤: {label: (max_w, max_h)} 归一化比例
     # 0 / 缺省 = 关闭过滤; 用途见 source_detect_runners_mixin._passes_box_size_limit

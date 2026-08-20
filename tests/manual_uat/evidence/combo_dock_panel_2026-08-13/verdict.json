@@ -1,0 +1,35 @@
+{
+  "steps": [
+    {
+      "name": "计数就绪 (区A=2, 区B=1)",
+      "ok": true,
+      "detail": "{\"区A\": 2, \"区B\": 1}"
+    },
+    {
+      "name": "看板不再是悬浮层 (无 absolute 类)",
+      "ok": true,
+      "detail": "combo-big-card h-44 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col flex-shrink-0 max-w-[55%]"
+    },
+    {
+      "name": "看板在视频下方 (不遮挡画面)",
+      "ok": true,
+      "detail": "video_bottom=610 panel_y=623"
+    },
+    {
+      "name": "看板与 SOP 卡片同一行且在其右侧",
+      "ok": true,
+      "detail": "sop=(21,623,w=603) panel=(631,623)"
+    },
+    {
+      "name": "瓦片含 区A/区B 计数与缸型标记 机型X",
+      "ok": true,
+      "detail": "判型实时看板 区A 2 区B 1 当前缸型 机型X"
+    },
+    {
+      "name": "PLC 切 4→6 后缸型标记刷新为 机型Y",
+      "ok": true,
+      "detail": "判型实时看板 区A 2 区B 1 当前缸型 机型Y"
+    }
+  ],
+  "pass": true
+}

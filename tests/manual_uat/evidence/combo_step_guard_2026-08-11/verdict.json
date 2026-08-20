@@ -1,0 +1,55 @@
+{
+  "steps": [
+    {
+      "name": "「切步数量门」开关露出且默认关",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "配置区展开 (少装/超装/收窄/期望依据/处置)",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "T5 落库 step_guard (hint + 事件3)",
+      "ok": true,
+      "detail": "{\"enabled\": true, \"check_under\": true, \"check_over\": true, \"narrow_by_progress\": true, \"action\": \"hint\", \"event_id\": 3, \"expected_source\": \"table\", \"plc_unavailable\": \"table\", \"plc_connection_id\": null, \"plc_point\": \"\"}"
+    },
+    {
+      "name": "幕1 切步那一刻报少装 (transition 区A=1)",
+      "ok": true,
+      "detail": "{\"kind\": \"transition\", \"label\": \"区A\", \"actual\": 1, \"expected\": [2, 3], \"message\": \"[区A] 切步数量不符: 应 2/3 个, 实际 1 个 (判定表推断)\", \"ts\": 1786443948.8488052, \"action\": \"hint\"}"
+    },
+    {
+      "name": "幕1 警告事件计数 +1",
+      "ok": true,
+      "detail": "警告 3→4"
+    },
+    {
+      "name": "幕1 hint 不提前结算 (不良不变)",
+      "ok": true,
+      "detail": "不良 1→1"
+    },
+    {
+      "name": "幕1 Monitor 红色横幅可见",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "幕2 第4个位置当场报超装 (over, 上限3)",
+      "ok": true,
+      "detail": "{\"kind\": \"over\", \"label\": \"区A\", \"actual\": 4, \"expected\": [2, 3], \"message\": \"[区A] 超装: 已 4 个, 最多 3 个 (判定表推断)\", \"ts\": 1786443959.6993752, \"action\": \"hint\"}"
+    },
+    {
+      "name": "幕3 instant_ng 当场结算 (不良 +1, 未出收尾步)",
+      "ok": true,
+      "detail": "不良 1→2"
+    },
+    {
+      "name": "幕3 违规透出 action=instant_ng",
+      "ok": true,
+      "detail": "{\"kind\": \"transition\", \"label\": \"区A\", \"actual\": 0, \"expected\": [2, 3], \"message\": \"[区A] 切步数量不符: 应 2/3 个, 实际 0 个 (判定表推断)\", \"ts\": 1786443966.70976, \"action\": \"instant_ng\"}"
+    }
+  ],
+  "pass": true
+}

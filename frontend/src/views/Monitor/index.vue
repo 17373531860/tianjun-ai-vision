@@ -782,7 +782,25 @@
         <div v-else class="absolute top-4 right-4 bg-gray-600/90 text-white px-6 py-2 rounded shadow-lg text-lg font-bold">
           已停止
         </div>
-        
+
+        <!-- v3.49 切步数量门违规横幅 (combo_verdict.step_guard.last);
+             二期: 补齐消警转绿 (kind='resolved') -->
+        <div v-if="comboGuardBanner"
+             class="absolute top-16 left-1/2 -translate-x-1/2 z-20 max-w-[90%]
+                    text-white px-4 py-2 rounded shadow-lg text-sm font-bold
+                    border text-center"
+             :class="comboGuardBannerClass">
+          {{ comboGuardBanner }}
+        </div>
+
+        <!-- v3.49 二期 结算挂起等补横幅 (combo_verdict.settle_hold, 琥珀色) -->
+        <div v-if="comboSettleHold"
+             class="absolute bottom-24 left-1/2 -translate-x-1/2 z-20 max-w-[90%]
+                    bg-amber-600/95 text-white px-4 py-2 rounded shadow-lg text-sm font-bold
+                    border border-amber-300/60 text-center">
+          {{ comboSettleHoldText }}
+        </div>
+
         <!-- Current Project Info -->
         <div v-if="currentProject" class="absolute top-4 left-4 bg-slate-900/80 text-white px-4 py-2 rounded shadow-lg">
           <div class="text-xs text-gray-400">当前项目</div>
@@ -850,6 +868,12 @@
             <span v-if="systemStore.display.monitor.showFps !== false">FPS: <span class="text-cyan-400 font-mono">{{ fps }}</span></span>
             <span v-if="systemStore.display.monitor.showLatency !== false">延迟: <span class="text-cyan-400 font-mono">{{ latency }} ms</span></span>
             <span v-if="systemStore.display.monitor.showDetectionCount !== false">检测数: <span class="text-cyan-400 font-mono">{{ detectionCount }}</span></span>
+            <!-- v3.48 判型表 positional 实时位置计数 (锁定几个位置数几, 周期结算清零) -->
+            <template v-if="comboLive">
+              <span class="text-gray-500">|</span>
+              <span>判型计数: <span class="text-cyan-400 font-mono">{{ comboCountsText }}</span></span>
+              <span v-if="comboLive.last_tag">机型: <span class="text-amber-400 font-mono">{{ comboLive.last_tag }}</span></span>
+            </template>
             <!-- Step 8 (feat/multi-model-roi-link): 多模型 per-slot 性能快照 (仅 >=2 个 slot 时显示) -->
             <template v-if="modelStats.length >= 2">
               <span class="text-gray-500">|</span>
@@ -867,13 +891,60 @@
       <!-- SOP流程 (Step Indicators) — non-tracking & non-per_item & non-weighing modes（M-2 外置 SopStepPanel）
            v3.42.x: 补排除称重投料模式 — 称重看板(WeighingPanel)与 SOP 同链互斥且 SOP 在前,
            不排除的话称重项目永远被 SOP 卡片抢占、专属看板一次都轮不到(萍乡百斯特现场撞出)。
-           融合模式(step_gate)的 logic_mode 是 sequential, 不受影响、SOP 照旧显示。 -->
-      <SopStepPanel
-        v-if="systemStore.display.monitor.stepStrip && steps.length > 0 && !isTrackingMode && !isPerItemMode && !isWeighingMode"
-        ref="sopPanelRef"
-        :steps="steps"
-        :step-intervals="stepIntervals"
-      />
+           融合模式(step_gate)的 logic_mode 是 sequential, 不受影响、SOP 照旧显示。
+           v3.49 二期: 判型实时看板 (combo_table.live_display, 默认关) 与 SOP 卡片同行右侧停靠,
+           不遮挡视频画面 (2026-08-13 由画面内悬浮卡改为停靠, 客户反馈悬浮卡压画面不美观) -->
+      <div v-if="sopPanelVisible || comboBigCard" class="flex items-stretch gap-2">
+        <SopStepPanel
+          v-if="sopPanelVisible"
+          ref="sopPanelRef"
+          class="flex-1 min-w-0"
+          :steps="steps"
+          :step-intervals="stepIntervals"
+        />
+        <div v-if="comboBigCard"
+             class="combo-big-card h-44 bg-slate-900 border border-slate-700 rounded-lg
+                    overflow-hidden flex flex-col"
+             :class="sopPanelVisible ? 'flex-shrink-0 max-w-[55%]' : 'flex-1'">
+          <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex-shrink-0">
+            <span class="text-cyan-400 text-lg font-bold">判型实时看板</span>
+          </div>
+          <div class="flex-1 p-2 flex items-stretch overflow-x-auto"
+               :class="comboBigCard.size === 'large' ? 'gap-2' : 'gap-1.5'">
+            <div v-for="it in comboBigCard.items" :key="it.label"
+                 class="flex-1 min-w-28 bg-gradient-to-b from-slate-800 to-slate-800/60
+                        border border-slate-600/60 rounded-lg relative overflow-hidden
+                        flex flex-col items-center justify-center px-4"
+                 :class="comboBigCard.size === 'large' ? '' : 'min-w-20'">
+              <div class="absolute left-0 top-0 bottom-0 w-1 bg-cyan-400/80"></div>
+              <div class="text-gray-400 tracking-widest"
+                   :class="comboBigCard.size === 'large' ? 'text-base' : 'text-xs'">{{ it.label }}</div>
+              <div class="text-cyan-300 font-mono font-bold leading-none mt-1"
+                   :class="comboBigCard.size === 'large' ? 'text-6xl' : 'text-4xl'">{{ it.count }}</div>
+            </div>
+            <!-- 缸型瓦片: PLC 值未在判定表登记时转红警示 (2026-08-14 现场
+                 cyl_type=11 vs 登记 4/6, 静默兜底工程师无从察觉) -->
+            <div v-if="comboBigCard.plcType"
+                 class="flex-1 min-w-32 rounded-lg relative overflow-hidden
+                        flex flex-col items-center justify-center px-4"
+                 :class="comboBigCard.plcUnregistered
+                   ? 'bg-gradient-to-b from-red-500/20 to-red-500/5 border border-red-500/60'
+                   : 'bg-gradient-to-b from-amber-500/15 to-amber-500/5 border border-amber-500/50'">
+              <div class="absolute left-0 top-0 bottom-0 w-1"
+                   :class="comboBigCard.plcUnregistered ? 'bg-red-400/90' : 'bg-amber-400/90'"></div>
+              <div class="tracking-widest"
+                   :class="[comboBigCard.plcUnregistered ? 'text-red-300/90' : 'text-amber-200/80',
+                            comboBigCard.size === 'large' ? 'text-base' : 'text-xs']">当前缸型</div>
+              <div class="font-bold leading-none mt-1 whitespace-nowrap"
+                   :class="[comboBigCard.plcUnregistered ? 'text-red-300' : 'text-amber-300',
+                            comboBigCard.size === 'large' ? 'text-4xl' : 'text-2xl']">{{ comboBigCard.plcType }}</div>
+              <div v-if="comboBigCard.plcUnregistered"
+                   class="text-red-400 font-bold mt-1"
+                   :class="comboBigCard.size === 'large' ? 'text-sm' : 'text-[10px]'">未在判定表登记</div>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <!-- Tracking Mode Checklist Panel -->
       <div v-else-if="isTrackingMode" class="h-44 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col">
@@ -1716,6 +1787,7 @@ import SingleChannelMonitor from './SingleChannelMonitor.vue';
 import YieldRateGauge from './YieldRateGauge.vue';
 import { createFramePump } from './framePump';
 import { listPackagingFlows, getPackagingFlowState } from '@/api/packaging_flow';
+import { getTriggers } from '@/api/triggers';
 import { getScannerBypassStatus } from '@/api/export';
 import TjSlot from '@/components/TjSlot.vue';
 import { dbg, dbgErr } from '@/utils/debug';
@@ -2062,6 +2134,84 @@ const lastCycleTimeWithNg = ref(0);
 const currentCycleTime = ref(0);
 const lastStepDurations = ref({});
 const detectionCount = ref(0);
+
+// v3.48 判型表 positional 实时计数条: "座瓦 3 · 盖瓦 2 · 挺柱 0"。
+// 数据源 /detection/results 的 combo_verdict; 标签全集取项目判型表配置,
+// 引擎计数字典只含 >0 的标签, 没配 positional 时整条隐藏 (零差异)。
+const comboLive = computed(() => {
+  const cv = multiChannelData.value[0]?.comboVerdict;
+  return (cv?.enabled && cv.positional_counts) ? cv : null;
+});
+const comboCountsText = computed(() => {
+  const cv = comboLive.value;
+  if (!cv) return '';
+  const pc = cv.positional_counts || {};
+  const cfgLabels = currentProject.value?.pipeline_config?.combo_table?.labels;
+  const labels = (Array.isArray(cfgLabels) && cfgLabels.length)
+    ? cfgLabels : Object.keys(pc);
+  return labels.map(l => `${l} ${pc[l] || 0}`).join(' · ');
+});
+// v3.49 切步数量门横幅: 最近一次违规 message (含「切步数量不符」/「超装」关键字, UAT 认字)
+const comboGuardLast = computed(() =>
+  multiChannelData.value[0]?.comboVerdict?.step_guard?.last || null);
+const comboGuardBanner = computed(() =>
+  comboGuardLast.value?.message ? String(comboGuardLast.value.message) : '');
+// v3.49 二期: 补齐消警后横幅转绿 (kind='resolved'), 违规仍红
+const comboGuardBannerClass = computed(() =>
+  comboGuardLast.value?.kind === 'resolved'
+    ? 'bg-emerald-700/95 border-emerald-400/60'
+    : 'bg-red-700/95 border-red-400/60');
+// SOP 卡片条可见性 (原模板内联表达式抽出, 供判型看板同行布局复用)
+const sopPanelVisible = computed(() =>
+  systemStore.display.monitor.stepStrip && steps.value.length > 0
+  && !isTrackingMode.value && !isPerItemMode.value && !isWeighingMode.value);
+// v3.49 二期 Monitor 判型实时看板 (combo_table.live_display, 默认关):
+// 各判型标签实时计数 + 当前 PLC 缸型 (plc_type 随轮询即时刷新)。
+// 2026-08-13 起与 SOP 卡片条同行右侧停靠, 配置里的 position 字段保留但不再使用 (向后兼容)
+const comboBigCard = computed(() => {
+  const cv = multiChannelData.value[0]?.comboVerdict;
+  const ld = cv?.live_display;
+  if (!ld?.enabled) return null;
+  const pc = cv.positional_counts || {};
+  const cfgLabels = currentProject.value?.pipeline_config?.combo_table?.labels;
+  const labels = (Array.isArray(cfgLabels) && cfgLabels.length)
+    ? cfgLabels : Object.keys(pc);
+  const pt = cv.plc_type;
+  const ptShown = ld.show_plc_type !== false && pt
+    && pt.value !== null && pt.value !== undefined;
+  // PLC 值未在判定表登记 → 红色警示 (镜像后端 _loose_eq 宽松比对语义):
+  // 仅在判定表确实登记过 plc_code 且全都对不上时才算未登记
+  let plcUnregistered = false;
+  if (ptShown && !pt.tag) {
+    const rows = currentProject.value?.pipeline_config?.combo_table?.rows;
+    const codes = (Array.isArray(rows) ? rows : [])
+      .map(r => r?.plc_code)
+      .filter(c => c !== undefined && c !== null && String(c).trim() !== '');
+    const eq = (a, b) => {
+      const sa = String(a).trim(), sb = String(b).trim();
+      if (sa === sb) return true;
+      const na = Number(sa), nb = Number(sb);
+      return !Number.isNaN(na) && !Number.isNaN(nb) && na === nb;
+    };
+    plcUnregistered = codes.length > 0 && !codes.some(c => eq(c, pt.value));
+  }
+  return {
+    size: ld.size === 'normal' ? 'normal' : 'large',
+    items: labels.map(l => ({ label: l, count: pc[l] || 0 })),
+    plcType: ptShown ? (pt.tag || String(pt.value)) : null,
+    plcUnregistered,
+  };
+});
+// v3.49 二期: 结算挂起等补状态 (on_settle_mismatch='hold', 琥珀横幅)
+const comboSettleHold = computed(() =>
+  multiChannelData.value[0]?.comboVerdict?.settle_hold || null);
+const comboSettleHoldText = computed(() => {
+  const h = comboSettleHold.value;
+  if (!h) return '';
+  const rem = (h.remaining_s === null || h.remaining_s === undefined)
+    ? '不限时' : `剩余 ${Math.round(h.remaining_s)}s`;
+  return `结算挂起等补 (${rem}): ${h.reason || '计数与判定表不符'}`;
+});
 const currentDetections = ref([]);
 
 // 视频播放信息（仅视频输入源时有效）
@@ -2761,6 +2911,7 @@ const processChannelResult = (ch, d) => {
   chData.perItemState = d.per_item_state || null;   // v3.28: 多工位画框贴螺丝编号用
   chData.placementGuide = d.placement_guide || null;  // v3.32: 就位引导框运行态(已就位/未就位)
   chData.labelSplitRounds = d.label_split_rounds || null;  // v3.32: 多轮次拆分当前轮次
+  chData.comboVerdict = d.combo_verdict || null;  // v3.48: 判型表运行态(positional 锁定ROI+实时计数)
   chData.currentCycleSteps = d.current_cycle_steps || [];
   chData.backupCoveredLabels = d.backup_covered_labels || [];
   chData.stepCounts = d.step_counts || {};
@@ -3104,6 +3255,99 @@ const shouldDrawDetWithStepRoi = (det, stepsConfig, pipelineConfig) => {
   return pointInPolygonNorm(cx, cy, step.roi);
 };
 
+// ==================== v3.48 判型表 positional 锁定框叠加 ====================
+// 位置去重计数引擎的可视化: 已计数位置画常驻锁框+编号 (青色实线, 与当前帧检测框
+// 区分), 候选确认中画虚线+进度。数据来自 /detection/results 的
+// combo_verdict.positional_rois (归一化 xyxy), 空结果帧也要画 —— 锁定位置
+// 在检测框消失后仍然常驻到周期结算, 这正是"锁定"语义的可视化本体。
+// 单工位 drawDetections 与多工位 drawMultiDetections 共用, 坐标映射同拆分叠加层。
+const COMBO_LOCK_COLOR = '#22d3ee';     // 锁定 = 青色 (区别 OK 绿 / NG 红)
+const COMBO_PENDING_COLOR = '#94a3b8';  // 候选 = 灰
+
+const drawComboPositionalOverlay = (ctx, comboVerdict, dx, dy, dw, dh) => {
+  // 显示开关 (combo_table.show_lock_overlay, 默认开): 关掉只是不画, 锁定/计数照常
+  if (comboVerdict?.show_lock_overlay === false) return;
+  const rois = comboVerdict?.positional_rois;
+  if (!Array.isArray(rois) || rois.length === 0) return;
+  const fs = 11 * (window.__uiScale || 1);
+  ctx.save();
+  ctx.font = `bold ${fs}px sans-serif`;
+  for (const r of rois) {
+    const b = r?.box;
+    if (!Array.isArray(b) || b.length !== 4) continue;
+    const x = dx + b[0] * dw, y = dy + b[1] * dh;
+    const w = (b[2] - b[0]) * dw, h = (b[3] - b[1]) * dh;
+    const locked = r.state === 'locked';
+    ctx.strokeStyle = locked ? COMBO_LOCK_COLOR : COMBO_PENDING_COLOR;
+    ctx.lineWidth = locked ? 2 : 1;
+    ctx.setLineDash(locked ? [] : [5, 4]);
+    ctx.strokeRect(x, y, w, h);
+    const tag = locked ? `${r.label} #${r.seq}` : `${r.label} ${r.seen}/${r.need}`;
+    const tw = ctx.measureText(tag).width;
+    ctx.setLineDash([]);
+    ctx.fillStyle = locked ? 'rgba(8,51,68,0.85)' : 'rgba(51,65,85,0.75)';
+    ctx.fillRect(x, y - fs - 5, tw + 8, fs + 5);
+    ctx.fillStyle = locked ? COMBO_LOCK_COLOR : '#cbd5e1';
+    ctx.fillText(tag, x + 4, y - 4);
+  }
+  ctx.restore();
+};
+
+// ==================== v3.49 虚拟按钮触发区域叠加 ====================
+// 触发中心 pixel_region (虚拟按钮) 的标定区域在监控画面常驻显示 —— 操作员得
+// 知道往哪伸手 (2026-08-13 现场反馈"标定完看不见按钮在哪")。列表低频拉取
+// (区域/启用改动不频繁), 叠加画在检测框之下, 琥珀虚线框 + 名称。
+const TRIGGER_ZONE_COLOR = '#fbbf24';   // 琥珀 (区别锁框青 / OK绿 / NG红)
+const pixelTriggerZones = ref([]);      // [{name, region:[x1,y1,x2,y2], channel}]
+let triggerZoneTimer = null;
+
+const loadTriggerZones = async () => {
+  try {
+    const res = await getTriggers();
+    const rows = res.data?.triggers || [];
+    pixelTriggerZones.value = rows
+      .filter(t => t.enabled && t.type === 'pixel_region'
+        && Array.isArray(t.params?.region) && t.params.region.length === 4)
+      .map(t => ({
+        name: t.name || '虚拟按钮',
+        region: t.params.region.map(Number),
+        channel: Number(t.params.channel || 0),
+      }));
+  } catch { /* 触发中心不可用不影响监控 */ }
+};
+
+// region 是原始帧像素坐标 (与 /snapshot 1:1), 按帧自然尺寸归一后映射到画布
+const drawTriggerZoneOverlay = (ctx, ch, dx, dy, dw, dh, natW, natH) => {
+  if (!natW || !natH) return;
+  const zones = pixelTriggerZones.value.filter(z => z.channel === ch);
+  if (!zones.length) return;
+  const fs = 12 * (window.__uiScale || 1);
+  ctx.save();
+  ctx.font = `bold ${fs}px sans-serif`;
+  for (const z of zones) {
+    const [x1, y1, x2, y2] = z.region;
+    const x = dx + (x1 / natW) * dw, y = dy + (y1 / natH) * dh;
+    const w = ((x2 - x1) / natW) * dw, h = ((y2 - y1) / natH) * dh;
+    ctx.strokeStyle = TRIGGER_ZONE_COLOR;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([7, 5]);
+    ctx.strokeRect(x, y, w, h);
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 0.12;
+    ctx.fillStyle = TRIGGER_ZONE_COLOR;
+    ctx.fillRect(x, y, w, h);
+    ctx.globalAlpha = 1;
+    const tag = z.name;
+    const tw = ctx.measureText(tag).width;
+    const ty = y > fs + 8 ? y - 4 : y + h + fs + 2;   // 顶部放不下就画在框下沿
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(x, ty - fs - 1, tw + 8, fs + 5);
+    ctx.fillStyle = TRIGGER_ZONE_COLOR;
+    ctx.fillText(tag, x + 4, ty);
+  }
+  ctx.restore();
+};
+
 // ==================== v3.32 同标签区域拆分 / 工件就位提示 画布叠加 ====================
 // 单工位 drawDetections 与多工位 drawMultiDetections 共用。坐标映射由调用方传入
 // (dx,dy = letterbox 偏移, dw,dh = 实际渲染尺寸)。
@@ -3273,6 +3517,10 @@ const drawMultiDetections = (ch, canvas, detections, hiddenLabels = null, pollPr
   // v3.32: 拆分区域 / 就位引导框 叠加层 (画在检测框底下)
   drawLabelSplitOverlay(ctx, pipeMulti, detections, multiChannelData.value[ch]?.placementGuide, dx, dy, dw, dh,
     multiChannelData.value[ch]?.labelSplitRounds);
+  // v3.48: 判型表 positional 锁定框 (常驻, 空结果帧也画)
+  drawComboPositionalOverlay(ctx, multiChannelData.value[ch]?.comboVerdict, dx, dy, dw, dh);
+  // v3.49: 虚拟按钮触发区域 (常驻)
+  drawTriggerZoneOverlay(ctx, ch, dx, dy, dw, dh, nat?.w, nat?.h);
 
   // v3.8.x: 多工位画框也读用户配置 (老逻辑硬编码 #10b981/#ef4444、线宽2、字号11,
   // 客户在设置页改的检测框颜色/线宽/字号在多工位下全部失效).
@@ -4597,6 +4845,12 @@ const drawDetections = (detections) => {
     drawLabelSplitOverlay(ctx, currentProject.value?.pipeline_config,
       detections, multiChannelData.value[0]?.placementGuide, ox, oy, rw, rh,
       multiChannelData.value[0]?.labelSplitRounds);
+    // v3.48: 判型表 positional 锁定框 (常驻叠加层, 在提前 return 之前 —— 空结果帧
+    // 锁框也要画, "检测框消失后位置仍锁定"正是要给现场看的语义)
+    drawComboPositionalOverlay(ctx, multiChannelData.value[0]?.comboVerdict, ox, oy, rw, rh);
+    // v3.49: 虚拟按钮触发区域 (常驻, 操作员要看得见往哪伸手)
+    drawTriggerZoneOverlay(ctx, 0, ox, oy, rw, rh,
+      img0?.naturalWidth, img0?.naturalHeight);
   }
 
   if (!detections || detections.length === 0) return;
@@ -5543,6 +5797,8 @@ const startPolling = () => {
       multiChannelData.value[0].placementGuide = data.placement_guide || null;
       // v3.32: 多轮次拆分当前轮次 (叠加层区域名前缀 + 轮次角标)
       multiChannelData.value[0].labelSplitRounds = data.label_split_rounds || null;
+      // v3.48: 判型表运行态 (锁定框叠加层 + 信息条实时计数)
+      multiChannelData.value[0].comboVerdict = data.combo_verdict || null;
 
       // ── monitor.poll 诊断: 人工确认阻塞边沿 + 每 3s 轮询摘要 ──
       const _ackActive = !!(data.pending_ack && data.pending_ack.active);
@@ -6677,6 +6933,10 @@ onMounted(async () => {
   // v3.40: 空闲看门狗 — 后端被开工报文自动拉起时, 前端不用切页也能接管 (川南反馈)
   startIdleWatchdog();
 
+  // v3.49: 虚拟按钮触发区域叠加 — 低频刷新 (标定/启停改动不频繁)
+  loadTriggerZones();
+  triggerZoneTimer = setInterval(loadTriggerZones, 30000);
+
   // Reset error count so reconnection works after page navigation
   streamErrorCount = 0;
   
@@ -6748,6 +7008,7 @@ const handleResize = () => {
 onUnmounted(() => {
   monitorMounted = false;
   if (_nowTickInterval) { clearInterval(_nowTickInterval); _nowTickInterval = null; }
+  if (triggerZoneTimer) { clearInterval(triggerZoneTimer); triggerZoneTimer = null; }
   window.removeEventListener('resize', handleResize);
   if (canvasResizeObserver) { canvasResizeObserver.disconnect(); canvasResizeObserver = null; }
   stopIdleWatchdog();

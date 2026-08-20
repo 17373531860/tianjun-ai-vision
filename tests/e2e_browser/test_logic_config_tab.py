@@ -238,7 +238,8 @@ def test_计数组合判定表_可见可配_保存落库回显(page, base_url, a
     cmb = pc.get("combo_table") or {}
     assert cmb.get("enabled") is True, f"combo_table 应落库开, 实际 {cmb}"
     assert cmb.get("labels") == ["区A", "区B"], f"labels 应落库, 实际 {cmb}"
-    assert cmb.get("rows") == [{"counts": [5, 4], "verdict": "OK", "tag": "4缸-含挺柱"}], \
+    assert cmb.get("rows") == [{"counts": [5, 4], "verdict": "OK",
+                                "tag": "4缸-含挺柱", "plc_code": ""}], \
         f"行应落库, 实际 {cmb}"
     # 重进回显
     _open_logic_tab(page, base_url, name)
@@ -297,6 +298,243 @@ def test_计数口径positional_可切可配_保存落库回显(page, base_url, 
     got = card.locator(
         ".el-form-item:has-text('同位置判定 IoU') .el-input-number input").first.input_value()
     assert got == "0.5", f"IoU 应回显 0.5, 实际 {got}"
+
+
+def test_监控画锁定框开关_默认开_关掉落库回显(page, base_url, api_url):
+    """v3.48.x 锁定框显示开关: positional 展开后露出「监控画锁定框」且默认开 →
+    关掉 → 保存 → combo_table.show_lock_overlay=false 落库 → 重进回显关。"""
+    pid, name = _mk_project(api_url, "detection", steps=[
+        {"id": 1, "label": "区A", "name": "区域A", "enabled": True},
+        {"id": 2, "label": "收尾", "name": "收尾", "enabled": True},
+    ])
+    requests.put(f"{api_url}/api/v1/projects/{pid}", json={
+        "pipeline_config": {"combo_table": {
+            "enabled": True, "labels": ["区A"], "count_mode": "positional",
+            "rows": [{"counts": [5], "verdict": "OK", "tag": "T"}],
+        }},
+    }, timeout=5).raise_for_status()
+    _open_logic_tab(page, base_url, name)
+    card = page.locator(".el-card:has-text('计数组合判定表')").first
+    card.scroll_into_view_if_needed()
+    sw = card.locator(".combo-lock-overlay-switch").first
+    assert sw.count() == 1, "positional 展开后应露出「监控画锁定框」开关"
+    assert "is-checked" in (sw.get_attribute("class") or ""), "锁定框显示开关应默认开"
+    sw.click()
+    time.sleep(0.3)
+    page.locator("button:has-text('保存配置')").click()
+    time.sleep(2.0)
+    cmb = ((requests.get(f"{api_url}/api/v1/projects/{pid}", timeout=5).json()
+            .get("pipeline_config") or {}).get("combo_table") or {})
+    assert cmb.get("show_lock_overlay") is False, f"show_lock_overlay 应落库 false, 实际 {cmb}"
+    # 重进回显关
+    _open_logic_tab(page, base_url, name)
+    card = page.locator(".el-card:has-text('计数组合判定表')").first
+    card.scroll_into_view_if_needed()
+    sw = card.locator(".combo-lock-overlay-switch").first
+    assert "is-checked" not in (sw.get_attribute("class") or ""), "重进应回显关"
+
+
+def test_切步数量门开关_默认关_打开落库回显(page, base_url, api_url):
+    """v3.49 切步数量门: 判定表卡露出开关且默认关 → 打开 + 选提示事件 + 填 PLC 码
+    → 保存落库 step_guard.enabled/action/event_id + 行 plc_code → 重进回显开。"""
+    pid, name = _mk_project(api_url, "detection", steps=[
+        {"id": 1, "label": "区A", "name": "区域A", "enabled": True},
+        {"id": 2, "label": "区B", "name": "区域B", "enabled": True},
+        {"id": 3, "label": "收尾", "name": "收尾", "enabled": True},
+    ])
+    requests.put(f"{api_url}/api/v1/projects/{pid}", json={
+        "events_config": [
+            {"id": 1, "name": "合格(OK)", "actions": []},
+            {"id": 2, "name": "不合格(NG)", "actions": []},
+            {"id": 3, "name": "数量门警告", "actions": []},
+        ],
+        "pipeline_config": {"combo_table": {
+            "enabled": True, "labels": ["区A", "区B"], "count_mode": "positional",
+            "rows": [{"counts": [2, 1], "verdict": "OK", "tag": "机型X"}],
+        }},
+    }, timeout=5).raise_for_status()
+    _open_logic_tab(page, base_url, name)
+    card = page.locator(".el-card:has-text('计数组合判定表')").first
+    card.scroll_into_view_if_needed()
+    sw = card.locator(".combo-guard-switch").first
+    assert sw.count() == 1, "应露出「切步数量门」开关"
+    assert "is-checked" not in (sw.get_attribute("class") or ""), "数量门应默认关"
+    sw.click()
+    time.sleep(0.5)
+    txt = card.inner_text()
+    assert all(k in txt for k in ("少装/数量不符", "超装", "按已装数量收窄机型",
+                                  "期望数量依据", "违规处置")), f"配置区未展开: {txt[:300]}"
+    # 填行级 PLC 码
+    card.locator("input[placeholder='如 4']").first.fill("4")
+    card.locator(".combo-guard-event").click()
+    time.sleep(0.4)
+    # 2026-08-12 产品决策: 系统 合格(OK)/不合格(NG) 结算事件不得出现在提示事件下拉
+    dd_items = page.locator(".el-select-dropdown:visible .el-select-dropdown__item")
+    dd_texts = [dd_items.nth(i).inner_text() for i in range(dd_items.count())]
+    assert not any("合格" in t for t in dd_texts), \
+        f"提示事件下拉不得含系统 合格/不合格 结算事件, 实际 {dd_texts}"
+    page.locator(".el-select-dropdown:visible .el-select-dropdown__item"
+                 ":has-text('数量门警告')").first.click()
+    time.sleep(0.3)
+    page.locator("button:has-text('保存配置')").click()
+    time.sleep(2.0)
+    cmb = ((requests.get(f"{api_url}/api/v1/projects/{pid}", timeout=5).json()
+            .get("pipeline_config") or {}).get("combo_table") or {})
+    sg = cmb.get("step_guard") or {}
+    assert sg.get("enabled") is True and sg.get("action") == "hint", f"实际 {sg}"
+    assert sg.get("event_id") == 3, f"event_id 应落库 3, 实际 {sg}"
+    assert (cmb.get("rows") or [{}])[0].get("plc_code") == "4", f"行 plc_code 应落库, 实际 {cmb}"
+    # 重进回显开
+    _open_logic_tab(page, base_url, name)
+    card = page.locator(".el-card:has-text('计数组合判定表')").first
+    sw = card.locator(".combo-guard-switch").first
+    assert "is-checked" in (sw.get_attribute("class") or ""), "重进应回显数量门开"
+
+
+def test_二期新配置_顺序检查挂起大字卡按标签覆盖_落库回显(page, base_url, api_url):
+    """v3.49 二期: 数量门卡露出 顺序检查/已补齐事件/结算处置档, combo 卡露出
+    大字实时卡 + 按标签覆盖折叠表 → 全部配置 → 保存落库全部新键 → 重进回显。"""
+    pid, name = _mk_project(api_url, "detection", steps=[
+        {"id": 1, "label": "区A", "name": "区域A", "enabled": True},
+        {"id": 2, "label": "区B", "name": "区域B", "enabled": True},
+        {"id": 3, "label": "收尾", "name": "收尾", "enabled": True},
+    ])
+    requests.put(f"{api_url}/api/v1/projects/{pid}", json={
+        "events_config": [
+            {"id": 1, "name": "合格(OK)", "actions": []},
+            {"id": 2, "name": "不合格(NG)", "actions": []},
+            {"id": 3, "name": "补齐提示", "actions": []},
+        ],
+        "pipeline_config": {"combo_table": {
+            "enabled": True, "labels": ["区A", "区B"], "count_mode": "positional",
+            "rows": [{"counts": [2, 1], "verdict": "OK", "tag": "机型X"}],
+            "step_guard": {"enabled": True},
+        }},
+    }, timeout=5).raise_for_status()
+    _open_logic_tab(page, base_url, name)
+    card = page.locator(".el-card:has-text('计数组合判定表')").first
+    card.scroll_into_view_if_needed()
+    # --- 数量门: 顺序检查默认关 → 打开 ---
+    osw = card.locator(".combo-guard-order-switch").first
+    assert osw.count() == 1, "应露出「工序顺序检查」开关"
+    assert "is-checked" not in (osw.get_attribute("class") or ""), "顺序检查应默认关"
+    osw.click()
+    time.sleep(0.3)
+    # --- 已补齐事件 ---
+    card.locator(".combo-guard-resolved-event").click()
+    page.locator(".el-select-dropdown:visible .el-select-dropdown__item"
+                 ":has-text('补齐提示')").first.click()
+    time.sleep(0.3)
+    # --- 结算处置档 → 挂起等补 + 超时 60 ---
+    card.locator(".combo-guard-settle-mismatch").click()
+    page.locator(".el-select-dropdown:visible .el-select-dropdown__item"
+                 ":has-text('挂起等补')").first.click()
+    time.sleep(0.3)
+    tmo = card.locator(".combo-guard-hold-timeout input").first
+    tmo.click()
+    tmo.press("ControlOrMeta+a")
+    tmo.type("60", delay=20)
+    tmo.press("Tab")
+    time.sleep(0.3)
+    # --- 大字实时卡: 默认关 → 打开 + 普通字号 (2026-08-13 停靠看板化后无「位置」项) ---
+    lsw = card.locator(".combo-live-switch").first
+    assert lsw.count() == 1, "应露出「监控大字实时卡」开关"
+    assert "is-checked" not in (lsw.get_attribute("class") or ""), "大字卡应默认关"
+    lsw.click()
+    time.sleep(0.4)
+    card.locator(".el-radio-button:has-text('普通')").click()
+    assert card.locator(".el-radio-button:has-text('画面下方')").count() == 0, \
+        "停靠看板化后不应再有「位置」选项"
+    time.sleep(0.3)
+    # --- 按标签覆盖: 展开 → 区A 确认帧数填 1 ---
+    tpl = card.locator(".combo-tpl").first
+    assert tpl.count() == 1, "positional 下应露出「按标签单独覆盖追踪参数」"
+    tpl.locator("text=展开").first.click()
+    time.sleep(0.4)
+    row_a = tpl.locator("div.flex.items-center.gap-2:has-text('区A')").first
+    inp = row_a.locator(".el-input-number input").nth(2)  # 第3列=确认帧数
+    inp.click()
+    inp.type("1", delay=20)
+    inp.press("Tab")
+    time.sleep(0.3)
+    page.locator("button:has-text('保存配置')").click()
+    time.sleep(2.0)
+    cmb = ((requests.get(f"{api_url}/api/v1/projects/{pid}", timeout=5).json()
+            .get("pipeline_config") or {}).get("combo_table") or {})
+    sg = cmb.get("step_guard") or {}
+    assert sg.get("check_order") is True, f"check_order 应落库, 实际 {sg}"
+    assert sg.get("resolved_event_id") == 3, f"resolved_event_id 应落库 3, 实际 {sg}"
+    assert sg.get("on_settle_mismatch") == "hold", f"结算处置档应落库 hold, 实际 {sg}"
+    assert sg.get("hold_timeout_s") == 60, f"挂起超时应落库 60, 实际 {sg}"
+    ld = cmb.get("live_display") or {}
+    assert ld.get("enabled") is True and ld.get("size") == "normal", \
+        f"live_display 应落库, 实际 {ld}"
+    tplj = cmb.get("tracking_per_label") or {}
+    assert tplj.get("区A") == {"min_consecutive": 1}, \
+        f"按标签覆盖应只存有效键, 实际 {tplj}"
+    # 重进回显
+    _open_logic_tab(page, base_url, name)
+    card = page.locator(".el-card:has-text('计数组合判定表')").first
+    card.scroll_into_view_if_needed()
+    assert "is-checked" in (card.locator(".combo-guard-order-switch").first
+                            .get_attribute("class") or ""), "顺序检查应回显开"
+    assert "is-checked" in (card.locator(".combo-live-switch").first
+                            .get_attribute("class") or ""), "大字卡应回显开"
+    tpl = card.locator(".combo-tpl").first
+    tpl.locator("text=展开").first.click()
+    time.sleep(0.4)
+    row_a = tpl.locator("div.flex.items-center.gap-2:has-text('区A')").first
+    assert row_a.locator(".el-input-number input").nth(2).input_value() == "1", \
+        "区A 确认帧数覆盖应回显 1"
+
+
+def test_数量门PLC连接下拉_列出已建连接并选中落库(page, base_url, api_url):
+    """v3.49 二期现场修复回归: 后端 GET /plc/connections 返回 {"connections": [...]},
+    下拉曾因前端误取 data.items 永远 No data (PLC 已连接也选不了)。
+    验证: 建 mock 连接 → 下拉能列出 → 选中 → 保存落库 plc_connection_id。"""
+    conn_name = f"{E2E_PREFIX}plc_combo_{uuid.uuid4().hex[:6]}"
+    r = requests.post(f"{api_url}/api/v1/plc/connections", json={
+        "name": conn_name, "driver": "mock", "enabled": False,
+        "conn_params": {"store_id": conn_name, "poll_interval_ms": 100},
+        "points": [{"key": "cyl_type", "addr": "m0", "type": "int16", "dir": "read"}],
+        "read_rules": [], "write_rules": [], "options": {},
+    }, timeout=10)
+    assert r.status_code == 200, f"建 mock PLC 连接失败: {r.text}"
+    conn_id = r.json()["id"]
+    try:
+        pid, name = _mk_project(api_url, "detection", steps=[
+            {"id": 1, "label": "区A", "name": "区域A", "enabled": True},
+            {"id": 2, "label": "收尾", "name": "收尾", "enabled": True},
+        ])
+        requests.put(f"{api_url}/api/v1/projects/{pid}", json={
+            "pipeline_config": {"combo_table": {
+                "enabled": True, "labels": ["区A"], "count_mode": "positional",
+                "rows": [{"counts": [2], "verdict": "OK", "tag": "机型X"}],
+                "step_guard": {"enabled": True, "expected_source": "auto"},
+            }},
+        }, timeout=5).raise_for_status()
+        _open_logic_tab(page, base_url, name)
+        card = page.locator(".el-card:has-text('计数组合判定表')").first
+        card.scroll_into_view_if_needed()
+        sel = card.locator(".combo-guard-plc-conn").first
+        assert sel.count() == 1, "期望数量依据非 table 时应露出「PLC 连接」下拉"
+        sel.click()
+        time.sleep(0.8)
+        opt = page.locator(".el-select-dropdown:visible .el-select-dropdown__item"
+                           f":has-text('{conn_name}')").first
+        assert opt.count() == 1, \
+            "PLC 连接下拉应列出已建连接 (回归: data.connections 而非 data.items)"
+        opt.click()
+        time.sleep(0.3)
+        page.locator("button:has-text('保存配置')").click()
+        time.sleep(2.0)
+        cmb = ((requests.get(f"{api_url}/api/v1/projects/{pid}", timeout=5).json()
+                .get("pipeline_config") or {}).get("combo_table") or {})
+        sg = cmb.get("step_guard") or {}
+        assert sg.get("plc_connection_id") == conn_id, \
+            f"plc_connection_id 应落库 {conn_id}, 实际 {sg}"
+    finally:
+        requests.delete(f"{api_url}/api/v1/plc/connections/{conn_id}", timeout=5)
 
 
 def test_legacy收尾防呆键_迁移为ng_handling回显(page, base_url, api_url):

@@ -1,0 +1,45 @@
+{
+  "steps": [
+    {
+      "name": "「监控画锁定框」开关露出",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "默认状态 = 开",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "T5 落库 show_lock_overlay=false",
+      "ok": true,
+      "detail": "{\"show_lock_overlay\": false, \"count_mode\": \"positional\"}"
+    },
+    {
+      "name": "关: 后端锁定照常发生",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "关: 判型计数条照常显示",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "关: 画面不画青色锁框",
+      "ok": true,
+      "detail": "cyan=False"
+    },
+    {
+      "name": "重开落库 show_lock_overlay=true",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "开: 青色锁框回来",
+      "ok": true,
+      "detail": "locked=True cyan=True"
+    }
+  ],
+  "pass": true
+}

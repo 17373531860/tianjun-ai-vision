@@ -110,6 +110,7 @@ video_frames/
 HCNetSDK*/
 *.xlsx
 hotfix*/
+backend/hotfix.py
 *.zip
 *.lic
 

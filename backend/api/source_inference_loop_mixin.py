@@ -77,6 +77,7 @@ class InferenceLoopMixin:
             # v3.32: synthetic 也过标签区域拆分层 → 全链路可用剧本回归
             detections = self._apply_label_splits(detections)
             self._feed_combo_positional(detections)
+            self._tick_combo_guard()
             # v3.51.1: 跟踪模式项目也能用剧本回归 —— 剧本 detections 自带 track_id,
             # logic_mode=tracking 时走 _update_tracking_stats（历史上固定走非跟踪
             # 路径, 导致捷昌类跟踪模式配置无法虚拟测试）。其余模式行为不变。
@@ -113,6 +114,7 @@ class InferenceLoopMixin:
         # 下游状态机/画框/MES 全部见到的是虚拟步骤标签
         detections = self._apply_label_splits(detections)
         self._feed_combo_positional(detections)
+        self._tick_combo_guard()
 
         return (detections, is_tracking, is_seg, t_start)
 
@@ -129,6 +131,53 @@ class InferenceLoopMixin:
             eng.feed(detections)
         except Exception as e:
             debug_log(f"!!! combo_positional 喂帧失败: {e}", "INFERENCE")
+
+    def _tick_combo_guard(self):
+        """v3.49 切步数量门逐 tick 检查 (combo_table.step_guard)。
+
+        计数口径与结算查表同源: positional 引擎在则用位置去重计数,
+        否则用本周期步骤出现次数。违规处置 (提示事件/即时NG) 收口在
+        settlement mixin 的 _fire_combo_guard_violation。
+        未配置时 _combo_guard 为 None → 一次 getattr 早退零开销。
+        """
+        # v3.49 手动结算请求消费 (触发中心虚拟按钮/脚踏板 → 步骤类模式立即
+        # 结算)。放在 guard 早退之前: 没配数量门的项目手动结算同样要生效。
+        try:
+            self._consume_manual_settle_request()
+        except Exception as e:
+            debug_log(f"!!! 手动结算消费失败: {e}", "INFERENCE")
+        guard = getattr(self, '_combo_guard', None)
+        if guard is None:
+            return
+        try:
+            pos = getattr(self, '_combo_positional', None)
+            if pos is not None:
+                counts = pos.counts()
+            else:
+                from collections import Counter
+                counts = Counter(self.current_cycle_steps or [])
+            violations = guard.tick(counts)
+            resolved = guard.pop_resolved()
+        except Exception as e:
+            debug_log(f"!!! combo_guard 检查失败: {e}", "INFERENCE")
+            return
+        for v in violations:
+            try:
+                self._fire_combo_guard_violation(v)
+            except Exception as e:
+                debug_log(f"!!! combo_guard 违规处置失败: {e}", "INFERENCE")
+        # v3.49 二期: 补齐消警 (活跃违规回到允许值 → 消横幅 + 可配已补齐事件)
+        for r in resolved:
+            try:
+                self._resolve_combo_guard_violation(r)
+            except Exception as e:
+                debug_log(f"!!! combo_guard 消警处置失败: {e}", "INFERENCE")
+        # v3.49 二期: 结算挂起等补驱动 (补齐命中判定表 → 再结算; 超时 → NG)
+        if getattr(self, '_combo_settle_hold', None) is not None:
+            try:
+                self._combo_settle_hold_tick()
+            except Exception as e:
+                debug_log(f"!!! combo_hold 驱动失败: {e}", "INFERENCE")
 
     def _apply_label_splits(self, detections):
         """v3.32 检测出口标签改写层: 同标签区域拆分 + 工件就位状态刷新.

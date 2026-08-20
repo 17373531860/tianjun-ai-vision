@@ -1815,6 +1815,50 @@ const initProjectDefaults = (project) => {
   for (const [k, dv] of Object.entries(trkDefaults)) {
     if (!Number.isFinite(Number(cmb.tracking[k]))) cmb.tracking[k] = dv;
   }
+  // 监控锁定框显示开关 (默认开; false 只是不画, 锁定/计数照常)
+  if (typeof cmb.show_lock_overlay !== 'boolean') cmb.show_lock_overlay = true;
+  // v3.49 切步数量门兜底 (默认全关 = 零差异)
+  if (!cmb.step_guard || typeof cmb.step_guard !== 'object') cmb.step_guard = {};
+  const sg = cmb.step_guard;
+  if (typeof sg.enabled !== 'boolean') sg.enabled = false;
+  if (typeof sg.check_under !== 'boolean') sg.check_under = true;
+  if (typeof sg.check_over !== 'boolean') sg.check_over = true;
+  if (typeof sg.narrow_by_progress !== 'boolean') sg.narrow_by_progress = true;
+  if (!['hint', 'instant_ng'].includes(sg.action)) sg.action = 'hint';
+  if (!['table', 'plc', 'auto'].includes(sg.expected_source)) sg.expected_source = 'table';
+  if (!['table', 'skip'].includes(sg.plc_unavailable)) sg.plc_unavailable = 'table';
+  if (sg.event_id === undefined) sg.event_id = null;
+  if (sg.plc_connection_id === undefined) sg.plc_connection_id = null;
+  if (typeof sg.plc_point !== 'string') sg.plc_point = sg.plc_point != null ? String(sg.plc_point) : '';
+  // v3.49 二期新键 (默认与后端 _parse_combo_table 一致)
+  if (typeof sg.check_order !== 'boolean') sg.check_order = false;
+  if (sg.resolved_event_id === undefined) sg.resolved_event_id = null;
+  if (!['ng', 'hold'].includes(sg.on_settle_mismatch)) sg.on_settle_mismatch = 'ng';
+  if (!Number.isFinite(Number(sg.hold_timeout_s))) sg.hold_timeout_s = 120;
+  (cmb.rows || []).forEach((row) => {
+    if (row && typeof row.plc_code !== 'string') {
+      row.plc_code = row.plc_code != null ? String(row.plc_code) : '';
+    }
+  });
+  // v3.49 二期: 大字实时卡 + 缸型独立点位 + 按标签追踪参数覆盖兜底
+  if (!cmb.live_display || typeof cmb.live_display !== 'object') {
+    cmb.live_display = { enabled: false, size: 'large', show_plc_type: true, position: 'top' };
+  }
+  const ld = cmb.live_display;
+  if (typeof ld.enabled !== 'boolean') ld.enabled = false;
+  if (!['large', 'normal'].includes(ld.size)) ld.size = 'large';
+  if (typeof ld.show_plc_type !== 'boolean') ld.show_plc_type = true;
+  if (!['top', 'bottom'].includes(ld.position)) ld.position = 'top';
+  if (!cmb.plc_display || typeof cmb.plc_display !== 'object') {
+    cmb.plc_display = { connection_id: null, point: '' };
+  }
+  if (cmb.plc_display.connection_id === undefined) cmb.plc_display.connection_id = null;
+  if (typeof cmb.plc_display.point !== 'string') {
+    cmb.plc_display.point = cmb.plc_display.point != null ? String(cmb.plc_display.point) : '';
+  }
+  if (!cmb.tracking_per_label || typeof cmb.tracking_per_label !== 'object') {
+    cmb.tracking_per_label = {};
+  }
 
   const nghCfg = project.pipeline_config.ng_handling;
   if (!['none', 'hint', 'instant_ng'].includes(nghCfg.violation)) nghCfg.violation = 'none';
@@ -2266,14 +2310,93 @@ const handleSaveProject = async () => {
               }),
               verdict: String(r?.verdict).toUpperCase() === 'NG' ? 'NG' : 'OK',
               tag: String(r?.tag || '').trim(),
+              plc_code: String(r?.plc_code || '').trim(),
             }));
           // v3.48.x 计数口径 + 追踪参数随保存透传 (clamp 与后端 _parse_combo_table 一致)
           const num = (v, d) => { const n = Number(v); return Number.isFinite(n) ? n : d; };
           const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
           const t = (src.tracking && typeof src.tracking === 'object') ? src.tracking : {};
+          // v3.49 切步数量门: 未启用只存 enabled:false, 不污染其它字段语义
+          const sgSrc = (src.step_guard && typeof src.step_guard === 'object') ? src.step_guard : {};
+          const sgEnabled = sgSrc.enabled === true;
+          let plcConnId = null;
+          if (sgSrc.plc_connection_id != null && sgSrc.plc_connection_id !== '') {
+            const n = Number(sgSrc.plc_connection_id);
+            plcConnId = Number.isFinite(n) ? Math.floor(n) : null;
+          }
+          let eventId = null;
+          if (sgSrc.event_id != null && sgSrc.event_id !== '') {
+            const n = Number(sgSrc.event_id);
+            eventId = Number.isFinite(n) ? Math.floor(n) : null;
+          }
+          let resolvedEventId = null;
+          if (sgSrc.resolved_event_id != null && sgSrc.resolved_event_id !== '') {
+            const n = Number(sgSrc.resolved_event_id);
+            resolvedEventId = Number.isFinite(n) ? Math.floor(n) : null;
+          }
+          const step_guard = sgEnabled ? {
+            enabled: true,
+            check_under: sgSrc.check_under !== false,
+            check_over: sgSrc.check_over !== false,
+            // v3.49 二期: 工序顺序检查 (默认关)
+            check_order: sgSrc.check_order === true,
+            narrow_by_progress: sgSrc.narrow_by_progress !== false,
+            action: sgSrc.action === 'instant_ng' ? 'instant_ng' : 'hint',
+            event_id: eventId,
+            // v3.49 二期: 补齐消警可配事件 + 结算处置档
+            resolved_event_id: resolvedEventId,
+            on_settle_mismatch: sgSrc.on_settle_mismatch === 'hold' ? 'hold' : 'ng',
+            hold_timeout_s: clamp(num(sgSrc.hold_timeout_s, 120), 0, 86400),
+            expected_source: ['table', 'plc', 'auto'].includes(sgSrc.expected_source)
+              ? sgSrc.expected_source : 'table',
+            plc_unavailable: sgSrc.plc_unavailable === 'skip' ? 'skip' : 'table',
+            plc_connection_id: plcConnId,
+            plc_point: String(sgSrc.plc_point || '').trim(),
+          } : { enabled: false };
+          // v3.49 二期: 大字实时卡 (未启用只存 enabled:false)
+          const ldSrc = (src.live_display && typeof src.live_display === 'object') ? src.live_display : {};
+          const live_display = ldSrc.enabled === true ? {
+            enabled: true,
+            size: ldSrc.size === 'normal' ? 'normal' : 'large',
+            show_plc_type: ldSrc.show_plc_type !== false,
+            position: ldSrc.position === 'bottom' ? 'bottom' : 'top',
+          } : { enabled: false };
+          // v3.49 二期: 缸型显示独立点位 (连接+点位都填了才存)
+          const pdSrc = (src.plc_display && typeof src.plc_display === 'object') ? src.plc_display : {};
+          let pdConnId = null;
+          if (pdSrc.connection_id != null && pdSrc.connection_id !== '') {
+            const n = Number(pdSrc.connection_id);
+            pdConnId = Number.isFinite(n) ? Math.floor(n) : null;
+          }
+          const pdPoint = String(pdSrc.point || '').trim();
+          const plc_display = (pdConnId && pdPoint)
+            ? { connection_id: pdConnId, point: pdPoint } : null;
+          // v3.49 二期: 追踪参数按标签覆盖 — 只存有效数值键, 空对象不存该标签
+          const tplSrc = (src.tracking_per_label && typeof src.tracking_per_label === 'object')
+            ? src.tracking_per_label : {};
+          const tplSpec = {
+            iou: [0.05, 0.95, false], ema_alpha: [0, 1, false],
+            min_consecutive: [1, 60, true], pending_ttl: [1, 600, true],
+            perish_ticks: [0, 100000, true], idle_reset_ticks: [0, 100000, true],
+          };
+          const tracking_per_label = {};
+          for (const lbl of labels) {
+            const ov = tplSrc[lbl];
+            if (!ov || typeof ov !== 'object') continue;
+            const cleaned = {};
+            for (const [k, [lo, hi, asInt]] of Object.entries(tplSpec)) {
+              if (ov[k] === null || ov[k] === undefined || ov[k] === '') continue;
+              const n = Number(ov[k]);
+              if (!Number.isFinite(n)) continue;
+              const v = clamp(n, lo, hi);
+              cleaned[k] = asInt ? Math.floor(v) : v;
+            }
+            if (Object.keys(cleaned).length) tracking_per_label[lbl] = cleaned;
+          }
           return {
             enabled: src.enabled === true && labels.length > 0, labels, rows,
             count_mode: src.count_mode === 'positional' ? 'positional' : 'steps',
+            show_lock_overlay: src.show_lock_overlay !== false,
             tracking: {
               iou: clamp(num(t.iou, 0.4), 0.05, 0.95),
               ema_alpha: clamp(num(t.ema_alpha, 0.6), 0, 1),
@@ -2282,6 +2405,10 @@ const handleSaveProject = async () => {
               perish_ticks: clamp(Math.floor(num(t.perish_ticks, 0)), 0, 100000),
               idle_reset_ticks: clamp(Math.floor(num(t.idle_reset_ticks, 0)), 0, 100000),
             },
+            tracking_per_label,
+            step_guard,
+            live_display,
+            plc_display,
           };
         })(),
         // 原生称重投料模式配置 (weighing 模式 / v3.35 融合步骤门控模式写入, 其他不污染)

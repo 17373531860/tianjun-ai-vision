@@ -341,6 +341,11 @@ class SettlementMixin:
         
         if not ng_reasons:
             event_id, reason = self._apply_combo_verdict(step_counts)
+            # v3.49 二期: 结算查表未命中可选挂起等补 (on_settle_mismatch='hold')。
+            # 命中 NG 行 = 已知坏组合, 照常 NG; 只有"未知组合"才有补救意义。
+            if (event_id == 2 and getattr(self, '_combo_verdict_missed', False)
+                    and self._combo_settle_hold_enter(reason)):
+                return   # 挂起: 不触发事件不清池, 周期保持打开等工人补
             print(f"  -> {'OK' if event_id == 1 else 'NG'}: {reason}")
             self._trigger_event(event_id, reason)
         else:
@@ -348,12 +353,22 @@ class SettlementMixin:
             reason = '；'.join(ng_reasons)
             print(f"  → {reason} → NG")
             self._trigger_event(2, reason)
+        # 结算已落账 (OK/NG 任一) → 挂起状态终结
+        self._combo_settle_hold = None
 
         # positional 计数引擎随周期清池 (对齐原型工具"清除步骤"语义);
         # 放在两个判定分支之后, 缺/重 NG 的周期同样要清
         _combo_pos = getattr(self, '_combo_positional', None)
         if _combo_pos is not None:
             _combo_pos.reset()
+        # v3.49 切步数量门: 周期结算后清去重账 (last 违规透出保留给 Monitor;
+        # "已补齐"绿幅是本周期内的确认信息, 随周期结束消失)
+        _combo_guard = getattr(self, '_combo_guard', None)
+        if _combo_guard is not None:
+            _combo_guard.reset()
+        _last = getattr(self, '_combo_guard_last', None)
+        if _last and _last.get('kind') == 'resolved':
+            self._combo_guard_last = None
 
         self.current_cycle_steps = []
         self.backup_steps_seen_in_cycle = set()
@@ -392,6 +407,8 @@ class SettlementMixin:
         else:
             vec = [step_counts.get(l, 0) for l in labels]
         detail = ', '.join(f'{l}×{c}' for l, c in zip(labels, vec))
+        # v3.49 二期: 区分"查表未命中"与"命中 NG 行" (挂起等补只对前者有意义)
+        self._combo_verdict_missed = False
         for row in combo['rows']:
             if row['counts'] == vec:
                 tag = row['tag'] or '未命名机型'
@@ -403,10 +420,125 @@ class SettlementMixin:
                     return 2, f'机型判定[{tag}]: {detail} (判定表指定 NG)'
                 return 1, f'机型判定[{tag}]: {detail}'
         self._combo_last_tag = None
+        self._combo_verdict_missed = True
         if debug_center.is_on("backend.settlement"):
             debug_center.dbg("backend.settlement", "计数组合判定未命中",
                              f"channel={self.channel_id} counts={vec} → NG")
         return 2, f'计数组合未匹配任何机型: {detail}'
+
+    def _combo_settle_hold_enter(self, reason: str) -> bool:
+        """v3.49 二期 结算挂起档 (step_guard.on_settle_mismatch='hold')。
+
+        查表未命中时不立即 NG: 挂起等工人补件 (positional 计数持续累计),
+        补齐/超时由推理 tick 侧 _combo_settle_hold_tick 驱动再结算。
+        返回 True = 已进入/仍在挂起, 调用方应直接 return (不结算不清池);
+        返回 False = 未启用 hold 档或挂起已超时 → 走正常 NG 落账。
+        """
+        combo = getattr(self, '_combo_table', None) or {}
+        cfg = combo.get('step_guard') or {}
+        if cfg.get('on_settle_mismatch') != 'hold':
+            return False
+        hold = getattr(self, '_combo_settle_hold', None)
+        timeout = float(cfg.get('hold_timeout_s') or 0)
+        if hold and timeout and (time.time() - hold['since'] > timeout):
+            # 超时 → 放弃挂起, 本次按原因 NG 落账 (调用方正常 trigger)
+            self._combo_settle_hold = None
+            print(f"[ComboHold] 挂起等补超时 {int(timeout)}s → NG 落账: {reason}")
+            return False
+        if not hold:
+            self._combo_settle_hold = {'since': time.time(), 'reason': reason}
+            print(f"[ComboHold] 结算查表未命中 → 挂起等补 "
+                  f"(超时 {int(timeout) if timeout else '不限'}s): {reason}")
+            event_id = cfg.get('event_id')
+            if event_id:
+                try:   # 借事件响应面提示差多少 (灯/蜂鸣/Toast), 绝不能走
+                    # _trigger_event — 那是结算通道, 会把刚挂起的周期当场结掉
+                    self.fire_external_event_response(
+                        int(event_id), f'结算挂起等补: {reason}',
+                        source='combo_guard')
+                except Exception as e:
+                    print(f"[ComboHold] 挂起提示事件触发失败: {e}")
+        return True
+
+    def _combo_settle_hold_tick(self):
+        """挂起等补的逐 tick 驱动 (推理线程, 由 _tick_combo_guard 调用)。
+
+        - 补齐: 当前计数向量精确命中判定表任一行 → 重走 _settle_detection_cycle
+          正常结算 (OK 行判 OK, NG 行=已知坏组合照常 NG);
+        - 超时: 重走 _settle_detection_cycle, hold 分支检出超时 → NG 落账。
+        """
+        hold = getattr(self, '_combo_settle_hold', None)
+        if not hold:
+            return
+        combo = getattr(self, '_combo_table', None)
+        if not combo:
+            self._combo_settle_hold = None
+            return
+        cfg = combo.get('step_guard') or {}
+        timeout = float(cfg.get('hold_timeout_s') or 0)
+        expired = timeout and (time.time() - hold['since'] > timeout)
+        matched = False
+        if not expired:
+            labels = combo['labels']
+            _pos = getattr(self, '_combo_positional', None)
+            if _pos is not None:
+                pos_counts = _pos.counts()
+                vec = [pos_counts.get(l, 0) for l in labels]
+            else:
+                from collections import Counter
+                step_counts = Counter(self.current_cycle_steps or [])
+                vec = [step_counts.get(l, 0) for l in labels]
+            matched = any(row['counts'] == vec for row in combo['rows'])
+        if matched or expired:
+            if matched:
+                print("[ComboHold] 计数已补齐命中判定表 → 重新结算")
+            self._settle_detection_cycle()
+
+    # ============ 手动结算 (触发中心虚拟按钮/脚踏板, v3.49) ============
+    #
+    # per_item 之外的步骤类模式 (detection/sequential/custom-sequential) 此前
+    # 没有手动结算出口 —— 触发中心 manual_settle 动作只支持 per_item, 缸体判型
+    # (detection + combo_table) 现场按虚拟按钮没反应。语义与 per_item 版一致:
+    # 只代替"结算时机", OK/NG 仍由既有结算函数按真实步骤/查表判定, 不伪造结果。
+    #
+    # 线程纪律: 动作线程只打请求标志, 由推理线程在 _tick_combo_guard 入口消费
+    # (结算函数只允许推理线程跑, 与空闲超时/收尾结算同线程, 无竞态)。
+    def request_manual_settle(self, source: str = 'trigger') -> dict:
+        """请求立即结算当前周期 (任意线程可调, 结算在下一推理帧执行)。"""
+        lm = (self.project_config or {}).get('logic_mode') or 'detection'
+        based_on = ((self.project_config or {}).get('pipeline_config')
+                    or {}).get('custom_based_on')
+        if not (lm in ('detection', 'sequential')
+                or (lm == 'custom' and based_on == 'sequential')):
+            return {"ok": False, "msg": f"逻辑模式 {lm} 不支持手动结算"}
+        if not self.is_detecting:
+            return {"ok": False, "msg": "检测未运行"}
+        if not self.current_cycle_steps:
+            return {"ok": False, "msg": "当前没有打开的周期可结算"}
+        self._manual_settle_request = {"ts": time.time(), "source": source}
+        return {"ok": True, "msg": "已请求结算 (OK/NG 按真实步骤判定)"}
+
+    def _consume_manual_settle_request(self):
+        """推理线程逐帧消费手动结算请求 (由 _tick_combo_guard 顶部调用)。"""
+        req = getattr(self, '_manual_settle_request', None)
+        if not req:
+            return
+        self._manual_settle_request = None
+        if not self.current_cycle_steps:
+            print(f"[ManualSettle] 请求到达时周期已关闭, 忽略 "
+                  f"(source={req.get('source')})")
+            return
+        lm = (self.project_config or {}).get('logic_mode') or 'detection'
+        based_on = ((self.project_config or {}).get('pipeline_config')
+                    or {}).get('custom_based_on')
+        print(f"[ManualSettle] {req.get('source')} 触发手动结算 "
+              f"(mode={lm}, steps={self.current_cycle_steps})")
+        if lm == 'custom' and based_on == 'sequential':
+            self._settle_custom_cycle()
+        elif lm == 'sequential':
+            self._settle_sequential_cycle()
+        elif lm == 'detection':
+            self._settle_detection_cycle()
 
     def _settle_sequential_cycle(self):
         """结算纯顺序模式的当前周期（在新周期开始前调用）
@@ -1168,7 +1300,82 @@ class SettlementMixin:
             throttle[key] = now_mono
         return True
 
-    def _fire_instant_ng(self, reason: str) -> bool:
+    def _fire_combo_guard_violation(self, v: dict):
+        """v3.49 切步数量门违规处置收口 (提示事件 / 即时NG)。
+
+        引擎 (source_combo_guard.ComboStepGuard) 只产出违规事实; 本方法读
+        combo_table.step_guard.action 分流:
+          - hint: 借所配提示事件的响应面 (灯/蜂鸣/Toast/计数), 不动周期。
+            ⚠️ 必须走 fire_external_event_response 而非 _trigger_event —
+            后者是结算通道 (无条件 end_cycle), 配 NG 事件会当场结算,
+            "只报警不结算"就名存实亡 (2026-08-12 现场反馈修复);
+          - instant_ng: 经 _fire_instant_ng(force=True) 当场 NG 结算
+            (force 绕过全局 ng_handling.violation 档, 数量门自带独立处置)。
+        空周期 (尚无步骤入账) 即时NG 不适用 → 降级提示档, 避免刷 NG 计数。
+        违规快照写入 _combo_guard_last 供 /detection/results 与 Monitor 横幅。
+        """
+        combo = getattr(self, '_combo_table', None) or {}
+        cfg = combo.get('step_guard') or {}
+        action = cfg.get('action') if cfg.get('action') in ('hint', 'instant_ng') else 'hint'
+        event_id = cfg.get('event_id')
+        msg = (v or {}).get('message') or '切步数量不符'
+        reason = f'切步数量门: {msg}'
+        snapshot = dict(v or {})
+        snapshot['ts'] = time.time()
+        snapshot['action'] = action
+        self._combo_guard_last = snapshot
+
+        if action == 'instant_ng':
+            if self._fire_instant_ng(reason, force=True):
+                guard = getattr(self, '_combo_guard', None)
+                if guard is not None:
+                    guard.reset()
+                print(f"[ComboGuard] 即时NG已触发: {msg}")
+                return
+            # 空周期等不适用场景 → 降级提示, 不吞掉现场报警
+
+        if event_id:
+            try:
+                self.fire_external_event_response(int(event_id), reason,
+                                                  source='combo_guard')
+                print(f"[ComboGuard] 提示事件已触发(响应面): event_id={event_id} {msg}")
+            except Exception as e:
+                print(f"[ComboGuard] 提示事件触发失败: {e}")
+        else:
+            print(f"[ComboGuard] {reason}")
+
+    def _resolve_combo_guard_violation(self, r: dict):
+        """v3.49 二期 补齐消警收口: 引擎复查到活跃违规已解除时调用。
+
+        - 横幅切换: _combo_guard_last 若还挂着该 (标签) 的违规 → 替换为
+          "已补齐"快照 (kind='resolved', Monitor 画绿幅), 结算 OK 时清掉;
+        - 可配事件: step_guard.resolved_event_id (默认 None = 仅日志),
+          给需要"补齐也响一声/计一笔"的现场。
+        """
+        combo = getattr(self, '_combo_table', None) or {}
+        cfg = combo.get('step_guard') or {}
+        msg = (r or {}).get('message') or '数量已补齐'
+        last = getattr(self, '_combo_guard_last', None)
+        if last and last.get('label') == (r or {}).get('label') \
+                and last.get('kind') != 'resolved':
+            snapshot = dict(r or {})
+            snapshot['ts'] = time.time()
+            snapshot['action'] = 'resolved'
+            self._combo_guard_last = snapshot
+        resolved_event_id = cfg.get('resolved_event_id')
+        if resolved_event_id:
+            try:
+                # 响应面通道: 配 合格(OK) 也只响一声/计一笔, 不会提前 OK 结算
+                self.fire_external_event_response(
+                    int(resolved_event_id), f'切步数量门: {msg}',
+                    source='combo_guard')
+                print(f"[ComboGuard] 已补齐事件已触发(响应面): event_id={resolved_event_id} {msg}")
+            except Exception as e:
+                print(f"[ComboGuard] 已补齐事件触发失败: {e}")
+        else:
+            print(f"[ComboGuard] {msg}")
+
+    def _fire_instant_ng(self, reason: str, force: bool = False) -> bool:
         """v3.43 实时NG统一收口: 违规确认点当场触发 NG 事件(2) 走完整结算链路
         (end_cycle/计数/报警/MES)。全模式挂点共用 (严格守门违序 / 回退重复 /
         后续各模式超量等), 分流与档位只在这里存在一份。
@@ -1186,8 +1393,11 @@ class SettlementMixin:
             (_clear_step_runtime_state 会连定格一起抹掉; 清理交给确认端点:
             确认重做→清 / 保留周期→留, 与既有 ack 语义一致)
           - 不带 → 当场结算 + 清运行时开新周期 (同 _force_timeout_ng 语义)
+
+        v3.49: force=True 绕过全局实时NG开关 (切步数量门自带独立处置档,
+        不该被 ng_handling.violation 档位绑架); 其余语义不变。
         """
-        if not getattr(self, 'instant_ng_on_violation', False):
+        if not force and not getattr(self, 'instant_ng_on_violation', False):
             return False
         if not getattr(self, 'current_cycle_steps', None):
             return False

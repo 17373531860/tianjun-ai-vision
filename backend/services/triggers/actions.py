@@ -265,8 +265,16 @@ def _act_manual_settle(engine, rule: dict, action: dict, ctx: dict):
     if not mgr:
         return
     if not getattr(mgr, "_per_item_config", None):
-        engine._log("error", f"manual_settle 工位 {ch} 未启用 per_item 模式 "
-                             "(手动结算仅 per_item 支持, 其他模式请用 trigger_event/clear_reset)")
+        # v3.49: 步骤类模式 (detection/sequential/custom-sequential, 含缸体判型
+        # combo_table) 也支持手动结算 —— 打请求标志, 推理线程下一帧按真实
+        # 步骤/判定表结算 (语义同 per_item: 只代替时机不代替结果)
+        req = getattr(mgr, "request_manual_settle", None)
+        ret = req(source=f"trigger:{engine.name}") if callable(req) \
+            else {"ok": False, "msg": "该模式不支持手动结算"}
+        if ret.get("ok"):
+            engine._log("event", f"manual_settle → 工位{ch} {ret.get('msg', '已请求结算')}")
+        else:
+            engine._log("error", f"manual_settle 工位{ch} 未结算: {ret.get('msg', '')}")
         return
     ret = mgr.per_item_manual_settle()
     if ret.get("ok"):

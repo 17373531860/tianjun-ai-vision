@@ -1,0 +1,110 @@
+{
+  "steps": [
+    {
+      "name": "幕0 二期配置区渲染 (顺序检查/已补齐/结算处置/大字卡/按标签覆盖)",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "幕0 顺序检查/大字卡开关回显开",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "幕1 API 透出缸型 (value=4 → 机型X)",
+      "ok": true,
+      "detail": "{\"value\": 4, \"tag\": \"机型X\"}"
+    },
+    {
+      "name": "幕1 Monitor 大字卡可见 (缸型 + 机型X)",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "幕1 mock 切缸型 4→6, 标记即时变 机型Y",
+      "ok": true,
+      "detail": "{\"value\": 6, \"tag\": \"机型Y\"}"
+    },
+    {
+      "name": "幕1 Monitor 缸型显示跟随切换",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "幕2 区B 开始后回头加区A → 乱序违规 (order)",
+      "ok": true,
+      "detail": "{\"kind\": \"order\", \"label\": \"区A\", \"actual\": 3, \"expected\": [], \"message\": \"[区A] 工序乱序: [区B] 已开始后又新增 (第 3 个)\", \"ts\": 1786467527.462372, \"action\": \"hint\"}"
+    },
+    {
+      "name": "幕2 警告事件计数 +1",
+      "ok": true,
+      "detail": "警告 3→4"
+    },
+    {
+      "name": "幕2 Monitor 乱序红幅可见",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "幕3 少装切步红幅 (transition 区A=1)",
+      "ok": true,
+      "detail": "{\"kind\": \"transition\", \"label\": \"区A\", \"actual\": 1, \"expected\": [2, 3], \"message\": \"[区A] 切步数量不符: 应 2/3 个, 实际 1 个 (判定表推断)\", \"ts\": 1786467532.874275, \"action\": \"hint\"}"
+    },
+    {
+      "name": "幕3 补第 2 件后自动消警 (resolved)",
+      "ok": true,
+      "detail": "{\"kind\": \"resolved\", \"label\": \"区A\", \"actual\": 2, \"expected\": [2, 3], \"message\": \"[区A] 已补齐: 现 2 个 (应 2/3 个)\", \"orig_kind\": \"transition\", \"ts\": 1786467535.547783, \"action\": \"resolved\"}"
+    },
+    {
+      "name": "幕3 Monitor 绿幅「已补齐」可见",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "幕3 补齐后收尾正常结算 OK (+1) + 补齐事件 +1",
+      "ok": true,
+      "detail": "合格 0→1, 补齐 0→1"
+    },
+    {
+      "name": "幕3 结算后绿幅消失 (guard_last 清空)",
+      "ok": true,
+      "detail": "{}"
+    },
+    {
+      "name": "幕4a 查表未命中 → 挂起等补 (不结算)",
+      "ok": true,
+      "detail": "{\"active\": true, \"since\": 1786467551.013709, \"reason\": \"计数组合未匹配任何机型: 区A×1, 区B×1\", \"timeout_s\": 60.0, \"remaining_s\": 59.9}"
+    },
+    {
+      "name": "幕4a Monitor 琥珀横幅「挂起等补」可见",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "幕4a 补齐后自动按 OK 落账 (+1, 无 NG)",
+      "ok": true,
+      "detail": "合格 1→2"
+    },
+    {
+      "name": "幕4a 落账后挂起解除",
+      "ok": true,
+      "detail": "null"
+    },
+    {
+      "name": "幕4b 挂起进入 (超时 6s 档)",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "幕4b 超时按原因 NG 落账 (+1)",
+      "ok": true,
+      "detail": "不良 1→2"
+    },
+    {
+      "name": "幕4b 落账后挂起解除",
+      "ok": true,
+      "detail": ""
+    }
+  ],
+  "pass": true
+}

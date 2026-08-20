@@ -249,6 +249,7 @@
                 <span v-for="l in comboCfg.labels" :key="l" class="w-20 text-center">{{ l }}</span>
                 <span class="w-20 text-center">判定</span>
                 <span class="flex-1">机型标记 (tag)</span>
+                <span class="w-20 text-center">PLC码</span>
                 <span class="w-8"></span>
               </div>
               <div v-for="(row, ri) in comboCfg.rows" :key="ri" class="flex items-center gap-2">
@@ -261,6 +262,8 @@
                 </el-select>
                 <el-input v-model="row.tag" size="small" class="flex-1"
                   placeholder="如 4缸-含挺柱（进事件原因/导出/MES）" />
+                <el-input v-model="row.plc_code" size="small" class="!w-20"
+                  placeholder="如 4" />
                 <el-button type="danger" size="small" text @click="comboCfg.rows.splice(ri, 1)">✕</el-button>
               </div>
               <el-button type="primary" size="small" plain @click="addComboRow">+ 添加机型行</el-button>
@@ -303,6 +306,206 @@
                 <el-input-number v-model="comboCfg.tracking.idle_reset_ticks" :min="0" :max="100000" size="small" class="w-full" />
                 <p class="text-xs text-gray-500">该类标签全部消失 N 帧后清空全部已计位置（默认 0＝不重置）</p>
               </el-form-item>
+              <el-form-item label="监控画锁定框">
+                <el-switch v-model="comboCfg.show_lock_overlay" class="combo-lock-overlay-switch" />
+                <p class="text-xs text-gray-500">Monitor 画面上把已计数位置画成青色常驻锁框＋编号（默认开）。关掉只是不画，锁定与计数照常进行</p>
+              </el-form-item>
+            </div>
+
+            <!-- v3.49 二期: 追踪参数按标签单独覆盖 (留空 = 用上方全局值) -->
+            <div v-if="comboCfg.count_mode === 'positional' && comboCfg.labels.length"
+                 class="bg-slate-900 rounded p-3 space-y-2 combo-tpl">
+              <div class="flex items-center justify-between cursor-pointer select-none"
+                   @click="comboTplExpanded = !comboTplExpanded">
+                <div>
+                  <span class="font-bold text-white text-sm">按标签单独覆盖追踪参数</span>
+                  <p class="text-xs text-gray-500 mt-0.5">每类目标大小/动作节奏不同时，可给单个标签配独立参数；留空的格子用上方全局值</p>
+                </div>
+                <span class="text-cyan-400 text-xs">{{ comboTplExpanded ? '收起 ▲' : '展开 ▼' }}</span>
+              </div>
+              <div v-if="comboTplExpanded" class="space-y-2">
+                <div class="flex items-center gap-2 text-xs text-gray-400 font-bold">
+                  <span class="w-24">标签</span>
+                  <span class="w-24 text-center">IoU</span>
+                  <span class="w-24 text-center">平滑步长</span>
+                  <span class="w-24 text-center">确认帧数</span>
+                  <span class="w-24 text-center">候选保留</span>
+                  <span class="w-24 text-center">消失超时</span>
+                  <span class="w-24 text-center">空闲重置</span>
+                </div>
+                <div v-for="l in comboCfg.labels" :key="l" class="flex items-center gap-2">
+                  <span class="w-24 text-xs text-gray-300 truncate" :title="l">{{ l }}</span>
+                  <el-input-number v-model="comboTplRow(l).iou" :min="0.05" :max="0.95" :step="0.05"
+                    :controls="false" size="small" class="!w-24" placeholder="全局" />
+                  <el-input-number v-model="comboTplRow(l).ema_alpha" :min="0" :max="1" :step="0.1"
+                    :controls="false" size="small" class="!w-24" placeholder="全局" />
+                  <el-input-number v-model="comboTplRow(l).min_consecutive" :min="1" :max="60"
+                    :controls="false" size="small" class="!w-24" placeholder="全局" />
+                  <el-input-number v-model="comboTplRow(l).pending_ttl" :min="1" :max="600"
+                    :controls="false" size="small" class="!w-24" placeholder="全局" />
+                  <el-input-number v-model="comboTplRow(l).perish_ticks" :min="0" :max="100000"
+                    :controls="false" size="small" class="!w-24" placeholder="全局" />
+                  <el-input-number v-model="comboTplRow(l).idle_reset_ticks" :min="0" :max="100000"
+                    :controls="false" size="small" class="!w-24" placeholder="全局" />
+                </div>
+              </div>
+            </div>
+
+            <!-- v3.49 切步数量门: 做完一步去做下一步时当场核上一步数量 (少装/超装) -->
+            <div class="bg-slate-900 rounded p-3 space-y-3 border border-slate-700/80">
+              <div class="flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                  <div class="font-bold text-white text-sm">切步数量门</div>
+                  <p class="text-xs text-gray-500 mt-0.5">
+                    不等周期结算：上一步数量不对（少装/不符）切到下一步就报警；超装则一锁到超上限立刻报。
+                    默认关 = 与未配置完全相同。
+                  </p>
+                </div>
+                <el-switch v-model="comboGuard.enabled" class="combo-guard-switch" />
+              </div>
+              <template v-if="comboGuard.enabled">
+                <div class="grid grid-cols-2 gap-x-4 gap-y-2">
+                  <el-form-item label="少装/数量不符（切步检查）">
+                    <el-switch v-model="comboGuard.check_under" />
+                    <p class="text-xs text-gray-500">下一步首次计数成立时，回查更早步骤是否落在候选机型允许值内</p>
+                  </el-form-item>
+                  <el-form-item label="超装（即时检查）">
+                    <el-switch v-model="comboGuard.check_over" />
+                    <p class="text-xs text-gray-500">任一标签计数超过候选机型上限，当帧立刻报，不等切步</p>
+                  </el-form-item>
+                  <el-form-item label="工序顺序检查">
+                    <el-switch v-model="comboGuard.check_order" class="combo-guard-order-switch" />
+                    <p class="text-xs text-gray-500">
+                      以上方标签配置顺序为工序顺序：后面工序已开始还回头给前面工序加件即报乱序
+                      （处于少装报警中回头补件不算乱序）。报警不拦计数。非判型步骤间的顺序用「步骤设置」里的严格顺序
+                    </p>
+                  </el-form-item>
+                  <el-form-item label="按已装数量收窄机型">
+                    <el-switch v-model="comboGuard.narrow_by_progress" />
+                    <p class="text-xs text-gray-500">座瓦装完 5 后只保留 5,5,* 行，盖瓦上限随之收窄（纯视觉推断机型）</p>
+                  </el-form-item>
+                  <el-form-item label="期望数量依据">
+                    <el-select v-model="comboGuard.expected_source" size="small" class="w-full">
+                      <el-option value="table" label="判定表推断（纯视觉）" />
+                      <el-option value="plc" label="PLC 缸型点位" />
+                      <el-option value="auto" label="自动（PLC 优先，读不到退判定表）" />
+                    </el-select>
+                  </el-form-item>
+                </div>
+                <div v-if="comboGuard.expected_source !== 'table'"
+                     class="grid grid-cols-3 gap-x-4 gap-y-2 bg-slate-950/50 rounded p-2">
+                  <el-form-item label="PLC 连接">
+                    <el-select v-model="comboGuard.plc_connection_id" size="small" class="w-full combo-guard-plc-conn"
+                      clearable placeholder="选择连接" @visible-change="(v) => v && loadPlcConns()">
+                      <el-option v-for="c in plcConnOptions" :key="c.id"
+                        :label="`${c.name || '连接'} (#${c.id})`" :value="c.id" />
+                    </el-select>
+                  </el-form-item>
+                  <el-form-item label="缸型点位 key">
+                    <el-input v-model="comboGuard.plc_point" size="small" placeholder="如 cyl_type" />
+                    <p class="text-xs text-gray-500">与 PLC 连接器里点位 key 一致（S7 模板默认 cyl_type）</p>
+                  </el-form-item>
+                  <el-form-item label="PLC 不可用时">
+                    <el-select v-model="comboGuard.plc_unavailable" size="small" class="w-full"
+                      :disabled="comboGuard.expected_source === 'auto'">
+                      <el-option value="table" label="退回判定表推断" />
+                      <el-option value="skip" label="本帧跳过检查（防掉线误报）" />
+                    </el-select>
+                    <p v-if="comboGuard.expected_source === 'auto'" class="text-xs text-gray-500">自动档固定退判定表</p>
+                  </el-form-item>
+                </div>
+                <div class="flex items-center gap-3 flex-wrap">
+                  <span class="text-gray-400 text-xs shrink-0">违规处置</span>
+                  <el-select v-model="comboGuard.action" size="small" class="!w-56">
+                    <el-option value="hint" label="当场提示 — 报警不结算" />
+                    <el-option value="instant_ng" label="立即NG — 当场结算本周期" />
+                  </el-select>
+                  <span class="text-gray-400 text-xs">提示事件</span>
+                  <el-select :model-value="comboGuard.event_id ?? null" size="small" class="!w-44 combo-guard-event"
+                    placeholder="不提示（仅日志）" clearable
+                    @update:model-value="comboGuard.event_id = $event || null">
+                    <el-option v-for="ev in comboGuardEventOptions" :key="ev.id" :label="ev.name" :value="ev.id" />
+                  </el-select>
+                  <el-tooltip placement="top" effect="dark"
+                    content="「立即NG」只受本卡处置档控制，不依赖上方「违规出现时」全局档。空周期尚无步骤入账时降级为提示。">
+                    <span class="text-gray-500 cursor-help text-xs">ⓘ</span>
+                  </el-tooltip>
+                  <span class="text-gray-500 text-xs">系统「合格/不合格」为结算事件不可选；请到【事件设置】新建专用事件（如“数量门警告”）</span>
+                </div>
+                <!-- v3.49 二期: 补救闭环 — 已补齐事件 + 结算处置档 -->
+                <div class="flex items-center gap-3 flex-wrap">
+                  <span class="text-gray-400 text-xs shrink-0">已补齐事件</span>
+                  <el-select :model-value="comboGuard.resolved_event_id ?? null" size="small"
+                    class="!w-44 combo-guard-resolved-event"
+                    placeholder="不触发（仅消警）" clearable
+                    @update:model-value="comboGuard.resolved_event_id = $event || null">
+                    <el-option v-for="ev in comboGuardEventOptions" :key="ev.id" :label="ev.name" :value="ev.id" />
+                  </el-select>
+                  <el-tooltip placement="top" effect="dark"
+                    content="工人回头补件把计数补到允许值后自动消警（红幅转绿）；这里可选补齐时额外响一声/计一笔的事件，默认只消警。">
+                    <span class="text-gray-500 cursor-help text-xs">ⓘ</span>
+                  </el-tooltip>
+                </div>
+                <div class="flex items-center gap-3 flex-wrap">
+                  <span class="text-gray-400 text-xs shrink-0">结算数量不符时</span>
+                  <el-select v-model="comboGuard.on_settle_mismatch" size="small"
+                    class="!w-56 combo-guard-settle-mismatch">
+                    <el-option value="ng" label="直接NG（默认，查表防呆）" />
+                    <el-option value="hold" label="挂起等补 — 报警不结算，补齐再结" />
+                  </el-select>
+                  <template v-if="comboGuard.on_settle_mismatch === 'hold'">
+                    <span class="text-gray-400 text-xs">挂起超时(秒)</span>
+                    <el-input-number v-model="comboGuard.hold_timeout_s" :min="0" :max="86400"
+                      size="small" class="!w-28 combo-guard-hold-timeout" />
+                    <span class="text-gray-500 text-xs">0＝不限时；超时按原因 NG 落账</span>
+                  </template>
+                </div>
+                <p class="text-xs text-amber-400/90">
+                  用 PLC 缸型时，请在上方机型行填「PLC 码」（与点位实时值宽松比对，如 4 / 6）。
+                </p>
+              </template>
+            </div>
+
+            <!-- v3.49 二期: Monitor 大字实时卡 (计数 + 当前缸型), 默认关 = 仅现状小字条 -->
+            <div class="bg-slate-900 rounded p-3 space-y-3 border border-slate-700/80">
+              <div class="flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                  <div class="font-bold text-white text-sm">监控大字实时卡</div>
+                  <p class="text-xs text-gray-500 mt-0.5">
+                    视频下方与 SOP 流程卡片同行右侧停靠「判型实时看板」（每个判型标签一格大号计数）
+                    ＋当前 PLC 缸型，切缸型即时刷新，不遮挡画面。默认关＝只有底部小字条。
+                  </p>
+                </div>
+                <el-switch v-model="comboLiveDisplay.enabled" class="combo-live-switch" />
+              </div>
+              <template v-if="comboLiveDisplay.enabled">
+                <div class="grid grid-cols-3 gap-x-4 gap-y-2">
+                  <el-form-item label="字号">
+                    <el-radio-group v-model="comboLiveDisplay.size" size="small">
+                      <el-radio-button value="large">大字</el-radio-button>
+                      <el-radio-button value="normal">普通</el-radio-button>
+                    </el-radio-group>
+                  </el-form-item>
+                  <el-form-item label="显示缸型">
+                    <el-switch v-model="comboLiveDisplay.show_plc_type" />
+                    <p class="text-xs text-gray-500">缸型值来自下方独立点位；没配则用切步数量门的点位</p>
+                  </el-form-item>
+                </div>
+                <div v-if="comboLiveDisplay.show_plc_type"
+                     class="grid grid-cols-2 gap-x-4 gap-y-2 bg-slate-950/50 rounded p-2">
+                  <el-form-item label="缸型显示 PLC 连接（选填）">
+                    <el-select v-model="comboPlcDisplay.connection_id" size="small" class="w-full"
+                      clearable placeholder="留空＝用数量门的连接" @visible-change="(v) => v && loadPlcConns()">
+                      <el-option v-for="c in plcConnOptions" :key="c.id"
+                        :label="`${c.name || '连接'} (#${c.id})`" :value="c.id" />
+                    </el-select>
+                  </el-form-item>
+                  <el-form-item label="缸型点位 key（选填）">
+                    <el-input v-model="comboPlcDisplay.point" size="small" placeholder="留空＝用数量门的点位（如 cyl_type）" />
+                    <p class="text-xs text-gray-500">独立配置后，数量门没开也能显示缸型</p>
+                  </el-form-item>
+                </div>
+              </template>
             </div>
           </template>
         </div>
@@ -2055,6 +2258,7 @@ import { ElMessage } from 'element-plus';
 import { Delete } from '@element-plus/icons-vue';
 import { dbg } from '@/utils/debug';
 import { getDetectionResults, inferOnce } from '@/api/detection';
+import { getPlcConnections } from '@/api/plc';
 import { _pi_itemLabelToArray, _pi_itemLabelFromArray } from './perItemLabel';
 
 const props = defineProps({
@@ -2105,6 +2309,83 @@ const regionEventsCfg = computed(() => {
 // 行 counts 长度必须与 labels 等长 (后端 _parse_combo_table 会丢弃错行)。
 const comboCfg = computed(() => props.project?.pipeline_config?.combo_table || null);
 
+// v3.49 切步数量门: 嵌在 combo_table.step_guard; 缺块时就地兜底, 保证开关可点。
+const comboGuard = computed(() => {
+  const cfg = comboCfg.value;
+  if (!cfg) return { enabled: false };
+  if (!cfg.step_guard || typeof cfg.step_guard !== 'object') {
+    cfg.step_guard = {
+      enabled: false, check_under: true, check_over: true,
+      narrow_by_progress: true, action: 'hint', event_id: null,
+      expected_source: 'table', plc_unavailable: 'table',
+      plc_connection_id: null, plc_point: '',
+    };
+  }
+  const sg = cfg.step_guard;
+  // v3.49 二期新键: 老项目缺块就地补默认 (与后端 parse 默认一致)
+  if (sg.check_order === undefined) sg.check_order = false;
+  if (sg.resolved_event_id === undefined) sg.resolved_event_id = null;
+  if (sg.on_settle_mismatch === undefined) sg.on_settle_mismatch = 'ng';
+  if (sg.hold_timeout_s === undefined) sg.hold_timeout_s = 120;
+  // 2026-08-12 产品决策: 系统 合格(1)/不合格(2) 是结算事件, 提示/消警禁止借用
+  // (借用会污染 OK/NG 统计与主逻辑联动)。旧配置存了也在回显时洗掉, 后端同门。
+  if (sg.event_id === 1 || sg.event_id === 2) sg.event_id = null;
+  if (sg.resolved_event_id === 1 || sg.resolved_event_id === 2) sg.resolved_event_id = null;
+  return sg;
+});
+
+// 提示/已补齐事件的候选: 排除系统 合格(OK)/不合格(NG) 结算事件
+const comboGuardEventOptions = computed(() =>
+  (props.project?.events_config || []).filter(ev => ev.id !== 1 && ev.id !== 2));
+
+// v3.49 二期 Monitor 大字实时卡配置: 缺块就地兜底 (默认关 = 仅现状小字条)
+const comboLiveDisplay = computed(() => {
+  const cfg = comboCfg.value;
+  if (!cfg) return { enabled: false };
+  if (!cfg.live_display || typeof cfg.live_display !== 'object') {
+    cfg.live_display = { enabled: false, size: 'large', show_plc_type: true, position: 'top' };
+  }
+  return cfg.live_display;
+});
+
+// v3.49 二期 缸型显示独立点位 (数量门没开也能显示; 留空回落数量门点位)
+const comboPlcDisplay = computed(() => {
+  const cfg = comboCfg.value;
+  if (!cfg) return { connection_id: null, point: '' };
+  if (!cfg.plc_display || typeof cfg.plc_display !== 'object') {
+    cfg.plc_display = { connection_id: null, point: '' };
+  }
+  return cfg.plc_display;
+});
+
+// v3.49 二期 追踪参数按标签覆盖: 取/建某标签的覆盖对象 (留空键 = 用全局)
+const comboTplRow = (label) => {
+  const cfg = comboCfg.value;
+  if (!cfg) return {};
+  if (!cfg.tracking_per_label || typeof cfg.tracking_per_label !== 'object') {
+    cfg.tracking_per_label = {};
+  }
+  if (!cfg.tracking_per_label[label] || typeof cfg.tracking_per_label[label] !== 'object') {
+    cfg.tracking_per_label[label] = {
+      iou: null, ema_alpha: null, min_consecutive: null,
+      pending_ttl: null, perish_ticks: null, idle_reset_ticks: null,
+    };
+  }
+  return cfg.tracking_per_label[label];
+};
+const comboTplExpanded = ref(false);
+const plcConnOptions = ref([]);
+const loadPlcConns = async () => {
+  try {
+    const { data } = await getPlcConnections();
+    // 后端返回 {"connections": [...]} (与 PlcPanel.vue 取法一致)
+    const list = Array.isArray(data) ? data : (data?.connections || []);
+    plcConnOptions.value = Array.isArray(list) ? list : [];
+  } catch (e) {
+    plcConnOptions.value = [];
+  }
+};
+
 const syncComboRows = () => {
   const cfg = comboCfg.value;
   if (!cfg) return;
@@ -2113,6 +2394,7 @@ const syncComboRows = () => {
     if (!Array.isArray(row.counts)) row.counts = [];
     while (row.counts.length < n) row.counts.push(0);
     row.counts.length = n;
+    if (typeof row.plc_code !== 'string') row.plc_code = row.plc_code != null ? String(row.plc_code) : '';
   });
 };
 
@@ -2120,7 +2402,7 @@ const addComboRow = () => {
   const cfg = comboCfg.value;
   if (!cfg) return;
   if (!Array.isArray(cfg.rows)) cfg.rows = [];
-  cfg.rows.push({ counts: (cfg.labels || []).map(() => 0), verdict: 'OK', tag: '' });
+  cfg.rows.push({ counts: (cfg.labels || []).map(() => 0), verdict: 'OK', tag: '', plc_code: '' });
 };
 
 // ==================== v3.44 NG 判定与处置 (统一卡) ====================
