@@ -58,90 +58,15 @@
       </div>
     </div>
 
-    <!-- 人工确认阻塞层 (任一工位 pendingAck.active) -->
-    <div
+    <!-- 人工确认阻塞层 (任一工位 pendingAck.active)（M-5 外置 PendingAckOverlay compact 变体） -->
+    <PendingAckOverlay
       v-if="pendingAckDisplay"
-      class="absolute inset-0 z-[60] flex items-center justify-center bg-black/75 backdrop-blur-sm p-4"
-    >
-      <div class="w-full max-w-lg bg-slate-900 border-2 border-amber-500 rounded-xl shadow-2xl p-6 flex flex-col gap-4">
-        <div class="text-center">
-          <div class="text-amber-400 text-sm font-bold mb-1">⚠ 需要人工确认</div>
-          <div class="text-2xl font-bold text-white">
-            工位 {{ pendingAckDisplay.channel + 1 }}
-          </div>
-        </div>
-        <div class="bg-slate-800 rounded-lg p-4 space-y-2 text-sm">
-          <div class="flex gap-2">
-            <span class="text-gray-400 flex-shrink-0">事件:</span>
-            <span class="text-white font-bold">{{ pendingAckDisplay.eventName || '(未命名事件)' }}</span>
-          </div>
-          <div class="flex gap-2">
-            <span class="text-gray-400 flex-shrink-0">原因:</span>
-            <span class="text-gray-200 break-all">{{ pendingAckDisplay.reason || '—' }}</span>
-          </div>
-          <div class="flex gap-2 items-center">
-            <span class="text-gray-400 flex-shrink-0">已等待:</span>
-            <span class="text-cyan-300 font-mono">{{ pendingAckWaitedSec }} 秒</span>
-            <template v-if="pendingAckDisplay.timeoutSec > 0">
-              <span class="text-gray-600">|</span>
-              <span class="text-amber-300 font-mono">{{ pendingAckRemainSec }} 秒后自动确认</span>
-            </template>
-          </div>
-          <!-- v3.23 缺步骤延迟落账挂起: 展示缺项明细 -->
-          <div v-if="pendingAckDisplay.remediation" class="flex gap-2 items-start pt-2 border-t border-slate-700">
-            <span class="text-gray-400 flex-shrink-0">缺步骤:</span>
-            <span class="text-rose-300 font-bold break-all">
-              {{ (pendingAckDisplay.remediation.missing || []).join('、') || '（未解析出具体步骤）' }}
-            </span>
-          </div>
-          <!-- v3.44 包装层箱账挂起: 展示在制箱明细 -->
-          <div v-if="pendingAckDisplay.pkgHold" class="flex gap-2 items-start pt-2 border-t border-slate-700">
-            <span class="text-gray-400 flex-shrink-0">在制箱:</span>
-            <span class="text-rose-300 font-bold">
-              第 {{ pendingAckDisplay.pkgHold.box }} 箱 — 已进箱 {{ pendingAckDisplay.pkgHold.sliders }}
-              <template v-if="pendingAckDisplay.pkgHold.target > 0"> / {{ pendingAckDisplay.pkgHold.target }}</template>
-              （箱账挂起，未落 NG）
-            </span>
-          </div>
-        </div>
-        <!-- v3.23 挂起态: 补步骤/认NG/重做 三选一; v3.44 包装挂账: 重做本箱/认NG落账 二选一; 普通确认: 单"重做"按钮 -->
-        <template v-if="pendingAckDisplay.remediation">
-          <div class="text-xs text-gray-400 text-center">
-            工人补做缺的步骤后点「补步骤」直接判合格（不重置周期）；确认确实漏做点「认 NG」；想整件重做点「重做」。
-          </div>
-          <div class="flex items-center justify-center gap-2 flex-wrap">
-            <el-button type="success" size="large" :loading="pendingAckDisplay.acking"
-              @click="ackPendingForChannel(pendingAckDisplay.channel, 'supplement_step')">补步骤 — 判合格</el-button>
-            <el-button type="danger" size="large" plain :loading="pendingAckDisplay.acking"
-              @click="ackPendingForChannel(pendingAckDisplay.channel, 'confirm_ng')">认 NG</el-button>
-            <el-button size="large" :loading="pendingAckDisplay.acking"
-              @click="ackPendingForChannel(pendingAckDisplay.channel, 'redo')">重做本件</el-button>
-          </div>
-        </template>
-        <template v-else-if="pendingAckDisplay.pkgHold">
-          <div class="text-xs text-gray-400 text-center">
-            本箱账挂起未落 NG：点「重做本箱」丢弃这次结果同箱重测（工单进度不动）；点「认 NG 落账」按实际进箱数记 NG 箱并进入下一箱。
-          </div>
-          <div class="flex items-center justify-center gap-2 flex-wrap">
-            <el-button type="warning" size="large" :loading="pendingAckDisplay.acking"
-              @click="ackPendingForChannel(pendingAckDisplay.channel, 'redo')">重做本箱 — 不记 NG</el-button>
-            <el-button type="danger" size="large" plain :loading="pendingAckDisplay.acking"
-              @click="ackPendingForChannel(pendingAckDisplay.channel, 'confirm_ng')">认 NG 落账 — 进下一箱</el-button>
-          </div>
-        </template>
-        <div v-else class="flex items-center justify-center gap-3">
-          <span v-if="pendingAckDisplay.acking" class="text-xs text-gray-400">提交中...</span>
-          <el-button
-            type="warning"
-            size="large"
-            :loading="pendingAckDisplay.acking"
-            @click="ackPendingForChannel(pendingAckDisplay.channel)"
-          >
-            我已确认 — 重做工位 {{ pendingAckDisplay.channel + 1 }}
-          </el-button>
-        </div>
-      </div>
-    </div>
+      variant="compact"
+      :display="pendingAckDisplay"
+      :waited-sec="pendingAckWaitedSec"
+      :remain-sec="pendingAckRemainSec"
+      @ack="ackPendingForChannel"
+    />
 
     <!-- 录像异常入口+详情面板（M-1 外置, 原同构块消重） -->
     <RecordingFailureOverlay
@@ -1556,172 +1481,24 @@
       </div>
     </template>
 
-    <!-- v3.9.x 事件人工确认 全屏覆盖层 -->
+    <!-- v3.9.x 事件人工确认 全屏覆盖层（M-5 外置 PendingAckOverlay full 变体） -->
     <!-- 触发条件: 任一通道 pendingAck.active=true → 弹覆盖层, 显示需确认的工位编号 -->
     <!-- 多通道场景: 只显示一个工位 (优先当前选中, 其次最早阻塞的), 工人逐个确认 -->
-    <div
+    <PendingAckOverlay
       v-if="!kioskMode && pendingAckDisplay"
-      class="absolute inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
-      @click.stop
-    >
-      <div class="w-full max-w-xl bg-slate-900 border-2 border-amber-500 rounded-xl shadow-2xl flex flex-col overflow-hidden">
-        <div class="px-5 py-3 bg-gradient-to-r from-amber-700 to-amber-900 flex items-center gap-3">
-          <el-icon :size="28" class="text-amber-200"><Warning /></el-icon>
-          <div class="flex-1">
-            <div class="text-white font-bold text-lg">需要人工确认</div>
-            <div class="text-amber-200 text-xs">画面与状态机已暂停 — 请工人重做本周期后点击下方按钮</div>
-          </div>
-          <span class="bg-slate-900/60 px-2 py-0.5 rounded text-amber-200 text-xs font-bold">
-            工位 {{ pendingAckDisplay.channel + 1 }}
-          </span>
-        </div>
+      variant="full"
+      :display="pendingAckDisplay"
+      :waited-sec="pendingAckWaitedSec"
+      :remain-sec="pendingAckRemainSec"
+      @ack="ackPendingForChannel"
+    />
 
-        <div class="px-5 py-4 space-y-3 text-sm">
-          <div class="flex items-center gap-3">
-            <span class="text-gray-400 w-20 shrink-0">触发事件</span>
-            <span class="text-white font-bold">{{ pendingAckDisplay.eventName || '(未命名事件)' }}</span>
-          </div>
-          <div class="flex items-start gap-3">
-            <span class="text-gray-400 w-20 shrink-0">触发原因</span>
-            <span class="text-gray-200 break-all">{{ pendingAckDisplay.reason || '—' }}</span>
-          </div>
-          <div class="flex items-center gap-3">
-            <span class="text-gray-400 w-20 shrink-0">已等待</span>
-            <span class="text-cyan-300 font-mono">{{ pendingAckWaitedSec }} 秒</span>
-            <template v-if="pendingAckDisplay.timeoutSec > 0">
-              <span class="text-gray-500">/</span>
-              <span class="text-amber-300 font-mono">{{ pendingAckRemainSec }} 秒后自动确认</span>
-            </template>
-          </div>
-          <!-- v3.23 缺步骤延迟落账挂起: 缺项明细 -->
-          <div v-if="pendingAckDisplay.remediation" class="flex items-start gap-3">
-            <span class="text-gray-400 w-20 shrink-0">缺步骤</span>
-            <span class="text-rose-300 font-bold break-all">
-              {{ (pendingAckDisplay.remediation.missing || []).join('、') || '（未解析出具体步骤）' }}
-            </span>
-          </div>
-          <!-- v3.44 包装层箱账挂起明细: 挂起的是第几箱、当前进箱数/目标 -->
-          <div v-if="pendingAckDisplay.pkgHold" class="flex items-center gap-3">
-            <span class="text-gray-400 w-20 shrink-0">在制箱</span>
-            <span class="text-rose-300 font-bold">
-              第 {{ pendingAckDisplay.pkgHold.box }} 箱 — 已进箱 {{ pendingAckDisplay.pkgHold.sliders }}
-              <template v-if="pendingAckDisplay.pkgHold.target > 0"> / 目标 {{ pendingAckDisplay.pkgHold.target }}</template>
-              <span class="text-amber-300 ml-1">（箱账挂起，未落 NG）</span>
-            </span>
-          </div>
-          <!-- v3.43.1 确认后的处置方式明示: 工人点按钮前就知道是"重做"还是"断点续做" -->
-          <div v-if="!pendingAckDisplay.remediation && !pendingAckDisplay.pkgHold" class="flex items-center gap-3">
-            <span class="text-gray-400 w-20 shrink-0">确认后</span>
-            <span v-if="pendingAckDisplay.keepsCycle" class="text-emerald-300 font-bold">
-              保留已完成步骤 — 从断点继续补做
-            </span>
-            <span v-else class="text-amber-300 font-bold">
-              清空本周期已识别步骤 — 整件从头重做
-            </span>
-          </div>
-          <div class="text-xs text-gray-500 bg-slate-950/60 rounded p-2 border-l-2 border-amber-700/50 leading-relaxed">
-            <template v-if="pendingAckDisplay.remediation">
-              本件缺步骤被<span class="text-amber-300">延迟落账</span>（还没记 OK/NG）。工人补做后点「补步骤」直接判合格；确认确实漏做点「认 NG」落账；想整件重做点「重做」。
-            </template>
-            <template v-else-if="pendingAckDisplay.pkgHold">
-              本箱账已<span class="text-amber-300">挂起等处置</span>（还没记 NG 箱、没翻页）。点「重做本箱」丢弃这次结果、同一箱号重测（工单进度不动）；点「认 NG 落账」按实际进箱数记 NG 箱并进入下一箱。
-            </template>
-            <template v-else-if="pendingAckDisplay.keepsCycle">
-              本次事件已按配置落账（<span class="text-amber-300">计数已记，确认不回滚记录</span>）。该事件配置为「确认后保留周期」：点确认只解除定格，已做对的步骤保留，请工人从断点接着补做后面的步骤。
-            </template>
-            <template v-else>
-              本次事件已按配置落账（<span class="text-amber-300">计数已记，确认不回滚记录</span>）。点确认后清当前周期运行时（步骤序列、识别状态），请工人整件从头重做。如果有多个工位都在等确认，这里会按顺序依次显示。
-            </template>
-          </div>
-        </div>
-
-        <!-- v3.23 挂起态: 补步骤/认NG/重做 三选一; v3.44 包装挂账: 重做本箱/认NG落账 二选一; 普通确认: 单"重做"按钮 -->
-        <div class="px-5 py-4 bg-slate-950 border-t border-slate-800 flex items-center justify-end gap-3 flex-wrap">
-          <span v-if="pendingAckDisplay.acking" class="text-xs text-gray-400">提交中...</span>
-          <template v-if="pendingAckDisplay.remediation">
-            <el-button size="large" :loading="pendingAckDisplay.acking"
-              @click="ackPendingForChannel(pendingAckDisplay.channel, 'redo')">重做本件</el-button>
-            <el-button type="danger" size="large" plain :loading="pendingAckDisplay.acking"
-              @click="ackPendingForChannel(pendingAckDisplay.channel, 'confirm_ng')">认 NG</el-button>
-            <el-button type="success" size="large" :loading="pendingAckDisplay.acking"
-              @click="ackPendingForChannel(pendingAckDisplay.channel, 'supplement_step')">补步骤 — 判合格</el-button>
-          </template>
-          <template v-else-if="pendingAckDisplay.pkgHold">
-            <el-button type="danger" size="large" plain :loading="pendingAckDisplay.acking"
-              @click="ackPendingForChannel(pendingAckDisplay.channel, 'confirm_ng')">认 NG 落账 — 进下一箱</el-button>
-            <el-button type="warning" size="large" :loading="pendingAckDisplay.acking"
-              @click="ackPendingForChannel(pendingAckDisplay.channel, 'redo')">重做本箱 — 不记 NG</el-button>
-          </template>
-          <el-button
-            v-else
-            :type="pendingAckDisplay.keepsCycle ? 'success' : 'warning'"
-            size="large"
-            :loading="pendingAckDisplay.acking"
-            @click="ackPendingForChannel(pendingAckDisplay.channel)"
-          >
-            {{ pendingAckDisplay.keepsCycle
-              ? `我已确认 — 断点继续 工位 ${pendingAckDisplay.channel + 1}`
-              : `我已确认 — 整件重做 工位 ${pendingAckDisplay.channel + 1}` }}
-          </el-button>
-        </div>
-      </div>
-    </div>
-
-    <!-- v3.23 借管理员密码授权确认: 无 ack 权限的操作员点确认被 403 → 弹此窗 -->
-    <!-- 只校验一次管理员账密 + 权限解除阻塞, 不创建登录会话、不改当前登录身份 -->
-    <!-- 取消 = 关本窗回到上面的人工确认覆盖层 (pendingAck 未清, 覆盖层仍在) -->
-    <div
+    <!-- v3.23 借管理员密码授权确认（M-5 外置 ElevateAckDialog）: 无 ack 权限的操作员点确认被 403 → 弹此窗 -->
+    <ElevateAckDialog
       v-if="!kioskMode && elevateDialog.visible"
-      class="absolute inset-0 z-[70] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
-      @click.stop
-    >
-      <div class="w-full max-w-md bg-slate-900 border-2 border-cyan-500 rounded-xl shadow-2xl flex flex-col overflow-hidden">
-        <div class="px-5 py-3 bg-gradient-to-r from-cyan-700 to-cyan-900 flex items-center gap-3">
-          <el-icon :size="26" class="text-cyan-100"><Lock /></el-icon>
-          <div class="flex-1">
-            <div class="text-white font-bold text-lg">借管理员密码授权确认</div>
-            <div class="text-cyan-100 text-xs">当前账号无人工确认权限，请管理员授权本次确认（不改变当前登录身份）</div>
-          </div>
-          <span class="bg-slate-900/60 px-2 py-0.5 rounded text-cyan-100 text-xs font-bold">
-            工位 {{ elevateDialog.channel + 1 }}
-          </span>
-        </div>
-
-        <div class="px-5 py-4 space-y-3">
-          <el-input
-            v-model="elevateDialog.username"
-            placeholder="管理员账号"
-            size="large"
-            clearable
-            @keyup.enter="submitElevatedAck"
-          >
-            <template #prefix><el-icon><User /></el-icon></template>
-          </el-input>
-          <el-input
-            v-model="elevateDialog.password"
-            type="password"
-            placeholder="管理员密码"
-            size="large"
-            show-password
-            @keyup.enter="submitElevatedAck"
-          >
-            <template #prefix><el-icon><Lock /></el-icon></template>
-          </el-input>
-        </div>
-
-        <div class="px-5 py-4 bg-slate-950 border-t border-slate-800 flex items-center justify-end gap-3">
-          <el-button size="large" @click="elevateDialog.visible = false">取消</el-button>
-          <el-button
-            type="primary"
-            size="large"
-            :loading="elevateDialog.submitting"
-            @click="submitElevatedAck"
-          >
-            授权并确认
-          </el-button>
-        </div>
-      </div>
-    </div>
+      :dialog="elevateDialog"
+      @submit="submitElevatedAck"
+    />
 
   <!-- 录像异常入口+详情面板（M-1 外置, 原同构块消重） -->
   <RecordingFailureOverlay
@@ -1765,9 +1542,9 @@ import { useSystemStore } from '@/store/useSystemStore';
 import { useSourceStore } from '@/store/useSourceStore';
 import { useScannerDisableStore } from '@/store/useScannerDisableStore';
 import { usePluginThemeStore } from '@/store/usePluginThemeStore';
-import { Check, Folder, Picture, CircleCheck, CircleClose, Warning, Lock, User } from '@element-plus/icons-vue';
+import { Check, Folder, Picture, CircleCheck, CircleClose, Warning } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { startDetection as apiStartDetection, stopDetection as apiStopDetection, pauseDetection, resumeDetection, standbyDetection, resumeInference, resetDetection, resetDetectionStats, resetPeriodicAction, getDetectionResults, getSourceStatus, setProjectConfig, getWorkstations, getMultiMonitorConfig, getScanPairActive, settleScanPairForStop, ackPendingEvent, ackPendingEventElevated } from '@/api/detection';
+import { startDetection as apiStartDetection, stopDetection as apiStopDetection, pauseDetection, resumeDetection, standbyDetection, resumeInference, resetDetection, resetDetectionStats, resetPeriodicAction, getDetectionResults, getSourceStatus, setProjectConfig, getWorkstations, getMultiMonitorConfig, getScanPairActive, settleScanPairForStop } from '@/api/detection';
 import { getModelDetail, resolveModelPath as apiResolveModelPath } from '@/api/model';
 import { getProjectDetail } from '@/api/project';
 import api, { getBackendHost } from '@/api/index';
@@ -1780,6 +1557,9 @@ import VirtualScanGun from './VirtualScanGun.vue';
 import ExternalAlarmBanner from './ExternalAlarmBanner.vue';
 import RecordingFailureOverlay from './RecordingFailureOverlay.vue';
 import SopStepPanel from './SopStepPanel.vue';
+import PendingAckOverlay from './PendingAckOverlay.vue';
+import ElevateAckDialog from './ElevateAckDialog.vue';
+import { useManualAck } from './composables/useManualAck';
 import CustomMixItemPanel from './CustomMixItemPanel.vue';
 import ChannelVideoCard from './ChannelVideoCard.vue';
 import GoodBadPieChart from './GoodBadPieChart.vue';
@@ -6776,140 +6556,19 @@ const autoRestoreSource = async () => {
   return restored;
 };
 
-// ==================== v3.9.x 事件人工确认 ====================
-// nowTimestamp: 实时时钟 ref, 0.5s 一次刷新, 用于驱动倒计时 / 已等待秒数 computed
-// pendingAckDisplay: 当前要在覆盖层展示哪个通道的阻塞信息 (优先选中, 其次最早阻塞)
-// pendingAckWaitedSec / pendingAckRemainSec: 实时计算的秒数 (依赖 nowTimestamp + multiChannelData)
-// ackPendingForChannel: 调后端 ack-event 接口, 成功后乐观清前端 pendingAck (后端下次 polling 也会清)
-const nowTimestamp = ref(Math.floor(Date.now() / 1000));
-let _nowTickInterval = null;
-
-const pendingAckChannelStates = computed(() => {
-  const list = [];
-  for (let ch = 0; ch < channelCount.value; ch++) {
-    const pa = multiChannelData.value[ch]?.pendingAck;
-    if (pa && pa.active) {
-      list.push({
-        channel: ch,
-        eventId: pa.event_id,
-        eventName: pa.event_name,
-        startedAt: pa.started_at || nowTimestamp.value,
-        timeoutSec: Number(pa.timeout_sec || 0),
-        // v3.43.1 优先用阻塞态自带原因 (后端固化, 不随 30s 事件窗滚动丢失);
-        // 老后端无 reason 字段时兜底回 recentEvents 捞
-        reason: pa.reason || (multiChannelData.value[ch]?.recentEvents || [])
-          .filter(e => e.require_ack)
-          .slice(-1)[0]?.reason || '',
-        // v3.43.1 确认后的处置方式: true=保留周期断点续做 / false=清运行时整件重做
-        keepsCycle: !!pa.keeps_cycle,
-        acking: !!multiChannelData.value[ch]?.pendingAckSubmitting,
-        // v3.23 缺步骤延迟落账挂起 (有值 → ack 窗展示缺项 + "补步骤/认NG/重做"三按钮)
-        remediation: multiChannelData.value[ch]?.pendingRemediation || null,
-        // v3.44 包装层 NG 箱账挂起等处置 (有值 → 弹窗露"认NG落账/重做本箱"双选,
-        // 明示"重做不记 NG 箱"; 结构 {box, sliders, target, is_tail, ...})
-        pkgHold: pa.pkg_hold || null,
-      });
-    }
-  }
-  return list;
-});
-
-const pendingAckDisplay = computed(() => {
-  const list = pendingAckChannelStates.value;
-  if (list.length === 0) return null;
-  const cur = list.find(s => s.channel === selectedChannel.value);
-  if (cur) return cur;
-  return list.slice().sort((a, b) => a.startedAt - b.startedAt)[0];
-});
-
-const pendingAckWaitedSec = computed(() => {
-  const d = pendingAckDisplay.value;
-  if (!d) return 0;
-  return Math.max(0, Math.floor(nowTimestamp.value - d.startedAt));
-});
-
-const pendingAckRemainSec = computed(() => {
-  const d = pendingAckDisplay.value;
-  if (!d || !d.timeoutSec) return 0;
-  return Math.max(0, d.timeoutSec - pendingAckWaitedSec.value);
-});
-
-// v3.23 action: null/redo=重做 / supplement_step=补步骤判OK / confirm_ng=认NG落账
-const ackPendingForChannel = async (ch, action = null) => {
-  const chData = multiChannelData.value[ch];
-  if (!chData || !chData.pendingAck?.active) return;
-  if (chData.pendingAckSubmitting) return;
-  chData.pendingAckSubmitting = true;
-  try {
-    const res = await ackPendingEvent(ch, action);
-    if (res?.data?.acked) {
-      // v3.44: 后端带回包装挂账解挂结果 → 文案按箱语义说清落没落账
-      const pkg = res?.data?.packaging;
-      const msg = pkg && action === 'confirm_ng' ? '已认 NG 落账，进入下一箱'
-        : pkg ? '已确认，本箱不记 NG，同箱重做'
-        : action === 'supplement_step' ? '已补步骤判合格'
-        : action === 'confirm_ng' ? '已确认 NG'
-        : res?.data?.kept_cycle ? '已确认，保留周期从断点继续'
-        : '已确认，重置当前周期';
-      ElMessage.success(`工位 ${ch + 1} ${msg}`);
-    } else {
-      ElMessage.info(`工位 ${ch + 1} 当前没有待确认事件`);
-    }
-    chData.pendingAck = { active: false };
-    chData.pendingRemediation = null;
-  } catch (e) {
-    // 403 = 当前登录账号没有"人工确认"权限 (常见: 操作员) → 弹借管理员密码提权窗 (携带本次动作)
-    if (e?.response?.status === 403) {
-      openElevateDialog(ch, action);
-    } else {
-      console.error('[ackPendingForChannel] failed', e);
-      ElMessage.error('确认失败：' + (e?.message || '未知错误'));
-    }
-  } finally {
-    chData.pendingAckSubmitting = false;
-  }
-};
-
-// v3.23 借密码提权确认: 操作员无 ack 权限时, 输入管理员账密授权一次, 不改当前登录身份.
-// 确认完仍是该操作员的会话 (后端 ack-event-elevated 只校验一次账密 + 权限, 不发 token).
-const elevateDialog = ref({ visible: false, channel: 0, username: '', password: '', submitting: false, action: null });
-
-const openElevateDialog = (ch, action = null) => {
-  elevateDialog.value = { visible: true, channel: ch, username: '', password: '', submitting: false, action };
-};
-
-const submitElevatedAck = async () => {
-  const d = elevateDialog.value;
-  if (!d.username || !d.password) {
-    ElMessage.warning('请输入管理员账号和密码');
-    return;
-  }
-  d.submitting = true;
-  try {
-    const res = await ackPendingEventElevated(d.channel, d.username, d.password, d.action);
-    if (res?.data?.acked) {
-      const ch = d.channel;
-      ElMessage.success(`已由 ${res.data.authorized_by || d.username} 授权，工位 ${ch + 1} 确认成功`);
-      const chData = multiChannelData.value[ch];
-      if (chData) { chData.pendingAck = { active: false }; chData.pendingRemediation = null; }
-    } else {
-      ElMessage.info('当前没有待确认事件');
-    }
-    elevateDialog.value.visible = false;
-  } catch (e) {
-    const status = e?.response?.status;
-    const detail = e?.response?.data?.detail || e?.message || '未知错误';
-    if (status === 401) {
-      ElMessage.error('账号或密码错误');
-    } else if (status === 403) {
-      ElMessage.error(detail);
-    } else {
-      ElMessage.error('授权失败：' + detail);
-    }
-  } finally {
-    elevateDialog.value.submitting = false;
-  }
-};
+// ==================== v3.9.x 事件人工确认（M-5 外置 composables/useManualAck）====================
+// nowTimestamp 0.5s 时钟 / pendingAck 展示选择 / ack 提交 / 借管理员密码提权 全部原样外置;
+// tick 启停仍由本组件 onMounted(非 kiosk)/onUnmounted 控制, 时序与外置前一致。
+const {
+  startNowTick,
+  stopNowTick,
+  pendingAckDisplay,
+  pendingAckWaitedSec,
+  pendingAckRemainSec,
+  ackPendingForChannel,
+  elevateDialog,
+  submitElevatedAck,
+} = useManualAck({ channelCount, multiChannelData, selectedChannel });
 // ==============================================================
 
 onMounted(async () => {
@@ -6926,9 +6585,7 @@ onMounted(async () => {
   loadExtraFieldsSchema();
   scannerDisableStore.loadStatus();
 
-  _nowTickInterval = setInterval(() => {
-    nowTimestamp.value = Math.floor(Date.now() / 1000);
-  }, 500);
+  startNowTick();
 
   // v3.40: 空闲看门狗 — 后端被开工报文自动拉起时, 前端不用切页也能接管 (川南反馈)
   startIdleWatchdog();
@@ -7007,7 +6664,7 @@ const handleResize = () => {
 
 onUnmounted(() => {
   monitorMounted = false;
-  if (_nowTickInterval) { clearInterval(_nowTickInterval); _nowTickInterval = null; }
+  stopNowTick();
   if (triggerZoneTimer) { clearInterval(triggerZoneTimer); triggerZoneTimer = null; }
   window.removeEventListener('resize', handleResize);
   if (canvasResizeObserver) { canvasResizeObserver.disconnect(); canvasResizeObserver = null; }
