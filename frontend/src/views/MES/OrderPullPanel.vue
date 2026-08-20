@@ -75,12 +75,17 @@
       destroy-on-close
       top="5vh"
     >
-      <!-- 预设模板 -->
-      <div class="flex items-center gap-2 mb-4 p-2 rounded bg-slate-800/50">
-        <span class="text-xs text-gray-400">预设模板：</span>
-        <el-button size="small" type="primary" plain @click="applyTemplate('hiwin')">HIWIN 模板</el-button>
+      <!-- 模板：内置空白模板 + 本机保存的自定义模板 -->
+      <div class="flex items-center gap-2 mb-4 p-2 rounded bg-slate-800/50 flex-wrap">
+        <span class="text-xs text-gray-400">模板：</span>
         <el-button size="small" plain @click="applyTemplate('blank')">通用 REST（空白）</el-button>
-        <span class="text-xs text-gray-500 ml-2">选模板自动填好大部分，只需改地址和认证</span>
+        <el-tag
+          v-for="tpl in localTemplates" :key="tpl.name"
+          size="default" effect="plain" closable class="cursor-pointer"
+          @click="applyLocalTemplate(tpl)" @close="removeLocalTemplate(tpl.name)"
+        >{{ tpl.name }}</el-tag>
+        <el-button size="small" type="primary" plain @click="saveAsLocalTemplate">存为我的模板</el-button>
+        <span class="text-xs text-gray-500 ml-1">可将当前表单存为模板复用；模板保存在本机</span>
       </div>
 
       <el-form :model="form" label-width="120px" size="small">
@@ -249,7 +254,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   getConnections, createConnection, updateConnection, deleteConnection,
   pullTest, pullOrders,
@@ -321,24 +326,62 @@ function formatTime(t) {
 
 function applyTemplate(kind) {
   const base = emptyForm()
-  if (kind === 'hiwin') {
-    Object.assign(base, {
-      name: 'HIWIN MES',
-      url: 'https://itweb.hiwin.cn/java_demo_test/api',
-      request_body_template: JSON.stringify(
-        { api: 'hiwin/webcn/ai_error_prevention_job_info/query', parameters: { job_no: '{job_no}' } },
-        null, 2,
-      ),
-      success_path: 'statusCode', success_value: '200', array_path: 'response.resultData',
-      fm_order_no: 'job_no', fm_customer_name: 'cust_name', fm_product_spec: 'spec',
-      fm_planned_qty: 'dispatch_qty', fm_product_name: 'spec',
-    })
-  }
-  // 保留正在编辑的 id/name(若已填)
+  // 目前仅内置空白模板; 具体 MES 的成套配置请用「存为我的模板」在本机沉淀
+  void kind
   base.id = form.value.id
   form.value = base
   guessFields.value = []
   testResult.value = null
+}
+
+// ==================== 我的模板（localStorage，本机持久） ====================
+const LOCAL_TPL_KEY = 'tj_pull_conn_templates'
+const localTemplates = ref([])
+
+function _loadLocalTemplates() {
+  try {
+    const list = JSON.parse(localStorage.getItem(LOCAL_TPL_KEY) || '[]')
+    localTemplates.value = Array.isArray(list) ? list : []
+  } catch { localTemplates.value = [] }
+}
+_loadLocalTemplates()
+
+function _persistLocalTemplates() {
+  localStorage.setItem(LOCAL_TPL_KEY, JSON.stringify(localTemplates.value))
+}
+
+async function saveAsLocalTemplate() {
+  let name
+  try {
+    const { value } = await ElMessageBox.prompt('模板名称', '存为我的模板', {
+      inputValue: form.value.name || '', confirmButtonText: '保存', cancelButtonText: '取消',
+    })
+    name = (value || '').trim()
+  } catch { return }
+  if (!name) { ElMessage.warning('模板名称不能为空'); return }
+  const snapshot = JSON.parse(JSON.stringify(form.value))
+  delete snapshot.id
+  localTemplates.value = [
+    { name, form: snapshot },
+    ...localTemplates.value.filter(t => t.name !== name),
+  ].slice(0, 20)
+  _persistLocalTemplates()
+  ElMessage.success(`模板「${name}」已保存到本机`)
+}
+
+function applyLocalTemplate(tpl) {
+  const base = emptyForm()
+  Object.assign(base, JSON.parse(JSON.stringify(tpl.form || {})))
+  base.id = form.value.id
+  form.value = base
+  guessFields.value = []
+  testResult.value = null
+  ElMessage.success(`已套用模板「${tpl.name}」`)
+}
+
+function removeLocalTemplate(name) {
+  localTemplates.value = localTemplates.value.filter(t => t.name !== name)
+  _persistLocalTemplates()
 }
 
 function buildPullConfig(f) {

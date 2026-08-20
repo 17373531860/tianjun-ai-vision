@@ -1,7 +1,7 @@
 """可见浏览器 UAT — 外部 MES 工单拉取面板 (v3.20).
 
 走完整客户路径:
-  打开 MES → 工单拉取 Tab → 新建配置 → 上银模板一键填充 → 改地址指向 mock
+  打开 MES → 工单拉取 Tab → 新建配置 → 空白模板手填 → 地址指向 mock
   → 测试连接(结构识别+字段映射自动填) → 保存 → 列表出现
   → 试同步(不落库) → 立即同步(落库) → sqlite 验证工单真入库
 
@@ -94,17 +94,25 @@ def run():
             dlg = page.get_by_role("dialog")
             step("02 新建对话框打开", dlg.is_visible())
 
-            # 4) 上银模板一键填充
-            page.get_by_role("button", name="上银 HIWIN").click()
-            time.sleep(0.8)
+            # 4) 空白模板 + 手填字段（内置客户模板已匿名化移除, 成套配置走「我的模板」沉淀）
+            page.get_by_role("button", name="通用 REST（空白）").click()
+            time.sleep(0.5)
+            dlg.locator("input").first.fill("HIWIN MES")
             name_val = dlg.locator("input").first.input_value()
-            step("03 上银模板填充配置名称", "上银" in name_val)
+            step("03 空白模板后填配置名称", name_val == "HIWIN MES")
+            # 展开高级设置填请求体; 成功判定默认 statusCode=200,
+            # 数组路径与字段映射由「测试连接」自动识别填充
+            dlg.get_by_text("展开高级设置").click()
+            time.sleep(0.5)
+            dlg.get_by_placeholder("JSON，用 {job_no} 占位工单号").fill(
+                '{"api": "hiwin/webcn/ai_error_prevention_job_info/query",'
+                ' "parameters": {"job_no": "{job_no}"}}')
             page.screenshot(path=f"{SHOTS}/03_template_filled.png")
 
-            # 5) 把地址改成 mock (清空再填)
-            url_input = dlg.get_by_placeholder("上银给你的查询接口网址")
+            # 5) 填 mock 地址
+            url_input = dlg.get_by_placeholder("MES 提供的工单查询接口地址")
             url_input.fill(mock_url)
-            step("04 地址已填 mock", dlg.get_by_placeholder("上银给你的查询接口网址").input_value() == mock_url)
+            step("04 地址已填 mock", url_input.input_value() == mock_url)
 
             # 6) 测试连接 → 结构识别 + 字段映射自动填
             dlg.get_by_role("button", name="测试连接").click()
@@ -118,7 +126,7 @@ def run():
             page.locator(".el-dialog button:has-text('保存')").first.click()
             page.wait_for_load_state("networkidle"); time.sleep(1.5)
             body = page.evaluate("document.body.innerText")
-            step("07 保存后列表出现配置", "上银 HIWIN MES" in body)
+            step("07 保存后列表出现配置", "HIWIN MES" in body)
             page.screenshot(path=f"{SHOTS}/05_saved_list.png")
 
             # 8) 试同步 (dry_run, 不落库)

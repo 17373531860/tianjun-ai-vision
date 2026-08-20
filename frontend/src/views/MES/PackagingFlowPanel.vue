@@ -56,11 +56,17 @@
       :close-on-click-modal="false"
       top="5vh"
     >
-      <div class="preset-bar mb-3">
-        <el-button type="warning" plain size="small" @click="applyHiwinPreset">
+      <div class="preset-bar mb-3 flex items-center gap-2 flex-wrap">
+        <el-button type="warning" plain size="small" @click="applyBuiltinPreset">
           套用预设：物品计数包装线
         </el-button>
-        <span class="text-xs text-gray-400 ml-2">推荐先套用预设、再按产线实际情况微调；高级项保持默认即可</span>
+        <el-tag
+          v-for="tpl in localTemplates" :key="tpl.name"
+          size="default" effect="plain" closable class="cursor-pointer"
+          @click="applyLocalTemplate(tpl)" @close="removeLocalTemplate(tpl.name)"
+        >{{ tpl.name }}</el-tag>
+        <el-button type="primary" plain size="small" @click="saveAsLocalTemplate">存为我的模板</el-button>
+        <span class="text-xs text-gray-400 ml-1">推荐先套用预设或模板、再按产线实际情况微调；「存为我的模板」将当前表单保存在本机复用</span>
       </div>
 
       <el-form :model="form" label-width="150px" size="small">
@@ -828,7 +834,70 @@ const openEdit = (row) => {
   dialogVisible.value = true;
 };
 
-const applyHiwinPreset = () => {
+// ==================== 我的模板（localStorage，本机持久） ====================
+const LOCAL_TPL_KEY = 'tj_packaging_flow_templates';
+const localTemplates = ref([]);
+
+const _loadLocalTemplates = () => {
+  try {
+    const list = JSON.parse(localStorage.getItem(LOCAL_TPL_KEY) || '[]');
+    localTemplates.value = Array.isArray(list) ? list : [];
+  } catch { localTemplates.value = []; }
+};
+_loadLocalTemplates();
+
+const _persistLocalTemplates = () => {
+  localStorage.setItem(LOCAL_TPL_KEY, JSON.stringify(localTemplates.value));
+};
+
+const saveAsLocalTemplate = async () => {
+  let name;
+  try {
+    const { value } = await ElMessageBox.prompt('模板名称', '存为我的模板', {
+      inputValue: form.name || '', confirmButtonText: '保存', cancelButtonText: '取消',
+    });
+    name = (value || '').trim();
+  } catch { return; }
+  if (!name) { ElMessage.warning('模板名称不能为空'); return; }
+  const snapForm = JSON.parse(JSON.stringify(form));
+  delete snapForm.id;
+  // 字符串态输入框单独快照, 套用时原样还原 UI
+  const snapshot = {
+    name,
+    form: snapForm,
+    strs: {
+      scan: scanDeviceIdStr.value, pull: pullConnIdStr.value,
+      trayQty: trayQtyTableJson.value, traysPerBox: traysPerBoxTableJson.value,
+      specMap: specToProjectJson.value,
+    },
+  };
+  localTemplates.value = [snapshot, ...localTemplates.value.filter(t => t.name !== name)].slice(0, 20);
+  _persistLocalTemplates();
+  ElMessage.success(`模板「${name}」已保存到本机`);
+};
+
+const applyLocalTemplate = (tpl) => {
+  const keepId = form.id;
+  const keepName = form.name;
+  Object.assign(form, _newForm(), JSON.parse(JSON.stringify(tpl.form || {})));
+  form.id = keepId;
+  if (keepId) form.name = keepName;  // 编辑态不改名（名称即配置身份）
+  _syncStrFields();
+  const strs = tpl.strs || {};
+  if (strs.scan != null) scanDeviceIdStr.value = strs.scan;
+  if (strs.pull != null) pullConnIdStr.value = strs.pull;
+  if (strs.trayQty != null) trayQtyTableJson.value = strs.trayQty;
+  if (strs.traysPerBox != null) traysPerBoxTableJson.value = strs.traysPerBox;
+  if (strs.specMap != null) specToProjectJson.value = strs.specMap;
+  ElMessage.success(`已套用模板「${tpl.name}」`);
+};
+
+const removeLocalTemplate = (name) => {
+  localTemplates.value = localTemplates.value.filter(t => t.name !== name);
+  _persistLocalTemplates();
+};
+
+const applyBuiltinPreset = () => {
   Object.assign(form, {
     // 上银 SY: 滑块口径 — MES 排产量(滑块总数) ÷ 每箱96(固定值) = 箱数 + 尾箱余数
     count_unit: 'sliders',
