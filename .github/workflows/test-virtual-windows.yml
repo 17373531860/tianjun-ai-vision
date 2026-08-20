@@ -63,63 +63,52 @@ jobs:
         working-directory: frontend
         run: npm run build
 
-      # Windows 上 bash 后台进程会在 step 结束时被回收，
-      # 必须用 Start-Process 脱离父进程树才能活到后续 step
-      - name: Start backend (background)
-        shell: pwsh
+      # Windows runner 会在 step 结束时回收其派生进程（实测连 Start-Process 脱壳
+      # 也活不过 step 边界：日志停在启动中段、端口 12min 全程 000）。
+      # 唯一稳妥做法：起服务 + 等端口 + 跑 pytest 全部收进同一个 bash step，
+      # 后台进程在 step 存续期内天然存活，测完再统一收尸。
+      - name: Start servers, wait ports, run Playwright E2E
         run: |
-          New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
-          $p = Start-Process -FilePath python `
-            -ArgumentList '-m','uvicorn','backend.main:app','--host','127.0.0.1','--port','8001' `
-            -RedirectStandardOutput ci-logs/backend.log `
-            -RedirectStandardError ci-logs/backend.err.log `
-            -PassThru -NoNewWindow
-          "BACKEND_PID=$($p.Id)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          mkdir -p ci-logs test-results
+          python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001 \
+            > ci-logs/backend.log 2>&1 &
+          BACKEND_PID=$!
+          (cd frontend && npx vite preview --host 127.0.0.1 --port 6001 \
+            > ../ci-logs/frontend.log 2>&1) &
+          FRONTEND_PID=$!
 
-      - name: Start frontend preview (background, port 6001)
-        shell: pwsh
-        run: |
-          $p = Start-Process -FilePath cmd `
-            -ArgumentList '/c','npx vite preview --host 127.0.0.1 --port 6001 > ..\ci-logs\frontend.log 2>&1' `
-            -WorkingDirectory frontend `
-            -PassThru -NoNewWindow
-          "FRONTEND_PID=$($p.Id)" | Out-File -FilePath $env:GITHUB_ENV -Append
-
-      # Windows runner 上 torch/cv2 冷 import 明显慢于 ubuntu，窗口放宽到 ~12min，
-      # 且每 10 轮打一次两端口的 http code 方便失败归因
-      - name: Wait for ports 8001 + 6001
-        run: |
+          # torch/cv2 冷 import 在 Windows runner 明显慢于 ubuntu，窗口 ~12min，
+          # 每 10 轮打一次两端口 http code 方便失败归因
+          ready=0
           for i in $(seq 1 240); do
-            be=$(curl -s -o /dev/null --max-time 3 -w '%{http_code}' http://127.0.0.1:8001/api/v1/test/synthetic/state || echo 000)
-            fe=$(curl -s -o /dev/null --max-time 3 -w '%{http_code}' http://127.0.0.1:6001/ || echo 000)
+            be=$(curl -s -o /dev/null --max-time 3 -w '%{http_code}' http://127.0.0.1:8001/api/v1/test/synthetic/state) || be=000
+            fe=$(curl -s -o /dev/null --max-time 3 -w '%{http_code}' http://127.0.0.1:6001/) || fe=000
             if [ "$be" = "200" ] && [ "$fe" = "200" ]; then
               echo "ports ready (attempt $i)"
-              exit 0
+              ready=1
+              break
             fi
             if [ $((i % 10)) -eq 0 ]; then
               echo "attempt $i: backend=$be frontend=$fe"
             fi
             sleep 2
           done
-          echo "ports NOT ready (backend=$be frontend=$fe)"
-          tail -120 ci-logs/backend.log || true
-          tail -120 ci-logs/backend.err.log || true
-          tail -80 ci-logs/frontend.log || true
-          exit 1
+          if [ "$ready" != "1" ]; then
+            echo "ports NOT ready (backend=$be frontend=$fe)"
+            tail -150 ci-logs/backend.log || true
+            tail -80 ci-logs/frontend.log || true
+            kill $BACKEND_PID $FRONTEND_PID 2>/dev/null || true
+            exit 1
+          fi
 
-      - name: Run Playwright E2E (browser tests)
-        run: |
+          set +e
           python -m pytest tests/e2e_browser/ \
             -v --tb=short \
             --junitxml=test-results/e2e-windows.xml
-
-      - name: Stop background processes
-        if: always()
-        shell: pwsh
-        run: |
-          foreach ($pid_ in @($env:BACKEND_PID, $env:FRONTEND_PID)) {
-            if ($pid_) { Stop-Process -Id $pid_ -Force -ErrorAction SilentlyContinue }
-          }
+          rc=$?
+          set -e
+          kill $BACKEND_PID $FRONTEND_PID 2>/dev/null || true
+          exit $rc
 
       - name: Upload screenshots
         if: always()
