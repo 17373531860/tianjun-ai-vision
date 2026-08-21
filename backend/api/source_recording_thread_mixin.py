@@ -215,6 +215,13 @@ class RecordingThreadMixin:
             elif frame.shape[2] == 4:
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
             
+            # v3.54: 会话录像到点换段 (廉价时间比较, 只在录制线程做,
+            # 换段失败不影响本帧写入——老 writer 仍在位)
+            try:
+                self._maybe_rotate_session_recording()
+            except Exception as e:
+                print(f"[RecThread/Warn] session segment rotate failed: {e}")
+
             # 取 writer 引用时短暂加锁，write() 在锁外执行以防止管道阻塞导致死锁
             with self._writer_lock:
                 session_w = self.video_writer

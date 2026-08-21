@@ -385,7 +385,8 @@ import {
   getStepAverages,
   exportSessionCsv,
   downloadBlob,
-  getVideoUrl
+  getVideoUrl,
+  getSessionVideos
 } from '@/api/data';
 import { dbg, dbgErr } from '@/utils/debug';
 
@@ -898,13 +899,23 @@ const playCycleVideo = (cycle) => {
   }
 };
 
-// 播放会话视频
-const playSessionVideo = (session) => {
-  if (session.video_id) {
-    videoPlayerRef.value?.open(getVideoUrl(session.video_id));
-  } else {
+// 播放会话视频 (v3.54: 长会话按小时分段, 先拉分段列表, 多段显示切换条)
+const playSessionVideo = async (session) => {
+  if (!session.video_id) {
     ElMessage.info('该会话无录制视频（请在记录设置中开启"录制会话视频"后重新检测）');
+    return;
   }
+  try {
+    const res = await getSessionVideos(session.id);
+    const segs = res.data || [];
+    if (segs.length > 1) {
+      videoPlayerRef.value?.openSegments(segs, getVideoUrl);
+      return;
+    }
+  } catch (e) {
+    dbgErr('data', '拉取会话录像分段失败, 回退单段播放', e);
+  }
+  videoPlayerRef.value?.open(getVideoUrl(session.video_id));
 };
 
 // v3.6.2: 重命名会话标识 (客户自定义"会话 ID")

@@ -72,6 +72,11 @@ export const getVideoUrl = (videoId) => {
   return `${getBackendHost()}/api/v1/data/videos/${videoId}`;
 };
 
+// 会话录像分段列表 (v3.54: 长会话录像按小时分段, 老数据返回单段)
+export const getSessionVideos = (sessionId) => {
+  return api.get(`/data/sessions/${sessionId}/videos`);
+};
+
 // ============ 统计 API ============
 
 // 获取步骤平均耗时和间隔统计
@@ -218,6 +223,15 @@ export const runCleanupNow = () => {
 // 获取存储空间信息
 export const getStorageInfo = () => {
   return api.get('/data/storage-info');
+};
+
+// v3.54: 录像存储位置（自定义录像根目录, 实时生效）
+export const getRecordingStorageDir = () => {
+  return api.get('/data/storage/recording-dir');
+};
+
+export const setRecordingStorageDir = (dir) => {
+  return api.put('/data/storage/recording-dir', { dir });
 };
 
 // ============ 辅助函数 ============

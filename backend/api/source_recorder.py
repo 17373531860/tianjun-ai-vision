@@ -25,6 +25,60 @@ def _get_ffmpeg_path_cached():
     return get_cached_ffmpeg_path()
 
 
+def remux_to_faststart(filepath: str, timeout: float = None) -> bool:
+    """把 fragmented MP4 收尾整理成 faststart 常规 MP4 (流拷贝, 不转码)。
+
+    v3.54 长录像治理: 录制中用 fMP4 (随时可播/断电不废), 收尾后 remux 回
+    标准 mp4 —— moov 前置秒开、时长元数据精确、老播放器全兼容。
+    tmp + 原子替换; 任何失败都保留原 fMP4 (照样能播), 绝不越修越坏。
+
+    Returns: True = 已替换为 faststart mp4; False = 保留原文件。
+    """
+    try:
+        if not os.path.isfile(filepath):
+            return False
+        size = os.path.getsize(filepath)
+        if size <= 0:
+            return False
+
+        # 磁盘余量护栏: remux 期间新旧两份并存, 余量不足宁可不整理
+        import shutil
+        free = shutil.disk_usage(os.path.dirname(filepath) or ".").free
+        if free < size * 1.3 + 200 * 1024 * 1024:
+            print(f"[FFmpeg录制] 磁盘余量不足, 跳过收尾整理: {os.path.basename(filepath)}")
+            return False
+
+        if timeout is None:
+            # 流拷贝按磁盘速度走, 每 GB 给 2 分钟预算, 上限 15 分钟
+            timeout = min(900.0, 60.0 + size / (1024 ** 3) * 120.0)
+
+        ffmpeg_path = _get_ffmpeg_path_cached()
+        # tmp 后缀刻意不带 .mp4, 避免被清理/孤儿扫描当成录像; 用 -f mp4 显式指格式
+        tmp_path = filepath + ".remux.tmp"
+        cmd = [ffmpeg_path, "-y", "-i", filepath,
+               "-c", "copy", "-movflags", "+faststart",
+               "-f", "mp4", tmp_path]
+        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL,
+                              capture_output=True, timeout=timeout)
+        if proc.returncode == 0 and os.path.isfile(tmp_path) \
+                and os.path.getsize(tmp_path) > 0:
+            os.replace(tmp_path, filepath)
+            print(f"[FFmpeg录制] 收尾整理完成(faststart): {os.path.basename(filepath)}")
+            return True
+        err = (proc.stderr or b"")[-300:].decode("utf-8", "ignore")
+        print(f"[FFmpeg录制] 收尾整理失败(保留 fMP4 可播): rc={proc.returncode} {err}")
+    except Exception as e:
+        print(f"[FFmpeg录制] 收尾整理异常(保留 fMP4 可播): {e}")
+    finally:
+        try:
+            _tmp = filepath + ".remux.tmp"
+            if os.path.exists(_tmp):
+                os.remove(_tmp)
+        except OSError:
+            pass
+    return False
+
+
 class FFmpegRecorder:
     """使用 FFmpeg 进程进行视频录制
 
@@ -75,7 +129,18 @@ class FFmpegRecorder:
                 '-threads', '1',
                 '-crf', '28',
                 '-pix_fmt', 'yuv420p',
-                '-movflags', '+faststart',
+                # 固定 GOP=125 帧 (25fps 下 5s): fMP4 每个关键帧收一个 fragment
+                # 落盘, 崩溃丢失粒度确定为 ≤5s (默认 keyint 250 是 10s)
+                '-g', '125',
+                # v3.54 长录像治理: 录制中写 fragmented MP4 —— 每个关键帧起一个
+                # fragment 落盘, 文件任意时刻可播; 断电/强杀只丢最后一个片段
+                # (≤~10s), 不再像 +faststart 那样收尾重写 moov 失败就整段全废
+                # (24h 会话录像的"视频加载失败"根因)。收尾由 release() 异步
+                # remux 回 faststart 常规 mp4 (见 remux_to_faststart)。
+                '-movflags', '+frag_keyframe+empty_moov+default_base_moof',
+                # 每包即时刷盘: 不加的话输出滞留在 ffmpeg ~32KB IO 缓冲里,
+                # 高压缩画面可能几分钟不落盘, 强杀丢失窗口不可控
+                '-flush_packets', '1',
                 self.filepath
             ]
 
@@ -148,8 +213,13 @@ class FFmpegRecorder:
         except Exception:
             pass
 
-    def release(self):
-        """关闭录制器"""
+    def release(self, remux: bool = True):
+        """关闭录制器
+
+        fMP4 收尾无 moov 重写, 子进程正常在 1s 内退出; 超时兜底 kill 也
+        只丢最后一个片段, 文件仍可播。之后异步 remux 成 faststart 常规 mp4
+        (守护线程, 不阻塞调用方; 进程退出中断 remux 也只是保留 fMP4)。
+        """
         with self._lock:
             if self.process is not None:
                 try:
@@ -158,7 +228,7 @@ class FFmpegRecorder:
                 except Exception:
                     pass
                 try:
-                    self.process.wait(timeout=3)
+                    self.process.wait(timeout=10)
                 except subprocess.TimeoutExpired:
                     try:
                         self.process.kill()
@@ -179,6 +249,13 @@ class FFmpegRecorder:
                 print(f"[FFmpeg录制] !!! 0 帧异常, ffmpeg stderr 末尾 {len(self._stderr_lines)} 行:")
                 for line in self._stderr_lines:
                     print(f"  | {line}")
+
+        # 锁外起收尾整理线程 (remux 可能秒级~分钟级, 不能占 _lock)
+        if remux and self._frame_count > 0:
+            threading.Thread(
+                target=remux_to_faststart, args=(self.filepath,), daemon=True,
+                name=f"ffmpeg-remux-{os.path.basename(self.filepath)}"
+            ).start()
 
     def isOpened(self) -> bool:
         """检查是否正在录制"""

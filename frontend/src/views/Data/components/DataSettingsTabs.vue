@@ -59,6 +59,37 @@
                 </div>
               </div>
             </div>
+
+            <!-- v3.54: 录像存储位置 (自定义目录, 实时生效) -->
+            <div class="mt-6">
+              <div class="text-xs text-gray-500 font-medium mb-2 uppercase tracking-wider">录像存储位置</div>
+              <p class="text-xs text-gray-500 mb-2 leading-relaxed">
+                录像文件的写入根目录。留空使用默认数据目录；指定其他磁盘分区可避免系统盘空间不足。
+                保存后立即生效，已有录像无需搬迁，回放不受影响。
+              </p>
+              <div class="flex items-center gap-2">
+                <el-input
+                  v-model="recordingDirForm"
+                  size="small"
+                  clearable
+                  placeholder="留空 = 默认数据目录，如 D:\TianjunRecordings"
+                  data-testid="recording-dir-input"
+                />
+                <el-button type="primary" size="small" :loading="recordingDirSaving"
+                           data-testid="recording-dir-save" @click="saveRecordingDir">保存</el-button>
+              </div>
+              <div v-if="recordingDirInfo" class="text-xs text-gray-500 mt-2 space-y-0.5" data-testid="recording-dir-status">
+                <div>
+                  当前生效：<span class="font-mono text-gray-400">{{ recordingDirInfo.effective_root }}</span>
+                  <el-tag v-if="recordingDirInfo.using_custom" size="small" type="success" effect="plain" class="ml-1">自定义</el-tag>
+                  <el-tag v-else size="small" type="info" effect="plain" class="ml-1">默认</el-tag>
+                </div>
+                <div v-if="recordingDirInfo.disk_free_gb != null">
+                  所在磁盘剩余：<span class="font-mono text-gray-400">{{ recordingDirInfo.disk_free_gb }} GB</span>
+                  / 共 {{ recordingDirInfo.disk_total_gb }} GB
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </el-tab-pane>
@@ -448,7 +479,9 @@ import {
   getCleanupSettings,
   updateCleanupSettings,
   runCleanupNow,
-  getStorageInfo
+  getStorageInfo,
+  getRecordingStorageDir,
+  setRecordingStorageDir
 } from '@/api/data';
 import { getProjectDetail, updateProject } from '@/api/project';
 import { dbg, dbgErr } from '@/utils/debug';
@@ -914,11 +947,53 @@ watch(() => projectStore.currentProjectId, () => {
   loadExportSettings();
 });
 
+// ========== v3.54: 录像存储位置 ==========
+const recordingDirForm = ref('');
+const recordingDirInfo = ref(null);
+const recordingDirSaving = ref(false);
+
+// 序号守卫: 防止挂载时的慢 GET 晚于保存返回、把新状态覆盖回旧值
+let recordingDirSeq = 0;
+
+const loadRecordingDir = async () => {
+  const seq = ++recordingDirSeq;
+  try {
+    const res = await getRecordingStorageDir();
+    if (seq !== recordingDirSeq) return; // 已有更新的操作, 丢弃过期响应
+    recordingDirInfo.value = res.data;
+    recordingDirForm.value = res.data.custom_dir || '';
+  } catch (e) {
+    dbgErr('data', '加载录像存储位置失败', e);
+  }
+};
+
+const saveRecordingDir = async () => {
+  recordingDirSaving.value = true;
+  const seq = ++recordingDirSeq;
+  try {
+    const res = await setRecordingStorageDir((recordingDirForm.value || '').trim());
+    recordingDirSeq = Math.max(recordingDirSeq, seq);
+    recordingDirInfo.value = res.data;
+    recordingDirForm.value = res.data.custom_dir || '';
+    ElMessage.success(res.data.using_custom
+      ? `录像存储位置已生效：${res.data.effective_root}`
+      : '已恢复默认录像存储位置');
+    dbg('data', '录像存储位置已保存', res.data);
+  } catch (e) {
+    const reason = e?.response?.data?.detail || e.message;
+    ElMessage.error(`保存失败：${reason}`);
+    dbgErr('data', '保存录像存储位置失败', e);
+  } finally {
+    recordingDirSaving.value = false;
+  }
+};
+
 onMounted(() => {
   loadExportSettings();
   loadCleanupSettings();
   loadStorageInfo();
   loadArchiveStatus();
+  loadRecordingDir();
 });
 </script>
 

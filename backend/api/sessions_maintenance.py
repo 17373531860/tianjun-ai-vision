@@ -72,6 +72,29 @@ def _prune_empty_dated_dirs(base_dir: str):
 
 # ---- internal helpers (also used by main.py 启动时调用) ----
 
+def _all_video_scan_dirs():
+    """孤儿扫描/清理/统计要遍历的录像目录 (默认 + 自定义根, v3.54)。
+
+    自定义录像存储位置启用后, 新录像写在自定义根的 sessions/cycles/steps
+    子目录下; 清理与统计必须把两套根都扫到, 否则自定义目录只进不出。
+    按记录删除不受影响 (走 DB 里的绝对路径)。
+    """
+    from backend.services.recording_storage import all_scan_roots
+    dirs = []
+    for root in all_scan_roots():
+        for sub in ("sessions", "cycles", "steps"):
+            d = os.path.join(root, sub)
+            if d not in dirs:
+                dirs.append(d)
+    return dirs
+
+
+def _all_cache_dirs():
+    """默认 + 自定义根下的视频转码缓存目录 (v3.54)。"""
+    from backend.services.recording_storage import all_scan_roots
+    return [os.path.join(root, "cache") for root in all_scan_roots()]
+
+
 def _read_cleanup_settings(db):
     """从数据库读取清理设置（复用传入的 db，不自开关）。返回 dict。
 
@@ -211,7 +234,8 @@ def _calc_data_size():
             p = db_path + extra
             if os.path.isfile(p):
                 total += os.path.getsize(p)
-        for d in (settings.RECORDING_DIR, settings.VIDEO_UPLOAD_DIR):
+        from backend.services.recording_storage import all_scan_roots
+        for d in (*all_scan_roots(), settings.VIDEO_UPLOAD_DIR):
             if os.path.isdir(d):
                 for dp, _, fns in os.walk(d):
                     for f in fns:
@@ -491,7 +515,7 @@ def _perform_auto_cleanup():
                 known_paths.add(os.path.abspath(fp))
 
         orphan_deleted = 0
-        for rec_dir in [settings.SESSION_VIDEO_DIR, settings.CYCLE_VIDEO_DIR, settings.STEP_VIDEO_DIR]:
+        for rec_dir in _all_video_scan_dirs():
             if not os.path.isdir(rec_dir):
                 continue
             # 录像已按 YYYY-MM-DD 分子目录存放, 故递归扫描(同时兼容老的平铺录像)。
@@ -513,10 +537,11 @@ def _perform_auto_cleanup():
         if orphan_deleted:
             print(f"[自动清理] 孤儿录制文件: 删除 {orphan_deleted} 个")
 
-        # 3. 视频转换缓存
-        cache_dir = os.path.join(settings.RECORDING_DIR, "cache")
+        # 3. 视频转换缓存 (默认 + 自定义根两处)
         cache_deleted = 0
-        if os.path.isdir(cache_dir):
+        for cache_dir in _all_cache_dirs():
+            if not os.path.isdir(cache_dir):
+                continue
             for fname in os.listdir(cache_dir):
                 fpath = os.path.join(cache_dir, fname)
                 if os.path.isfile(fpath):
@@ -721,7 +746,7 @@ def clear_all_data(db: Session = Depends(get_db)):
     """清空所有历史数据：会话、周期、步骤、视频记录、录制文件、缓存、上传视频"""
     try:
         deleted_files = 0
-        for vd in [settings.SESSION_VIDEO_DIR, settings.CYCLE_VIDEO_DIR, settings.STEP_VIDEO_DIR]:
+        for vd in _all_video_scan_dirs():
             if os.path.isdir(vd):
                 # 递归删(录像按日期分子目录), 再回收空的日期目录
                 for dirpath, _dirs, fnames in os.walk(vd):
@@ -735,8 +760,9 @@ def clear_all_data(db: Session = Depends(get_db)):
                             print(f"删除视频文件失败: {fp}, {e}")
                 _prune_empty_dated_dirs(vd)
 
-        cache_dir = os.path.join(settings.RECORDING_DIR, "cache")
-        if os.path.isdir(cache_dir):
+        for cache_dir in _all_cache_dirs():
+            if not os.path.isdir(cache_dir):
+                continue
             for fn in os.listdir(cache_dir):
                 fp = os.path.join(cache_dir, fn)
                 try:
@@ -845,7 +871,7 @@ def clear_data_by_range(req: DateRangeCleanup, db: Session = Depends(get_db)):
         ).delete(synchronize_session=False)
         db.commit()
         _checkpoint_wal()  # A3: 范围清理后收缩 WAL
-        for vd in [settings.SESSION_VIDEO_DIR, settings.CYCLE_VIDEO_DIR, settings.STEP_VIDEO_DIR]:
+        for vd in _all_video_scan_dirs():
             _prune_empty_dated_dirs(vd)
 
         return {
@@ -979,7 +1005,8 @@ def get_storage_info():
     dir_sizes = {}
     db_path = os.path.join(base_dir, "sql_app.db")
     dir_sizes["database"] = os.path.getsize(db_path) if os.path.isfile(db_path) else 0
-    dir_sizes["recordings"] = _dir_size(settings.RECORDING_DIR)
+    from backend.services.recording_storage import all_scan_roots
+    dir_sizes["recordings"] = sum(_dir_size(r) for r in all_scan_roots())
     dir_sizes["upload_videos"] = _dir_size(settings.VIDEO_UPLOAD_DIR)
     dir_sizes["upload_models"] = _dir_size(settings.MODEL_UPLOAD_DIR)
 
@@ -997,6 +1024,75 @@ def get_storage_info():
         "disk_free_gb": round(disk.free / 1024 / 1024 / 1024, 2),
         "disk_usage_percent": round(disk.used / disk.total * 100, 1),
     }
+
+
+# ---------------------------------------------------------------------------
+# v3.54 自定义录像存储位置 (治 C 盘易满: 录像直接写指定盘, 软件内回放不变)
+# ---------------------------------------------------------------------------
+
+def _recording_dir_payload():
+    """GET/PUT 共用的状态载荷: 配置值 / 生效根 / 生效盘余量。"""
+    from backend.services.recording_storage import (
+        get_custom_root, get_recording_root)
+    custom = get_custom_root(force=True)
+    effective = get_recording_root()
+    payload = {
+        "custom_dir": custom or "",
+        "effective_root": effective,
+        "default_root": settings.RECORDING_DIR,
+        "using_custom": bool(custom) and effective != settings.RECORDING_DIR,
+    }
+    try:
+        disk = shutil.disk_usage(effective if os.path.isdir(effective)
+                                 else os.path.dirname(effective))
+        payload.update({
+            "disk_total_gb": round(disk.total / 1024 ** 3, 2),
+            "disk_free_gb": round(disk.free / 1024 ** 3, 2),
+        })
+    except Exception:
+        pass
+    return payload
+
+
+@router.get("/storage/recording-dir")
+def get_recording_storage_dir():
+    """查询录像存储位置: 自定义目录配置 + 当前生效目录 + 生效盘剩余空间。"""
+    return _recording_dir_payload()
+
+
+class RecordingDirUpdate(BaseModel):
+    dir: str = ""  # 空字符串 = 恢复默认数据目录
+
+
+@router.put("/storage/recording-dir",
+            dependencies=[Depends(require_perm("settings.edit"))])
+def set_recording_storage_dir(req: RecordingDirUpdate,
+                              db: Session = Depends(get_db)):
+    """设置自定义录像存储目录, 实时生效 (下一段录像即写新目录)。
+
+    - 传空字符串恢复默认数据目录
+    - 非空时做与归档目的地同源的护栏校验 (绝对路径/黑名单/真实可写)
+      + 与启用中的本地归档目的地互斥
+    - 历史录像不搬迁: DB 存绝对路径, 新旧目录的回放都照常可用
+    """
+    from backend.services import recording_storage
+    target = (req.dir or "").strip()
+    if target:
+        reason = recording_storage.validate_recording_dir(target)
+        if reason:
+            raise HTTPException(status_code=400, detail=reason)
+    row = db.query(SystemConfig).filter(
+        SystemConfig.key == recording_storage.KV_KEY).first()
+    if row:
+        row.value = target
+    else:
+        db.add(SystemConfig(key=recording_storage.KV_KEY, value=target,
+                            description="自定义录像存储根目录 (空=默认数据目录)"))
+    db.commit()
+    recording_storage.refresh_cache()
+    print(f"[RecordingStorage] 录像存储目录已更新: "
+          f"{target or '(默认数据目录)'}")
+    return _recording_dir_payload()
 
 
 @router.post("/cleanup/vacuum",

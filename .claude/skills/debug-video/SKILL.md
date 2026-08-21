@@ -100,16 +100,52 @@ fetch(streamUrl) → ReadableStream
 ## FFmpeg 录像 (FFmpegRecorder)
 
 ```python
-class FFmpegRecorder:
+class FFmpegRecorder:  # backend/api/source_recorder.py
     # 通过管道将原始帧写入FFmpeg子进程
     ffmpeg -y -f rawvideo -pix_fmt bgr24 -s WxH -r FPS -i pipe:
-           -c:v libx264 -preset fast -crf 23 output.mp4
+           -c:v libx264 -preset ultrafast -crf 28 -g 125
+           -movflags +frag_keyframe+empty_moov+default_base_moof
+           -flush_packets 1 output.mp4
 ```
+
+- **v3.54 长录像治理（三层，治"24h 录像视频加载失败"）:**
+  1. **录制中写 fragmented MP4**: 每 5s 一个 fragment 即时落盘（`-g 125` @25fps
+     + `-flush_packets 1`），文件任意时刻可播；断电/强杀最多丢 ~5s。此前
+     `+faststart` 收尾要整文件重写 moov，`release()` 3s 超时就 kill，大文件必坏
+  2. **收尾异步 remux**: `release()` 后守护线程跑 `remux_to_faststart()`
+     （`-c copy` 流拷贝, tmp+原子替换, 磁盘余量护栏），整理成 moov 前置的常规
+     mp4（时长精确/秒开/老播放器兼容）；remux 失败/中断保留 fMP4 照样能播。
+     日志 `[FFmpeg录制] 收尾整理完成(faststart)`
+  3. **回放按需转码**: `sessions.py _is_browser_compatible_h264()` 用
+     `ffmpeg -i` stderr 探测（不依赖 ffprobe），h264+yuv420p 直接原文件出流
+     （Starlette FileResponse 支持 Range 拖动），只有老 mp4v 等才走
+     `convert_video_for_browser` 转码。排查"还在转码"先看探测日志
+- **v3.54 会话录像自动分段**: 会话级录像每 `TJ_SESSION_SEGMENT_SECONDS`
+  （默认 3600s）自动换段续录，`source_recording_api_mixin.py`
+  `_rotate_session_recording()`（录制线程内触发，开新段失败保老段 60s 重试，
+  绝不断流）。每段独立 VideoClip（clip_type='session', related_id=session_id），
+  `session.video_id/video_path` 恒指首段；分段列表
+  `GET /data/sessions/{id}/videos`，前端播放弹窗多段时显示切换条
+  （`VideoPlayerDialog.openSegments`）。周期/步骤录像不分段。
+  排查"没分段"：确认是会话录像（周期录像本来就不分）+ 看
+  `[Recording] session video rotated -> segment N` 日志。
+  测试加速：起后端时 `TJ_SESSION_SEGMENT_SECONDS=30`；
+  单测 `tests/test_session_segmentation.py` + `tests/test_recorder_fmp4.py`，
+  e2e `tests/e2e_browser/test_session_segments.py`，
+  UAT `tests/uat/uat_session_segments.py`（支持 UAT_RUN_SECONDS 长跑）
 
 - **路径解析:** `get_ffmpeg_path()` / `get_cached_ffmpeg_path()`
   - 开发环境: 系统 PATH 中的 ffmpeg
   - 生产环境: `resources/ffmpeg/ffmpeg.exe`
-- **录像文件:** `recordings/` 目录下，按日期+时间命名
+- **录像文件:** 默认 `recordings/` 目录下，按日期+时间命名
+- **自定义录像存储位置 (v3.54):** `backend/services/recording_storage.py` —
+  SystemConfig KV `recording_storage_dir` 存自定义根目录（空=默认），三个开录点
+  （`source_recording_api_mixin.py` 的 session/cycle/step）每次开录动态解析
+  `get_video_dirs()`，实时生效；转码缓存/清理扫描/存储统计跟随
+  （`sessions_maintenance._all_video_scan_dirs()`）。排查"录像没写进指定盘"先
+  `GET /api/v1/data/storage/recording-dir` 看 `effective_root`，自定义目录不可用
+  时会打日志 `[RecordingStorage]` 并回退默认（绝不丢录像）。回放与目录无关
+  （DB 存绝对路径）。
 
 ## 诊断步骤
 
@@ -146,9 +182,13 @@ class FFmpegRecorder:
 
 ### 录像无法播放
 1. 检查 FFmpeg 路径是否正确
-2. 检查 `convert_video_for_browser()` (sessions.py) 转码是否成功
+2. v3.54 起自录 h264 直出不转码；仅老 mp4v 走 `convert_video_for_browser()`
+   (sessions.py) 转码，检查转码是否成功
 3. 原始录像格式可能不是H.264，需要转码
 4. 文件大小为0 → FFmpegRecorder 管道断开
+5. v3.54 前的历史坑（已治）: 超长录像收尾 moov 重写被 3s 超时 kill 整段废 +
+   回放无条件重转码 300s 超时回退坏原片 → 现象"视频加载失败"。v3.54 起
+   录制 fMP4 断电可播 + 收尾异步 remux + h264 直出，若仍复现先确认客户版本
 
 ### 多工位视频串流
 1. 每个通道是独立的 VideoSourceManager 实例（`channel_manager.py`）

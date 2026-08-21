@@ -880,8 +880,58 @@ def get_cycle_steps(cycle_id: int, db: Session = Depends(get_db)):
 
 # ============ 视频 API ============
 
+# v3.54: 编码探测缓存 (path -> (mtime, size, compatible)); 探测一次 ~100ms,
+# 同一文件重复播放免重复起 ffmpeg 子进程
+_VIDEO_PROBE_CACHE: dict = {}
+
+
+def _is_browser_compatible_h264(path: str) -> bool:
+    """探测视频是否浏览器可直接播放 (h264 + yuv420p), 免转码直出。
+
+    v3.54 长录像治理: 我们自己 FFmpegRecorder 录的就是 libx264+yuv420p,
+    以前却无条件全量重转码——24h 会话录像几 GB, 300s 超时转不完, 回退
+    原文件表现为"视频加载失败"。h264 直出后回放零转码零等待, 拖动进度条
+    走 HTTP Range。老录像 (mp4v) 探测不过, 照旧走转码路径, 行为不变。
+
+    探测用 `ffmpeg -i` 的 stderr 解析而非 ffprobe——开发环境 conda 只带
+    ffmpeg 不带 ffprobe, 统一走 ffmpeg 免去打包资产差异 (交付审计教训)。
+    判定从严: 解析不出/异常一律 False (走转码, 稳妥兜底)。
+    """
+    try:
+        st = os.stat(path)
+        cached = _VIDEO_PROBE_CACHE.get(path)
+        if cached and cached[0] == st.st_mtime and cached[1] == st.st_size:
+            return cached[2]
+
+        ffmpeg_path = get_cached_ffmpeg_path()
+        # ffmpeg -i 无输出文件时 rc=1 属预期, 只要 stderr 里有流信息即可
+        proc = subprocess.run(
+            [ffmpeg_path, "-hide_banner", "-i", path],
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=15)
+        stderr = (proc.stderr or b"").decode("utf-8", "ignore")
+        compatible = False
+        for line in stderr.splitlines():
+            if "Video:" not in line:
+                continue
+            info = line.split("Video:", 1)[1].lower()
+            compatible = ("h264" in info) and ("yuv420p" in info or "yuvj420p" in info)
+            break
+
+        if len(_VIDEO_PROBE_CACHE) > 512:
+            _VIDEO_PROBE_CACHE.clear()
+        _VIDEO_PROBE_CACHE[path] = (st.st_mtime, st.st_size, compatible)
+        return compatible
+    except Exception as e:
+        print(f"[Video] 编码探测异常(回退转码路径): {e}")
+        return False
+
+
 def convert_video_for_browser(input_path: str) -> str:
     """将视频转换为浏览器兼容的H.264格式
+
+    v3.54: h264+yuv420p 的文件 (本系统 FFmpegRecorder 的产物) 直接原样
+    返回, 不再无条件重转码——治超大会话录像转码超时导致的"视频加载失败",
+    同时省掉一份与原片等大的转码缓存。仅老编码 (mp4v 等) 走下面的转码。
 
     v3.48.1 治「视频加载失败」两根因:
     1. 旧实现直接往缓存路径写, 转码超时/被杀会留残缺文件, 且下次请求
@@ -891,7 +941,12 @@ def convert_video_for_browser(input_path: str) -> str:
     3. 超时 60s → 300s: 会话级长录像 60s 根本转不完, 超时后回退原始
        mp4v 编码文件, Chromium 解不了照样黑屏报错。
     """
-    cache_dir = os.path.join(settings.RECORDING_DIR, "cache")
+    if _is_browser_compatible_h264(input_path):
+        return input_path
+
+    # v3.54: 转码缓存跟随当前生效录像根目录 (自定义大盘时缓存也别占 C 盘)
+    from backend.services.recording_storage import get_video_dirs
+    cache_dir = get_video_dirs()["cache"]
     os.makedirs(cache_dir, exist_ok=True)
 
     filename = os.path.basename(input_path)
@@ -939,6 +994,27 @@ def convert_video_for_browser(input_path: str) -> str:
             except OSError:
                 pass
     return input_path  # 转换失败回退原文件(老编码浏览器可能放不了, 但至少可下载)
+
+
+@router.get("/sessions/{session_id}/videos")
+def get_session_videos(session_id: int, db: Session = Depends(get_db)):
+    """会话录像分段列表 (v3.54 长录像治理: 会话录像按小时分段落库)。
+
+    按 start_time 升序返回该会话全部 session 类型 VideoClip。
+    老数据单文件会话返回单元素列表, 前端播放入口统一走本端点。
+    """
+    clips = db.query(VideoClip).filter(
+        VideoClip.clip_type == 'session',
+        VideoClip.related_id == session_id,
+    ).order_by(VideoClip.start_time).all()
+    return [{
+        "video_uuid": c.video_uuid,
+        "segment_index": i + 1,
+        "start_time": c.start_time.strftime("%Y-%m-%d %H:%M:%S") if c.start_time else None,
+        "end_time": c.end_time.strftime("%Y-%m-%d %H:%M:%S") if c.end_time else None,
+        "file_size": c.file_size,
+        "file_exists": bool(c.file_path and os.path.exists(c.file_path)),
+    } for i, c in enumerate(clips)]
 
 
 @router.get("/videos/{video_id}")

@@ -78,13 +78,22 @@ def validate_dest_dir(p: str) -> Optional[str]:
         return "目标目录必须是绝对路径"
     if _norm_dir(expanded) in _DEST_DIR_BLACKLIST:
         return "该目录为系统/盘根目录，禁止设为归档目录"
+    # v3.54: 录像根可自定义, 默认根和自定义根都不允许指入
+    rec_roots = [os.path.abspath(os.path.join(DATA_DIR, "recordings"))]
     try:
-        rec_root = os.path.abspath(os.path.join(DATA_DIR, "recordings"))
-        dest_abs = os.path.abspath(expanded)
-        if os.path.commonpath([dest_abs, rec_root]) == rec_root:
-            return "目标目录不能指向本地录像目录内部（会形成自拷贝循环）"
-    except ValueError:
-        pass  # 不同盘符, commonpath 抛错 = 肯定不在录像目录内
+        from backend.services.recording_storage import get_custom_root
+        custom = get_custom_root()
+        if custom:
+            rec_roots.append(os.path.abspath(os.path.expanduser(custom)))
+    except Exception:
+        pass
+    dest_abs = os.path.abspath(expanded)
+    for rec_root in rec_roots:
+        try:
+            if os.path.commonpath([dest_abs, rec_root]) == rec_root:
+                return "目标目录不能指向本地录像目录内部（会形成自拷贝循环）"
+        except ValueError:
+            pass  # 不同盘符, commonpath 抛错 = 肯定不在录像目录内
     return None
 
 

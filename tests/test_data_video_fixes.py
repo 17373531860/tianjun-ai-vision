@@ -87,6 +87,8 @@ def test_convert_failure_cleans_tmp_and_falls_back(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sessions_api.subprocess, "run", lambda *a, **k: _FailResult())
     monkeypatch.setattr(sessions_api, "get_cached_ffmpeg_path", lambda: "ffmpeg", raising=False)
+    # v3.54: 本测试测的是转码路径, 探测强制不兼容 (真探测会被上面的 fake run 干扰)
+    monkeypatch.setattr(sessions_api, "_is_browser_compatible_h264", lambda p: False)
 
     src = _mk_input(tmp_path)
     out = sessions_api.convert_video_for_browser(src)
@@ -114,6 +116,7 @@ def test_convert_success_atomic_rename(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sessions_api.subprocess, "run", _fake_run)
     monkeypatch.setattr(sessions_api, "get_cached_ffmpeg_path", lambda: "ffmpeg", raising=False)
+    monkeypatch.setattr(sessions_api, "_is_browser_compatible_h264", lambda p: False)
 
     src = _mk_input(tmp_path)
     out1 = sessions_api.convert_video_for_browser(src)
@@ -141,6 +144,7 @@ def test_partial_tmp_never_served(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sessions_api.subprocess, "run", lambda *a, **k: _FailResult())
     monkeypatch.setattr(sessions_api, "get_cached_ffmpeg_path", lambda: "ffmpeg", raising=False)
+    monkeypatch.setattr(sessions_api, "_is_browser_compatible_h264", lambda p: False)
 
     out = sessions_api.convert_video_for_browser(src)
     assert out == src

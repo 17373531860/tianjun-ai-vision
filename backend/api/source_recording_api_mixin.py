@@ -29,6 +29,40 @@ from backend.models.models import (  # noqa: F401
     VideoClip,
 )
 from backend.api.source_recorder import FFmpegRecorder
+# v3.54 自定义录像存储位置: 三个开录点改为动态解析当前生效目录 (实时生效)
+from backend.services.recording_storage import get_video_dirs
+
+# v3.54 长录像治理: 会话录像按时长分段 (默认 1 小时/段)。
+# 24h 连续录像单文件几 GB, 回放加载慢且单点故障域太大; 分段后每段独立
+# VideoClip 落库、独立可播, 清理/统计按既有 related_id 查询天然兼容。
+# 测试用环境变量加速 (如 30s/段), 生产不配置即 3600s, 无 UI 无配置面。
+SESSION_SEGMENT_SECONDS = max(
+    10, int(os.environ.get("TJ_SESSION_SEGMENT_SECONDS", "3600") or 3600))
+
+
+def _finalize_session_clip_row(filepath: str, retries: int = 3):
+    """按 file_path 补齐分段 VideoClip 的 end_time/file_size。
+
+    行由 _persist 队列异步创建, 可能晚于本调用, 带小重试。
+    """
+    from backend.db.database import SessionLocal
+    for i in range(retries):
+        db = SessionLocal()
+        try:
+            video = db.query(VideoClip).filter(
+                VideoClip.file_path == filepath).first()
+            if video:
+                video.end_time = datetime.now()
+                if os.path.exists(filepath):
+                    video.file_size = os.path.getsize(filepath)
+                db.commit()
+                return True
+        except Exception:
+            db.rollback()
+        finally:
+            db.close()
+        time.sleep(1.0 * (i + 1))
+    return False
 
 
 def _ensure_dated_dir(base_dir):
@@ -65,7 +99,7 @@ class RecordingApiMixin:
         
         try:
             filename = f"session_{self.current_session_uuid}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
-            filepath = os.path.join(_ensure_dated_dir(settings.SESSION_VIDEO_DIR), filename)
+            filepath = os.path.join(_ensure_dated_dir(get_video_dirs()["sessions"]), filename)
             
             fps = min(self.export_settings.get('video_fps', 30), 25)
             
@@ -84,7 +118,12 @@ class RecordingApiMixin:
                 return
             with self._writer_lock:
                 self.video_writer = writer
-            print(f"[Recording] session video started: {filepath}")
+            # v3.54 分段状态: 到点由录制线程调 _maybe_rotate_session_recording 换段
+            self._session_seg_index = 1
+            self._session_seg_deadline = time.time() + SESSION_SEGMENT_SECONDS
+            self._session_rec_params = (width, height, fps)
+            print(f"[Recording] session video started: {filepath} "
+                  f"(segment 1, {SESSION_SEGMENT_SECONDS}s/段)")
             
             # 记录到数据库 (完整 uuid 防唯一约束撞号; try/finally 兜底关连接防泄漏)
             video_uuid = uuid.uuid4().hex
@@ -118,7 +157,7 @@ class RecordingApiMixin:
     
     def stop_session_recording(self):
         """停止会话视频录制 - delayed release to flush queued frames"""
-        session_id = self.current_session_id
+        self._session_seg_deadline = None  # v3.54: 停录即停分段轮转
 
         with self._writer_lock:
             writer = self.video_writer
@@ -127,7 +166,7 @@ class RecordingApiMixin:
                 self._draining_session_writer = writer
 
         if writer:
-            def _delayed_release(w, sid):
+            def _delayed_release(w):
                 time.sleep(1.5)
                 with self._writer_lock:
                     if getattr(self, '_draining_session_writer', None) is w:
@@ -135,26 +174,104 @@ class RecordingApiMixin:
                 try:
                     w.release()
                     print("[Recording] session video stopped (drained)")
-                    db = self._get_db_session()
-                    try:
-                        session = db.query(DetectionSession).filter(DetectionSession.id == sid).first()
-                        if session and session.video_path:
-                            video = db.query(VideoClip).filter(VideoClip.file_path == session.video_path).first()
-                            if video:
-                                video.end_time = datetime.now()
-                                if os.path.exists(session.video_path):
-                                    video.file_size = os.path.getsize(session.video_path)
-                                db.commit()
-                    except Exception:
-                        db.rollback()
-                        raise
-                    finally:
-                        db.close()
+                    # v3.54: 按 writer 自己的 file_path 定位 VideoClip 行——
+                    # 分段后 session.video_path 指首段, 最后在录的是末段
+                    _finalize_session_clip_row(w.filepath)
                 except Exception as e:
                     print(f"[Recording] stop session recording failed: {e}")
 
             import threading
-            threading.Thread(target=_delayed_release, args=(writer, session_id), daemon=True).start()
+            threading.Thread(target=_delayed_release, args=(writer,), daemon=True).start()
+
+    def _maybe_rotate_session_recording(self):
+        """会话录像到点换段 (仅录制线程调用; 无会话录像时零开销)。"""
+        deadline = getattr(self, '_session_seg_deadline', None)
+        if not deadline or time.time() < deadline:
+            return
+        self._rotate_session_recording()
+
+    def _rotate_session_recording(self):
+        """开新段 → 原子换 writer → 老段延迟释放收尾 + 新段 VideoClip 落库。
+
+        v3.54 长录像治理。运行在录制线程内: 新 writer open (~百 ms 级) 期间
+        帧在录制队列排队, 不丢帧; 换段瞬间老段进 draining 通道继续收 1.5s
+        (与停录一致的排空语义, 两段之间宁重叠不缺帧)。
+        开新段失败 → 老 writer 继续录 + 60s 后重试, 绝不让录像中断。
+        """
+        width, height, fps = getattr(
+            self, '_session_rec_params',
+            (self.width if self.width > 0 else 1280,
+             self.height if self.height > 0 else 720, 25))
+        seg_idx = getattr(self, '_session_seg_index', 1) + 1
+
+        filename = (f"session_{self.current_session_uuid}_"
+                    f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_p{seg_idx:03d}.mp4")
+        # get_video_dirs 每段现解析: 中途改自定义存储位置, 下一段即落新目录
+        filepath = os.path.join(
+            _ensure_dated_dir(get_video_dirs()["sessions"]), filename)
+
+        new_writer = FFmpegRecorder(filepath, width, height, fps)
+        if not new_writer.open():
+            print(f"[Recording/Warn] 会话分段开新段失败, 老段续录, 60s 后重试: "
+                  f"{getattr(new_writer, 'last_error', '')}")
+            self._append_recording_failure(
+                "session", "rotate_open_failed", writer=new_writer,
+                error=getattr(new_writer, "last_error", "rotate_open_failed"))
+            self._session_seg_deadline = time.time() + 60
+            return
+
+        with self._writer_lock:
+            old_writer = self.video_writer
+            self.video_writer = new_writer
+            if old_writer:
+                self._draining_session_writer = old_writer
+
+        self._session_seg_index = seg_idx
+        self._session_seg_deadline = time.time() + SESSION_SEGMENT_SECONDS
+        print(f"[Recording] session video rotated -> segment {seg_idx}: {filename}")
+
+        # 老段: 排空 1.5s 后释放 (内部异步 remux 成 faststart) + 补 end_time/size
+        if old_writer:
+            def _drain_old(w):
+                time.sleep(1.5)
+                with self._writer_lock:
+                    if getattr(self, '_draining_session_writer', None) is w:
+                        self._draining_session_writer = None
+                try:
+                    w.release()
+                    _finalize_session_clip_row(w.filepath)
+                    print(f"[Recording] session segment sealed: "
+                          f"{os.path.basename(w.filepath)}")
+                except Exception as e:
+                    print(f"[Recording] seal session segment failed: {e}")
+
+            import threading
+            threading.Thread(target=_drain_old, args=(old_writer,),
+                             daemon=True).start()
+
+        # 新段 VideoClip 落库 (走本通道落库线程, 不阻塞录制线程;
+        # session.video_id/video_path 保持指首段, 分段列表按 related_id 查)
+        video_uuid = uuid.uuid4().hex
+        _sid = self.current_session_id
+        _start_dt = datetime.now()
+
+        def _persist_new_segment():
+            from backend.db.database import SessionLocal
+            db = SessionLocal()
+            try:
+                db.add(VideoClip(
+                    video_uuid=video_uuid,
+                    clip_type='session',
+                    related_id=_sid,
+                    file_path=filepath,
+                    file_name=filename,
+                    start_time=_start_dt,
+                ))
+                db.commit()
+            finally:
+                db.close()
+
+        self._persist.submit(f"session_seg#{video_uuid[:8]}", _persist_new_segment)
     
     def start_cycle_recording(self):
         """开始周期视频录制（使用 FFmpeg 进程）"""
@@ -171,7 +288,7 @@ class RecordingApiMixin:
         
         try:
             filename = f"cycle_{self.current_cycle_uuid}_{datetime.now().strftime('%H%M%S')}.mp4"
-            filepath = os.path.join(_ensure_dated_dir(settings.CYCLE_VIDEO_DIR), filename)
+            filepath = os.path.join(_ensure_dated_dir(get_video_dirs()["cycles"]), filename)
             
             fps = min(self.export_settings.get('video_fps', 30), 25)
             
@@ -310,7 +427,7 @@ class RecordingApiMixin:
                 video_uuid = uuid.uuid4().hex  # 完整 uuid 防唯一约束撞号
                 # 使用 .mp4 格式
                 filename = f"step_{step_label}_{video_uuid}_{datetime.now().strftime('%H%M%S')}.mp4"
-                filepath = os.path.join(_ensure_dated_dir(settings.STEP_VIDEO_DIR), filename)
+                filepath = os.path.join(_ensure_dated_dir(get_video_dirs()["steps"]), filename)
                 
                 fps = min(self.export_settings.get('video_fps', 30), 25)  # 限制FPS
                 
@@ -412,6 +529,7 @@ class RecordingApiMixin:
     
     def _close_all_writers(self):
         """关闭所有 FFmpeg 录制进程，防止资源泄漏"""
+        self._session_seg_deadline = None  # v3.54: 总清理时停分段轮转
         with self._writer_lock:
             if self.video_writer:
                 try:
