@@ -34,6 +34,26 @@
 
 触发点在三个 source mixin：`source_recording_api_mixin`（录像收尾 enqueue）/ `source_session_lifecycle_mixin`（NG 定案置 `_archive_ng_frame_pending`）/ `source_inference_loop_mixin`（同帧消费异步抽帧）。前端 `api/videoArchive.js` + `views/Data/components/VideoArchiveDialog.vue`。
 
+## 〇之一点六、自定义录像存储 + 检测主页自定义布局（v3.54 新增）
+
+### `backend/services/recording_storage.py`（185 行，新文件）
+
+> 自定义录像存储根目录（治"C 盘易满、无法实时指定视频路径"）。存 `SystemConfig` KV `recording_custom_root`，**动态解析**——录制点每次开 writer 时调 `get_video_dirs()` 现取，改目录立即生效不用重启。
+
+| 函数 | 一句话 |
+|---|---|
+| `get_custom_root(db=None)` | 读 KV（10s TTL 缓存 `_cache`，`refresh_cache()` 在 PUT 后强制刷新） |
+| `validate_recording_dir(path)` | 校验：必须绝对路径 / 不在系统目录黑名单 / 可写（实际 touch 探测）/ 不得嵌套进归档目的地（防自拷贝环）；返回 (ok, msg) |
+| `get_recording_root()` | 生效根：自定义可用则用之，坏了（盘拔了/没权限）**回退默认根**并留日志，录制永不因目录配置挂 |
+| `get_video_dirs()` | 返回 `{session/cycle/step/cache}` 四目录（生效根下），录制点/转码缓存唯一入口 |
+| `all_scan_roots()` | 默认根+自定义根聚合（清理/孤儿扫描/存储统计遍历用，见 03 册 sessions_maintenance v3.54 注） |
+
+API 挂 `sessions_maintenance.py`（`GET/PUT /data/storage/recording-dir`）；前端 `Data/components/DataSettingsTabs.vue`「录像存储位置」卡（序号守卫防慢 GET 覆盖快 PUT）。反向护栏：`services/video_archive.py::validate_dest_dir` 同步禁止归档目的地设进当前生效录像根。回归 `tests/test_recording_storage.py`（13 例）+ e2e `test_recording_storage_dir.py` + UAT `uat_recording_storage_dir.py`。
+
+### `backend/api/system_display.py` v3.54 增量（568 行）
+
+> 文件尾新增「检测主页自定义布局」四端点：`GET /system/monitor-layouts`（读全部，单条坏数据跳过不连坐）/ `PUT|DELETE /system/monitor-layouts/{form_key}` / `DELETE /system/monitor-layouts`（全清）。存 KV `monitor_layout.{form_key}`（**主程序保留命名空间**）；`_validate_layout_payload` 从严校验（version int 必填 / slot id 正则 / 坐标钳制 0~1、宽高最小 1% 防拖没 / z 0~1000 / 总量 64KB·100 slot 上限）——宁可 400 拒收不存渲染时才炸的数据。写/删挂 `monitor.layout.edit` 权限（`core/permissions.py` 已注册）。前端消费方见 04 册（`Monitor/layout/` runtime + 编辑器）。回归 `tests/test_monitor_layout_api.py`（21 例）+ BDD `features/monitor_layout.feature`（8 场景）+ e2e `test_monitor_layout_editor.py`（6 例）+ UAT `uat_monitor_layout.py`（14 断言）。
+
 ## 〇之二、训练平台互连（v3.47 新增家族）
 
 > 与 YoloVision 训练平台双向互连（契约 interconnect-contract 1.1，共同事实源在训练平台仓库 `TIANJUN_INTERCONNECT_SPEC.md`）。默认关；配置存 SystemConfig KV `interconnect.config`（**不是**独立 json 文件）。诊断见 `debug-interconnect` skill。

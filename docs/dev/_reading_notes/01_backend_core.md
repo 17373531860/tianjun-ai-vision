@@ -264,8 +264,8 @@
 | `source_detect_runners_mixin.py` | 609 | YOLO 三种 runner；v3.42 增 `infer_once_for_calibration` L306（标定用单帧推理：对当前显示帧现推一帧，**刻意不过**步骤过滤/ROI/box尺寸——锚点标签通常不是步骤；不发布 current_detections、无状态机副作用；无模型但在检测=synthetic 时透传实时结果） | `_detect_only/_detect_and_track/_detect_segment` L136+ | `_gpu_lock_ctx` |
 | `source_camera_start_mixin.py` | 875 | 6 种视频源启动（v3.41.1 曝光设置按 backend 语义精准下发 + set/get 可观测日志，见表下注） | `start_camera/rtsp/hcnetsdk/...` L114+；`_apply_exposure_setting` L136 | 启 `_capture_loop` 线程 |
 | `source_session_lifecycle_mixin.py` | 1773 | Session/Cycle DB 生命周期 | **`end_cycle` L711**；`start_session` L229；`start_cycle` L497 | — |
-| `source_recording_thread_mixin.py` | 305 | FFmpeg 录制线程 | `_recording_loop` L76 线程 | `_writer_lock` |
-| `source_recording_api_mixin.py` | 417 | 录制 API | session/cycle/step 录制启停 | `_step_writers_lock` |
+| `source_recording_thread_mixin.py` | 312 | FFmpeg 录制线程；v3.54 每帧调 `_maybe_rotate_session_recording` 触发分段轮转检查 | `_recording_loop` L76 线程 | `_writer_lock` |
+| `source_recording_api_mixin.py` | 556 | 录制 API；v3.54 三处录制点改 `get_video_dirs()` 动态取根（自定义录像目录）+ 会话录像按小时分段轮转（见表下 v3.54 注） | session/cycle/step 录制启停；`_rotate_session_recording` | `_step_writers_lock` |
 | `source_lifecycle_mixin.py` | 610 | pause/resume/stop/clear（v3.41.1 resume 重开相机沿用原 backend + 回放曝光，见表下注；v3.45 standby 待机保留周期+视频播放冻结） | `stop` L~100+；`_reopen_camera` L180 | — |
 | `source_periodic_actions_mixin.py` | 888 | v3.5 周期性强制动作 | `_run_periodic_actions_on_start` | — |
 | `source_synthetic_mixin.py` | 202 | 虚拟剧本源（测试） | `_SYNTHETIC_LOCK` L18 | class Lock |
@@ -275,6 +275,8 @@
 
 > **v3.41.1 USB 相机曝光保持（dev-qing 合入，技彩现场"锁帧"修复）**：症状是 Monitor 停止会 release 相机，重开（resume / 采集线程断线重连 / 前端 localStorage 恢复）后漏回写曝光 → 自动曝光复活把帧率压死。三处配套：① `source_camera_start_mixin._apply_exposure_setting` 重构——先探 backend（`_camera_backend_info`），MSMF 写 AE=0、DSHOW 写 0.25（老代码两个值都写、后写覆盖先写），每次 set 都记"请求值/set 返回/回读值"三元日志（`[Camera/Exposure]` 前缀），并把结果 dict 返回；启动成功后把 backend id 存 `_camera_backend`；② `source_capture_loop_mixin` 断线重连分支、`source_lifecycle_mixin._reopen_camera`（resume）都回放 `_auto_exposure/_exposure_value`（getattr 带默认，老源对象无属性也安全），resume 还沿用 `_camera_backend` 而不是硬编码 DSHOW；③ `main.py` bootstrap 新增 Windows 专属 `OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS=0`（**必须在 cv2 import 前**，与 FFMPEG threads;1 同段——技彩 UVC 相机开 HW transforms 时每次 set 分辨率/FPS 要重协商数秒）。回归：`tests/test_usb_camera_exposure_reopen.py` 6 例（⚠️ MSMF 语义用例必须 mock platform.system=Windows，Linux 开发机裸跑会走进 V4L2 分支断言失败）+ `tests/e2e_browser/test_usb_camera_exposure_restore.py`；UAT `tests/uat/uat_20260715_usb_camera_exposure_resume.py`。
 | `source_streaming_mixin.py` | 165 | MJPEG（**未接入 VSM MRO**，主类 L1831 有完整版） | `generate_mjpeg` L48 | frame_lock |
+
+> **v3.54 长录像治理（24h 录像"视频加载失败"治本三件套，录制族联动改动）**：① `source_recorder.py` 录制改 **fragmented MP4**——老管线 `+faststart` 在 release 时要整文件重写 moov，24h 大文件远超 10s 收尾超时被 SIGKILL，moov 残缺=整段不可播；fMP4 每个 fragment 自带索引，录制中途崩溃/断电文件仍可解码；release 后台 `remux_to_faststart` 流拷贝出常规 faststart MP4（秒级 seek + 全兼容），失败保留 fMP4 原件仍可播。② `source_recording_api_mixin.py` **会话录像按小时分段**——`SESSION_SEGMENT_SECONDS`（默认 3600，env `TJ_SESSION_SEGMENT_SECONDS` 可调）到点 `_rotate_session_recording` 开新段先起新 writer 再换旧（新段打不开延用旧 writer 下轮重试，不丢帧），每段独立 `VideoClip` 行（`_finalize_session_clip_row` 按 filepath 补 end_time/file_size，重试兜异步落库）；轮转检查挂在录制线程 `_write_frame_to_writers` 每帧调 `_maybe_rotate_session_recording`。③ 回放侧 `sessions.py` 编码探测直出免转码（见 03 册）。三处录制点（session/cycle/step）的落盘目录改 `services/recording_storage.get_video_dirs()` 动态解析（自定义录像存储根，见 05 册）。回归：`tests/test_recorder_fmp4.py`（杀进程可解码/收尾 remux/探测矩阵）+ `tests/test_session_segmentation.py`（轮转/失败重试/收尾清 deadline/API 顺序）+ e2e `test_session_segments.py` + UAT `uat_session_segments.py`（2h 长跑验证）。
 
 **v3.33~v3.45 增量变更（mixin 族）**：
 
@@ -338,7 +340,7 @@
 | `source_sequence_labels.py` | 220 | 步骤标签查询（无状态） | `get_expected_labels` L107 等 7 方法 | — |
 | `source_geometry.py` | 106 | 几何/字体工具 | `point_in_polygon/get_chinese_font` | — |
 | `source_roi.py` | 167 | 逐步骤 ROI mask | `ensure_roi_mask/apply_roi_mask` | — |
-| `source_recorder.py` | 255 | FFmpeg 录制器 + KalmanFilter2D | `FFmpegRecorder` L28 | `_lock` |
+| `source_recorder.py` | 332 | FFmpeg 录制器 + KalmanFilter2D；v3.54 改 fragmented MP4 录制（`+frag_keyframe+empty_moov+default_base_moof` + `-flush_packets 1` + `-g 125`，进程被杀文件仍可解码）+ `remux_to_faststart`（release 后台 daemon 线程流拷贝收尾成 faststart 常规 MP4，失败保留 fMP4 原件） | `FFmpegRecorder` L28；`remux_to_faststart` | `_lock` |
 | `source_sdk_loader.py` | 179 | HCNetSDK/海康工业相机/调试日志 | `debug_log/get_hikvision_device_list` | — |
 | `source_custom_mix.py` | 1735 | custom 混合子状态机；v3.45 容器记账体系重做（0b~0e） | `_ContainerAccumulator` L59；`CustomMixMachine` L1448；`compose_settle_event` L1684 | — |
 | `source_label_split.py` | 557 | v3.32 同标签区域拆分（虚拟步骤）+ 就位提示：检测出口标签改写层（fixed/anchor 两种定位 × 多轮次 × 每轮独立区域） | `parse_label_splits` L120；`LabelSplitEngine.apply` L435；`parse_placement_guide` L499；`PlacementGuideState` L515 | 无（每通道单实例仅推理线程访问） |

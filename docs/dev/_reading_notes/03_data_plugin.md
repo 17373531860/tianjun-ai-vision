@@ -64,15 +64,17 @@
 
 | 文件 | 行数 | 职责 |
 |---|---:|---|
-| `backend/api/sessions.py` | 1072 | 主路由：Session/Cycle/Step CRUD、视频、导出设置、CSV 导出入口；L1071–1072 挂载 stats/maintenance 子路由（v3.41 复核） |
+| `backend/api/sessions.py` | 1179 | 主路由：Session/Cycle/Step CRUD、视频、导出设置、CSV 导出入口；文件尾挂载 stats/maintenance 子路由（v3.41 复核；v3.54 变更见表下注） |
 | `backend/api/sessions_export.py` | 584 | CSV/多格式导出 builder（session/cycle/range 三分支）；`build_csv_string` 供定时导出复用 |
-| `backend/api/sessions_maintenance.py` | 937 | 备份/清空/范围清理/自动清理/VACUUM/存储信息；`_perform_auto_cleanup` 被 `main.py` 启动调用（v3.41 复核） |
+| `backend/api/sessions_maintenance.py` | 1156 | 备份/清空/范围清理/自动清理/VACUUM/存储信息；`_perform_auto_cleanup` 被 `main.py` 启动调用（v3.41 复核；v3.54 变更见表下注） |
 | `backend/api/sessions_stats.py` | 198 | 步骤/周期平均耗时统计 API |
 | `backend/api/projects.py` | 759 | 项目 CRUD/激活/复制/插件数据 patch；激活时 `fire_plugin_hook("project_activated")`（L430 附近，v3.41 复核） |
 
 > v3.32.1 变更：`projects.py` 激活防错位——抽出 `_channels_bound_to_other()`（L249）：单工位部署（channels 只有 1 个）不豁免任何旧绑定，多工位保持"各工位自绑项目优先"原语义；配置同步成功后把该通道的持久化绑定改指本项目（L305–315，仅旧绑定指向别的项目时才写）。动机：残留旧绑定会让重启后 `auto_load_active_project` 悄悄恢复另一个项目+模型，出现"项目页显示启用 A、工位实际跑 B"的持久错位。
 > v3.35.1 变更：`sessions.py` 按日查询的班次过滤放开 day/night 硬编码（L443–445），支持自定义班次名（白班/午班/夜班…，配套萍乡自定义班次列表）。
 > v3.48.1 变更：`sessions.py` 两处——① `get_session_cycles`（L629 附近）新增 `result=ok|ng` 查询参数按 `DetectionCycle.is_good` 过滤（数据中心「只看NG录像」）；② `convert_video_for_browser`（L881 附近）转码原子化：先写 `.tmp.mp4` 成功后 `os.replace` 落位、缓存名 `_h264` → `_h264v2`（历史坏缓存自然失效重转）、超时 60s→300s、失败半成品 finally 必清——治"转码超时留残缺缓存后该录像永远播放失败"。
+> v3.54 变更：`sessions.py` 三处——① `_is_browser_compatible_h264`（模块级 probe 缓存 `_VIDEO_PROBE_CACHE`）：用 `ffmpeg -i` stderr 解析探测 h264+yuv420p，命中则 `convert_video_for_browser` **直出原文件免转码**（fMP4 收尾 remux 后的录像天然命中；老 mp4v 录像照旧转码，老测试 monkeypatch 该函数为 False 保持转码路径覆盖）；② 转码缓存目录改 `get_video_dirs()` 动态取（跟自定义录像根走）；③ 新端点 `GET /data/sessions/{id}/videos` 返回会话录像分段列表（v3.54 长会话按小时分段，见 01 册录制族注），按 start_time 排序含 `video_uuid/start_time/end_time/file_exists`。
+> v3.54 变更：`sessions_maintenance.py` ——新增 `GET/PUT /data/storage/recording-dir`（自定义录像存储根目录，PUT 挂 `settings.edit` + `validate_recording_dir` 校验 + `refresh_cache`）；新增 `_all_video_scan_dirs()/_all_cache_dirs()` 聚合默认根+自定义根，清理/孤儿扫描/存储统计 6 处目录遍历全部改走聚合（自定义目录里的录像同样被自动清理管到）；`_ensure_dated_dir` 改在建段时实时调 `get_video_dirs()`。存储服务本体 `services/recording_storage.py` 见 05 册。
 > v3.38 变更：`sessions_maintenance.py` 清理事务卫生（川南"框冻结"第二刀）——大事务握写锁秒级会堵推理线程写步骤/周期记录（撞 busy_timeout → 前端检测框冻结），三处整改：① `_delete_cycles_by_filter`（L129–178）按 `_CLEANUP_BATCH_CYCLES=200` 个周期/批分批删+逐批提交，录像文件删除（慢 I/O）移出事务、提交放锁后再动磁盘（进程崩溃留下的孤儿文件由孤儿扫描下一轮自愈）；② OK/NG 分开保留的录像清理逐结果提交、文件删除同样移出事务（L327–347）；③ 流水日志表（扫码/MES 通讯/外设日志）按主键 5000 行/批分批删（L392–406），整表条件删单事务会握锁数秒。
 
 ### 1.4 导出 API（`/api/v1/export/*`）

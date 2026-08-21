@@ -1,0 +1,119 @@
+{
+  "version": "3.54.0",
+  "date": "2026-08-21",
+  "previous_version": "3.53.0",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "检测主页自定义布局（拖拽排版，按形态分别保存）",
+      "symptom": "不同产线对检测主页区块摆放习惯不同，此前只能改代码定制",
+      "root_cause": "Monitor 五种形态排版硬编码，无用户级自定义能力",
+      "fix": "样式接管机制：data-layout-canvas/data-layout-slot 标注 + runtime 绝对定位百分比坐标，无布局零差异；编辑器覆盖层（八向手柄/网格吸附/撤销重做/16:9锁/z序/草稿防崩溃）；按形态键存 SystemConfig KV monitor_layout.*（升级备份不丢）；reconcile 升级安全（新区块兜底区/孤儿忽略/坏数据回默认）；新权限点 monitor.layout.edit；显示设置入口卡 + 全部恢复默认",
+      "files": ["backend/api/system_display.py", "backend/core/permissions.py", "frontend/src/api/monitorLayout.js", "frontend/src/views/Monitor/layout/monitorLayout.js", "frontend/src/views/Monitor/layout/LayoutEditorOverlay.vue", "frontend/src/views/Monitor/index.vue", "frontend/src/views/Monitor/SingleChannelMonitor.vue", "frontend/src/views/Settings/DisplaySettingsTab.vue"],
+      "keywords": ["自定义布局", "拖拽", "layout", "monitor-layouts", "data-layout-slot", "样式接管", "reconcile", "八向手柄", "网格吸附", "恢复默认", "monitor.layout.edit", "form_key", "草稿", "drag", "resize", "custom layout"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "录像存储位置自定义（实时生效 + 软件内直接回放）",
+      "symptom": "客户反馈 C 盘容易满，且无法实时指定录像路径",
+      "root_cause": "录像路径硬编码安装盘 recordings/，只能靠归档复制一份",
+      "fix": "services/recording_storage.py：KV recording_custom_root + get_video_dirs() 动态解析改目录即生效；校验（绝对路径/黑名单/可写探测/与归档目的地互斥）；盘失联自动回退默认根；清理/孤儿扫描/存储统计聚合双根；API GET/PUT /data/storage/recording-dir；Data 页录像存储位置卡",
+      "files": ["backend/services/recording_storage.py", "backend/api/source_recording_api_mixin.py", "backend/api/sessions.py", "backend/api/sessions_maintenance.py", "backend/services/video_archive.py", "frontend/src/api/data.js", "frontend/src/views/Data/components/DataSettingsTabs.vue"],
+      "keywords": ["录像存储位置", "自定义目录", "C盘满", "recording_custom_root", "recording-dir", "get_video_dirs", "动态解析", "回退默认", "磁盘占用", "custom recording directory"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "长录像治理三件套：fMP4 录制 + 条件转码直出 + 会话按小时分段",
+      "symptom": "24 小时长录像回放高发「视频加载失败」",
+      "root_cause": "faststart 收尾整文件重写 moov 超 10s 超时被强杀致 moov 残缺不可播；回放端不管源编码一律转码，大文件 300s 转码超时必败",
+      "fix": "录制改 fragmented MP4（frag_keyframe+empty_moov+default_base_moof + flush_packets 1 + g 125）崩溃仍可解码，release 后台 remux_to_faststart 流拷贝出常规 MP4；回放端 h264+yuv420p 探测命中直出免转码；会话录像按小时分段轮转（TJ_SESSION_SEGMENT_SECONDS 可调，先起新 writer 再换旧不丢帧，每段独立 VideoClip），GET /data/sessions/{id}/videos 分段列表 + 播放器分段切换条",
+      "files": ["backend/api/source_recorder.py", "backend/api/source_recording_api_mixin.py", "backend/api/source_recording_thread_mixin.py", "backend/api/sessions.py", "frontend/src/api/data.js", "frontend/src/views/Data/index.vue", "frontend/src/views/Data/components/VideoPlayerDialog.vue"],
+      "keywords": ["视频加载失败", "24小时录像", "fragmented MP4", "fMP4", "moov", "faststart", "remux", "免转码", "编码探测", "会话分段", "分段回放", "SESSION_SEGMENT_SECONDS", "轮转", "long recording"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "前端信息架构（IA）重构：功能归位到所属域页面",
+      "symptom": "系统设置页堆满与设置无关的产线功能，项目逻辑设置塞装箱清点全量参数，排版乱找不到",
+      "root_cause": "近期大量功能无暇做信息架构归位，全塞系统设置页",
+      "fix": "输入源页扩为「工位与输入源」四 tab（多屏/工位组/流水线串行迁入）；MES 页 tab 按域分组（包装结算/触发中心迁入）；项目配置新增条件 tab「装箱清点」（混合跟踪时出现）；系统设置瘦身；老入口直接移除（纯前端位置变化无数据迁移），手册/skill/e2e 全量同步",
+      "files": ["frontend/src/views/Source/index.vue", "frontend/src/views/Source/MultiMonitorPanel.vue", "frontend/src/views/Source/ChannelGroupPanel.vue", "frontend/src/views/Source/WorkpieceFlowPanel.vue", "frontend/src/views/MES/index.vue", "frontend/src/views/MES/PackagingFlowPanel.vue", "frontend/src/views/MES/TriggerPanel.vue", "frontend/src/views/Project/index.vue", "frontend/src/views/Project/CustomMixBoxTab.vue", "frontend/src/views/Project/LogicConfigTab.vue", "frontend/src/views/Settings/index.vue", "frontend/src/layout/index.vue"],
+      "keywords": ["信息架构", "IA重构", "工位与输入源", "MES管理", "装箱清点", "包装结算", "触发中心", "工位组", "流水线串行", "多屏工位显示", "功能归位"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-005",
+      "title": "全前端文案专业化 + 客户信息匿名化 + 本地配置模板",
+      "symptom": "UI 文案是客户使用说明式的（点名客户/内部黑话），内置模板带客户品牌",
+      "root_cause": "现场交付节奏下文案未做产品化打磨",
+      "fix": "全前端可见文案改中性专业产品语言（滑块→物品、托盘→容器、去客户名/RFC引用）；MES tab 分组分段控件；内置模板匿名化；新增「存为我的模板」localStorage 本地模板（保存/套用/删除，PackagingFlowPanel + OrderPullPanel）",
+      "files": ["frontend/src/views/MES/PackagingFlowPanel.vue", "frontend/src/views/MES/OrderPullPanel.vue", "frontend/src/views/MES/GatewayPanel.vue", "frontend/src/views/MES/OrderInboundPanel.vue", "frontend/src/views/MES/ScannerPanel.vue", "frontend/src/views/MES/UsbScanGunDialog.vue", "frontend/src/views/Project/CustomMixBoxTab.vue", "frontend/src/views/Project/WeighingConfigTab.vue", "frontend/src/views/Alarm/components/SmsPushCard.vue", "frontend/src/views/Settings/DisplaySettingsTab.vue", "frontend/src/views/Source/index.vue"],
+      "keywords": ["文案专业化", "匿名化", "本地模板", "我的模板", "localStorage", "物品", "容器", "专业语言", "anonymize", "template"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-006",
+      "title": "缸体判型二期收编（feat/tianyong 合入）",
+      "symptom": "缸体判型现场二期整改需求",
+      "root_cause": "一期能力面不足",
+      "fix": "切步数量门顺序检查增强 + 补齐消警转绿 + 结算挂起等补横幅 + 标签级追踪参数 + 锁框叠加层 + 手动结算 + PLC 判型码回写 + 现场交付文档",
+      "files": ["backend/api/source_inference_loop_mixin.py", "backend/api/source_settlement_mixin.py"],
+      "keywords": ["缸体判型", "切步数量门", "combo_verdict", "settle_hold", "消警", "手动结算", "PLC判型码", "tianyong"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-007",
+      "title": "三工位监控一屏等宽三列（dev-qing 合入）",
+      "symptom": "三工位产线走 2×2 网格总览浪费一格，信息密度低",
+      "root_cause": "channelCount>2 一律走网格总览",
+      "fix": "channelCount===3 独立分支：一屏等宽三列完整工位卡（视频/计数/质量摘要/MES条/SOP/步骤表/控制按列全套）",
+      "files": ["frontend/src/views/Monitor/index.vue", "frontend/src/views/Settings/DisplaySettingsTab.vue"],
+      "keywords": ["三工位", "三列", "triple", "监控布局", "dev-qing"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "REF-001",
+      "title": "前端巨石视图拆分五连（行为零差异）",
+      "symptom": "Data/Settings/Alarm/Monitor/Project 五个巨石视图维护困难",
+      "root_cause": "历史堆积",
+      "fix": "Data 2409→约1050、Settings 3120→约230、Alarm 2175→762、Monitor 人工确认外置、Project 3530→3025；每步 build 绿 + 域 e2e 全绿 + testid 一致",
+      "files": ["frontend/src/views/Data/index.vue", "frontend/src/views/Settings/index.vue", "frontend/src/views/Alarm/index.vue", "frontend/src/views/Monitor/index.vue", "frontend/src/views/Project/index.vue"],
+      "keywords": ["巨石拆分", "重构", "composable", "子组件", "refactor"],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "CI-001",
+      "title": "新增 Windows e2e 跑道 + ubuntu 跑道补 frontend 触发",
+      "symptom": "客户通用系统是 Windows/Linux，此前 e2e 只有 ubuntu 跑道且 frontend 改动不触发",
+      "root_cause": "Start-Process 子进程活不过 GitHub Actions step 边界",
+      "fix": "windows-latest e2e workflow，起服务/等端口/pytest 合并单 bash step 后台化；test-virtual.yml push 触发补 frontend/** 路径",
+      "files": [".github/workflows/test-virtual-windows.yml", ".github/workflows/test-virtual.yml"],
+      "keywords": ["Windows e2e", "CI", "Start-Process", "step边界", "端口等待", "workflow"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "e2e 偶发红灯两修（跨平台）",
+      "symptom": "settle_scan_lifecycle CI 红本地绿；external_device_pulse_panel 并行回归偶发红",
+      "root_cause": "Meta+a 全选在 Ubuntu runner 是 no-op 致输入追加；成功 toast 匹配残留消息致 GET 跑在落库前",
+      "fix": "前者改 fill() 原生替换值；后者保存后查询改短轮询",
+      "files": ["tests/e2e_browser/test_settle_scan_lifecycle.py", "tests/e2e_browser/test_external_device_pulse_panel.py"],
+      "keywords": ["e2e flake", "Meta+a", "fill", "短轮询", "竞态", "跨平台"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["modify-frontend", "debug-frontend", "api-sync", "debug-video", "debug-mes", "run-tests", "start-dev-servers"],
+  "files_changed": ["backend/api/system_display.py", "backend/core/permissions.py", "backend/services/recording_storage.py", "backend/api/source_recorder.py", "backend/api/source_recording_api_mixin.py", "backend/api/source_recording_thread_mixin.py", "backend/api/sessions.py", "backend/api/sessions_maintenance.py", "backend/services/video_archive.py", "frontend/src/api/monitorLayout.js", "frontend/src/api/data.js", "frontend/src/views/Monitor/layout/monitorLayout.js", "frontend/src/views/Monitor/layout/LayoutEditorOverlay.vue", "frontend/src/views/Monitor/index.vue", "frontend/src/views/Monitor/SingleChannelMonitor.vue", "frontend/src/views/Settings/DisplaySettingsTab.vue", "frontend/src/views/Data/index.vue", "frontend/src/views/Data/components/VideoPlayerDialog.vue", "frontend/src/views/Data/components/DataSettingsTabs.vue", "frontend/src/views/Source/index.vue", "frontend/src/views/MES/index.vue", "frontend/src/views/Project/index.vue"]
+}

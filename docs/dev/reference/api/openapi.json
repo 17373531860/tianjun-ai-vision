@@ -7979,6 +7979,17 @@
     "title": "PulseRequest",
     "type": "object"
    },
+   "RecordingDirUpdate": {
+    "properties": {
+     "dir": {
+      "default": "",
+      "title": "Dir",
+      "type": "string"
+     }
+    },
+    "title": "RecordingDirUpdate",
+    "type": "object"
+   },
    "RemediationRedoInput": {
     "properties": {
      "channel_id": {
@@ -17356,6 +17367,47 @@
     ]
    }
   },
+  "/api/v1/data/sessions/{session_id}/videos": {
+   "get": {
+    "description": "会话录像分段列表 (v3.54 长录像治理: 会话录像按小时分段落库)。\n\n按 start_time 升序返回该会话全部 session 类型 VideoClip。\n老数据单文件会话返回单元素列表, 前端播放入口统一走本端点。",
+    "operationId": "get_session_videos_api_v1_data_sessions__session_id__videos_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "session_id",
+      "required": true,
+      "schema": {
+       "title": "Session Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Get Session Videos",
+    "tags": [
+     "data"
+    ]
+   }
+  },
   "/api/v1/data/stats/behavior-score": {
    "get": {
     "description": "行为分析综合评分 (0-100) + 子项 + 最近周期耗时序列.\n\n子项:\n  yield     良率得分           = 良率 * 100\n  stability 节拍稳定度          = 100 - 变异系数*100 (周期耗时越稳越高)\n  streak    连续无 NG 得分      = 最近无 NG 连续比例 * 100\noverall = 0.5*yield + 0.3*stability + 0.2*streak",
@@ -17735,6 +17787,64 @@
      }
     },
     "summary": "Get Storage Info",
+    "tags": [
+     "data"
+    ]
+   }
+  },
+  "/api/v1/data/storage/recording-dir": {
+   "get": {
+    "description": "查询录像存储位置: 自定义目录配置 + 当前生效目录 + 生效盘剩余空间。",
+    "operationId": "get_recording_storage_dir_api_v1_data_storage_recording_dir_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Get Recording Storage Dir",
+    "tags": [
+     "data"
+    ]
+   },
+   "put": {
+    "description": "设置自定义录像存储目录, 实时生效 (下一段录像即写新目录)。\n\n- 传空字符串恢复默认数据目录\n- 非空时做与归档目的地同源的护栏校验 (绝对路径/黑名单/真实可写)\n  + 与启用中的本地归档目的地互斥\n- 历史录像不搬迁: DB 存绝对路径, 新旧目录的回放都照常可用",
+    "operationId": "set_recording_storage_dir_api_v1_data_storage_recording_dir_put",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RecordingDirUpdate"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Set Recording Storage Dir",
     "tags": [
      "data"
     ]
@@ -32222,6 +32332,152 @@
      }
     },
     "summary": "Put Log Limits",
+    "tags": [
+     "system"
+    ]
+   }
+  },
+  "/api/v1/system/monitor-layouts": {
+   "delete": {
+    "description": "全部形态恢复默认 (显示设置页的终极出口, 布局改乱时的自救按钮)。",
+    "operationId": "delete_all_monitor_layouts_api_v1_system_monitor_layouts_delete",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Delete All Monitor Layouts Api V1 System Monitor Layouts Delete",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Delete All Monitor Layouts",
+    "tags": [
+     "system"
+    ]
+   },
+   "get": {
+    "description": "读全部自定义布局 {form_key: layout}。无自定义返回空对象。\n\n单条解析失败跳过该条不影响其他形态 (坏数据兜底, 主页渲染不能因布局挂)。",
+    "operationId": "get_monitor_layouts_api_v1_system_monitor_layouts_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Get Monitor Layouts Api V1 System Monitor Layouts Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Get Monitor Layouts",
+    "tags": [
+     "system"
+    ]
+   }
+  },
+  "/api/v1/system/monitor-layouts/{form_key}": {
+   "delete": {
+    "description": "删除某形态的自定义布局 (恢复该形态默认)。幂等: 不存在也返回 ok。",
+    "operationId": "delete_monitor_layout_api_v1_system_monitor_layouts__form_key__delete",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "form_key",
+      "required": true,
+      "schema": {
+       "title": "Form Key",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Delete Monitor Layout Api V1 System Monitor Layouts  Form Key  Delete",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Delete Monitor Layout",
+    "tags": [
+     "system"
+    ]
+   },
+   "put": {
+    "description": "保存某形态的自定义布局 (整份覆盖)。",
+    "operationId": "put_monitor_layout_api_v1_system_monitor_layouts__form_key__put",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "form_key",
+      "required": true,
+      "schema": {
+       "title": "Form Key",
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "additionalProperties": true,
+        "title": "Layout",
+        "type": "object"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Put Monitor Layout Api V1 System Monitor Layouts  Form Key  Put",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Put Monitor Layout",
     "tags": [
      "system"
     ]

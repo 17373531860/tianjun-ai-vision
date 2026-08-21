@@ -45,7 +45,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `/tasks/*` | `tasks.py` | 无（`task.js` 已删） | 离线推理任务（前端无入口，仅 API 在线） |
 | `/reports/*` | `reports.py` | 无（`report.js` 已删） | 趋势/日报/导出（报表展示由 Data 页接管） |
 | `/cameras/*` | `cameras.py` | 无（`camera.js` 已删） | **旧式相机表**，新代码不要往这写 |
-| `/system/*` | `system_display.py` | 无封装（`useSystemStore` 直调） | KV 配置 + license 缓存 |
+| `/system/*` | `system_display.py` | 大部分无封装（`useSystemStore` 直调）；★ v3.54 `monitorLayout.js` 封装 `/system/monitor-layouts` | KV 配置 + license 缓存；v3.54 检测主页自定义布局 `GET /monitor-layouts`（读不鉴权）+ `PUT/DELETE /monitor-layouts/{form_key}` + `DELETE /monitor-layouts`（写/删挂 `monitor.layout.edit` 权限） |
 | `/alarm/*` | `alarm.py` | 无封装（Alarm 视图直调） | 灯塔 / 蜂鸣器 / 共享灯柱 |
 | `/sms/*` | `sms.py` | `sms.js` | 系统级统一短信通道 + NG 汇总通知（config/ports/test；通道五选一 at_modem/generic_http/wxpusher/aliyun/tencent，日报共用此配置，默认关） |
 | `/sms-report/*` | `sms_report.py` | `smsReport.js` | v3.46 每日短信日报（规则 CRUD/试发/预览/日志 + `/providers` 只读通道信息；通道配置走 `/sms/config`） |
@@ -82,7 +82,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 
 ## 2. 前端 API 客户端清单（`frontend/src/api/`）
 
-23 个文件（2026-08 实数盘点）。前缀对应关系**看 §1 真相表第三列**，此处只记状态与坑。所有文件统一 `import api from './index'`，`api.get('/xxx')` 自动加 `/api/v1` 前缀。
+25 个文件（2026-08 实数盘点；v3.53 增 `videoArchive.js`、v3.54 增 `monitorLayout.js`）。前缀对应关系**看 §1 真相表第三列**，此处只记状态与坑。所有文件统一 `import api from './index'`，`api.get('/xxx')` 自动加 `/api/v1` 前缀。
 
 | 前端文件 | 状态 / 坑 |
 |---|---|
@@ -98,7 +98,9 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `plc.js` | ★ v3.48 在用（MES 页 PLC 对接 tab：`/plc/*` 全组封装） |
 | `triggers.js` | ★ v3.48 在用（MES 管理页触发中心 tab：`/triggers/*` 全组封装） |
 | `auth.js` | 在用（一个文件封装 `/auth` `/users` `/roles` `/api-keys` 四组） |
-| `plugins.js` / `channel_group.js` / `packaging_flow.js` | 在用 |
+| `plugins.js` / `channel_group.js` / `packaging_flow.js` / `workpiece_flow.js` | 在用 |
+| `videoArchive.js` | ★ v3.53 在用（Data 页录像归档卡：`/export/video-archive/*` 全组封装） |
+| `monitorLayout.js` | ★ v3.54 在用（`/system/monitor-layouts` CRUD；消费方 `Monitor/layout/monitorLayout.js` runtime + `Settings/DisplaySettingsTab.vue` 入口卡） |
 | `export.js` | 在用（v3.5.0 自定义导出 + 实时规则） |
 | `operators.js` | ⚠ 后端全 410 Gone（v3.10.0 废弃），新代码禁用 |
 | ~~`report.js` / `task.js` / `camera.js`~~ | **已于 2026-07 死代码清理中删除**（连同 `views/Report/index.vue`；全仓核实无引用 + build 绿）。别再复活 |
@@ -225,7 +227,9 @@ export function getBackendHost() {
 | GET | `/data/sessions/{id}/cycles` | 周期列表（`skip` `limit`） |
 | GET | `/data/cycles/{id}` `/cycles/{id}/steps` | 周期详情 + 步骤 |
 | GET | `/data/cycles/by-serial/{serial_no}` | v3.4.3 工件全局检索 |
-| GET | `/data/videos` `/videos/{id}` | 录像列表/单条流（`{id}` 走 MJPEG/MP4） |
+| GET | `/data/videos` `/videos/{id}` | 录像列表/单条流（`{id}` 走 MJPEG/MP4；v3.54 起 h264+yuv420p 探测通过直出免转码） |
+| GET | `/data/sessions/{id}/videos` | ★ v3.54 会话录像分段列表（长会话按小时分段，多段时 Data 页显示分段切换条） |
+| GET/PUT | `/data/storage/recording-dir` | ★ v3.54 自定义录像存储根目录（PUT 挂 `settings.edit`，校验黑名单/可写/与归档目录互斥） |
 | GET/PUT | `/data/export-settings` | 导出开关 |
 | GET | `/data/export/csv` | `export_type=session\|cycle\|all`，`pt_mode`/`ct_mode`/`project_id`/`channel_id`/`start_date`/`end_date`/`week`/`month` |
 | GET | `/data/stats/step-averages` `/stats/cycle-averages` | 聚合统计（v3.5.0 含置信度） |
@@ -319,6 +323,7 @@ rg -n "channel_id=|channel=" frontend/src/api/*.js backend/api/*.py
 - **v3.5.1（线上）**：CSV 导出加 `pt_mode/ct_mode`；操作手册补完。
 - **v3.5.2（未发）**：扫码器列表为空时静默"⚠ 未绑码"；海康相机 NameError；检测框三层 clip。
 - **v3.49.0**：捷昌整改批次四组新端点——`GET/PUT /mes/gateway/async-dispatch`（MES 外推并发派发开关，SystemConfig `mes_async_dispatch`）；`GET/PUT /scanner/scan-pair/new-code-first`（scan_pair 新码先上屏开关，SystemConfig `scan_pair_new_code_first`）；`GET /cluster/report-status`（副机上报链路状态：queued/spooled/spool_replayed_total，ClusterPanel 状态区）；`GET /system/db-info`（数据库 dialect/脱敏位置/版本/连接池，Settings 数据库卡片）。`/cluster/config` 增 `report_timeout_sec`/`report_async` 字段。⚠️ 网关连接的 `retry_budget_sec` 存 **config JSON 内**不是顶层字段，前端 GatewayPanel 与 UAT 都按 config 取。前端封装：`api/cluster.js`（report-status）、Settings/GatewayPanel/ClusterPanel 直调。
+- **v3.54**：三组新端点——`GET/PUT/DELETE /system/monitor-layouts[/{form_key}]`（检测主页自定义布局按形态键存 SystemConfig KV `monitor_layout.*`，写/删挂 `monitor.layout.edit`，前端 `monitorLayout.js`）；`GET/PUT /data/storage/recording-dir`（自定义录像存储根目录，SystemConfig `recording_custom_root`，PUT 挂 `settings.edit`，前端 `data.js`）；`GET /data/sessions/{id}/videos`（长会话录像分段列表，前端 `data.js::getSessionVideos`，多段时 VideoPlayerDialog 出分段切换条）。回归护栏：BDD `tests/features/monitor_layout.feature` + 单测 `test_monitor_layout_api.py`/`test_recording_storage.py`/`test_session_segmentation.py` + e2e `test_monitor_layout_editor.py`/`test_recording_storage_dir.py`/`test_session_segments.py`。
 
 ---
 

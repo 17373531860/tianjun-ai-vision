@@ -305,7 +305,9 @@ CI 浏览器回归覆盖设置 roundtrip、Electron apply payload 可结构化�
 
 ## 五、Monitor 深读
 
-**文件**：`frontend/src/views/Monitor/index.vue`（6272 行；v3.43 复核）
+**文件**：`frontend/src/views/Monitor/index.vue`（6950 行；v3.54 复核）
+
+> **v3.54 增量**：① 三工位形态改一屏等宽三列完整工位卡（dev-qing fcc1b9b，`channelCount === 3` 独立分支，视频/计数/质量摘要/MES 条/SOP/步骤表/控制按列全套）；② 全形态打自定义布局标注（`data-layout-canvas`/`data-layout-slot`，见 5.6 节）+ `LayoutEditorOverlay` 挂载（`v-if="!kioskMode"`）+ `?layout_edit=1` route watch；③ 人工确认体系外置为 `composables/useManualAck.js` + `PendingAckOverlay.vue` + `ElevateAckDialog.vue`（结构重构行为零差异）。5.1/5.2 表行号系 v3.43 快照，漂移以代码为准。
 
 > **v3.43 增量**：① SOP 流程卡片显示条件补排除称重投料模式（`!isWeighingMode`，行 612）——称重看板与 SOP 同链互斥且 SOP 在前，不排除的话称重项目永远被 SOP 卡片抢占、专属看板一次都轮不到（萍乡百斯特现场撞出；融合模式 logic_mode 是 sequential 不受影响）。② 人工确认弹窗体验：原因优先读后端固化的 `pending_ack.reason`（不随 30s 事件窗滚动丢失，行 5937），新增「确认后」处置方式明示行 + 按钮文案/颜色按 `keeps_cycle` 分道（"断点继续"绿 / "整件重做"橙，行 1246–1290），确认成功 toast 同步区分。配套 `BottomBar.vue`/`Navbar.vue` 模式文案表补 weighing/region_events（五语言 locales 同步加 `mode.weighing`/`mode.region_events`——此前称重项目底栏显示"未定义"）。
 
@@ -415,6 +417,24 @@ CI 浏览器回归覆盖设置 roundtrip、Electron apply payload 可结构化�
 | STREAM_FIRST_FRAME_TIMEOUT_MS | 5000ms | 1782 |
 | WeighingLiveBar 自轮询 | 800ms | 组件内行 89 |
 | Navbar 激活项目跟随轮询（v3.37） | 5000ms | Navbar 行 748 |
+
+### 5.6 检测主页自定义布局（v3.54 新增家族）
+
+> 用户在检测主页直接拖拽调整区块位置/大小，按形态键分别存后端。机制是"样式接管"而非组件重排——排查/修改前必读 `debug-frontend` skill v3.54 节 + `modify-frontend` skill 8.5 节（**slot id 是持久化契约**）。
+
+| 文件 | 行数 | 职责 |
+|---|---|---|
+| `views/Monitor/layout/monitorLayout.js` | 421 | 运行时核心（模块级单例）：`attachLayoutRoot`（MutationObserver+watchEffect 驱动 `requestApply`）/ `absolutize`/`restoreEl` 样式接管与还原（原 inline style 暂存可整体退场）/ `captureNaturalLayout` 现场测量自然 flow 位置当编辑初稿 / reconcile（新 slot 落左下兜底区、孤儿忽略、异常整体回默认）/ 编辑会话 enterEdit/saveDraft/exitEdit/restoreFormDefault / localStorage 草稿防崩溃（`tj_layout_draft::` 前缀） |
+| `views/Monitor/layout/LayoutEditorOverlay.vue` | 571 | 编辑器覆盖层：固定层工具条（保存/完成/取消/撤销重做 50 步/恢复默认/网格吸附 24×24/视频 16:9 锁/z 序）+ 区块选框八向手柄拖拽 + 方向键微调（Shift=调尺寸）+ 草稿恢复弹窗；`SLOT_LABELS` 登记区块中文名（新增 slot 要补） |
+| `api/monitorLayout.js` | 20 | `/system/monitor-layouts` CRUD 封装 |
+
+- **模板标注**：`Monitor/index.vue` 五种形态根容器打 `data-layout-canvas="single|dual|triple|grid"`，`SingleChannelMonitor.vue` 打 `zoom`；区块打 `data-layout-slot`；条件块 `v-if` 补 `|| layoutEditActive`（编辑态强制显示）。双/三工位编辑第一列其余列镜像。
+- **入口**：`Settings/DisplaySettingsTab.vue`「检测主页自定义布局」卡（`layout-edit-entry` 跳 `/monitor?layout_edit=1`，权限 `monitor.layout.edit` 守门；已定制形态 tag 可单删；「全部形态恢复默认」终极出口）；Monitor 侧 route watch 消费 `layout_edit` query 并即时清掉不污染路由记忆；kiosk 不进编辑态。
+
+### 5.7 Data 页 v3.54 增量（跨域指针）
+
+- `views/Data/components/VideoPlayerDialog.vue`：新增 `openSegments(segList, urlOf)` + 分段切换条（`data-testid=video-segment-bar`，仅多段会话录像显示；单段/周期/步骤视频不出）；`Data/index.vue::playSessionVideo` 先拉 `GET /data/sessions/{id}/videos` 多段走分段播放、失败回退单段。
+- `views/Data/components/DataSettingsTabs.vue`：「视频录制」区新增「录像存储位置」卡（自定义目录输入/保存/生效路径与磁盘占用回显；`recordingDirSeq` 序号守卫防慢 GET 覆盖快 PUT 的竞态）。后端侧见 03/05 册。
 
 ---
 

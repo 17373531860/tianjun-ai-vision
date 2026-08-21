@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 import requests
+from playwright.sync_api import expect
 
 from .conftest import API_URL
 
@@ -259,7 +260,9 @@ def test_kiosk_is_readonly_and_polls_only_requested_channel(page, base_url, work
     # 越界 query 钳制到最后工位；只有显式 readonly=0 才显示复用的既有控制入口。
     _goto(page, base_url, "/monitor?channel=99&kiosk=1&readonly=0&multi_monitor=1")
     monitor = page.get_by_test_id("single-channel-monitor")
-    assert monitor.get_attribute("data-channel") == "2"
+    # 整页加载后工位数是异步拉取的, 元素先以默认 channelCount=1 (钳制=0) 可见,
+    # 拉到 3 后才翻成 2 —— 用轮询断言等稳定态, 即时断言在回归负载下会输给竞态。
+    expect(monitor).to_have_attribute("data-channel", "2", timeout=5_000)
 
     # 路由切换完成后再重置观察账本，排除上一工位已发出但尚未回调的瞬时请求。
     # reload 用当前 query 触发一轮确定的新流连接；稳定态仍严格要求只出现 channel=2。
@@ -268,7 +271,7 @@ def test_kiosk_is_readonly_and_polls_only_requested_channel(page, base_url, work
     stream_channels.clear()
     page.reload(wait_until="domcontentloaded", timeout=15_000)
     monitor.wait_for(state="visible", timeout=5_000)
-    assert monitor.get_attribute("data-channel") == "2"
+    expect(monitor).to_have_attribute("data-channel", "2", timeout=5_000)
     _wait_for_channel(page, result_channels, 2)
     _wait_for_channel(page, stream_channels, 2)
     assert page.get_by_test_id("single-channel-controls").count() == 1
