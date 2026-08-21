@@ -360,3 +360,19 @@ v3.7.3 起 IoU / 优先级 / FP16 收进"高级参数 ▾"折叠区（默认收�
 3. **⚠️ 不变量：网格总览整卡点击=放大单路（v3.47 交付行为），多屏开关不得改变**。v3.52 合并审计拦下过一次"多屏关闭时误改为仅选中"的回归；2/3 工位整卡点击=选中不变。双向守门：`tests/e2e_browser/test_multi_workstation_layout.py::test_grid_overview_pagination_and_zoom` + `test_multi_monitor_phase1.py::test_disabled_workstations_keep_legacy_selection`。
 4. **kiosk 路由不污染主窗记忆**：`router/index.js` `isMultiMonitorRoute` 守门——kiosk query 不触发冷启动路由恢复、不写 `LAST_ROUTE_KEY`；`layout/index.vue` kiosk 下隐藏导航/底栏且不启 `startScanGun()`（⚠️ 现场焦点落副屏时 USB 扫码枪输入会丢，部署交代主屏持焦）。
 5. **start 迟返操作锁释放**：单工位 `startPolling` 里"正操作 + 前端未 detecting + 后端 `is_detecting=true`"三条件齐 → 释放 `isOperating` 并对齐运行态（治 start HTTP promise 不返回按钮转圈）。
+
+## v3.54 补充：检测主页自定义布局（拖拽排版）
+
+**架构**（"样式接管"而非组件重排，核心 `frontend/src/views/Monitor/layout/monitorLayout.js` 模块级单例）：
+- 模板给形态根容器打 `data-layout-canvas="<形态族>"`（single/dual/triple/grid/zoom），区块打 `data-layout-slot="<slot id>"`。无自定义布局时这些属性完全惰性，flex/grid 默认排版零差异。
+- 某形态存在自定义布局（或编辑态）时，runtime 把画布内 slot 元素绝对定位到画布百分比坐标；双/三工位=编辑第一列、其余列镜像。原 inline style 接管前暂存，恢复默认原样还原。
+- 存储：后端 `SystemConfig` KV（键 `monitor_layout.{form_key}`），API `/api/v1/system/monitor-layouts`（读不鉴权；写/删挂 `monitor.layout.edit` 权限）。**刻意不用 localStorage**——升级/备份/换机不丢。
+- 编辑入口：显示设置「检测主页自定义布局」卡 →`/monitor?layout_edit=1`；编辑器 `layout/LayoutEditorOverlay.vue`（八向手柄/吸附/撤销重做/16:9 锁/z 序/localStorage 草稿防崩溃）。
+
+**排查要点**：
+1. "布局没生效/区块叠一起" → F12 看元素有无 `data-layout-applied="1"`；`GET /system/monitor-layouts` 看该形态键有没有数据；任何布局应用异常自动整体退场回默认渲染（`requestApply` 的 catch），所以"主页正常但自定义丢了"优先查布局 JSON 是否被判坏。
+2. "升级后新区块看不到" → reconcile 兜底：布局不认识的新 slot 落左下兜底区（可再编辑），不会丢；布局里有、页面已删的 slot 静默忽略。
+3. "改乱了救不回" → 显示设置「全部形态恢复默认」（`DELETE /system/monitor-layouts`），或编辑态工具条「恢复默认」只删当前形态。
+4. kiosk 副屏不进编辑态（`LayoutEditorOverlay` 挂 `v-if="!kioskMode"`），但保存的布局对 zoom 形态照常生效。
+
+回归护栏：`tests/test_monitor_layout_api.py`（21 单测）+ `tests/e2e_browser/test_monitor_layout_editor.py`（6 e2e）+ UAT `tests/uat/uat_monitor_layout.py`（14 断言，证据 `tests/uat/artifacts/monitor-layout/`）。

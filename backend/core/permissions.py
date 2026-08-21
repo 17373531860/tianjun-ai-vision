@@ -124,6 +124,13 @@ register_permission(
     "确认 / 解除人工确认 NG (默认仅工程师 / 管理员; 操作员需借密码提权)",
     "监控",
 )
+# v3.54 检测主页自定义布局: 独立权限点 (不并入 settings.edit, 客户可单独授予
+# 产线组长调布局而不放开系统设置; admin 走 "*" 通配天然拥有, 无需迁移)
+register_permission(
+    "monitor.layout.edit",
+    "自定义检测主页布局 (编辑 / 保存 / 恢复默认)",
+    "监控",
+)
 
 # 项目
 register_permission("project.view", "查看项目", "项目")

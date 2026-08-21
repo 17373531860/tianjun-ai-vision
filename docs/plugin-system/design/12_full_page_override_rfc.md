@@ -168,4 +168,14 @@ registry.slots.register("project.layout.body", ProjectPage);
 
 ---
 
-**最后更新**：实施中（v3.16 目标）
+## 十一、与 v3.54 检测主页自定义布局的关系（2026-08 补注）
+
+主程序 v3.54 起 Monitor 自带「检测主页自定义布局」（`data-layout-canvas` / `data-layout-slot` 标注 + 样式接管 runtime，存 `SystemConfig` KV `monitor_layout.*`，详见 `debug-frontend` skill v3.54 节）。与整页覆盖的相互作用：
+
+- **插件整页覆盖优先**：插件通过 `monitor.layout.body` 覆盖 Monitor 主体后，主程序内建形态画布不在 DOM 里，自定义布局天然不生效（互不干扰，无需插件适配）。
+- **插件自渲染的 UI 不被布局系统接管**：runtime 只认 `data-layout-slot` 标注；插件如希望自己的整页 UI 也支持用户拖拽排版，可在自己的 DOM 上打 `data-layout-canvas="<自定义形态族>"` + `data-layout-slot` 标注复用同一 runtime（形态键规则 `^[a-z0-9_]+(:[a-z0-9_]+)?$`，建议插件用 `plugin_<code>` 前缀避免与主程序形态键撞车）。
+- **`monitor_layout.` KV 前缀是主程序保留命名空间**，插件配置照旧走 `plugin.{customer_code}.*`。
+
+---
+
+**最后更新**：实施中（v3.16 目标）；2026-08 补 v3.54 自定义布局关系注

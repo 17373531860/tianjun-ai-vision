@@ -322,6 +322,8 @@ class SystemConfig(Base):
 - `display.brand_name` / `display.app_name` / `display.inspector_name` / `display.device_number` / `display.factory_name` / `display.line_name`（v3.5.0 自定义导出场景用）
 - `license.cache`（前端 IPC → 后端缓存）
 - `display.monitor.ptMode` / `display.monitor.ctMode`（PT/CT 三档显示，v3.5.1）
+- `recording_custom_root`（v3.54 自定义录像存储根目录，`/data/storage/recording-dir` 读写）
+- `monitor_layout.{form_key}`（v3.54 检测主页自定义布局，`/system/monitor-layouts` 读写；⚠️ **整个 `monitor_layout.` 前缀是主程序保留命名空间**，插件不要往里写——布局 JSON 有严格结构校验，旁路写坏数据会被前端 reconcile 整体丢弃）
 
 **插件强烈推荐用法**：
 ```python

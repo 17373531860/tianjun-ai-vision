@@ -222,6 +222,16 @@ App.vue
 | `Navbar.vue` 自动恢复 vs Settings 修改 | 时序坑 | Navbar 用 `JSON.parse` 直接覆盖 `store.display`，而非深合并 |
 | `WMaxPanel.vue` | 不在 MES tab 直接挂载 | 由 `ScannerPanel.vue:10` 通过 `v-if="activeTab==='wmax' && hasWmaxDevice"` 间接挂 |
 
+## 8.5 检测主页自定义布局（v3.54）— slot id 是持久化契约
+
+Monitor 五种形态（single/dual/triple/grid/zoom，zoom 在 `SingleChannelMonitor.vue`）的区块都打了 `data-layout-slot="<id>"` 标注，客户的自定义布局按这些 id 存后端 `SystemConfig`（键 `monitor_layout.{form_key}`）。改 Monitor 模板时：
+
+- **不要改名/删除已有 `data-layout-slot` id**——改名=客户该区块布局丢失（落兜底区）。语义不变就保留原 id。
+- **新增区块**给它打新的 slot id + 在 `layout/LayoutEditorOverlay.vue` 的 `SLOT_LABELS` 登记中文名；老布局里没有它时 reconcile 自动落兜底区，无需迁移。
+- 区块的条件渲染 `v-if` 需要补 `|| layoutEditActive`（编辑态强制显示，否则用户编辑时看不到该块）。
+- 画布根容器的 `data-layout-canvas` 值是形态族名，别动；新增形态才新增画布标注。
+- runtime 详解与排查见 `debug-frontend` skill v3.54 节。
+
 ## 9. ElementPlus 约束（v2.13.x）
 
 ### 必须显式 import 才能用 `h()` 渲染

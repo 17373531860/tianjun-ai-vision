@@ -177,9 +177,12 @@
 
   <!-- ===== DUAL WORKSTATION MODE (2 channels) ===== -->
   <div v-else-if="channelCount === 2" class="grid grid-cols-2 gap-2 h-[calc(100vh-7.25rem)] p-2 relative">
-    <div v-for="ch in 2" :key="ch - 1" class="flex flex-col gap-1.5 min-h-0 overflow-hidden relative">
+    <!-- v3.54 自定义布局: 每个工位列是一块画布 (data-layout-canvas), 列内区块打
+         data-layout-slot; 一套列内布局镜像应用到所有列。无自定义布局时零差异。 -->
+    <div v-for="ch in 2" :key="ch - 1" data-layout-canvas="dual" class="flex flex-col gap-1.5 min-h-0 overflow-hidden relative">
       <!-- Video panel (70% height)（M-4 外置 ChannelVideoCard, 流/绘制机制留父级） -->
       <ChannelVideoCard
+        data-layout-slot="video"
         style="flex: 7 1 0%;"
         :ch="ch - 1"
         :ch-data="multiChannelData[ch - 1]"
@@ -192,7 +195,7 @@
         @zoom="zoomChannel(ch - 1)"
       />
       <!-- v3.1.3: per-channel MES 信息条 (工件号 / 未绑码警告 / 等待扫码 / 清除按钮) -->
-      <div v-if="shouldShowMesBarFor(ch - 1)"
+      <div v-if="shouldShowMesBarFor(ch - 1) || layoutEditActive" data-layout-slot="mes-bar"
            class="bg-slate-900 border border-cyan-800/50 rounded-lg px-2 py-1 flex items-center gap-3 text-xs flex-shrink-0">
         <div v-if="!isScanDisabledFor(ch - 1) && getDisplayWorkpieceFor(ch - 1)" class="flex items-center gap-1.5 min-w-0">
           <span class="text-cyan-400 font-bold">工件:</span>
@@ -260,7 +263,7 @@
         </el-tooltip>
       </div>
       <!-- Row 1: Counters (scrollable) + Yield Rate -->
-      <div class="flex gap-2 flex-shrink-0">
+      <div data-layout-slot="counters" class="flex gap-2 flex-shrink-0">
         <div class="flex-1 flex gap-2 overflow-x-auto min-w-0">
           <div class="flex-shrink-0 bg-slate-900 border border-slate-700 rounded px-4 py-2 text-center min-w-[5.625rem]">
             <div class="text-xs text-gray-400">总产量</div>
@@ -283,7 +286,7 @@
         </div>
       </div>
       <!-- Row 2: SOP (left, with image cards, scrollable) + Step Stats (right) -->
-      <div class="flex gap-2 min-h-0" style="flex: 3 1 0%;">
+      <div data-layout-slot="sop-row" class="flex gap-2 min-h-0" style="flex: 3 1 0%;">
         <div class="w-[60%] bg-slate-900 border border-slate-700 rounded overflow-hidden flex flex-col min-w-0">
           <div class="bg-slate-800 px-3 py-1 text-cyan-400 text-sm font-bold border-b border-slate-700 flex items-center justify-between flex-shrink-0">
             <span>SOP</span>
@@ -319,7 +322,7 @@
         </div>
       </div>
       <!-- Controls -->
-      <div class="flex gap-1.5 flex-shrink-0" data-testid="channel-controls" :data-channel="ch - 1">
+      <div data-layout-slot="controls" class="flex gap-1.5 flex-shrink-0" data-testid="channel-controls" :data-channel="ch - 1">
         <button @click="startDetectionForChannel(ch - 1)" :disabled="(!multiChannelData[ch - 1]?.project && !currentProject) || multiChannelData[ch - 1]?.isDetecting"
           class="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-1 rounded text-xs font-bold">开始</button>
         <button @click="stopDetectionForChannel(ch - 1)" :disabled="!multiChannelData[ch - 1]?.isRunning"
@@ -370,13 +373,15 @@
        关掉 SOP: 视频卡略放高到 16:10 (画面区小幅往下延长, 画面仍 contain 等比、仅一丢丢黑边),
        其余让出的高度由步骤表 flex-1 吃满. 卡内 flex-col + min-h-0, 按钮贴底; 1920 宽三列完整、无横向滚动. -->
   <div v-else-if="channelCount === 3" data-testid="triple-grid" class="grid grid-cols-3 gap-2 h-[calc(100vh-7.25rem)] px-4 py-2 relative">
-    <div v-for="ch in 3" :key="ch - 1" :data-testid="`triple-col-${ch - 1}`"
+    <!-- v3.54 自定义布局: 工位列 = 画布, 一套列内布局镜像应用到三列 -->
+    <div v-for="ch in 3" :key="ch - 1" :data-testid="`triple-col-${ch - 1}`" data-layout-canvas="triple"
       class="flex flex-col gap-1.5 min-w-0 min-h-0 overflow-hidden relative rounded-lg border p-1"
       :class="selectedChannel === (ch - 1) ? 'border-cyan-600/70 bg-slate-950/40' : 'border-slate-800 bg-slate-950/20'">
       <!-- 视频卡: 宽度随列自适应, 画面始终 contain letterbox (等比不拉伸/不裁剪).
            显示 SOP 卡片时贴 16:9 (与样例一致, 零黑边);
            关掉 SOP 卡片时略放高到 16:10 → 画面区小幅往下延长, 仅一丢丢黑边, 余量仍给步骤表. -->
       <ChannelVideoCard
+        data-layout-slot="video"
         class="w-full flex-shrink-0"
         :style="systemStore.display.monitor.stepStrip !== false ? 'aspect-ratio: 16 / 9;' : 'aspect-ratio: 16 / 10;'"
         :ch="ch - 1"
@@ -390,7 +395,7 @@
         @zoom="zoomChannel(ch - 1)"
       />
       <!-- 计数行: 总产量/合格/不良/CT 四等分横排 (跟随显示设置 defaultCounters) -->
-      <div class="flex gap-1.5 flex-shrink-0">
+      <div data-layout-slot="counters" class="flex gap-1.5 flex-shrink-0">
         <div v-if="systemStore.display.monitor.defaultCounters?.showTotal !== false" class="flex-1 bg-slate-900 border border-slate-700 rounded px-1 py-1 text-center min-w-0">
           <div class="text-[0.625rem] text-gray-400">总产量</div>
           <div class="text-xl font-bold font-mono text-white">{{ multiChannelData[ch - 1]?.total ?? 0 }}</div>
@@ -410,8 +415,8 @@
       </div>
       <!-- 质量区: 合格率圆环 + NG 步骤 TOP3 榜单 + 产出统计条 三块并排 (各自成块, 匀称铺满一行;
            分别跟随 capacityChart / ngTop3 / defectChart 显示开关). 占固定高度, 相应压缩下方 SOP / 步骤表区. -->
-      <div v-if="systemStore.display.monitor.capacityChart !== false || systemStore.display.monitor.ngTop3 !== false || systemStore.display.monitor.defectChart !== false"
-        :data-testid="`triple-quality-${ch - 1}`"
+      <div v-if="systemStore.display.monitor.capacityChart !== false || systemStore.display.monitor.ngTop3 !== false || systemStore.display.monitor.defectChart !== false || layoutEditActive"
+        :data-testid="`triple-quality-${ch - 1}`" data-layout-slot="quality"
         class="flex gap-1.5 flex-shrink-0 h-24">
         <!-- 合格率圆环 -->
         <div v-if="systemStore.display.monitor.capacityChart !== false"
@@ -478,7 +483,7 @@
         </div>
       </div>
       <!-- MES 信息条 (与双工位同构) -->
-      <div v-if="shouldShowMesBarFor(ch - 1)"
+      <div v-if="shouldShowMesBarFor(ch - 1) || layoutEditActive" data-layout-slot="mes-bar"
            class="bg-slate-900 border border-cyan-800/50 rounded-lg px-2 py-1 flex items-center gap-2 text-xs flex-shrink-0 overflow-hidden">
         <div v-if="!isScanDisabledFor(ch - 1) && getDisplayWorkpieceFor(ch - 1)" class="flex items-center gap-1.5 min-w-0">
           <span class="text-cyan-400 font-bold">工件:</span>
@@ -518,8 +523,8 @@
       </div>
       <!-- SOP 流程卡片 (整宽一行) — 受显示设置「SOP 流程卡片」(display.monitor.stepStrip) 控制.
            关掉即隐藏整行, 上方视频区 flex-1 向下拉大吃满余量; 显示时步骤表 flex-1 吸收余量. -->
-      <div v-if="systemStore.display.monitor.stepStrip !== false"
-        :data-testid="`triple-sop-${ch - 1}`"
+      <div v-if="systemStore.display.monitor.stepStrip !== false || layoutEditActive"
+        :data-testid="`triple-sop-${ch - 1}`" data-layout-slot="sop"
         class="bg-slate-900 border border-slate-700 rounded overflow-hidden flex flex-col flex-shrink-0">
         <div class="bg-slate-800 px-2 py-0.5 text-cyan-400 text-xs font-bold border-b border-slate-700 flex items-center justify-between flex-shrink-0">
           <span>SOP</span>
@@ -547,7 +552,7 @@
         </div>
       </div>
       <!-- 步骤状态表 (整宽): flex-1 吸收剩余高度; 关掉 SOP 卡片后自动吃满其让出的空间 -->
-      <div :data-testid="`triple-steptable-${ch - 1}`"
+      <div :data-testid="`triple-steptable-${ch - 1}`" data-layout-slot="step-table"
         class="bg-slate-900 border border-slate-700 rounded overflow-auto min-w-0 flex-1 min-h-0">
         <table v-if="(multiChannelData[ch - 1]?.tableData || []).length" class="w-full text-[0.625rem]">
           <thead class="bg-slate-800 text-gray-400 sticky top-0"><tr>
@@ -568,7 +573,7 @@
         <div v-else class="h-full flex items-center justify-center text-gray-600 text-[0.625rem] px-2 text-center">暂无步骤数据</div>
       </div>
       <!-- 控制按钮: 开始/停止/待机/清零 四等宽, 贴底 -->
-      <div class="flex gap-1.5 flex-shrink-0" data-testid="channel-controls" :data-channel="ch - 1">
+      <div data-layout-slot="controls" class="flex gap-1.5 flex-shrink-0" data-testid="channel-controls" :data-channel="ch - 1">
         <button @click="startDetectionForChannel(ch - 1)" :disabled="(!multiChannelData[ch - 1]?.project && !currentProject) || multiChannelData[ch - 1]?.isDetecting"
           class="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-1 rounded text-xs font-bold">开始</button>
         <button @click="stopDetectionForChannel(ch - 1)" :disabled="!multiChannelData[ch - 1]?.isRunning"
@@ -612,11 +617,11 @@
   </div>
 
   <!-- ===== GRID WORKSTATION MODE (4+ channels): 总览网格(可选布局+分页) + 点击放大单路 (v3.47) ===== -->
-  <div v-else-if="channelCount > 3" class="flex flex-col h-[calc(100vh-7.25rem)] p-2 gap-2 relative">
+  <div v-else-if="channelCount > 3" data-layout-canvas="grid" class="flex flex-col h-[calc(100vh-7.25rem)] p-2 gap-2 relative">
     <!-- —— 总览模式 —— -->
     <template v-if="zoomedChannel === null">
-      <!-- 工具条: 布局选择 + 分页 -->
-      <div class="flex items-center gap-3 flex-shrink-0 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 flex-wrap">
+      <!-- 工具条: 布局选择 + 分页 (v3.54 自定义布局 slot: 网格形态可摆放工具条与网格区) -->
+      <div data-layout-slot="toolbar" class="flex items-center gap-3 flex-shrink-0 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 flex-wrap">
         <span class="text-cyan-400 font-bold text-sm">多工位总览</span>
         <span class="text-xs text-gray-500">共 {{ channelCount }} 工位 · 点击卡片放大单路</span>
         <div class="flex items-center gap-1 ml-auto">
@@ -638,7 +643,7 @@
       </div>
       <!-- 网格: 当前页工位卡片 (缩小视频流 + 简略数据) -->
       <!-- v3.47 起网格整卡点击=放大单路, 多屏开关不得改变此行为 (存量客户依赖); zoom 按钮仅是多屏开启时的显式入口 -->
-      <div class="flex-1 grid gap-2 min-h-0"
+      <div data-layout-slot="grid-area" class="flex-1 grid gap-2 min-h-0"
         :style="{ gridTemplateColumns: `repeat(${gridDims.cols}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${gridDims.rows}, minmax(0, 1fr))` }">
         <ChannelVideoCard
           v-for="ch in gridPageChannels" :key="ch"
@@ -703,12 +708,13 @@
   </div>
 
   <!-- ===== SINGLE-VIEW MODE (original layout) ===== -->
-  <div v-else class="grid grid-cols-12 gap-3 h-[calc(100vh-7.25rem)] p-2 relative">
+  <!-- v3.54 自定义布局: 单工位整页 = 一块画布 (左右两列容器不定位, slot 直接锚到画布) -->
+  <div v-else data-layout-canvas="single" class="grid grid-cols-12 gap-3 h-[calc(100vh-7.25rem)] p-2 relative">
     <!-- LEFT COLUMN: VIDEO & STEPS -->
     <div class="col-span-7 flex flex-col gap-3 min-h-0">
       
       <!-- Video Region -->
-      <div class="min-h-0 bg-black border-2 border-slate-700 rounded-lg relative overflow-hidden group" style="aspect-ratio: 16/9; max-height: 100%;">
+      <div data-layout-slot="video" class="min-h-0 bg-black border-2 border-slate-700 rounded-lg relative overflow-hidden group" style="aspect-ratio: 16/9; max-height: 100%;">
         <!-- 视频流：双缓冲 img + key 控制的 DOM 重建。watchdog 触发强制
              重连时 streamKey++, Vue 销毁旧 <img> 节点 + 创建新节点, Chrome
              看到 DOM 节点移除会关掉 keep-alive socket, 新 <img> 起新连接
@@ -860,7 +866,7 @@
            融合模式(step_gate)的 logic_mode 是 sequential, 不受影响、SOP 照旧显示。
            v3.49 二期: 判型实时看板 (combo_table.live_display, 默认关) 与 SOP 卡片同行右侧停靠,
            不遮挡视频画面 (2026-08-13 由画面内悬浮卡改为停靠, 客户反馈悬浮卡压画面不美观) -->
-      <div v-if="sopPanelVisible || comboBigCard" class="flex items-stretch gap-2">
+      <div v-if="sopPanelVisible || comboBigCard" data-layout-slot="sop-row" class="flex items-stretch gap-2">
         <SopStepPanel
           v-if="sopPanelVisible"
           ref="sopPanelRef"
@@ -913,7 +919,7 @@
       </div>
 
       <!-- Tracking Mode Checklist Panel -->
-      <div v-else-if="isTrackingMode" class="h-44 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col">
+      <div v-else-if="isTrackingMode" data-layout-slot="mode-panel" class="h-44 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col">
         <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex-shrink-0 flex justify-between items-center">
           <span class="text-cyan-400 text-lg font-bold">{{ trackingContainerMode ? '容器清点' : '物品清点' }}</span>
           <div class="flex items-center gap-2">
@@ -980,12 +986,14 @@
       <!-- 原生称重投料模式专属看板 (与 SOP/Tracking/PerItem 排他, 占视频下方核心展示位) -->
       <WeighingPanel
         v-else-if="isWeighingMode"
+        data-layout-slot="mode-panel"
         :channel="selectedChannel"
       />
 
       <!-- v3.8+ 逐件模式专属面板 (与 SOP/Tracking 排他, 占视频下方核心展示位) -->
       <PerItemPanel
         v-else-if="isPerItemMode"
+        data-layout-slot="mode-panel"
         :state="perItemState"
         :channel="selectedChannel"
       />
@@ -1001,12 +1009,14 @@
       <!-- v3.35.1 融合模式实时称重数值条 (与上方 SOP 并存: 步骤看 SOP, 重量看这里; 可在称重配置关闭) -->
       <WeighingLiveBar
         v-if="isStepGateWeighing"
+        data-layout-slot="weighing-bar"
         :channel="selectedChannel"
       />
 
       <!-- v3.19.x 自定义混合模式物品校验面板 (与上方 SOP 并存: 步骤看 SOP, 物品看这里) -->
       <PerItemPanel
         v-if="customMixPerItemState"
+        data-layout-slot="mix-panel"
         :state="customMixPerItemState"
         :channel="selectedChannel"
         mix
@@ -1014,6 +1024,7 @@
       <!-- 混合类型=tracking 物品校验看板（M-3 外置 CustomMixItemPanel） -->
       <CustomMixItemPanel
         v-else-if="customMixState && customMixState.mix_type === 'tracking'"
+        data-layout-slot="mix-panel"
         :state="customMixState"
         :tracking-checklist="trackingChecklist"
       />
@@ -1021,6 +1032,7 @@
       <!-- v3.21: 包装箱结算进度 (仅当前工位有启用配置才显示, 否则不渲染/不轮询, 零差异) -->
       <PackagingFlowCard
         v-if="packagingCfgForChannel"
+        data-layout-slot="packaging-card"
         :config="packagingCfgForChannel"
         :state="packagingState"
       />
@@ -1028,11 +1040,12 @@
       <!-- 虚拟扫码枪测试台 (仅当存在启用的包装结算配置时出现, 默认折叠; 无包装客户零差异) -->
       <VirtualScanGun
         v-if="packagingConfigs.length > 0"
+        data-layout-slot="scan-gun"
         :channel-id="selectedChannel"
       />
 
       <!-- v3.5.0: 周期性强制动作进度（独立链，与上方 SOP/Tracking 不冲突） -->
-      <div v-if="periodicActions.length > 0" class="bg-slate-900 border border-slate-700 rounded-lg overflow-hidden">
+      <div v-if="periodicActions.length > 0" data-layout-slot="periodic-actions" class="bg-slate-900 border border-slate-700 rounded-lg overflow-hidden">
         <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex items-center justify-between">
           <span class="text-cyan-400 text-base font-bold">周期性强制动作</span>
           <div class="flex items-center gap-2">
@@ -1100,7 +1113,7 @@
     <div class="col-span-5 flex flex-col gap-3 min-h-0">
 
       <!-- Top Row: Stats Counters (Dynamic) -->
-      <div v-if="systemStore.display.monitor.statsPanel" class="bg-slate-900 border border-slate-700 rounded-lg p-3 flex flex-col">
+      <div v-if="systemStore.display.monitor.statsPanel || layoutEditActive" data-layout-slot="stats" class="bg-slate-900 border border-slate-700 rounded-lg p-3 flex flex-col">
         <template v-if="currentProject && counters.length > 0">
           <!-- 三个系统内置计数器并排 -->
           <div class="grid grid-cols-3 gap-2 mb-2">
@@ -1135,7 +1148,7 @@
       <!-- MES 信息条 -->
       <!-- v3.50: scanner_resume_blocked 必须算进显示条件, 否则 NG 后无工件/工单时
            整条信息条不渲染, "恢复扫码"人工出口按钮出不来 -->
-      <div v-if="displayWorkpiece || mesData?.order || mesData?.warn_no_barcode || mesData?.scanner_resume_blocked || workpieceOverride === null || isScanDisabledFor(selectedChannel) || systemStore.display.monitor.showBypassSn" class="bg-slate-900 border border-cyan-800/50 rounded-lg px-3 py-2 flex items-center gap-6 text-sm">
+      <div v-if="displayWorkpiece || mesData?.order || mesData?.warn_no_barcode || mesData?.scanner_resume_blocked || workpieceOverride === null || isScanDisabledFor(selectedChannel) || systemStore.display.monitor.showBypassSn || layoutEditActive" data-layout-slot="mes-bar" class="bg-slate-900 border border-cyan-800/50 rounded-lg px-3 py-2 flex items-center gap-6 text-sm">
         <!-- 扫码器旁路当前 SN (系统设置 showBypassSn 打开后才显示; 无 SN 时 placeholder 等待扫码) -->
         <div v-if="systemStore.display.monitor.showBypassSn" class="flex items-center gap-2">
           <span class="text-cyan-400 font-bold">旁路SN:</span>
@@ -1263,7 +1276,7 @@
       </div>
 
       <!-- Middle: Charts + NG Ranking -->
-      <div class="h-52 grid grid-cols-3 gap-2">
+      <div data-layout-slot="charts" class="h-52 grid grid-cols-3 gap-2">
          <!-- Pie Chart -->
          <div v-if="systemStore.display.monitor.defectChart" class="bg-slate-900 border border-slate-700 rounded-lg p-2 relative">
             <h3 class="text-cyan-400 text-base font-bold absolute top-1.5 left-2">良品/不良统计</h3>
@@ -1364,7 +1377,7 @@
       </div>
 
       <!-- Bottom: Detail Table & Controls -->
-      <div v-if="systemStore.display.monitor.stepTable" class="flex-1 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col">
+      <div v-if="systemStore.display.monitor.stepTable || layoutEditActive" data-layout-slot="step-table" class="flex-1 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col">
          <div class="bg-slate-800 px-3 py-2 flex justify-between items-center border-b border-slate-700">
             <span class="text-cyan-400 text-lg font-bold">步骤统计</span>
             <span class="text-sm bg-slate-700 px-2 py-0.5 rounded text-gray-300">CT: {{ displayCT }}s</span>
@@ -1579,11 +1592,15 @@
        惰性: 后端未配报警台账 → 无数据 → 永不出现 (字节级零打扰)。 -->
   <ExternalAlarmBanner v-if="!kioskMode" />
 
+  <!-- v3.54 检测主页自定义布局编辑器 (route ?layout_edit=1 + monitor.layout.edit 权限时激活) -->
+  <LayoutEditorOverlay v-if="!kioskMode" @exited="onLayoutEditorExited" />
+
 </template>
 
 <script setup>
 import { onMounted, onUnmounted, ref, watch, nextTick, computed, h } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
+import { useAuthStore } from '@/store/useAuthStore';
 import { useProjectStore } from '@/store/useProjectStore';
 import { useSystemStore } from '@/store/useSystemStore';
 import { useSourceStore } from '@/store/useSourceStore';
@@ -1618,6 +1635,11 @@ import { getTriggers } from '@/api/triggers';
 import { getScannerBypassStatus } from '@/api/export';
 import TjSlot from '@/components/TjSlot.vue';
 import { dbg, dbgErr } from '@/utils/debug';
+import LayoutEditorOverlay from './layout/LayoutEditorOverlay.vue';
+import {
+  loadLayouts as loadMonitorLayouts, attachLayoutRoot,
+  layoutRuntimeState, enterEdit as enterLayoutEdit, exitEdit as exitLayoutEdit,
+} from './layout/monitorLayout';
 
 const projectStore = useProjectStore();
 const systemStore = useSystemStore();
@@ -1625,7 +1647,78 @@ const sourceStore = useSourceStore();
 const scannerDisableStore = useScannerDisableStore();
 const pluginThemeStore = usePluginThemeStore();
 const route = useRoute();
+const router = useRouter();
+const authStore = useAuthStore();
 const kioskMode = computed(() => route.query.kiosk === '1');
+
+// ==================== v3.54 检测主页自定义布局 ====================
+// 形态键: 布局按形态独立保存。工位数/放大态决定形态族; 单工位再按逻辑模式细分
+// (不同模式下方看板不同)。插件整页覆盖 (monitor.layout.body) 时不套自定义布局。
+const { editMode: layoutEditMode } = layoutRuntimeState();
+const layoutEditActive = computed(() => layoutEditMode.value && !kioskMode.value);
+const canEditLayout = computed(() => authStore.hasPermission('monitor.layout.edit'));
+
+const monitorFormKey = computed(() => {
+  if (effectiveLayoutBodyOverride.value) return '';
+  if (singleChannelViewActive.value) return 'zoom';
+  if (channelCount.value === 2) return 'dual';
+  if (channelCount.value === 3) return 'triple';
+  if (channelCount.value > 3) return 'grid';
+  const mode = isWeighingMode.value ? 'weighing'
+    : isPerItemMode.value ? 'per_item'
+      : isTrackingMode.value ? 'tracking' : 'default';
+  return `single:${mode}`;
+});
+
+let detachLayoutRuntime = null;
+let layoutEditRetryTimer = null;
+
+/** 进入编辑带重试: 页面数据 (channelCount/项目) 异步就绪, 画布可能晚出现 */
+const enterLayoutEditWithRetry = (attempt = 0) => {
+  clearTimeout(layoutEditRetryTimer);
+  const formKey = monitorFormKey.value;
+  if (formKey && enterLayoutEdit(formKey)) return;
+  if (attempt < 20) {
+    layoutEditRetryTimer = setTimeout(() => enterLayoutEditWithRetry(attempt + 1), 300);
+  } else {
+    ElMessage.warning('布局编辑器启动失败：当前页面没有可编辑的布局画布');
+  }
+};
+
+// watcher 统一在 onMounted 注册: monitorFormKey 的依赖 (channelCount /
+// singleChannelViewActive / is*Mode) 定义在 script 后段, setup 期 watch 会
+// 立刻求值 source 触发 TDZ (真浏览器验证时整页白屏), 挂载后注册即安全。
+const setupLayoutWatchers = () => {
+  watch(() => route.query.layout_edit, (v) => {
+    if (kioskMode.value) return;
+    if (v === '1') {
+      if (!canEditLayout.value) {
+        ElMessage.warning('当前账号没有「自定义检测主页布局」权限');
+        router.replace({ query: { ...route.query, layout_edit: undefined } });
+        return;
+      }
+      nextTick(() => enterLayoutEditWithRetry());
+    } else if (layoutEditMode.value) {
+      exitLayoutEdit();
+    }
+  });
+
+  // 编辑中形态切换 (如放大/退出放大): 按新形态重开编辑会话
+  watch(monitorFormKey, (nk, ok) => {
+    if (layoutEditMode.value && nk && nk !== ok) {
+      exitLayoutEdit();
+      nextTick(() => enterLayoutEditWithRetry());
+    }
+  });
+};
+
+const onLayoutEditorExited = () => {
+  clearTimeout(layoutEditRetryTimer);
+  if (route.query.layout_edit) {
+    router.replace({ query: { ...route.query, layout_edit: undefined } });
+  }
+};
+// ==================== 自定义布局 END ====================
 // 一期默认只读；只有 Electron 明确传 readonly=0 才放开现有控制 actions。
 const kioskReadonly = computed(() => route.query.readonly !== '0');
 
@@ -1921,6 +2014,15 @@ const bypassSnFor = (ch) => {
 };
 
 onMounted(async () => {
+  // v3.54 自定义布局: kiosk 副屏也要应用布局 (只读), 编辑入口另有 kiosk 守门
+  loadMonitorLayouts();
+  setupLayoutWatchers();
+  detachLayoutRuntime = attachLayoutRoot(document.body, () => monitorFormKey.value);
+  if (route.query.layout_edit === '1' && !kioskMode.value) {
+    if (canEditLayout.value) nextTick(() => enterLayoutEditWithRetry());
+    else router.replace({ query: { ...route.query, layout_edit: undefined } });
+  }
+
   if (kioskMode.value) return;
   loadTaskInfoDisplay();
   await loadPackagingConfigs();
@@ -1944,6 +2046,13 @@ watch(
 );
 
 onUnmounted(() => {
+  // v3.54 自定义布局: 退出编辑会话 + 布局运行时退场 (还原被接管的样式)
+  clearTimeout(layoutEditRetryTimer);
+  if (layoutEditMode.value) exitLayoutEdit();
+  if (detachLayoutRuntime) {
+    detachLayoutRuntime();
+    detachLayoutRuntime = null;
+  }
   if (packagingTimer) {
     clearInterval(packagingTimer);
     packagingTimer = null;

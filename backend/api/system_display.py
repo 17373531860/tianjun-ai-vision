@@ -432,3 +432,137 @@ def put_license_cache(payload: LicenseCachePayload,
             desc="License cache from frontend IPC")
     db.commit()
     return {"status": "ok"}
+
+
+# ==================== v3.54 检测主页自定义布局 ====================
+# 存储: SystemConfig KV, 键 monitor_layout.{form_key} —— 跟数据目录走, 升级 /
+# 备份 / SQLite→PG 迁移天然带上 (刻意不用 localStorage: 重装或换机即丢)。
+# form_key = 页面形态键, 如 single:sequential / dual / triple / grid / zoom;
+# 布局 JSON 由前端生成, 后端只做结构校验 + 尺寸护栏, 不理解语义 (slot 集合随
+# 版本演进, 前端加载时自行 reconcile: 认识的用自定义位置, 不认识的丢弃)。
+# 权限: 读不鉴权 (监控页渲染必需, 操作员也要读); 写/删挂 monitor.layout.edit。
+
+_LAYOUT_KV_PREFIX = "monitor_layout."
+_LAYOUT_FORM_KEY_RE = None  # 延迟编译, 见 _validate_form_key
+_LAYOUT_MAX_BYTES = 64 * 1024
+_LAYOUT_MAX_SLOTS = 100
+
+
+def _validate_form_key(form_key: str) -> str:
+    global _LAYOUT_FORM_KEY_RE
+    if _LAYOUT_FORM_KEY_RE is None:
+        import re
+        _LAYOUT_FORM_KEY_RE = re.compile(r"^[a-z0-9_]+(:[a-z0-9_]+)?$")
+    if not form_key or len(form_key) > 64 or not _LAYOUT_FORM_KEY_RE.match(form_key):
+        raise HTTPException(400, f"非法形态键: {form_key!r}")
+    return form_key
+
+
+def _validate_layout_payload(layout: Dict[str, Any]) -> Dict[str, Any]:
+    """结构校验: 只收留版本号/吸附开关/slots 三类键, 坐标钳制到合法域。
+
+    校验从严的原因: 布局 JSON 一旦坏掉会影响检测主页 (产线在用),
+    宁可 400 拒收也不能存进一条渲染时才炸的数据。
+    """
+    if not isinstance(layout, dict):
+        raise HTTPException(400, "布局必须是 JSON 对象")
+    version = layout.get("version")
+    if not isinstance(version, int) or version < 1 or version > 100:
+        raise HTTPException(400, "布局缺少合法 version 字段")
+    slots = layout.get("slots")
+    if not isinstance(slots, dict) or not slots:
+        raise HTTPException(400, "布局缺少 slots")
+    if len(slots) > _LAYOUT_MAX_SLOTS:
+        raise HTTPException(400, f"slots 数超上限 {_LAYOUT_MAX_SLOTS}")
+
+    import re
+    slot_re = re.compile(r"^[a-z0-9_.\-]+(@\d{1,3})?$")
+    clean_slots: Dict[str, Any] = {}
+    for sid, rect in slots.items():
+        if not isinstance(sid, str) or len(sid) > 64 or not slot_re.match(sid):
+            raise HTTPException(400, f"非法 slot id: {sid!r}")
+        if not isinstance(rect, dict):
+            raise HTTPException(400, f"slot {sid} 的位置必须是对象")
+        clean = {}
+        for f in ("x", "y", "w", "h"):
+            v = rect.get(f)
+            if not isinstance(v, (int, float)) or v != v:  # NaN 自比不等
+                raise HTTPException(400, f"slot {sid} 缺少数值字段 {f}")
+            # x/y 允许 0~1, w/h 最小 1% —— 防止拖没了找不回来
+            lo = 0.01 if f in ("w", "h") else 0.0
+            clean[f] = round(min(1.0, max(lo, float(v))), 4)
+        z = rect.get("z")
+        if z is not None:
+            if not isinstance(z, int) or not (0 <= z <= 1000):
+                raise HTTPException(400, f"slot {sid} 的 z 序非法")
+            clean["z"] = z
+        clean_slots[sid] = clean
+
+    return {
+        "version": version,
+        "snap": bool(layout.get("snap", True)),
+        "slots": clean_slots,
+    }
+
+
+@router.get("/monitor-layouts")
+def get_monitor_layouts(db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """读全部自定义布局 {form_key: layout}。无自定义返回空对象。
+
+    单条解析失败跳过该条不影响其他形态 (坏数据兜底, 主页渲染不能因布局挂)。
+    """
+    import json as _json
+    out: Dict[str, Any] = {}
+    rows = db.query(SystemConfig).filter(
+        SystemConfig.key.like(_LAYOUT_KV_PREFIX + "%")).all()
+    for r in rows:
+        form_key = r.key[len(_LAYOUT_KV_PREFIX):]
+        if not r.value:
+            continue
+        try:
+            out[form_key] = _json.loads(r.value)
+        except Exception:
+            print(f"[MonitorLayout] 布局数据解析失败, 跳过: {r.key}")
+    return {"layouts": out}
+
+
+@router.put("/monitor-layouts/{form_key}",
+            dependencies=[Depends(require_perm("monitor.layout.edit"))])
+def put_monitor_layout(form_key: str, layout: Dict[str, Any],
+                       db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """保存某形态的自定义布局 (整份覆盖)。"""
+    form_key = _validate_form_key(form_key)
+    clean = _validate_layout_payload(layout)
+
+    import json as _json
+    raw = _json.dumps(clean, ensure_ascii=False)
+    if len(raw.encode("utf-8")) > _LAYOUT_MAX_BYTES:
+        raise HTTPException(400, "布局数据过大")
+    _set_kv(db, _LAYOUT_KV_PREFIX + form_key, raw,
+            desc=f"monitor custom layout ({form_key})")
+    db.commit()
+    return {"status": "ok", "form_key": form_key,
+            "slot_count": len(clean["slots"])}
+
+
+@router.delete("/monitor-layouts/{form_key}",
+               dependencies=[Depends(require_perm("monitor.layout.edit"))])
+def delete_monitor_layout(form_key: str,
+                          db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """删除某形态的自定义布局 (恢复该形态默认)。幂等: 不存在也返回 ok。"""
+    form_key = _validate_form_key(form_key)
+    n = db.query(SystemConfig).filter(
+        SystemConfig.key == _LAYOUT_KV_PREFIX + form_key).delete()
+    db.commit()
+    return {"status": "ok", "deleted": n}
+
+
+@router.delete("/monitor-layouts",
+               dependencies=[Depends(require_perm("monitor.layout.edit"))])
+def delete_all_monitor_layouts(db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """全部形态恢复默认 (显示设置页的终极出口, 布局改乱时的自救按钮)。"""
+    n = db.query(SystemConfig).filter(
+        SystemConfig.key.like(_LAYOUT_KV_PREFIX + "%")).delete(
+        synchronize_session=False)
+    db.commit()
+    return {"status": "ok", "deleted": n}

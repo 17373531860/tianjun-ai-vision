@@ -92,6 +92,44 @@
           </el-card>
 
           <!-- Monitor Settings -->
+          <!-- v3.54 检测主页自定义布局 -->
+          <el-card shadow="never" class="bg-slate-800 border-slate-700" data-testid="layout-entry-card">
+            <template #header>
+              <div class="flex items-center gap-2">
+                <el-icon class="text-tech-blue"><Aim /></el-icon>
+                <span class="font-bold text-white">检测主页自定义布局</span>
+              </div>
+            </template>
+            <div class="space-y-3">
+              <div class="text-xs text-gray-400 leading-relaxed">
+                在检测主页上直接拖拽调整各功能区块的位置与大小（视频画面、SOP 卡片、统计面板、步骤表等）。
+                布局按页面形态（单工位 / 双工位 / 三工位 / 多工位总览 / 单通道放大）与检测模式分别保存，
+                存储于系统数据库，软件升级与数据备份均不丢失。未自定义的形态保持出厂排版。
+              </div>
+              <div class="flex items-center gap-3 flex-wrap">
+                <el-tooltip :disabled="canEditLayout" content="当前账号没有「自定义检测主页布局」权限" placement="top">
+                  <el-button type="primary" :disabled="!canEditLayout"
+                             data-testid="layout-edit-entry" @click="openLayoutEditor">
+                    自定义编辑主页
+                  </el-button>
+                </el-tooltip>
+                <el-button v-if="customLayoutForms.length" type="warning" plain :disabled="!canEditLayout"
+                           data-testid="layout-restore-all" @click="restoreAllLayouts">
+                  全部形态恢复默认
+                </el-button>
+              </div>
+              <div v-if="customLayoutForms.length" class="flex items-center gap-2 flex-wrap" data-testid="layout-custom-forms">
+                <span class="text-xs text-gray-500">已自定义：</span>
+                <el-tag v-for="fk in customLayoutForms" :key="fk" size="small" closable
+                        :data-testid="`layout-form-tag-${fk.replace(':', '-')}`"
+                        @close="restoreOneLayout(fk)">
+                  {{ layoutFormLabel(fk) }}
+                </el-tag>
+              </div>
+              <div v-else class="text-xs text-gray-600">当前所有形态均为出厂排版</div>
+            </div>
+          </el-card>
+
           <el-card shadow="never" class="bg-slate-800 border-slate-700">
             <template #header>
               <div class="flex items-center gap-2">
@@ -685,13 +723,72 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue';
+import { useRouter } from 'vue-router';
 import { useSystemStore } from '@/store/useSystemStore';
+import { useAuthStore } from '@/store/useAuthStore';
 import { Top, Monitor, Edit, VideoCamera, Refresh, DataLine, Lightning, Aim, Minus, Loading, Connection } from '@element-plus/icons-vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import api from '@/api/index';
+import { getMonitorLayouts, deleteMonitorLayout, deleteAllMonitorLayouts } from '@/api/monitorLayout';
+import { formLabelOf } from '@/views/Monitor/layout/monitorLayout';
 import { dbg, dbgErr } from '@/utils/debug';
 
 const store = useSystemStore();
+const router = useRouter();
+const authStore = useAuthStore();
+
+// ==================== v3.54 检测主页自定义布局入口 ====================
+const canEditLayout = computed(() => authStore.hasPermission('monitor.layout.edit'));
+const customLayoutForms = ref([]);
+const layoutFormLabel = (fk) => formLabelOf(fk);
+
+const loadCustomLayoutForms = async () => {
+  try {
+    const res = await getMonitorLayouts();
+    customLayoutForms.value = Object.keys(res.data?.layouts || {}).sort();
+  } catch (e) {
+    dbgErr('settings', '读取自定义布局清单失败', e);
+  }
+};
+
+const openLayoutEditor = () => {
+  dbg('settings.ops', '进入检测主页布局编辑');
+  router.push({ path: '/monitor', query: { layout_edit: '1' } });
+};
+
+const restoreOneLayout = async (formKey) => {
+  try {
+    await ElMessageBox.confirm(
+      `将「${formLabelOf(formKey)}」形态恢复为出厂排版？`, '恢复默认布局',
+      { confirmButtonText: '恢复默认', cancelButtonText: '取消', type: 'warning' });
+  } catch (_) { return; }
+  try {
+    await deleteMonitorLayout(formKey);
+    ElMessage.success('已恢复该形态默认布局');
+    loadCustomLayoutForms();
+  } catch (e) {
+    ElMessage.error(`恢复失败: ${e?.response?.data?.detail || e.message}`);
+  }
+};
+
+const restoreAllLayouts = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '将删除全部形态的自定义布局，检测主页恢复出厂排版。此操作不可撤销，确定继续？',
+      '全部形态恢复默认',
+      { confirmButtonText: '全部恢复默认', cancelButtonText: '取消', type: 'warning' });
+  } catch (_) { return; }
+  try {
+    await deleteAllMonitorLayouts();
+    ElMessage.success('已全部恢复默认布局');
+    loadCustomLayoutForms();
+  } catch (e) {
+    ElMessage.error(`恢复失败: ${e?.response?.data?.detail || e.message}`);
+  }
+};
+
+onMounted(loadCustomLayoutForms);
+// ==================== 自定义布局入口 END ====================
 
 const saveDisplaySettings = () => {
   dbg('settings.ops', '保存显示设置', `brand=${store.display?.brandName ?? ''}`);

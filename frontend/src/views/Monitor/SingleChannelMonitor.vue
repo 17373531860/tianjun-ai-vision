@@ -1,12 +1,14 @@
 <template>
+  <!-- v3.54 自定义布局: 放大态与 kiosk 共用形态键 zoom, 根容器 = 画布 -->
   <div
+    data-layout-canvas="zoom"
     class="flex min-h-0 flex-col gap-2 bg-[#0f172a] text-white"
     :class="kiosk ? 'h-screen p-2' : 'h-[calc(100vh-7.25rem)] p-2'"
     data-testid="single-channel-monitor"
     :data-channel="channelId"
     :data-readonly="readonly ? 'true' : 'false'"
   >
-    <header class="flex flex-shrink-0 flex-wrap items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5">
+    <header data-layout-slot="topbar" class="flex flex-shrink-0 flex-wrap items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5">
       <button
         v-if="!kiosk"
         type="button"
@@ -32,12 +34,15 @@
       </div>
     </header>
 
-    <slot name="context-bar" />
+    <!-- context-bar 有内容(主屏放大态 MES 条)或编辑态才渲染包装, 避免 kiosk 空 div 占 gap -->
+    <div v-if="$slots['context-bar'] || layoutEditActive" data-layout-slot="context-bar">
+      <slot name="context-bar" />
+    </div>
 
     <div class="grid min-h-0 flex-1 grid-cols-12 gap-3">
       <!-- 与原单工位同构：左 7 列视频，上下紧接同一个 SopStepPanel。 -->
       <div class="col-span-7 flex min-h-0 min-w-0 flex-col gap-3">
-        <div class="relative min-h-0 flex-1" data-testid="single-channel-video">
+        <div data-layout-slot="video" class="relative min-h-0 flex-1" data-testid="single-channel-video">
           <ChannelVideoCard
             :key="`single-${channelId}`"
             class="h-full w-full"
@@ -53,7 +58,8 @@
         </div>
 
         <SopStepPanel
-          v-if="showStepStrip && steps.length > 0"
+          v-if="(showStepStrip && steps.length > 0) || layoutEditActive"
+          data-layout-slot="sop"
           :steps="steps"
           :step-intervals="channelData?.stepIntervals || {}"
         />
@@ -64,7 +70,7 @@
 
       <!-- 与原单工位同构：右 5 列统计、NG TOP3、步骤统计和底部控制。 -->
       <aside class="col-span-5 flex min-h-0 min-w-0 flex-col gap-3 overflow-hidden">
-        <div v-if="showStatsPanel" class="flex flex-shrink-0 flex-col rounded-lg border border-slate-700 bg-slate-900 p-3" data-testid="single-channel-stats-panel">
+        <div v-if="showStatsPanel || layoutEditActive" data-layout-slot="stats" class="flex flex-shrink-0 flex-col rounded-lg border border-slate-700 bg-slate-900 p-3" data-testid="single-channel-stats-panel">
           <template v-if="hasProject">
             <div class="grid grid-cols-3 gap-2">
               <div v-for="stat in builtinStats" :key="stat.label" class="flex flex-col items-center justify-center rounded-lg bg-slate-800/50 p-2">
@@ -89,7 +95,8 @@
         </div>
 
         <div
-          v-if="showDefectChart || showCapacityChart || showNgTop3"
+          v-if="showDefectChart || showCapacityChart || showNgTop3 || layoutEditActive"
+          data-layout-slot="summary-row"
           class="grid h-40 flex-shrink-0 gap-3"
           :style="{ gridTemplateColumns: `repeat(${summaryPanelCount}, minmax(0, 1fr))` }"
           data-testid="single-channel-summary-row"
@@ -143,7 +150,7 @@
           </div>
         </div>
 
-        <div v-if="showStepTable" class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-700 bg-slate-900" data-testid="single-channel-step-table">
+        <div v-if="showStepTable || layoutEditActive" data-layout-slot="step-table" class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-700 bg-slate-900" data-testid="single-channel-step-table">
           <div class="flex flex-shrink-0 items-center justify-between border-b border-slate-700 bg-slate-800 px-3 py-2">
             <span class="text-lg font-bold text-cyan-400">步骤统计</span>
             <span class="rounded bg-slate-700 px-2 py-0.5 text-sm text-gray-300">CT: {{ displayCt }}</span>
@@ -183,6 +190,7 @@
         </div>
 
         <div
+          data-layout-slot="controls"
           class="flex flex-shrink-0 gap-2 rounded-lg border border-slate-800 bg-slate-950 p-2"
           data-testid="single-channel-controls"
           :data-readonly="readonly ? 'true' : 'false'"
@@ -204,6 +212,7 @@ import ChannelVideoCard from './ChannelVideoCard.vue';
 import GoodBadPieChart from './GoodBadPieChart.vue';
 import SopStepPanel from './SopStepPanel.vue';
 import YieldRateGauge from './YieldRateGauge.vue';
+import { layoutRuntimeState } from './layout/monitorLayout';
 
 const props = defineProps({
   channelId: { type: Number, required: true },
@@ -230,6 +239,10 @@ const props = defineProps({
 });
 
 defineEmits(['back', 'previous', 'next', 'start', 'stop', 'standby', 'reset', 'toggle-ng-top-mode']);
+
+// v3.54 自定义布局: 编辑态强制渲染受显示开关控制的区块 (kiosk 只读不进编辑态)
+const { editMode: layoutEditMode } = layoutRuntimeState();
+const layoutEditActive = computed(() => layoutEditMode.value && !props.kiosk);
 
 const steps = computed(() => props.channelData?.steps || []);
 const tableRows = computed(() => props.channelData?.tableData || []);
