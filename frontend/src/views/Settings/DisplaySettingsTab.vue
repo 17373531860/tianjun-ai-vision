@@ -101,7 +101,9 @@
             </template>
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
-                <span class="text-gray-300">SOP流程条</span>
+                <el-tooltip content="SOP 流程卡片（步骤缩略图带）。关闭后单工位/三工位监控页隐藏 SOP 流程卡片，把空间让给步骤表与检测画面区。" placement="top">
+                  <span class="text-gray-300">SOP流程卡片</span>
+                </el-tooltip>
                 <el-switch v-model="store.display.monitor.stepStrip" @change="saveDisplaySettings" />
               </div>
               <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">

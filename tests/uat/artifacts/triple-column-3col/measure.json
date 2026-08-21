@@ -1,0 +1,118 @@
+{
+  "1920x1080": {
+    "sop_on": {
+      "cards": [
+        {
+          "ch": 0,
+          "col_x": 32,
+          "video_w": 603.3,
+          "video_h": 339.4,
+          "ratio": 1.7778
+        },
+        {
+          "ch": 1,
+          "col_x": 653.3,
+          "video_w": 603.3,
+          "video_h": 339.4,
+          "ratio": 1.7778
+        },
+        {
+          "ch": 2,
+          "col_x": 1274.7,
+          "video_w": 603.3,
+          "video_h": 339.4,
+          "ratio": 1.7778
+        }
+      ],
+      "overflow_x": 0,
+      "grid_template_columns": "613.328px 613.328px 613.328px",
+      "sop_rows": 3
+    },
+    "sop_off": {
+      "cards": [
+        {
+          "ch": 0,
+          "col_x": 32,
+          "video_w": 603.3,
+          "video_h": 377.1,
+          "ratio": 1.6
+        },
+        {
+          "ch": 1,
+          "col_x": 653.3,
+          "video_w": 603.3,
+          "video_h": 377.1,
+          "ratio": 1.6
+        },
+        {
+          "ch": 2,
+          "col_x": 1274.7,
+          "video_w": 603.3,
+          "video_h": 377.1,
+          "ratio": 1.6
+        }
+      ],
+      "overflow_x": 0,
+      "grid_template_columns": "613.328px 613.328px 613.328px",
+      "sop_rows": 0
+    }
+  },
+  "1920x904": {
+    "sop_on": {
+      "cards": [
+        {
+          "ch": 0,
+          "col_x": 32,
+          "video_w": 603.3,
+          "video_h": 339.4,
+          "ratio": 1.7778
+        },
+        {
+          "ch": 1,
+          "col_x": 653.3,
+          "video_w": 603.3,
+          "video_h": 339.4,
+          "ratio": 1.7778
+        },
+        {
+          "ch": 2,
+          "col_x": 1274.7,
+          "video_w": 603.3,
+          "video_h": 339.4,
+          "ratio": 1.7778
+        }
+      ],
+      "overflow_x": 0,
+      "grid_template_columns": "613.328px 613.328px 613.328px",
+      "sop_rows": 3
+    },
+    "sop_off": {
+      "cards": [
+        {
+          "ch": 0,
+          "col_x": 32,
+          "video_w": 603.3,
+          "video_h": 377.1,
+          "ratio": 1.6
+        },
+        {
+          "ch": 1,
+          "col_x": 653.3,
+          "video_w": 603.3,
+          "video_h": 377.1,
+          "ratio": 1.6
+        },
+        {
+          "ch": 2,
+          "col_x": 1274.7,
+          "video_w": 603.3,
+          "video_h": 377.1,
+          "ratio": 1.6
+        }
+      ],
+      "overflow_x": 0,
+      "grid_template_columns": "613.328px 613.328px 613.328px",
+      "sop_rows": 0
+    }
+  }
+}
