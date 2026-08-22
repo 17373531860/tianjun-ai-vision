@@ -1630,6 +1630,7 @@ import GoodBadPieChart from './GoodBadPieChart.vue';
 import SingleChannelMonitor from './SingleChannelMonitor.vue';
 import YieldRateGauge from './YieldRateGauge.vue';
 import { createFramePump } from './framePump';
+import { regionEventRuleSteps, buildChannelStepViews } from './monitorModes';
 import { listPackagingFlows, getPackagingFlowState } from '@/api/packaging_flow';
 import { getTriggers } from '@/api/triggers';
 import { getScannerBypassStatus } from '@/api/export';
@@ -2770,16 +2771,6 @@ const stopMultiStreams = () => {
   multiFramePump.reset();
 };
 
-const regionEventRuleSteps = (pipelineConfig) =>
-  (pipelineConfig?.region_events?.rules || [])
-    .filter(r => r && r.name)
-    .map((r, i) => ({
-      id: `re_${r.id || i}`,
-      label: r.name,
-      displayLabel: r.name,
-      enabled: true,
-    }));
-
 const processChannelResult = (ch, d) => {
   const chData = multiChannelData.value[ch] || {};
   // v3.51.5: 工位源"从停到跑"的瞬间强制重连该路视频流 — 开机恢复要 30s+ 的现场
@@ -2919,132 +2910,17 @@ const processChannelResult = (ch, d) => {
   }
   chData.allCounters = allC;
 
-  // v3.1.3: 跟踪模式下,后端不推 _currentCycleSteps,改用 tracking.item_checklist
-  // 把 counted > 0 的步骤翻成 completed/OK,避免步骤一直停在"--/待检测"
-  const _isTracking = (d.project_config?.logic_mode || currentProject.value?.logic_mode) === 'tracking';
-  const _trackChecklist = _isTracking ? (d.tracking?.item_checklist || {}) : null;
-  const _trackBoxes = _isTracking ? (d.tracking?.boxes || {}) : null;
-  const _isContainer = _isTracking && !!d.tracking?.container_mode;
-  const _trackHit = (label) => {
-    if (!_isTracking) return false;
-    if (_isContainer && _trackBoxes) {
-      // 容器模式: 任意箱子里 counted > 0 即视为已检测
-      for (const bid of Object.keys(_trackBoxes)) {
-        const items = _trackChecklist?._boxes?.[bid]?.items;
-        if (items && items[label] && items[label].counted > 0) return true;
-      }
-      return false;
-    }
-    return !!(_trackChecklist?.[label] && _trackChecklist[label].counted > 0);
-  };
-
-  // v3.2.1: 跟踪模式下,步骤统计/SOP 只展示"每箱期望物品"中的项目,
-  // 排除作为"容器"的箱子类别(避免容器分组模式表格里出现"箱子"行)
-  const _trkExpectedLabels = (() => {
-    if (!_isTracking) return null;
-    const projCfg = d.project_config || currentProject.value || {};
-    const pipeCfg = projCfg.pipeline_config || {};
-    const expList = projCfg.counting_expected_list
-      || pipeCfg.counting_expected_list
-      || [];
-    const expDict = pipeCfg.counting_expected_items || {};
-    const set = new Set();
-    expList.forEach(it => { if (it && it.label) set.add(it.label); });
-    Object.keys(expDict).forEach(l => set.add(l));
-    if (set.size > 0) return set;
-    // 兜底:未填清单时仅排除容器 label
-    const containerLabel = projCfg.tracking_container_label
-      || pipeCfg.tracking_container_label
-      || '';
-    return containerLabel ? { _excludeContainer: containerLabel } : null;
-  })();
-  const _trkAllow = (label) => {
-    if (!_trkExpectedLabels) return true;
-    if (_trkExpectedLabels instanceof Set) return _trkExpectedLabels.has(label);
-    if (_trkExpectedLabels._excludeContainer) {
-      return label !== _trkExpectedLabels._excludeContainer;
-    }
-    return true;
-  };
-
-  const _logicMode = d.project_config?.logic_mode || currentProject.value?.logic_mode;
-  const _isRegionEvents = _logicMode === 'region_events';
-  const _resultRegionRules = d.project_config?.pipeline_config?.region_events?.rules;
-  const _stepsConf = _isRegionEvents
-    ? regionEventRuleSteps(
-      Array.isArray(_resultRegionRules)
-        ? d.project_config.pipeline_config
-        : currentProject.value?.pipeline_config
-    )
-    : (d.project_config?.steps_config || currentProject.value?.steps_config || []);
-  const _stepIsActive = (label) =>
-    _isRegionEvents && (chData.stepInflightDurations[label] || 0) > 0;
-
-  if (d.detections || _isRegionEvents) {
-    const stepsConf = _stepsConf;
-    const stMap = {};
-    stepsConf.forEach(s => { stMap[s.label] = s; });
-    // v3.31.x 语义收窄: hide_in_view 只隐藏画面检测框, SOP/步骤详情照常显示 (过滤条件不再含 hide_in_view)
-    const td = stepsConf
-      .filter(s => s.enabled !== false && !s.is_backup && _trkAllow(s.label))
-      .map((s) => {
-        const inCycle = chData.currentCycleSteps.includes(s.label);
-        const coveredByBackup = chData.backupCoveredLabels.includes(s.label);
-        const trackHit = _trackHit(s.label);
-        // v3.8.x (二次修订): 多工位 SOP/状态表"已完成"判定与单工位 status 对齐 —
-        // 步骤进过 cycle_steps 就算完成, 不再硬等权威 PT 写入。
-        // 修客户反馈"反应慢, 第三步显示时第一步 PT 还没出, 最后一步常常被周期清空根本来不及显示"。
-        // cycleResult (OK/NG) 仍在 updateStepsFromBackend 那条路用权威 PT 守门, 这里 trackHit 不变。
-        return {
-          step: s.displayLabel || s.label,
-          label: s.label,
-          status: (inCycle || coveredByBackup || trackHit)
-            ? 'completed'
-            : (_stepIsActive(s.label) ? 'active' : 'pending'),
-          cycleResult: trackHit ? 'ok' : null,
-        };
-      });
-    chData.tableData = td;
-  }
-
-  if (d.detections || _isRegionEvents) {
-    const stepsConf = _stepsConf;
-    const screenshots = d.step_screenshots || {};
-    // v3.10.x: SOP 卡片"图永不空"策略 — 后端有新图就替换, 没有就从上一轮按 label 继承,
-    // 让客户视觉上始终有缩略图(包括短步骤截图节流漏窗 / 跨周期间隙等场景).
-    // 状态色仍由 status/cycleResult 控制, 图片与状态完全解耦.
-    const prevSopByLabel = Object.fromEntries(
-      (chData.steps || []).map(s => [s.label, s.screenshot])
-    );
-    const sopSteps = stepsConf
-      .filter(s => s.enabled !== false && !s.is_backup && _trkAllow(s.label))
-      .map(s => {
-        const inCycle = chData.currentCycleSteps.includes(s.label);
-        const coveredByBackup = chData.backupCoveredLabels.includes(s.label);
-        const trackHit = _trackHit(s.label);
-        // v3.8.x (二次修订): 同步 sopSteps 与上方 tableData 的放宽规则, 进 cycle_steps 就算完成。
-        const rawB64 = screenshots[s.label];
-        return {
-          name: s.displayLabel || s.label,
-          label: s.label,
-          status: (inCycle || coveredByBackup || trackHit)
-            ? 'completed'
-            : (_stepIsActive(s.label) ? 'active' : 'pending'),
-          screenshot: rawB64
-            ? `data:image/jpeg;base64,${rawB64}`
-            : (prevSopByLabel[s.label] || null),
-        };
-      });
-    chData.steps = sopSteps;
-  }
-  // v2.7.4: 收集"项目配置中标记隐藏标注框"的 label 集合，drawMultiDetections 据此跳过画框
-  // v3.31.x 语义收窄: 仅影响实时画面的检测框, SOP 卡片/步骤详情照常显示; 检测/数据/报警/MES 一如既往不受影响
-  {
-    const stepsConf = d.project_config?.steps_config || currentProject.value?.steps_config || [];
-    chData._hiddenLabels = new Set(
-      stepsConf.filter(s => s && s.hide_in_view && s.label).map(s => s.label)
-    );
-  }
+  // 步骤表 / SOP 卡 / 隐藏标签集：纯函数构建（逻辑在 monitorModes.js，vitest 直测）
+  // tableData/sopSteps 为 null = 本轮无检测载荷且非 region_events，保留旧值不动
+  const stepViews = buildChannelStepViews(d, currentProject.value, {
+    currentCycleSteps: chData.currentCycleSteps,
+    backupCoveredLabels: chData.backupCoveredLabels,
+    stepInflightDurations: chData.stepInflightDurations,
+    prevSteps: chData.steps,
+  });
+  if (stepViews.tableData !== null) chData.tableData = stepViews.tableData;
+  if (stepViews.sopSteps !== null) chData.steps = stepViews.sopSteps;
+  chData._hiddenLabels = stepViews.hiddenLabels;
 
   const events = d.recent_events || [];
   if (events.length > 0) {
