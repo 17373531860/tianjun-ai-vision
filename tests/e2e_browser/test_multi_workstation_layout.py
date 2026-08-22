@@ -61,6 +61,60 @@ def test_triple_workstation_rows(page, base_url, channel_count_guard):
     assert page.locator("text=多工位总览").count() == 0
 
 
+def test_triple_region_events_sop_uses_rule_names(page, base_url, channel_count_guard):
+    """三工位区域事件 SOP 以动作规则为步骤，且 in-flight 动作点亮为进行中。"""
+    channel_count_guard(3)
+    page.set_viewport_size({"width": 1920, "height": 1080})
+
+    def handle_results(route):
+        route.fulfill(status=200, json={
+            "is_running": True,
+            "is_detecting": True,
+            "counters": {},
+            "detections": [],
+            "current_cycle_steps": [],
+            "step_inflight_durations": {"测硬度": 1.2},
+            "step_screenshots": {},
+            "project_config": {
+                "project_name": "__e2e_region_events_triple",
+                "logic_mode": "region_events",
+                # 陷阱：模型类别只有 2 个启用，但动作规则有 3 个。
+                "steps_config": [
+                    {"id": 1, "label": "工件", "enabled": True},
+                    {"id": 2, "label": "测硬度笔", "enabled": True},
+                    {"id": 3, "label": "扫码枪", "enabled": False},
+                ],
+                "pipeline_config": {
+                    "region_events": {
+                        "rules": [
+                            {"id": "r1", "name": "测硬度"},
+                            {"id": "r2", "name": "扫码"},
+                            {"id": "r3", "name": "下工件"},
+                        ],
+                    },
+                },
+            },
+        })
+
+    results_route = "**/source/detection/results*"
+    page.route(results_route, handle_results)
+    try:
+        _goto_monitor(page, base_url)
+
+        sop = page.locator("[data-testid='triple-sop-0']")
+        cards = sop.locator("div.w-28")
+        assert cards.count() == 3, "三工位区域事件 SOP 应按 3 条动作规则建卡"
+        for name in ("测硬度", "扫码", "下工件"):
+            assert sop.get_by_text(name, exact=True).count() == 1
+        assert sop.get_by_text("测硬度笔", exact=True).count() == 0
+
+        active_card = cards.filter(has_text="测硬度")
+        assert active_card.count() == 1
+        assert "border-cyan-500" in (active_card.get_attribute("class") or "")
+    finally:
+        page.unroute(results_route, handle_results)
+
+
 def test_triple_workstation_three_columns_layout(page, base_url, channel_count_guard):
     """v3.52 三工位横向三列: grid-cols-3, 三列从左到右, 视频 ~16:9, 无横向滚动。"""
     channel_count_guard(3)

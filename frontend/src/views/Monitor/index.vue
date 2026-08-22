@@ -2770,6 +2770,16 @@ const stopMultiStreams = () => {
   multiFramePump.reset();
 };
 
+const regionEventRuleSteps = (pipelineConfig) =>
+  (pipelineConfig?.region_events?.rules || [])
+    .filter(r => r && r.name)
+    .map((r, i) => ({
+      id: `re_${r.id || i}`,
+      label: r.name,
+      displayLabel: r.name,
+      enabled: true,
+    }));
+
 const processChannelResult = (ch, d) => {
   const chData = multiChannelData.value[ch] || {};
   // v3.51.5: 工位源"从停到跑"的瞬间强制重连该路视频流 — 开机恢复要 30s+ 的现场
@@ -2849,6 +2859,7 @@ const processChannelResult = (ch, d) => {
   chData.labelSplitRounds = d.label_split_rounds || null;  // v3.32: 多轮次拆分当前轮次
   chData.comboVerdict = d.combo_verdict || null;  // v3.48: 判型表运行态(positional 锁定ROI+实时计数)
   chData.currentCycleSteps = d.current_cycle_steps || [];
+  chData.stepInflightDurations = d.step_inflight_durations || {};
   chData.backupCoveredLabels = d.backup_covered_labels || [];
   chData.stepCounts = d.step_counts || {};
   chData.recentEvents = d.recent_events || [];
@@ -2956,8 +2967,21 @@ const processChannelResult = (ch, d) => {
     return true;
   };
 
-  if (d.detections) {
-    const stepsConf = d.project_config?.steps_config || currentProject.value?.steps_config || [];
+  const _logicMode = d.project_config?.logic_mode || currentProject.value?.logic_mode;
+  const _isRegionEvents = _logicMode === 'region_events';
+  const _resultRegionRules = d.project_config?.pipeline_config?.region_events?.rules;
+  const _stepsConf = _isRegionEvents
+    ? regionEventRuleSteps(
+      Array.isArray(_resultRegionRules)
+        ? d.project_config.pipeline_config
+        : currentProject.value?.pipeline_config
+    )
+    : (d.project_config?.steps_config || currentProject.value?.steps_config || []);
+  const _stepIsActive = (label) =>
+    _isRegionEvents && (chData.stepInflightDurations[label] || 0) > 0;
+
+  if (d.detections || _isRegionEvents) {
+    const stepsConf = _stepsConf;
     const stMap = {};
     stepsConf.forEach(s => { stMap[s.label] = s; });
     // v3.31.x 语义收窄: hide_in_view 只隐藏画面检测框, SOP/步骤详情照常显示 (过滤条件不再含 hide_in_view)
@@ -2974,15 +2998,17 @@ const processChannelResult = (ch, d) => {
         return {
           step: s.displayLabel || s.label,
           label: s.label,
-          status: (inCycle || coveredByBackup || trackHit) ? 'completed' : 'pending',
+          status: (inCycle || coveredByBackup || trackHit)
+            ? 'completed'
+            : (_stepIsActive(s.label) ? 'active' : 'pending'),
           cycleResult: trackHit ? 'ok' : null,
         };
       });
     chData.tableData = td;
   }
 
-  if (d.detections) {
-    const stepsConf = d.project_config?.steps_config || currentProject.value?.steps_config || [];
+  if (d.detections || _isRegionEvents) {
+    const stepsConf = _stepsConf;
     const screenshots = d.step_screenshots || {};
     // v3.10.x: SOP 卡片"图永不空"策略 — 后端有新图就替换, 没有就从上一轮按 label 继承,
     // 让客户视觉上始终有缩略图(包括短步骤截图节流漏窗 / 跨周期间隙等场景).
@@ -3001,7 +3027,9 @@ const processChannelResult = (ch, d) => {
         return {
           name: s.displayLabel || s.label,
           label: s.label,
-          status: (inCycle || coveredByBackup || trackHit) ? 'completed' : 'pending',
+          status: (inCycle || coveredByBackup || trackHit)
+            ? 'completed'
+            : (_stepIsActive(s.label) ? 'active' : 'pending'),
           screenshot: rawB64
             ? `data:image/jpeg;base64,${rawB64}`
             : (prevSopByLabel[s.label] || null),
@@ -5096,9 +5124,7 @@ watch(() => currentProject.value, (newProject, oldProject) => {
   } else if (logicMode === 'region_events') {
     // v3.32+ 区域事件模式: 步骤统计按"事件规则名"展示 (后端 step_counts 以规则名为键),
     // 不展示模型原始类别 (工件/手/工具本身不是流程步骤)
-    stepsToShow = (pipelineConfig.region_events?.rules || [])
-      .filter(r => r && r.name)
-      .map((r, i) => ({ id: `re_${r.id || i}`, label: r.name, displayLabel: r.name, enabled: true }));
+    stepsToShow = regionEventRuleSteps(pipelineConfig);
   } else {
     stepsToShow = stepsConfig.filter(s => s.enabled);
   }
