@@ -38,7 +38,7 @@
         <!-- v3.10.2+ 手动周期时机控制
              仅在「手动结算模式」开启时可见, 避免和自动判定路径互相打架.
              需要时去「项目配置 → 逻辑设置 → 结算时机」开「纯手动」开关. -->
-        <div v-if="state?.config?.disable_auto_settle" class="flex items-center gap-1">
+        <div v-if="!readonly && state?.config?.disable_auto_settle" class="flex items-center gap-1">
           <button
             class="px-2 py-0.5 text-[0.625rem] font-bold rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
             :class="state?.cycle_active
@@ -58,7 +58,7 @@
         </div>
         <!-- v3.28+ 手动判定 (判定时机=manual 时显示): 点一下拍快照亮绿/红, 不落账 -->
         <button
-          v-if="state?.config?.judge_timing === 'manual' && state?.cycle_active"
+          v-if="!readonly && state?.config?.judge_timing === 'manual' && state?.cycle_active"
           class="px-2 py-0.5 text-[0.625rem] font-bold rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
           :class="state?.judged && state?.judged_ok
             ? 'bg-green-600 text-white'
@@ -90,6 +90,7 @@
         </span>
       </div>
       <button
+        v-if="!readonly"
         class="px-3 py-0.5 text-xs font-bold rounded bg-red-600 hover:bg-red-500 text-white whitespace-nowrap transition-colors disabled:opacity-40"
         :disabled="busy"
         title="放弃补打, 按当前真实覆盖状态把本件判为 NG 落账 (= 触发事件人工确认)"
@@ -263,11 +264,16 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  readonly: {
+    type: Boolean,
+    default: false,
+  },
 })
 
 // v3.10.2+ 手动周期时机控制 (仅 settle | force_start)
 const busy = ref(false)
 const handleControl = async (action) => {
+  if (props.readonly) return
   if (busy.value) return
   busy.value = true
   try {

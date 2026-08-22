@@ -11,7 +11,10 @@
 from __future__ import annotations
 
 import os
+import uuid
 from pathlib import Path
+
+import requests
 
 from .mode_payloads import mixed_mode_router, sequential_payload, weighing_payload
 from .test_multi_workstation_layout import channel_count_guard  # noqa: F401
@@ -71,7 +74,10 @@ def test_triple_mixed_modes_show_matching_panels(page, base_url, channel_count_g
 
         _shot(page, "mode_panels_triple_mixed")
     finally:
-        page.unroute(route, handler)
+        try:
+            page.unroute(route, handler)
+        except Exception:
+            pass
 
 
 def test_dual_mixed_modes_keep_sop_row_slot(page, base_url, channel_count_guard):
@@ -96,7 +102,10 @@ def test_dual_mixed_modes_keep_sop_row_slot(page, base_url, channel_count_guard)
 
         _shot(page, "mode_panels_dual_mixed")
     finally:
-        page.unroute(route, handler)
+        try:
+            page.unroute(route, handler)
+        except Exception:
+            pass
 
 
 def test_dual_weighing_replaces_sop(page, base_url, channel_count_guard):
@@ -121,4 +130,99 @@ def test_dual_weighing_replaces_sop(page, base_url, channel_count_guard):
 
         _shot(page, "mode_panels_dual_weighing")
     finally:
-        page.unroute(route, handler)
+        try:
+            page.unroute(route, handler)
+        except Exception:
+            pass
+
+
+def test_zoom_tracking_shows_checklist(page, base_url, channel_count_guard):
+    """网格放大工位1（ch0 tracking）走 ModePanel 清点，槽位仍叫 sop。"""
+    channel_count_guard(6)
+    page.set_viewport_size({"width": 1920, "height": 1080})
+    handler, route = mixed_mode_router()
+    page.route(route, handler)
+    try:
+        _goto_monitor(page, base_url)
+        page.locator("text=工位1").first.click()
+        page.wait_for_timeout(1200)
+
+        scm = page.get_by_test_id("single-channel-monitor")
+        assert scm.count() == 1
+        sop = page.locator("[data-layout-canvas='zoom'] [data-layout-slot='sop']")
+        assert sop.count() == 1
+        assert sop.get_attribute("data-mode-panel") == "tracking"
+        assert sop.locator("text=物品清点").count() == 1
+        assert sop.locator("text=螺栓").count() == 1
+        assert page.get_by_test_id("sop-step-panel").count() == 0
+        assert page.get_by_test_id("single-channel-step-table").count() == 0
+        _shot(page, "mode_panels_zoom_tracking")
+    finally:
+        try:
+            page.unroute(route, handler)
+        except Exception:
+            pass
+
+
+def test_kiosk_per_item_is_readonly(page, base_url, channel_count_guard):
+    """kiosk 副屏：逐件面板可见且写按钮不出现；右侧控制仍禁用。"""
+    channel_count_guard(3)
+    page.set_viewport_size({"width": 1920, "height": 1080})
+    handler, route = mixed_mode_router()
+    page.route(route, handler)
+    try:
+        page.goto(
+            f"{base_url}/#/monitor?channel=1&kiosk=1",
+            wait_until="domcontentloaded",
+            timeout=15000,
+        )
+        page.wait_for_timeout(2800)
+
+        scm = page.get_by_test_id("single-channel-monitor")
+        assert scm.count() == 1
+        assert scm.get_attribute("data-readonly") == "true"
+        sop = page.locator("[data-layout-canvas='zoom'] [data-layout-slot='sop']")
+        assert sop.get_attribute("data-mode-panel") == "per_item"
+        assert sop.locator("text=逐件覆盖").count() >= 1
+        assert sop.locator("text=手动开始").count() == 0
+        assert sop.locator("text=手动结算").count() == 0
+        assert sop.locator("text=确认 NG").count() == 0
+        for tid in ("single-channel-start", "single-channel-stop",
+                    "single-channel-standby", "single-channel-reset"):
+            assert page.get_by_test_id(tid).is_disabled()
+        _shot(page, "mode_panels_kiosk_per_item")
+    finally:
+        try:
+            page.unroute(route, handler)
+        except Exception:
+            pass
+
+
+def test_single_tracking_uses_mode_panel_slot(page, base_url, api_url, channel_count_guard):
+    """单工位 tracking：激活跟踪项目后槽位仍叫 mode-panel，内容是清点看板。
+
+    单工位停机时不跑 results 轮询，面板跟 currentProject.logic_mode；
+    不能只靠 mock results（那是多工位/放大/kiosk 路径）。
+    """
+    channel_count_guard(1)
+    page.set_viewport_size({"width": 1920, "height": 1080})
+    pname = f"__e2e_trk_panel_{uuid.uuid4().hex[:5]}"
+    pid = None
+    try:
+        r = requests.post(f"{api_url}/api/v1/projects", json={
+            "name": pname, "task_type": "detection", "logic_mode": "tracking",
+        }, timeout=10)
+        r.raise_for_status()
+        pid = r.json()["id"]
+        requests.post(f"{api_url}/api/v1/projects/{pid}/activate", timeout=30).raise_for_status()
+
+        _goto_monitor(page, base_url)
+        panel = page.locator("[data-layout-canvas='single'] [data-layout-slot='mode-panel']")
+        assert panel.count() == 1
+        assert panel.get_attribute("data-mode-panel") == "tracking"
+        assert panel.locator("text=物品清点").count() == 1
+        assert page.get_by_test_id("sop-step-panel").count() == 0
+        _shot(page, "mode_panels_single_tracking")
+    finally:
+        if pid:
+            requests.delete(f"{api_url}/api/v1/projects/{pid}", timeout=10)

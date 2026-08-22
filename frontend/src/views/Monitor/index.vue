@@ -506,84 +506,14 @@
         </div>
       </div>
 
-      <!-- Tracking Mode Checklist Panel -->
-      <div v-else-if="isTrackingMode" data-layout-slot="mode-panel" class="h-44 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col">
-        <div class="bg-slate-800 px-3 py-1 border-b border-slate-700 flex-shrink-0 flex justify-between items-center">
-          <span class="text-cyan-400 text-lg font-bold">{{ trackingContainerMode ? '容器清点' : '物品清点' }}</span>
-          <div class="flex items-center gap-2">
-            <span v-if="trackingContainerMode && trackingSettledCount > 0" class="text-[0.625rem] px-1.5 py-0.5 rounded"
-              :class="trackingSettledNg > 0 ? 'bg-red-500/20 text-red-400' : 'bg-green-500/20 text-green-400'">
-              已结算 {{ trackingSettledCount }} (OK:{{ trackingSettledOk }} NG:{{ trackingSettledNg }})
-            </span>
-            <span v-if="trackingCycleActive" class="text-xs text-green-400 animate-pulse">跟踪中...</span>
-            <span v-else class="text-xs text-gray-500">等待</span>
-          </div>
-        </div>
-        <div class="flex-1 p-2 overflow-x-auto">
-          <!-- Container mode: per-box cards -->
-          <div v-if="trackingContainerMode" class="flex items-stretch h-full gap-3">
-            <div v-for="(box, boxDid) in trackingBoxes" :key="boxDid"
-              class="flex-shrink-0 w-44 bg-slate-800 rounded-lg border p-2 flex flex-col transition-all"
-              :class="box.is_complete ? 'border-green-500/70' : 'border-amber-500/70'">
-              <div class="flex items-center justify-between mb-1">
-                <span class="text-xs font-bold text-white">{{ boxDid }}</span>
-                <span class="text-[0.625rem] px-1.5 py-0.5 rounded"
-                  :class="box.is_complete ? 'bg-green-500/20 text-green-400' : 'bg-amber-500/20 text-amber-400'">
-                  {{ box.is_complete ? 'OK' : '...' }}
-                </span>
-              </div>
-              <div class="flex-1 space-y-0.5 overflow-y-auto">
-                <template v-if="trackingChecklist._boxes && trackingChecklist._boxes[boxDid]">
-                  <div v-for="(info, cls) in trackingChecklist._boxes[boxDid].items" :key="cls"
-                    class="flex items-center justify-between text-[0.625rem] px-1 py-0.5 rounded"
-                    :class="info.counted >= info.expected && info.expected > 0 ? 'bg-green-500/10 text-green-400' : 'bg-slate-700/50 text-gray-400'">
-                    <span class="truncate">{{ info.display_name || cls }}</span>
-                    <span class="font-mono font-bold">{{ info.counted }}<span v-if="info.expected > 0" class="text-gray-500">/{{ info.expected }}</span></span>
-                  </div>
-                </template>
-              </div>
-            </div>
-            <div v-if="Object.keys(trackingBoxes).length === 0"
-              class="flex items-center justify-center text-gray-500 text-sm w-full">
-              等待容器出现...
-            </div>
-          </div>
-          <!-- Normal mode: flat checklist -->
-          <div v-else class="flex items-stretch h-full gap-3">
-            <div v-for="(info, cls) in trackingChecklist" :key="cls"
-              class="flex-shrink-0 w-36 bg-slate-800 rounded-lg border p-2 flex flex-col justify-between transition-all"
-              :class="info.counted >= info.expected && info.expected > 0 ? 'border-green-500/70' : info.counted > info.expected && info.expected > 0 ? 'border-red-500/70' : 'border-slate-700'"
-            >
-              <div class="text-xs text-gray-400 truncate">{{ info.display_name || cls }}</div>
-              <div class="text-center my-1">
-                <span class="text-3xl font-bold font-mono"
-                  :class="info.counted >= info.expected && info.expected > 0 ? 'text-green-400' : 'text-white'"
-                >{{ info.counted }}</span>
-                <span v-if="info.expected > 0" class="text-sm text-gray-500"> / {{ info.expected }}</span>
-              </div>
-              <div class="text-[0.625rem] text-gray-500 text-center">{{ info.prefix }}1 ~ {{ info.prefix }}{{ info.counted || '?' }}</div>
-            </div>
-            <div v-if="Object.keys(trackingChecklist).length === 0"
-              class="flex items-center justify-center text-gray-500 text-sm w-full">
-              等待物品出现...
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- 原生称重投料模式专属看板 (与 SOP/Tracking/PerItem 排他, 占视频下方核心展示位) -->
-      <WeighingPanel
-        v-else-if="isWeighingMode"
+      <WorkstationModePanel
+        v-else-if="singleModePanelKind"
         data-layout-slot="mode-panel"
-        :channel="selectedChannel"
-      />
-
-      <!-- v3.8+ 逐件模式专属面板 (与 SOP/Tracking 排他, 占视频下方核心展示位) -->
-      <PerItemPanel
-        v-else-if="isPerItemMode"
-        data-layout-slot="mode-panel"
-        :state="perItemState"
-        :channel="selectedChannel"
+        class="h-44"
+        :mode="singleModePanelKind"
+        :ch="selectedChannel"
+        :ch-data="singleModeChData"
+        :compact="false"
       />
 
       <!-- No Project Selected -->
@@ -1203,7 +1133,6 @@ import api, { getBackendHost } from '@/api/index';
 import { getExtraFieldsSchema, setExtraFields, getInboundConfig } from '@/api/gateway';
 import PerItemPanel from './PerItemPanel.vue';
 import PackagingFlowCard from './PackagingFlowCard.vue';
-import WeighingPanel from './WeighingPanel.vue';
 import WeighingLiveBar from './WeighingLiveBar.vue';
 import VirtualScanGun from './VirtualScanGun.vue';
 import ExternalAlarmBanner from './ExternalAlarmBanner.vue';
@@ -1215,11 +1144,12 @@ import { useManualAck } from './composables/useManualAck';
 import CustomMixItemPanel from './CustomMixItemPanel.vue';
 import ChannelVideoCard from './ChannelVideoCard.vue';
 import WorkstationColumn from './WorkstationColumn.vue';
+import WorkstationModePanel from './WorkstationModePanel.vue';
 import GoodBadPieChart from './GoodBadPieChart.vue';
 import SingleChannelMonitor from './SingleChannelMonitor.vue';
 import YieldRateGauge from './YieldRateGauge.vue';
 import { createFramePump } from './framePump';
-import { regionEventRuleSteps } from './monitorModes';
+import { regionEventRuleSteps, resolveLogicMode, resolveModePanelKind } from './monitorModes';
 import { useMultiStreams } from './composables/useMultiStreams';
 import { useSingleStream } from './composables/useSingleStream';
 import { useToastVoice } from './composables/useToastVoice';
@@ -2175,11 +2105,29 @@ const {
 // 当前项目
 const currentProject = computed(() => projectStore.currentProject);
 
-const isTrackingMode = computed(() => currentProject.value?.logic_mode === 'tracking');
-// v3.8+: 逐件模式 — 视频下方专属面板, 排他 SOP/Tracking
-const isPerItemMode = computed(() => currentProject.value?.logic_mode === 'per_item');
-// 原生称重投料模式 — 视频下方专属看板 (人员/型号/各料投料进度/本件结论)
-const isWeighingMode = computed(() => currentProject.value?.logic_mode === 'weighing');
+const singleLogicMode = computed(() => resolveLogicMode(
+  multiChannelData.value[selectedChannel.value]?._pollProjectConfig,
+  currentProject.value,
+));
+const isTrackingMode = computed(() => singleLogicMode.value === 'tracking');
+const isPerItemMode = computed(() => singleLogicMode.value === 'per_item');
+const isWeighingMode = computed(() => singleLogicMode.value === 'weighing');
+const singleModePanelKind = computed(() => resolveModePanelKind(
+  multiChannelData.value[selectedChannel.value]?._pollProjectConfig,
+  currentProject.value,
+) || null);
+const singleModeChData = computed(() => ({
+  tracking: {
+    item_checklist: trackingChecklist.value,
+    boxes: trackingBoxes.value,
+    container_mode: trackingContainerMode.value,
+    cycle_active: trackingCycleActive.value,
+    settled_boxes: trackingSettledCount.value,
+    settled_ok: trackingSettledOk.value,
+    settled_ng: trackingSettledNg.value,
+  },
+  perItemState: perItemState.value,
+}));
 
 // ==================== 检测框/叠加层绘制 ====================
 // 阶段1⑤: 单/多工位画框与全部叠加层 (拆分区/引导框/判型锁框/触发区/ROI/mask)
@@ -3480,6 +3428,7 @@ const startPolling = () => {
       // v3.9.x 事件人工确认阻塞态 (单通道模式 — 与 processChannelResult 多通道路径对齐)
       // 不写到 multiChannelData[0].pendingAck 的话, 全屏覆盖层 computed 永远拿不到, 弹不出
       if (!multiChannelData.value[0]) multiChannelData.value[0] = {};
+      multiChannelData.value[0]._pollProjectConfig = data.project_config || null;
       multiChannelData.value[0].pendingAck = data.pending_ack || { active: false };
       multiChannelData.value[0].pendingRemediation = data.pending_remediation || null;
       multiChannelData.value[0].recentEvents = data.recent_events || [];

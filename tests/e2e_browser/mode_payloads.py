@@ -198,6 +198,9 @@ def mixed_mode_router(payloads=None):
     def handler(route):
         ch = _channel_of(route.request.url)
         factory = table.get(ch, sequential_payload)
-        route.fulfill(status=200, json=factory())
+        try:
+            route.fulfill(status=200, json=factory())
+        except Exception:
+            pass
 
     return handler, RESULTS_ROUTE

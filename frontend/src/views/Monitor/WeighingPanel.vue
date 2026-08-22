@@ -27,27 +27,27 @@
         <span class="text-gray-400">人员</span>
         <!-- v3.45 可选: 从用户名单选择 (称重配置·前置要求 开关), 默认自由填写 -->
         <el-select v-if="state.operator_from_users" v-model="opInput" size="small" style="width: 120px"
-                   class="weighing-op-select" placeholder="选择人员" filterable>
+                   class="weighing-op-select" placeholder="选择人员" filterable :disabled="readonly">
           <el-option v-for="op in operatorOptions" :key="op" :label="op" :value="op" />
         </el-select>
         <el-input v-else v-model="opInput" size="small" style="width: 120px"
-                  class="weighing-op-input" placeholder="操作人员" />
+                  class="weighing-op-input" placeholder="操作人员" :disabled="readonly" />
         <span class="text-gray-400 ml-2">型号</span>
         <el-select v-model="modelInput" size="small" style="width: 150px" placeholder="选择水泥型号"
-                   :disabled="state.material_check === 'visual'">
+                   :disabled="readonly || state.material_check === 'visual'">
           <el-option v-for="m in (state.available_models || [])" :key="m" :label="m" :value="m" />
         </el-select>
-        <el-button size="small" @click="applyContext" :disabled="!isPipeline && (phase === 'filling' || phase === 'await_tare')">确定人员/型号</el-button>
+        <el-button size="small" @click="applyContext" :disabled="readonly || (!isPipeline && (phase === 'filling' || phase === 'await_tare'))">确定人员/型号</el-button>
         <span class="text-gray-500 text-xs ml-1" v-if="state.material_check === 'visual'">(视觉识别料别，型号由模型自动判定)</span>
 
         <div class="flex-1"></div>
 
         <!-- 流水线模式: 件号自动生成, 无需扫码开始 -->
         <template v-if="!isPipeline">
-          <el-input v-model="snInput" size="small" style="width: 140px" placeholder="产品序列号" @keyup.enter="doScan" />
-          <el-button size="small" type="primary" @click="doScan">扫码开始</el-button>
+          <el-input v-model="snInput" size="small" style="width: 140px" placeholder="产品序列号" :disabled="readonly" @keyup.enter="doScan" />
+          <el-button size="small" type="primary" :disabled="readonly" @click="doScan">扫码开始</el-button>
         </template>
-        <el-button size="small" @click="doReset">复位</el-button>
+        <el-button size="small" :disabled="readonly" @click="doReset">复位</el-button>
       </div>
 
       <!-- 当前作业上下文 -->
@@ -135,8 +135,8 @@
         </span>
         <span v-else class="text-sm text-gray-400">投料进行中…</span>
         <div class="flex items-center gap-2">
-          <el-button size="small" @click="doTare">去皮</el-button>
-          <el-button size="small" @click="doZero">置零</el-button>
+          <el-button size="small" :disabled="readonly" @click="doTare">去皮</el-button>
+          <el-button size="small" :disabled="readonly" @click="doZero">置零</el-button>
         </div>
       </div>
     </template>
@@ -153,6 +153,7 @@ import {
 
 const props = defineProps({
   channel: { type: Number, default: 0 },
+  readonly: { type: Boolean, default: false },
 });
 
 const state = ref(null);
@@ -256,6 +257,7 @@ const refresh = async () => {
 };
 
 const applyContext = async () => {
+  if (props.readonly) return;
   try {
     await setWeighingContext({ channel_id: props.channel, operator: opInput.value || null, model_name: modelInput.value || null });
     ElMessage.success('已设置人员/型号');
@@ -263,6 +265,7 @@ const applyContext = async () => {
   } catch (e) { ElMessage.error('设置失败'); }
 };
 const doScan = async () => {
+  if (props.readonly) return;
   if (!snInput.value) { ElMessage.warning('请输入产品序列号'); return; }
   try {
     const { data } = await weighingScan({ channel_id: props.channel, serial_no: snInput.value });
@@ -270,9 +273,9 @@ const doScan = async () => {
     else { snInput.value = ''; refresh(); }
   } catch (e) { ElMessage.error('扫码开始失败'); }
 };
-const doTare = async () => { try { await weighingTare(props.channel); refresh(); } catch (e) { ElMessage.error('去皮失败'); } };
-const doZero = async () => { try { await weighingZero(props.channel); refresh(); } catch (e) { ElMessage.error('置零失败'); } };
-const doReset = async () => { try { await weighingReset(props.channel); refresh(); } catch (e) { ElMessage.error('复位失败'); } };
+const doTare = async () => { if (props.readonly) return; try { await weighingTare(props.channel); refresh(); } catch (e) { ElMessage.error('去皮失败'); } };
+const doZero = async () => { if (props.readonly) return; try { await weighingZero(props.channel); refresh(); } catch (e) { ElMessage.error('置零失败'); } };
+const doReset = async () => { if (props.readonly) return; try { await weighingReset(props.channel); refresh(); } catch (e) { ElMessage.error('复位失败'); } };
 
 watch(() => props.channel, () => { state.value = null; opInput.value = ''; modelInput.value = ''; refresh(); });
 
