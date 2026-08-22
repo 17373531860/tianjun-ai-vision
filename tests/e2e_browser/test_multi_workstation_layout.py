@@ -115,6 +115,83 @@ def test_triple_region_events_sop_uses_rule_names(page, base_url, channel_count_
         page.unroute(results_route, handle_results)
 
 
+def test_triple_region_events_sop_respects_custom_layout(page, base_url, channel_count_guard):
+    """v3.54 自定义布局 × 区域事件 SOP: sop 槽位按自定义坐标接管, 规则卡片照常渲染。"""
+    channel_count_guard(3)
+    page.set_viewport_size({"width": 1920, "height": 1080})
+    layouts_api = f"{API_URL}/api/v1/system/monitor-layouts"
+
+    def handle_results(route):
+        route.fulfill(status=200, json={
+            "is_running": True,
+            "is_detecting": True,
+            "counters": {},
+            "detections": [],
+            "current_cycle_steps": [],
+            "step_inflight_durations": {"测硬度": 1.2},
+            "step_screenshots": {},
+            "project_config": {
+                "project_name": "__e2e_region_events_layout",
+                "logic_mode": "region_events",
+                "steps_config": [{"id": 1, "label": "工件", "enabled": True}],
+                "pipeline_config": {
+                    "region_events": {
+                        "rules": [
+                            {"id": "r1", "name": "测硬度"},
+                            {"id": "r2", "name": "扫码"},
+                            {"id": "r3", "name": "下工件"},
+                        ],
+                    },
+                },
+            },
+        })
+
+    results_route = "**/source/detection/results*"
+    page.route(results_route, handle_results)
+    try:
+        # 自定义三工位布局: sop 提到列顶部 (自然 flow 里它在视频/计数之下),
+        # 位置差异本身就是"接管生效"的证据
+        r = requests.put(f"{layouts_api}/triple", json={
+            "version": 1, "snap": True,
+            "slots": {
+                "sop": {"x": 0.02, "y": 0.02, "w": 0.96, "h": 0.22},
+                "video": {"x": 0.02, "y": 0.26, "w": 0.96, "h": 0.4},
+            },
+        }, timeout=5)
+        assert r.status_code == 200
+
+        _goto_monitor(page, base_url)
+        page.wait_for_timeout(1000)  # 等布局 runtime 双帧接管
+
+        pos = page.evaluate(
+            """() => {
+                 const canvas = document.querySelector("[data-layout-canvas='triple']");
+                 const el = canvas && canvas.querySelector("[data-layout-slot='sop']");
+                 if (!el) return null;
+                 const c = canvas.getBoundingClientRect();
+                 const r = el.getBoundingClientRect();
+                 return {
+                   x: (r.left - c.left) / c.width,
+                   y: (r.top - c.top) / c.height,
+                   applied: el.dataset.layoutApplied === '1',
+                 };
+               }""")
+        assert pos and pos["applied"], f"sop 槽位未被自定义布局接管: {pos}"
+        assert abs(pos["x"] - 0.02) < 0.02 and abs(pos["y"] - 0.02) < 0.02, pos
+
+        # 接管后内容不受影响: 3 张规则卡 + in-flight 青色进行中
+        sop = page.locator("[data-testid='triple-sop-0']")
+        cards = sop.locator("div.w-28")
+        assert cards.count() == 3, "自定义布局下 SOP 规则卡应仍为 3 张"
+        for name in ("测硬度", "扫码", "下工件"):
+            assert sop.get_by_text(name, exact=True).count() == 1
+        active_card = cards.filter(has_text="测硬度")
+        assert "border-cyan-500" in (active_card.get_attribute("class") or "")
+    finally:
+        page.unroute(results_route, handle_results)
+        requests.delete(layouts_api, timeout=5)
+
+
 def test_triple_workstation_three_columns_layout(page, base_url, channel_count_guard):
     """v3.52 三工位横向三列: grid-cols-3, 三列从左到右, 视频 ~16:9, 无横向滚动。"""
     channel_count_guard(3)
