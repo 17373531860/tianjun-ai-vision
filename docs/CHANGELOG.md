@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.55.0 (2026-08-22)
+
+> 主题：**检测主页按工位 logic_mode 切工艺面板 + Monitor 巨石重构收口**。槽位 id 落库契约不动。零配置差异。
+
+- [FEAT-001] 新增: 双/三/放大/kiosk/单工位按该工位 tracking/per_item/weighing 显示清点/逐件/称重看板，步骤类仍 SOP
+- [FEAT-002] 新增: kiosk 称重与逐件写按钮只读禁用
+- [REF-001] 重构: 放大/kiosk 右侧栏抽出 ChannelDashboard；单工位右侧栏拓扑不同不共用
+- [TEST-001] 新增: e2e 模式面板 6 条 + results 契约 + 可见 UAT 8/8
+
 ## v3.54.1 (2026-08-22)
 
 > 主题：**补丁版——三工位区域事件 SOP 按动作规则名建卡片（收编 dev-qing）**。无后端改动，升级零配置差异。

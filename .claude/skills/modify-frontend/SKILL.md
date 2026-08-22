@@ -169,10 +169,11 @@ App.vue
         │   ├── 当前作业员 / 设备编号显示 ← display.navbar.* 开关
         │   └── 报警自动连接 → api (直接 axios)
         ├── router-view（8 子路由，互斥）
-        │   ├── Monitor/index.vue (4051 ⚠️) ← useSystemStore, useProjectStore, useSourceStore,
+        │   ├── Monitor/index.vue (⚠️ 巨石，v3.55 已抽 composable + 列/面板组件) ← useSystemStore, useProjectStore, useSourceStore,
         │   │                                  useScannerDisableStore, api/detection, api/model,
         │   │                                  api/operators, api/project, api/data
-        │   │   └── multiChannelData[ch].project   ← 每通道独立项目（不要用全局 currentProject）
+        │   │   └── WorkstationColumn / WorkstationModePanel / SingleChannelMonitor / ChannelDashboard
+        │   │   └── multiChannelData[ch]._pollProjectConfig.logic_mode  ← 每通道独立模式（不要只用全局 currentProject）
         │   │   └── speak(text, ch) / getToastConfig(toastId, ch)  ← 多通道参数
         │   ├── Project/index.vue (2925) ← useSystemStore, useProjectStore, api/project, api/model
         │   ├── Source/index.vue (1288) ← useSystemStore, useSourceStore, api/index, api/detection,

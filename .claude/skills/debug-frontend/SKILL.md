@@ -229,6 +229,7 @@ const getDisplayCT = (chData) => {
 - License 验证异常仍会设 `licenseChecked=true` 静默通过（设计如此）。
 - `detection_config` 在 DB 可能是 `null` 或字符串 `"null"`，`loadDetectionFromProject` 已处理两种情况。
 - 多工位 SOP/步骤表的步骤来源分逻辑模式（v3.54.1）：region_events 走 results 载荷 `region_events.rules` 规则名（helper `regionEventRuleSteps`，in-flight 用 `step_inflight_durations` 点亮 active），其余模式才走 `steps_config`。看到"三工位 SOP 标题是模型类别名"= 版本 <3.54.1 或该分支逻辑被改坏；区块位置异常先想 v3.54 自定义布局（`data-layout-slot` 接管只动容器不动内容，`DELETE /api/v1/system/monitor-layouts` 可整体排除布局因素）。
+- 按工位 logic_mode 切工艺面板（v3.55）：tracking/per_item/weighing 在原槽内换成清点/逐件/称重看板，步骤类仍 SOP。槽位 id 是布局落库契约，**禁止改名**（dual=`sop-row` / triple=`sop` / zoom=`sop` / single=`mode-panel`）。排查"跟踪工位还在画 SOP"= `resolveModePanelKind` 没吃到该通道 `_pollProjectConfig.logic_mode`。kiosk 必须 `readonly`（称重/逐件写按钮禁用）。单工位停机不跑 results 轮询，面板跟 `currentProject.logic_mode`。单工位右侧栏不能塞进 `ChannelDashboard`（槽位拓扑不同）。守门：`tests/e2e_browser/test_monitor_mode_panels.py` + `tests/uat/uat_monitor_mode_panels.py`。
 
 ---
 

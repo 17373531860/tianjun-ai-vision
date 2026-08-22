@@ -1,0 +1,66 @@
+{
+  "version": "3.55.0",
+  "date": "2026-08-22",
+  "previous_version": "3.54.1",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "按工位 logic_mode 切工艺面板",
+      "symptom": "双/三工位所有 logic_mode 都画通用 SOP 卡，跟踪/逐件/称重工位看不到自己的工艺看板",
+      "root_cause": "多工位列只渲染 SopStepPanel，未按通道 project_config.logic_mode 切换",
+      "fix": "WorkstationModePanel 在原槽位 id 内按 tracking/per_item/weighing 换专属组件，步骤类仍 SOP",
+      "files": [
+        "frontend/src/views/Monitor/monitorModes.js",
+        "frontend/src/views/Monitor/WorkstationModePanel.vue",
+        "frontend/src/views/Monitor/TrackingChecklistPanel.vue",
+        "frontend/src/views/Monitor/WorkstationColumn.vue",
+        "frontend/src/views/Monitor/index.vue"
+      ],
+      "keywords": ["logic_mode", "WorkstationModePanel", "sop-row", "mode-panel", "tracking", "per_item", "weighing"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "放大/kiosk/单工位接入 ModePanel，kiosk 只读",
+      "symptom": "放大态和副屏仍画 SOP；kiosk 上称重/逐件写按钮可点",
+      "root_cause": "SingleChannelMonitor 与单工位内联面板未走 ModePanel；PerItem/Weighing 无 readonly 守门",
+      "fix": "三处接入 WorkstationModePanel；readonly 禁用写通路",
+      "files": [
+        "frontend/src/views/Monitor/SingleChannelMonitor.vue",
+        "frontend/src/views/Monitor/PerItemPanel.vue",
+        "frontend/src/views/Monitor/WeighingPanel.vue"
+      ],
+      "keywords": ["kiosk", "readonly", "zoom", "SingleChannelMonitor"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "REF-001",
+      "title": "ChannelDashboard 抽出放大/kiosk 右侧栏",
+      "symptom": "SingleChannelMonitor 与单工位仪表盘 DOM 重复",
+      "root_cause": "放大态右侧栏内联在 SingleChannelMonitor",
+      "fix": "抽出 ChannelDashboard；单工位右侧栏拓扑不同不共用，避免破坏 v3.54 布局落库",
+      "files": [
+        "frontend/src/views/Monitor/ChannelDashboard.vue",
+        "frontend/src/views/Monitor/SingleChannelMonitor.vue"
+      ],
+      "keywords": ["ChannelDashboard", "layout-slot", "zoom"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-frontend", "debug-source", "modify-frontend"],
+  "files_changed": [
+    "frontend/src/views/Monitor/WorkstationModePanel.vue",
+    "frontend/src/views/Monitor/TrackingChecklistPanel.vue",
+    "frontend/src/views/Monitor/ChannelDashboard.vue",
+    "frontend/src/views/Monitor/SingleChannelMonitor.vue",
+    "frontend/src/views/Monitor/index.vue",
+    "frontend/src/views/Monitor/PerItemPanel.vue",
+    "frontend/src/views/Monitor/WeighingPanel.vue",
+    "tests/e2e_browser/test_monitor_mode_panels.py",
+    "tests/test_monitor_mode_results_contract.py",
+    "tests/uat/uat_monitor_mode_panels.py"
+  ]
+}

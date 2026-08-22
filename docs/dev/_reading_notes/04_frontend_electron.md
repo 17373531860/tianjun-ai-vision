@@ -1,4 +1,4 @@
-﻿# 04 · 前端 + Electron 读码笔记
+# 04 · 前端 + Electron 读码笔记
 
 > **类型**：reference
 > **本文不讲**：多屏配置后端模型与持久化细节（见 `backend/api/channel_manager.py`）、现场异显坞验收步骤（见对应交付记录）。
@@ -370,6 +370,8 @@ CI 浏览器回归覆盖设置 roundtrip、Electron apply payload 可结构化�
 > v3.38 起（NG top3 保持）：后端 NG 步骤 map 为空时保留现有 top3 展示（待机/重开 sync 配置不再清累计），仅总产量与不良总数都归零（真清零）才清空——单工位行 5469–5480、多工位 `processChannelResult` 行 2219–2229；工位清零同时重置 `ngStepRanking`（行 5686）。
 
 > v3.54.1 起（收编 dev-qing，三工位区域事件 SOP 按规则名建卡）：`processChannelResult` 里 SOP/步骤表建行改分逻辑模式——region_events 用 results 载荷 `project_config.pipeline_config.region_events.rules` 建步骤（helper `regionEventRuleSteps`，单工位 watch 同源复用），非 completed 步骤若 `step_inflight_durations[label]>0` 给 `active` 态（卡片青色脉冲）；其余模式仍走 `steps_config`。曾误用模型类别建卡（工件/测硬度笔混进 SOP 标题）。守门：`tests/e2e_browser/test_multi_workstation_layout.py`（含 v3.54 自定义布局组合用例）+ `tests/uat/uat_region_events_triple_sop.py`。
+
+> v3.55 起（按工位 logic_mode 切工艺面板 + 巨石收口）：`WorkstationModePanel` 在原布局槽内按通道模式切换 TrackingChecklistPanel / PerItemPanel / WeighingPanel，步骤类仍 SOP；槽位 id 不改名。放大/kiosk 共用 `SingleChannelMonitor` + `ChannelDashboard`（kiosk `readonly` 禁用写按钮）。单工位 `mode-panel` 停机跟 `currentProject`、运行中跟 `_pollProjectConfig`。单工位右侧栏不塞进 ChannelDashboard。守门：`tests/e2e_browser/test_monitor_mode_panels.py` + `tests/uat/uat_monitor_mode_panels.py`。
 
 **检测控制**：
 
