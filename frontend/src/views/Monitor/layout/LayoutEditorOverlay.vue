@@ -102,6 +102,7 @@ const SLOT_LABELS = {
   stats: '统计面板',
   charts: '图表区',
   'mode-panel': '模式看板（清点/称重/逐件）',
+  'mix-panel': '混合模式物品校验',
   'weighing-bar': '称重数值条',
   'packaging-card': '包装箱进度',
   'scan-gun': '虚拟扫码枪',

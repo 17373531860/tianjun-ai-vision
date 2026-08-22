@@ -179,7 +179,7 @@
   <div v-else-if="channelCount === 2" class="grid grid-cols-2 gap-2 h-[calc(100vh-7.25rem)] p-2 relative">
     <!-- v3.54 自定义布局: 每个工位列是一块画布 (data-layout-canvas), 列内区块打
          data-layout-slot; 一套列内布局镜像应用到所有列。无自定义布局时零差异。 -->
-    <div v-for="ch in 2" :key="ch - 1" data-layout-canvas="dual" class="flex flex-col gap-1.5 min-h-0 overflow-hidden relative">
+    <div v-for="ch in 2" :key="ch - 1" :data-testid="`dual-col-${ch - 1}`" data-layout-canvas="dual" class="flex flex-col gap-1.5 min-h-0 overflow-hidden relative">
       <!-- Video panel (70% height)（M-4 外置 ChannelVideoCard, 流/绘制机制留父级） -->
       <ChannelVideoCard
         data-layout-slot="video"
@@ -195,7 +195,7 @@
         @zoom="zoomChannel(ch - 1)"
       />
       <!-- v3.1.3: per-channel MES 信息条 (工件号 / 未绑码警告 / 等待扫码 / 清除按钮) -->
-      <div v-if="shouldShowMesBarFor(ch - 1) || layoutEditActive" data-layout-slot="mes-bar"
+      <div v-if="shouldShowMesBarFor(ch - 1) || layoutEditActive" data-layout-slot="mes-bar" :data-testid="`dual-mes-${ch - 1}`"
            class="bg-slate-900 border border-cyan-800/50 rounded-lg px-2 py-1 flex items-center gap-3 text-xs flex-shrink-0">
         <div v-if="!isScanDisabledFor(ch - 1) && getDisplayWorkpieceFor(ch - 1)" class="flex items-center gap-1.5 min-w-0">
           <span class="text-cyan-400 font-bold">工件:</span>
@@ -263,7 +263,7 @@
         </el-tooltip>
       </div>
       <!-- Row 1: Counters (scrollable) + Yield Rate -->
-      <div data-layout-slot="counters" class="flex gap-2 flex-shrink-0">
+      <div data-layout-slot="counters" :data-testid="`dual-counters-${ch - 1}`" class="flex gap-2 flex-shrink-0">
         <div class="flex-1 flex gap-2 overflow-x-auto min-w-0">
           <div class="flex-shrink-0 bg-slate-900 border border-slate-700 rounded px-4 py-2 text-center min-w-[5.625rem]">
             <div class="text-xs text-gray-400">总产量</div>
@@ -286,7 +286,7 @@
         </div>
       </div>
       <!-- Row 2: SOP (left, with image cards, scrollable) + Step Stats (right) -->
-      <div data-layout-slot="sop-row" class="flex gap-2 min-h-0" style="flex: 3 1 0%;">
+      <div data-layout-slot="sop-row" :data-testid="`dual-sop-${ch - 1}`" class="flex gap-2 min-h-0" style="flex: 3 1 0%;">
         <div class="w-[60%] bg-slate-900 border border-slate-700 rounded overflow-hidden flex flex-col min-w-0">
           <div class="bg-slate-800 px-3 py-1 text-cyan-400 text-sm font-bold border-b border-slate-700 flex items-center justify-between flex-shrink-0">
             <span>SOP</span>

@@ -116,6 +116,10 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      - name: Frontend unit tests (vitest)
+        working-directory: frontend
+        run: npm test
+
       - name: Build frontend (vite preview is faster than dev)
         working-directory: frontend
         run: npm run build
