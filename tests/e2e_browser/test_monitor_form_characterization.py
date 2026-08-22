@@ -113,7 +113,12 @@ def test_triple_form_skeleton_mixed_modes(page, base_url, channel_count_guard):
             sop = page.locator(f"[data-testid='triple-sop-{ch}']")
             assert sop.count() == 1
             assert sop.get_attribute("data-layout-slot") == "sop"
-            assert page.locator(f"[data-testid='triple-steptable-{ch}']").count() == 1
+            # 步骤表: 步骤类模式保留; tracking(ch0)/per_item(ch1) 隐藏
+            tbl = page.locator(f"[data-testid='triple-steptable-{ch}']")
+            if ch == 2:
+                assert tbl.count() == 1
+            else:
+                assert tbl.count() == 0
             assert col.locator("[data-layout-slot='controls']").count() == 1
         for name in ("开始", "停止", "待机", "清零"):
             assert page.get_by_role("button", name=name).count() == 3

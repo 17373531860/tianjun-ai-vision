@@ -4,6 +4,7 @@ import { describe, it, expect } from 'vitest';
 import {
   regionEventRuleSteps,
   resolveLogicMode,
+  resolveModePanelKind,
   buildChannelStepViews,
 } from '../monitorModes';
 
@@ -41,6 +42,27 @@ describe('resolveLogicMode', () => {
     expect(resolveLogicMode({ logic_mode: 'tracking' }, { logic_mode: 'sequential' })).toBe('tracking');
     expect(resolveLogicMode(null, { logic_mode: 'per_item' })).toBe('per_item');
     expect(resolveLogicMode(null, null)).toBeUndefined();
+  });
+});
+
+describe('resolveModePanelKind', () => {
+  it('tracking/per_item/weighing 换专属面板，步骤类走 SOP', () => {
+    expect(resolveModePanelKind({ logic_mode: 'tracking' }, null)).toBe('tracking');
+    expect(resolveModePanelKind({ logic_mode: 'per_item' }, null)).toBe('per_item');
+    expect(resolveModePanelKind({ logic_mode: 'weighing' }, null)).toBe('weighing');
+    expect(resolveModePanelKind({ logic_mode: 'region_events' }, null)).toBeNull();
+    expect(resolveModePanelKind({ logic_mode: 'sequential' }, null)).toBeNull();
+    expect(resolveModePanelKind({ logic_mode: 'detection' }, null)).toBeNull();
+    expect(resolveModePanelKind({ logic_mode: 'custom_mix' }, null)).toBeNull();
+  });
+
+  it('轮询配置优先于兜底项目', () => {
+    expect(resolveModePanelKind(
+      { logic_mode: 'tracking' },
+      { logic_mode: 'sequential' },
+    )).toBe('tracking');
+    expect(resolveModePanelKind(null, { logic_mode: 'weighing' })).toBe('weighing');
+    expect(resolveModePanelKind(null, { logic_mode: 'sequential' })).toBeNull();
   });
 });
 

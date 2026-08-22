@@ -107,8 +107,14 @@
       </div>
     </div>
   </div>
-  <!-- Row 2: SOP (left, with image cards, scrollable) + Step Stats (right) -->
-  <div data-layout-slot="sop-row" :data-testid="`dual-sop-${ch}`" class="flex gap-2 min-h-0" style="flex: 3 1 0%;">
+  <!-- Row 2: 工艺主面板 — 槽位 id 契约永远是 sop-row (布局落库), 槽内内容按工位模式切换:
+       tracking/per_item/weighing → 专属面板 (阶段3, v3.55); 步骤类模式 → 原 SOP+步骤表 -->
+  <div data-layout-slot="sop-row" :data-testid="`dual-sop-${ch}`"
+       :data-mode-panel="modePanelKind || undefined"
+       class="flex gap-2 min-h-0" style="flex: 3 1 0%;">
+    <WorkstationModePanel v-if="modePanelKind" class="flex-1 min-w-0 min-h-0"
+      :mode="modePanelKind" :ch="ch" :ch-data="multiChannelData[ch]" />
+    <template v-else>
     <div class="w-[60%] bg-slate-900 border border-slate-700 rounded overflow-hidden flex flex-col min-w-0">
       <div class="bg-slate-800 px-3 py-1 text-cyan-400 text-sm font-bold border-b border-slate-700 flex items-center justify-between flex-shrink-0">
         <span>SOP</span>
@@ -142,6 +148,7 @@
         </tbody>
       </table>
     </div>
+    </template>
   </div>
   <!-- Controls -->
   <div data-layout-slot="controls" class="flex gap-1.5 flex-shrink-0" data-testid="channel-controls" :data-channel="ch">
@@ -329,9 +336,17 @@
       {{ isScanDisabledFor(ch) ? '启用扫码' : '禁用扫码' }}
     </el-button>
   </div>
-  <!-- SOP 流程卡片 (整宽一行) — 受显示设置「SOP 流程卡片」(display.monitor.stepStrip) 控制.
+  <!-- 工艺主面板 (整宽一行) — 受显示设置「SOP 流程卡片」(display.monitor.stepStrip) 控制.
+       槽位 id 契约永远是 sop (布局落库); 槽内内容按工位模式切换:
+       tracking/per_item/weighing → 专属面板 (阶段3, v3.55); 步骤类模式 → 原 SOP 卡.
        关掉即隐藏整行, 上方视频区 flex-1 向下拉大吃满余量; 显示时步骤表 flex-1 吸收余量. -->
-  <div v-if="systemStore.display.monitor.stepStrip !== false || layoutEditActive"
+  <WorkstationModePanel
+    v-if="(systemStore.display.monitor.stepStrip !== false || layoutEditActive) && modePanelKind"
+    :data-testid="`triple-sop-${ch}`" data-layout-slot="sop"
+    :data-mode-panel="modePanelKind"
+    :class="modePanelKind === 'tracking' ? 'h-40 flex-shrink-0' : 'flex-shrink-0 max-h-[55%] overflow-y-auto'"
+    :mode="modePanelKind" :ch="ch" :ch-data="multiChannelData[ch]" />
+  <div v-else-if="systemStore.display.monitor.stepStrip !== false || layoutEditActive"
     :data-testid="`triple-sop-${ch}`" data-layout-slot="sop"
     class="bg-slate-900 border border-slate-700 rounded overflow-hidden flex flex-col flex-shrink-0">
     <div class="bg-slate-800 px-2 py-0.5 text-cyan-400 text-xs font-bold border-b border-slate-700 flex items-center justify-between flex-shrink-0">
@@ -359,8 +374,10 @@
       <div v-if="!multiChannelData[ch]?.steps?.length" class="text-gray-600 text-xs w-full text-center self-center">等待检测</div>
     </div>
   </div>
-  <!-- 步骤状态表 (整宽): flex-1 吸收剩余高度; 关掉 SOP 卡片后自动吃满其让出的空间 -->
-  <div :data-testid="`triple-steptable-${ch}`" data-layout-slot="step-table"
+  <!-- 步骤状态表: 步骤类模式保留; tracking/per_item/weighing 无步骤概念则隐藏
+       (编辑态强制显示, 避免布局编辑器丢块)。槽位 id 契约 step-table 不动. -->
+  <div v-if="!modePanelKind || layoutEditActive"
+    :data-testid="`triple-steptable-${ch}`" data-layout-slot="step-table"
     class="bg-slate-900 border border-slate-700 rounded overflow-auto min-w-0 flex-1 min-h-0">
     <table v-if="(multiChannelData[ch]?.tableData || []).length" class="w-full text-[0.625rem]">
       <thead class="bg-slate-800 text-gray-400 sticky top-0"><tr>
@@ -429,9 +446,12 @@
  * ctx 是父级组装的静态对象（refs/computeds/函数/stores 混装）；顶层解构后
  * refs 在模板中自动解包，与原 index.vue 内联渲染语义一致。
  */
+import { computed } from 'vue';
 import { Picture } from '@element-plus/icons-vue';
 import ChannelVideoCard from './ChannelVideoCard.vue';
 import TjSlot from '@/components/TjSlot.vue';
+import WorkstationModePanel from './WorkstationModePanel.vue';
+import { resolveModePanelKind } from './monitorModes';
 
 const props = defineProps({
   variant: { type: String, required: true }, // 'dual' | 'triple'
@@ -451,4 +471,15 @@ const {
   startDetectionForChannel, stopDetectionForChannel, standbyForChannel,
   resetCountersForChannel,
 } = props.ctx;
+
+// 阶段3: 本工位的按模式工艺面板 — 模式来源 poll 载荷 project_config 优先,
+// 兜底工位绑定项目/全局当前项目。tracking/per_item/weighing 换专属面板,
+// 步骤类模式 (sequential/detection/region_events/...) 走原 SOP 卡零差异。
+const modePanelKind = computed(() => {
+  const chData = multiChannelData.value?.[ch];
+  return resolveModePanelKind(
+    chData?._pollProjectConfig,
+    chData?.project || currentProject.value,
+  );
+});
 </script>

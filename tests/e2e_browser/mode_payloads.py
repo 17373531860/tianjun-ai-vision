@@ -99,7 +99,14 @@ def per_item_payload() -> dict:
                     "covered_count": 3,
                     "completed": False,
                     "items": [
-                        {"item_id": i, "covered": i < 3}
+                        {
+                            "id": i,
+                            "bbox": [0.1 + i * 0.12, 0.30, 0.08, 0.08],
+                            "covered": i < 3,
+                            "covered_at": None,
+                            "associated": False,
+                            "dup": 0,
+                        }
                         for i in range(6)
                     ],
                 },
@@ -153,6 +160,19 @@ def sequential_payload() -> dict:
     }
 
 
+def weighing_payload() -> dict:
+    """weighing 称重投料模式。看板自轮询 /weighing/state, 本载荷只需 logic_mode。"""
+    return {
+        **_BASE,
+        "project_config": {
+            "project_name": "__e2e_mix_weighing",
+            "logic_mode": "weighing",
+            "steps_config": [],
+            "pipeline_config": {"weighing": {}},
+        },
+    }
+
+
 CHANNEL_PAYLOADS = {
     0: tracking_payload,
     1: per_item_payload,
@@ -168,12 +188,16 @@ def _channel_of(url: str) -> int:
         return 0
 
 
-def mixed_mode_router():
-    """返回 (handler, route_pattern)：按 ?channel= 分发异模式载荷。"""
+def mixed_mode_router(payloads=None):
+    """返回 (handler, route_pattern)：按 ?channel= 分发异模式载荷。
+
+    payloads 可覆盖默认映射（0=tracking / 1=per_item / 2=region_events）。
+    """
+    table = payloads or CHANNEL_PAYLOADS
 
     def handler(route):
         ch = _channel_of(route.request.url)
-        factory = CHANNEL_PAYLOADS.get(ch, sequential_payload)
+        factory = table.get(ch, sequential_payload)
         route.fulfill(status=200, json=factory())
 
     return handler, RESULTS_ROUTE

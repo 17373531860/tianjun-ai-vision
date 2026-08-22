@@ -99,6 +99,7 @@ export function useChannelResults(ctx) {
     chData.detections = d.detections || [];
     chData._pollProjectConfig = d.project_config || null;
     chData.perItemState = d.per_item_state || null;   // v3.28: 多工位画框贴螺丝编号用
+    chData.customMixState = d.custom_mix_state || null;  // v3.19: 混合模式物品校验（阶段3 落通道态）
     chData.placementGuide = d.placement_guide || null;  // v3.32: 就位引导框运行态(已就位/未就位)
     chData.labelSplitRounds = d.label_split_rounds || null;  // v3.32: 多轮次拆分当前轮次
     chData.comboVerdict = d.combo_verdict || null;  // v3.48: 判型表运行态(positional 锁定ROI+实时计数)
