@@ -409,6 +409,23 @@ def then_event_steps_counted(client, ctx, names):
     ctx["last_body"] = body
 
 
+@then(parsers.parse('results 载荷规则清单应为 "{names}"'))
+def then_results_rule_names(client, ctx, names):
+    """v3.54.1 多工位 SOP 建卡契约: 前端消费 results.project_config.pipeline_config.region_events.rules[].name"""
+    expected = [s.strip() for s in names.split(",") if s.strip()]
+    body = ctx.get("last_body")
+    if body is None:
+        r = detection_results(client, channel=CH)
+        assert r.status_code == 200
+        body = r.json()
+        ctx["last_body"] = body
+    rules = (((body.get("project_config") or {})
+              .get("pipeline_config") or {})
+             .get("region_events") or {}).get("rules") or []
+    got = [r.get("name") for r in rules if r.get("name")]
+    assert got == expected, f"规则清单 {got} != {expected}"
+
+
 @then("周期应结算为合格")
 def then_cycle_ok(client, ctx):
     body = _poll(client, lambda b: _counter_delta(ctx, b, "合格总数") >= 1,

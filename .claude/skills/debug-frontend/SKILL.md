@@ -228,6 +228,7 @@ const getDisplayCT = (chData) => {
 - 前端硬编码中文很多，i18n 切语言基本无效（不是 bug，是产品决策）。
 - License 验证异常仍会设 `licenseChecked=true` 静默通过（设计如此）。
 - `detection_config` 在 DB 可能是 `null` 或字符串 `"null"`，`loadDetectionFromProject` 已处理两种情况。
+- 多工位 SOP/步骤表的步骤来源分逻辑模式（v3.54.1）：region_events 走 results 载荷 `region_events.rules` 规则名（helper `regionEventRuleSteps`，in-flight 用 `step_inflight_durations` 点亮 active），其余模式才走 `steps_config`。看到"三工位 SOP 标题是模型类别名"= 版本 <3.54.1 或该分支逻辑被改坏；区块位置异常先想 v3.54 自定义布局（`data-layout-slot` 接管只动容器不动内容，`DELETE /api/v1/system/monitor-layouts` 可整体排除布局因素）。
 
 ---
 

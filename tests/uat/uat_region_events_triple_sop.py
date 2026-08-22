@@ -142,9 +142,53 @@ def main() -> int:
             run.step("current_cycle_steps 规则名驱动完成态", "border-green-500" in completed_class,
                      completed_class)
 
-            real_console_errors = filter_console_errors(console_errors)
+            # 控制台检查放到自定义布局 reload 之后，一次覆盖全过程
+
+            # v3.54 自定义布局交叉面：sop 槽位提到列顶部，规则卡内容不受影响
+            put = requests.put(f"{API}/api/v1/system/monitor-layouts/triple", json={
+                "version": 1, "snap": True,
+                "slots": {
+                    "sop": {"x": 0.02, "y": 0.02, "w": 0.96, "h": 0.22},
+                    "video": {"x": 0.02, "y": 0.26, "w": 0.96, "h": 0.4},
+                },
+            }, timeout=5)
+            run.step("PUT triple 自定义布局 200", put.status_code == 200,
+                     f"status={put.status_code}")
+            page.reload(wait_until="domcontentloaded")
+            page.wait_for_timeout(2_000)
+            grid.wait_for(state="visible", timeout=10_000)
+            page.wait_for_timeout(1_000)
+            pos = page.evaluate(
+                """() => {
+                     const canvas = document.querySelector("[data-layout-canvas='triple']");
+                     const el = canvas && canvas.querySelector("[data-layout-slot='sop']");
+                     if (!el) return null;
+                     const c = canvas.getBoundingClientRect();
+                     const r = el.getBoundingClientRect();
+                     return {
+                       x: (r.left - c.left) / c.width,
+                       y: (r.top - c.top) / c.height,
+                       applied: el.dataset.layoutApplied === '1',
+                     };
+                   }""")
+            run.shot(page, "04_custom_layout_sop_top")
+            run.step("自定义布局接管 sop 槽位到列顶部",
+                     bool(pos) and pos.get("applied") and abs(pos["x"] - 0.02) < 0.04
+                     and abs(pos["y"] - 0.02) < 0.04,
+                     f"pos={pos}")
+            sop_after = page.get_by_test_id("triple-sop-0")
+            run.step("接管后仍按三条规则名建卡",
+                     sop_after.locator("div.w-28").count() == 3
+                     and sop_after.get_by_text("测硬度", exact=True).count() == 1
+                     and sop_after.get_by_text("测硬度笔", exact=True).count() == 0,
+                     f"cards={sop_after.locator('div.w-28').count()}")
+
+            # mock 的 project_name 不在库里，reload 后 GET /projects/{id} 会 404，属剧本噪声
+            real_console_errors = filter_console_errors(
+                console_errors, extra_noise=("Project not found",))
             run.step("浏览器无前端逻辑错误", not real_console_errors,
                      f"errors={real_console_errors[:3]}")
+
             page.unroute_all(behavior="ignoreErrors")
             context.close()
             context = None
@@ -159,6 +203,10 @@ def main() -> int:
         _request("POST", "/api/v1/workstations/mode", {"channel_count": original_count})
         run.step("工位数已还原", _request("GET", "/api/v1/workstations/")["channel_count"] == original_count,
                  f"channel_count={original_count}")
+        try:
+            requests.delete(f"{API}/api/v1/system/monitor-layouts", timeout=5)
+        except Exception:
+            pass
 
     exit_code = run.finish()
     summary = json.loads((Path(run.dir) / "run.json").read_text(encoding="utf-8"))

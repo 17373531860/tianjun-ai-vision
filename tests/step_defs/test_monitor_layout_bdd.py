@@ -56,6 +56,14 @@ def when_put_layout_zero_size(ctx, client, fk):
         {"x": 0.2, "y": 0.2, "w": 0, "h": 0}))
 
 
+@when(parsers.parse('我保存形态 "{fk}" 的布局且区块 "{slot}" 位于 x={x:g} y={y:g}'))
+def when_put_layout_named_slot(ctx, client, fk, slot, x, y):
+    ctx["resp"] = client.put(f"{BASE}/{fk}", json={
+        "version": 1, "snap": True,
+        "slots": {slot: {"x": x, "y": y, "w": 0.96, "h": 0.22}},
+    })
+
+
 @when(parsers.parse('我删除形态 "{fk}" 的布局'))
 def when_delete_layout(ctx, client, fk):
     ctx["resp"] = client.delete(f"{BASE}/{fk}")
@@ -87,6 +95,15 @@ def then_layout_contains_video_x(client, fk, x):
     assert fk in layouts, f"缺形态 {fk}, 现有 {list(layouts)}"
     assert abs(layouts[fk]["slots"]["video"]["x"] - x) < 1e-6, \
         f"video.x={layouts[fk]['slots']['video']['x']}"
+
+
+@then(parsers.parse('读取全部布局应包含形态 "{fk}" 且区块 "{slot}" x={x:g}'))
+def then_layout_contains_slot_x(client, fk, slot, x):
+    layouts = _get_layouts(client)
+    assert fk in layouts, f"缺形态 {fk}, 现有 {list(layouts)}"
+    slots = layouts[fk].get("slots") or {}
+    assert slot in slots, f"缺槽位 {slot}, 现有 {list(slots)}"
+    assert abs(slots[slot]["x"] - x) < 1e-6, f"{slot}.x={slots[slot]['x']}"
 
 
 @then(parsers.parse('读回形态 "{fk}" 的视频区块坐标应全部落在 0 到 1 之间'))

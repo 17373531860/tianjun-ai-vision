@@ -369,6 +369,8 @@ CI 浏览器回归覆盖设置 roundtrip、Electron apply payload 可结构化�
 
 > v3.38 起（NG top3 保持）：后端 NG 步骤 map 为空时保留现有 top3 展示（待机/重开 sync 配置不再清累计），仅总产量与不良总数都归零（真清零）才清空——单工位行 5469–5480、多工位 `processChannelResult` 行 2219–2229；工位清零同时重置 `ngStepRanking`（行 5686）。
 
+> v3.54.1 起（收编 dev-qing，三工位区域事件 SOP 按规则名建卡）：`processChannelResult` 里 SOP/步骤表建行改分逻辑模式——region_events 用 results 载荷 `project_config.pipeline_config.region_events.rules` 建步骤（helper `regionEventRuleSteps`，单工位 watch 同源复用），非 completed 步骤若 `step_inflight_durations[label]>0` 给 `active` 态（卡片青色脉冲）；其余模式仍走 `steps_config`。曾误用模型类别建卡（工件/测硬度笔混进 SOP 标题）。守门：`tests/e2e_browser/test_multi_workstation_layout.py`（含 v3.54 自定义布局组合用例）+ `tests/uat/uat_region_events_triple_sop.py`。
+
 **检测控制**：
 
 - 单工位：`startDetection`（行 4451 起）含副模型强制完整启动

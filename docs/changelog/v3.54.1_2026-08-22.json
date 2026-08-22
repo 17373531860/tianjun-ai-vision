@@ -1,0 +1,49 @@
+{
+  "version": "3.54.1",
+  "date": "2026-08-22",
+  "previous_version": "3.54.0",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "三工位（多工位路径）区域事件 SOP 误用模型类别建卡，且无进行中点亮",
+      "symptom": "region_events 项目在三工位/双工位/网格监控页，SOP 卡片与步骤表按 steps_config 模型类别（工件/测硬度笔/扫码枪）建行而非动作规则名（测硬度/扫码/下工件），与单工位不一致、与手册配方 P 不符；动作命中累计中无进行中青色点亮",
+      "root_cause": "Monitor/index.vue 多工位路径 processChannelResult 建 SOP/步骤表只认 steps_config 无 region_events 分支；后端 v3.32 起已在 results 载荷带 region_events.rules（id+name）与 step_inflight_durations，前端多工位未消费",
+      "fix": "新增 helper regionEventRuleSteps（单工位 watch 同源复用）；processChannelResult 在 region_events 下按规则名建行（detections 为空也建），非 completed 步骤 step_inflight_durations>0 给 active 态；chData 新增 stepInflightDurations。收编 dev-qing 65cdfb5（cherry-pick），剔除其夹带的未完成人工合格放行 UI（ManualPassControls 组件/前端 API/后端端点均缺失，原样合入构建必挂）",
+      "files": ["frontend/src/views/Monitor/index.vue"],
+      "keywords": ["region_events", "区域事件", "三工位", "多工位", "SOP", "规则名", "步骤表", "模型类别", "step_inflight_durations", "进行中", "active", "青色", "regionEventRuleSteps", "processChannelResult", "dev-qing", "收编", "cherry-pick", "ManualPassControls", "人工合格放行", "半成品提交"],
+      "breaking": false
+    },
+    {
+      "type": "test",
+      "id": "TEST-001",
+      "title": "三工位区域事件 SOP 回归护栏（e2e ×2 + 可见 UAT）",
+      "symptom": "",
+      "root_cause": "",
+      "fix": "e2e 新增规则名建卡用例与 v3.54 自定义布局组合用例；BDD 新增三工位 sop 槽位保存读回 + results 载荷规则清单契约；UAT 新增 uat_region_events_triple_sop.py（headless=False 三态推进 + 自定义布局交叉面 + GET/DOM 双向核对 + 证据三件套）",
+      "files": [
+        "tests/e2e_browser/test_multi_workstation_layout.py",
+        "tests/features/monitor_layout.feature",
+        "tests/step_defs/test_monitor_layout_bdd.py",
+        "tests/features/region_events_matrix.feature",
+        "tests/step_defs/test_region_events_matrix.py",
+        "tests/uat/uat_region_events_triple_sop.py"
+      ],
+      "keywords": ["e2e", "UAT", "自定义布局", "monitor-layouts", "data-layout-slot", "triple-sop", "border-cyan-500"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-source", "debug-frontend"],
+  "files_changed": [
+    "frontend/src/views/Monitor/index.vue",
+    "tests/e2e_browser/test_multi_workstation_layout.py",
+    "tests/features/monitor_layout.feature",
+    "tests/step_defs/test_monitor_layout_bdd.py",
+    "tests/features/region_events_matrix.feature",
+    "tests/step_defs/test_region_events_matrix.py",
+    "tests/uat/uat_region_events_triple_sop.py",
+    ".claude/skills/debug-source/SKILL.md",
+    ".claude/skills/debug-frontend/SKILL.md",
+    "docs/dev/_reading_notes/04_frontend_electron.md"
+  ]
+}

@@ -1045,6 +1045,7 @@ if (self.project_config or {}).get('logic_mode') == 'per_item':
 
 - 代码位置：`backend/api/source_region_events.py`（`parse_region_events` 配置解析 + `RegionEventEngine` 纯逻辑引擎，episode 状态机可单测）；`source_region_events_mixin.py`（帧循环接线 + 结算触发）；配置进 `pipeline_config.region_events`（rules / gap_tolerance_frames / dedup_consecutive / class_conf / sequence_check / settlement_rules）。
 - **步骤面板"进行中"不看 detectingLabels**：区域事件的步骤名是动作规则名（测硬度），画面检测框是模型类别名（测硬度笔），永远对不上——前端 Monitor 用 `/detection/results` 透出的引擎 in-flight 快照（episode 命中累计中即点亮，确认前就亮，与顺序模式对齐）。前端也**不做**"重复/乱序=NG"推断（复检序列合法性由后端结算规则说了算）。
+- **多工位（双/三工位/网格）SOP 同样按规则名建卡（v3.54.1）**：`processChannelResult` 多工位路径曾误用 `steps_config` 模型类别建 SOP/步骤表，v3.54.1 起 region_events 下改走 results 载荷 `project_config.pipeline_config.region_events.rules`（后端 v3.32 起只带 id+name 轻量身份）+ `step_inflight_durations` 点亮进行中；helper `regionEventRuleSteps`（Monitor/index.vue）单/多工位共用。排查"三工位 SOP 标题是模型类别"先确认版本 ≥3.54.1，e2e 守门 `tests/e2e_browser/test_multi_workstation_layout.py`。
 - 误报压制四件套（都在规则字段里）：`min_iou` 重叠下限 / `min_overlap_ratio` 重叠深度（压静置工具贴边）/ `min_move` 位移门槛 / `require_label` 辅助约束（如必须同时与"手"相交）。
 - **确认时长秒基门槛 `min_seconds`（v3.34，overlap/enter 可选，0=老帧数语义）**：>0 时确认改按"episode 命中跨度 ≥ 该秒数"判定，`min_frames` 退化为 3 帧硬下限防杂散框——现场相机帧率（24/30fps）和推理帧率（随 GPU 负载 15~30fps）都会漂，帧数门槛在不同机器上松紧不一致，秒基与帧率解耦。
 - **内建两条防误判（常开非配置，2026-07 TP 实测教训）**：① 位移包络对检测框中心做 5 帧中位数平滑再进包络——手划过遮挡把框"切"小的单帧中心跳变（~0.06）不算位移；② 动作互斥打断——一个动作确认瞬间其他进行中 episode 立即收尾（已确认的闭合、半截命中作废），否则 `gone_seconds` 会把复检场景"测硬度→扫码→测硬度→扫码"两段扫码桥接成一次，序列少步误落兜底 NG。
