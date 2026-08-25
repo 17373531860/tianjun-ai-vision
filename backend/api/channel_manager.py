@@ -726,12 +726,19 @@ class GpuAssignRequest(BaseModel):
 @router.post("/{channel_id}/gpu",
               dependencies=[Depends(require_perm("source.edit"))])
 def set_channel_gpu(channel_id: int, req: GpuAssignRequest):
-    """Assign a GPU device to a specific workstation/channel."""
+    """Assign a GPU device to a specific workstation/channel.
+
+    运行态 + 落盘双写: 只改 mgr.device 的话, 激活项目 / 重启后端都会按
+    workstation_config.json 里的旧 gpu_device 重载模型, 用户钉的设备静默丢失
+    (2026-08 两次实测: 钉 mps 后一激活项目就弹回 cpu, 推理 9fps)。
+    落盘走 save_channel_source(merge=True) 分段写入, 不碰该工位其他字段。
+    """
     try:
         mgr = channel_manager.get(channel_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     mgr.device = req.device
+    channel_manager.save_channel_source(channel_id, {"gpu_device": req.device}, merge=True)
     return {"status": "success", "channel_id": channel_id, "device": req.device}
 
 
