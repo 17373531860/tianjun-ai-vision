@@ -199,6 +199,21 @@
               <span class="mix-help cursor-help border-b border-dashed border-gray-600">按动作前的稳定计数快照入账，与操作快慢解耦</span>
             </el-tooltip>
           </div>
+          <div v-if="project.custom_mix_container_confirm_by_action && project.custom_mix_container_stable_min_frames > 0"
+               class="flex items-center gap-3 text-xs mix-row flex-wrap">
+            <span class="mix-label">取值锚点(动作前N秒)</span>
+            <el-input-number v-model="project.custom_mix_container_stable_anchor_s" :min="0" :max="60" :step="0.5" :precision="1" size="small" class="!w-24" />
+            <span class="mix-help">0 = 动作成立瞬间。填 N = 跳过动作前 N 秒的伸手污染区</span>
+          </div>
+          <div v-if="project.custom_mix_container_confirm_by_action && project.custom_mix_container_stable_min_frames > 0"
+               class="flex items-center gap-3 text-xs mix-row flex-wrap">
+            <span class="mix-label">稳定值取值口径</span>
+            <el-radio-group v-model="project.custom_mix_container_stable_pick" size="small">
+              <el-radio-button label="max">取最大</el-radio-button>
+              <el-radio-button label="latest">取最近</el-radio-button>
+            </el-radio-group>
+            <span class="mix-help">取最大免疫悬停少记；取最近能跟「拿走一个」当场下修</span>
+          </div>
         </template>
 
         <!-- ============ 记账修正 ============ -->
@@ -232,13 +247,33 @@
           <span class="mix-switch-label">显示与记账同源</span>
           <span class="mix-help">监控卡片的实时 / 峰值 / 预计进箱数值与结算校验取自同一记账容器，避免多容器数值混排；建议与上两项配合启用</span>
         </div>
+        <div class="flex items-center gap-3 text-xs mix-row">
+          <el-switch v-model="project.custom_mix_container_slot_verified_drop" size="small"
+            :disabled="!(project.custom_mix_container_slot_check_label && project.custom_mix_container_slot_total > 0)" />
+          <span class="mix-switch-label">看全下修</span>
+          <span class="mix-help">需先配好空槽标签+每盘槽位数。过了槽位门的帧等于确认看全整盘——看全了数还变少就是真被拿走，预计进箱/入账当场跟着下修。专治「装满后拿走 1 个仍按满数入账」</span>
+        </div>
+
+        <el-divider content-position="left">
+          <span class="text-xs text-gray-400 font-bold">合并为顺序步骤</span>
+        </el-divider>
+        <div class="flex items-center gap-3 text-xs mix-row flex-wrap">
+          <el-switch v-model="project.custom_mix_container_virtual_step" size="small" />
+          <span class="mix-switch-label">整箱装箱合并为一步</span>
+          <template v-if="project.custom_mix_container_virtual_step">
+            <span class="text-gray-400 shrink-0">步骤名称</span>
+            <el-input v-model="project.custom_mix_container_virtual_step_label" size="small" class="!w-40" placeholder="如：放滑块" />
+          </template>
+        </div>
+        <p class="text-xs text-gray-500">开启并填好名称后，整个装箱过程合并成一个顺序步骤，自动出现在「步骤设置」表格与判定序列候选里。整箱达标那一刻该步骤自动完成入周期。名称不能与物品/容器/动作等已有标签同名。</p>
       </div>
     </el-card>
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue';
+import { computed, watch } from 'vue';
+import { ElMessage } from 'element-plus';
 
 const props = defineProps({
   project: { type: Object, required: true },
@@ -259,6 +294,52 @@ const availableLabels = computed(() => {
   });
   return Array.from(set);
 });
+
+const syncContainerVirtualStepRow = () => {
+  const p = props.project;
+  if (!p || !Array.isArray(p.steps_config)) return;
+  const steps = p.steps_config;
+  const idx = steps.findIndex(s => s && s.container_virtual);
+  const label = (p.custom_mix_container_virtual_step_label || '').trim();
+  const on = p.custom_mixed_with === 'tracking'
+    && p.custom_mix_container_enabled
+    && p.custom_mix_container_virtual_step === true
+    && !!label;
+  if (!on) {
+    if (idx !== -1) {
+      const removed = steps.splice(idx, 1)[0];
+      if (Array.isArray(p.custom_sequence_order)) {
+        p.custom_sequence_order = p.custom_sequence_order.filter(
+          o => o && o.step_id !== removed.id);
+      }
+    }
+    return;
+  }
+  const clash = steps.some((s, i) => i !== idx && s && s.label === label);
+  if (clash) {
+    ElMessage.warning(`步骤名「${label}」已被占用，请换一个（不能与物品/容器/动作等已有标签同名）`);
+    return;
+  }
+  if (idx === -1) {
+    const nextId = steps.reduce((m, s) => Math.max(m, Number(s?.id) || 0), 0) + 1;
+    steps.push({
+      id: nextId, label, enabled: true, threshold: 40, min_frames: 1,
+      detection_type: 'dynamic', join_cycle: true, container_virtual: true,
+    });
+  } else {
+    steps[idx].label = label;
+    steps[idx].enabled = true;
+  }
+};
+watch(
+  () => [
+    props.project?.custom_mixed_with,
+    props.project?.custom_mix_container_enabled,
+    props.project?.custom_mix_container_virtual_step,
+    props.project?.custom_mix_container_virtual_step_label,
+  ],
+  syncContainerVirtualStepRow,
+);
 </script>
 
 <style scoped>

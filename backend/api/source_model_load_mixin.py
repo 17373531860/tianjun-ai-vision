@@ -603,8 +603,9 @@ class ModelLoadMixin:
         warmup_lock = getattr(getattr(self, '_router', None), 'warmup_lock', None)
 
         def _do_warmup(_imgsz: int):
-            # 半精度只在 CUDA 上启用, MPS 走 FP32 (与 detect runners 的守门口径一致)
-            _half = use_half if (is_native_pytorch and device.startswith('cuda')) else False
+            # 半精度 CUDA/MPS 均可启用 (与 detect runners 的守门口径一致);
+            # MPS FP16 实测 (M5 Pro, torch 2.13): 三路并发 24→37fps, conf 漂移 <0.03
+            _half = use_half if (is_native_pytorch and device.startswith(('cuda', 'mps'))) else False
             print(f"[ModelWarmup] {log_tag} {device} warm-up (half={_half}, imgsz={_imgsz})...")
             # MPS 预热 predict 也要与其它通道推理串行 (mps_guard 对 CUDA/CPU 为 no-op;
             # warmup_lock 只是每通道实例锁, 拦不住跨通道并发)

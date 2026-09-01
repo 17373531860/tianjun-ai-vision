@@ -28,15 +28,32 @@
             <p class="mb-1">• 首步又出现时，无论何种状态都立即结算上周期 NG（缺末步）+ 开新周期</p>
             <p class="text-red-400">⚠ 强制约束：本模式下所有步骤的"严格顺序"会被自动关闭；不能与"跨周期同时出现组"或"逐件覆盖模式"同时启用</p>
           </div>
-          <div class="flex items-center gap-3 pt-2 border-t border-slate-700">
+        </div>
+      </el-card>
+
+      <!-- 超时结算 (项目级参数, 顺序/自定义-顺序/检测模式通用)。
+           2026-08-21 现场: 检测模式(缸体判型)要"到时不等工位, 直接结算判定",
+           后端空闲超时分支本就支持 detection, 此前入口误挂在仅顺序模式渲染的
+           「结算方式」卡里, 检测模式无从配置 —— 拆出独立卡对齐后端能力面 -->
+      <el-card v-if="['sequential', 'detection'].includes(project.logic_mode)
+                     || (project.logic_mode === 'custom' && project.custom_based_on === 'sequential')"
+               shadow="never" class="bg-slate-800 border-slate-700">
+        <template #header>
+          <div class="flex items-center justify-between">
+            <span class="font-bold text-white">超时结算</span>
+            <span class="text-xs text-gray-500">到时不再等待工位操作（0=不启用）</span>
+          </div>
+        </template>
+        <div class="space-y-4 text-sm text-gray-300">
+          <div class="flex items-center gap-3">
             <span class="text-gray-400 text-xs whitespace-nowrap">空闲超时(秒)</span>
             <el-input-number v-model="project.idle_timeout_seconds" size="small" :min="0" :step="5" :precision="2" />
-            <span class="text-xs text-gray-500">超过此时间无新步骤加入，强制结算当前周期（0=不启用）</span>
+            <span class="text-xs text-gray-500">超过此时间无新步骤/新计数加入 → 按已做内容立即结算判定（检测模式按判定表判 OK/NG）</span>
           </div>
-          <div class="flex items-center gap-3 pt-2 border-t border-slate-700">
+          <div class="flex items-center gap-3">
             <span class="text-gray-400 text-xs whitespace-nowrap">周期超时(秒)</span>
             <el-input-number v-model="project.cycle_max_duration" size="small" :min="0" :step="5" :precision="2" />
-            <span class="text-xs text-gray-500">周期总时长超过此值直接判定NG（0=不启用）</span>
+            <span class="text-xs text-gray-500">周期总时长超过此值 → 不做判定直接判 NG 清场（硬上限兜底）</span>
           </div>
         </div>
       </el-card>
@@ -97,6 +114,18 @@
             </template>
             <el-tooltip placement="top" effect="dark"
               content="「定格弹窗」：NG 弹人工确认窗，给「补步骤—判合格」按钮，结果延迟落账。「挂起等补做」：不弹窗不定格，报警后周期保持打开，工人补齐缺的步骤自动判合格；超时未补按缺步 NG 落账（0=不限时）。">
+              <span class="text-gray-500 cursor-help text-xs">ⓘ</span>
+            </el-tooltip>
+          </div>
+
+          <!-- 场景 2b: 缺步提前发现 (仅挂起等补做档) -->
+          <div v-if="isCustomSequential && ngh.missing_step === 'hold'"
+               class="flex items-center gap-3 flex-wrap">
+            <span class="text-gray-400 w-28 shrink-0">缺步提前发现</span>
+            <el-switch v-model="ngh.missing_step_early" />
+            <span class="text-xs text-gray-500">跳步做下一个动作时当场报警挂起，不必等末步结算才暴露</span>
+            <el-tooltip placement="top" effect="dark"
+              content="后继步骤刚记入周期就检查前置是否已做：缺 → 立即触发上方提示事件并挂起等补做（提示事件勾了「需人工确认」则弹框定格，点确认后才能补做）。已做的步骤不丢弃，补齐缺的步骤后自动按正确顺序判合格；超时未补按缺步 NG（共用上方超时与提示事件）。末步残影单独开新周期不会误报。">
               <span class="text-gray-500 cursor-help text-xs">ⓘ</span>
             </el-tooltip>
           </div>

@@ -228,6 +228,7 @@
               <el-select v-model="editing.trigger_event" class="w-full">
                 <el-option label="cycle_end (每周期结束，单工件文件)" value="cycle_end" />
                 <el-option label="session_end (会话结束，整次开机汇总)" value="session_end" />
+                <el-option label="scan_group_end (多码采集码组结算，一工件一文件)" value="scan_group_end" />
                 <el-option label="box_complete (装箱完成 - 暂未实现)" value="box_complete" disabled />
               </el-select>
             </el-form-item>

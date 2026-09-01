@@ -127,6 +127,8 @@ export function useChannelResults(ctx) {
     }
 
     chData.mes = d.mes || null;
+    // v3.56: 周期多码采集实况 (项目未启用时后端不带该段 = null 零差异)
+    chData.scanCollect = d.scan_collect || null;
     if (d.mes) {
       if (d.mes.scan_event) {
         if (!kioskMode.value) handleScanToast(d.mes.scan_event, ch);

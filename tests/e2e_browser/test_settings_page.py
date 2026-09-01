@@ -1,6 +1,8 @@
 """Settings 页 E2E：验证 PT/CT 设置区与 POM 业务方法。"""
 from __future__ import annotations
 
+import requests
+
 from .pages import SettingsPage
 
 
@@ -83,3 +85,55 @@ def test_settings_navbar_logo_upload_roundtrip(page, base_url, tmp_path):
     card.locator("button:has-text('恢复默认')").click()
     time.sleep(0.6)
     assert (navbar_src() or "").endswith("app-icon.png"), "恢复默认应回退内置图"
+
+
+def test_检测框设置_监控横幅字号_保存落库(page, base_url, api_url):
+    """显示设置·检测框：监控叠加横幅字号可配，改后写入 localStorage + 工位绑定项目 detection_config。"""
+    import time
+
+    SettingsPage(page, base_url).goto()
+    page.locator(".el-tabs__item:has-text('检测框设置')").first.click()
+    time.sleep(0.6)
+    card = page.locator("div.p-3:has-text('监控横幅字号')").first
+    assert card.count() > 0, "检测框设置应渲染「监控横幅字号」滑杆"
+    page.screenshot(path="/tmp/t4_banner_font.png")
+
+    ws = requests.get(f"{api_url}/api/v1/workstations/", timeout=5).json()
+    bound = []
+    for cfg in (ws.get("source_configs") or {}).values():
+        pid = cfg.get("project_id")
+        if pid:
+            bound.append(pid)
+    orig = {}
+    for pid in bound:
+        dc = (requests.get(f"{api_url}/api/v1/projects/{pid}", timeout=5).json()
+              .get("detection_config") or {})
+        orig[pid] = dc.get("overlayBannerFontSize")
+
+    try:
+        page.evaluate("""() => {
+          const app = document.querySelector('#app')?.__vue_app__;
+          const store = app?.config?.globalProperties?.$pinia?._s?.get('system');
+          if (!store) throw new Error('no system store');
+          store.detection.overlayBannerFontSize = 26;
+          return store.saveDetectionSettings();
+        }""")
+        time.sleep(1.5)
+        ls = page.evaluate(
+            "() => JSON.parse(localStorage.getItem('detection_settings')||'{}').overlayBannerFontSize")
+        assert ls == 26, f"localStorage 横幅字号应为 26, 实际 {ls}"
+        for pid in bound:
+            dc = (requests.get(f"{api_url}/api/v1/projects/{pid}", timeout=5).json()
+                  .get("detection_config") or {})
+            assert dc.get("overlayBannerFontSize") == 26, \
+                f"项目 {pid} 应落库 overlayBannerFontSize=26, 实际 {dc.get('overlayBannerFontSize')}"
+    finally:
+        for pid, val in orig.items():
+            p = requests.get(f"{api_url}/api/v1/projects/{pid}", timeout=5).json()
+            dc = dict(p.get("detection_config") or {})
+            if val is None:
+                dc["overlayBannerFontSize"] = 14
+            else:
+                dc["overlayBannerFontSize"] = val
+            requests.put(f"{api_url}/api/v1/projects/{pid}",
+                         json={"detection_config": dc}, timeout=5)

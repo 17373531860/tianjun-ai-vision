@@ -1159,6 +1159,17 @@ class PackagingFlowCoordinator:
         if cfg.get("label_qty_enabled"):
             qty = self._extract_label_qty(raw_code, cfg)
             if not qty:
+                # 裸码 (无复合分隔符) = 工单条形码, 不是箱标签 —
+                # 现场 SOP 先扫工单再扫箱标签, 工单码在等扫标签态又进来一次 (枪重发/
+                # 习惯性双扫/重启恢复在途单后再扫工单) 不该按"标签取量失败"报警,
+                # 静默略过继续等真标签; 复合串但数量段缺失/非法才保留原报警。
+                delim = cfg.get("composite_delimiter") or "|"
+                if delim not in str(raw_code or ""):
+                    _pkg_dbg("等扫标签态收到裸工单码",
+                             f"order={run['order_no']} box={run['current_box_index']} "
+                             f"视为工单重扫, 忽略不报警")
+                    self._persist_run(run, db)
+                    return
                 self._raise_alarm(cfg, "label_qty_missing",
                                   f"工单 {run['order_no']} 第 {run['current_box_index']} 箱"
                                   f"未获取到本箱数量, 请扫箱标签二维码 (勿扫条形码)")
@@ -1172,6 +1183,74 @@ class PackagingFlowCoordinator:
                  f"order={run.get('order_no')} box={run.get('current_box_index')} "
                  f"qty={run.get('current_box_scan_qty') or '按计划'}")
         self._persist_run(run, db)
+
+    def on_cycle_cleared(self, channel_id: int, db):
+        """监控页「仅清理本周期」: 检测层丢弃在制周期后, 同步把当前箱
+        回退到"重新开做"态 — 工单号 / 总箱数 / 已完成箱数一概不动.
+
+        边界:
+          - 通道不参与 / 没开工单 / 还没开箱 → 零差异不动;
+          - trays 口径 (扫码判箱, 周期=一盘) → 不动箱账;
+          - 等放工单收尾 / 箱账已挂起 (pending_remediation) → 不动.
+        返回描述文本 (供 API 回显); 没动任何东西时返回 None.
+        """
+        if not self._configs:
+            return None
+        with self._lock:
+            config_id = self._channel_to_config.get(channel_id)
+            if config_id is None:
+                return None
+            cfg = self._configs.get(config_id)
+            run = self._runs.get(config_id)
+            if cfg is None or run is None:
+                return None
+            if cfg.get("count_unit") != "sliders":
+                return None
+            if run.get("awaiting_paper") or run.get("status") == "pending_remediation":
+                return None
+            box = int(run.get("current_box_index") or 0)
+            if box == 0:
+                return None
+            run["current_box_sliders"] = 0
+            run["current_box_scan_qty"] = 0
+            run["paper_order_done"] = False
+            run.pop("unscanned_alarm_box", None)
+            if cfg.get("box_label_scan_required"):
+                run["label_authorized"] = False
+                run["status"] = "waiting_label"
+            else:
+                run["label_authorized"] = True
+                run["status"] = "running"
+            self._apply_box_target(cfg, self._current_box_target(run))
+            self._persist_run(run, db)
+            desc = (f"工单 {run.get('order_no')} 第 {box} 箱已回退重做"
+                    + ("，请重扫箱标签" if run["status"] == "waiting_label" else ""))
+            _pkg_dbg("清本周期回退当前箱",
+                     f"order={run.get('order_no')} box={box} status={run['status']}")
+            return desc
+
+    def on_stats_reset(self, channel_id: int, db):
+        """监控页「清理所有数据」: 工单随全量清零一起清成白板.
+
+        在途工单直接作废 (落库留 aborted 行审计), 面板收尾快照一并清空。
+        通道不参与 / 没开过工单 → 零差异. 返回描述文本 (供 API 回显) 或 None.
+        """
+        if not self._configs:
+            return None
+        with self._lock:
+            config_id = self._channel_to_config.get(channel_id)
+            if config_id is None:
+                return None
+            run = self._runs.get(config_id)
+            desc = None
+            if run is not None:
+                order = run.get("order_no")
+                run["forced_reason"] = "监控页清零(清理所有数据)"
+                self._abort_order(run, db)
+                desc = f"在途工单 {order} 已作废，请重扫工单"
+                _pkg_dbg("全量清零作废工单", f"order={order} ch={channel_id}")
+            self._last_done.pop(config_id, None)
+            return desc
 
     def on_cycle_started(self, channel_id: int) -> None:
         """检测周期开始通知 (v3.45 箱标签扫码授权): 「等扫箱标签」态下工人没扫标签

@@ -35,6 +35,9 @@ def resolve_ng_handling(pipeline_config: dict) -> dict:
     五个版本各自累加的散装开关, 收敛为一个 ``ng_handling`` 块, 四行语义:
       violation:    违规当场反应  none | hint | instant_ng (+ violation_event_id)
       missing_step: 缺步骤时处置  ng | ack | hold (+ hold_timeout_s / hold_event_id)
+                    + missing_step_early (缺步提前发现, 仅 hold 档生效):
+                    后继步骤入周期瞬间发现前置缺失 → 当场进缺步挂起 (报警/断点
+                    补做/重排销结/超时NG), 不必等末步结算才暴露
       short_count:  少装数量处置  ng | ack | hold (hold=挂起补数量断点重做, v3.44.1)
       gate:         数量门(事前拦截) gate_enabled / gate_steps / gate_event_id
                     + gate_escalate_steps (v3.44.4 短拦长放): 列表内的收尾步骤被门
@@ -88,6 +91,7 @@ def resolve_ng_handling(pipeline_config: dict) -> dict:
         'violation': violation,
         'violation_event_id': _ev(src.get('violation_event_id')),
         'missing_step': missing_step,
+        'missing_step_early': bool(src.get('missing_step_early', False)),
         'hold_timeout_s': hold_timeout_s,
         'hold_event_id': _ev(src.get('hold_event_id')),
         'short_count': short_count,
@@ -579,7 +583,13 @@ def _apply_pipeline_config(h, config, pipeline_config):
         _ngh['violation_event_id'] if _ngh['violation'] in ('hint', 'instant_ng') else None)
     h._strict_violation_throttle = {}
     h.instant_ng_on_violation = _ngh['violation'] == 'instant_ng'
+    # 回退重复接提示档: 运行时需区分 hint 与 none (两者 instant 标志都是
+    # False; hint 无提示事件时 event_id 也同为 None, 单靠既有两属性辨不出档位)
+    h._violation_mode = _ngh['violation']
     h._settle_hold_enabled = _ngh['missing_step'] == 'hold'
+    # 缺步提前发现: 仅挂起档生效 (超时/提示事件复用挂起档配置), 默认关零差异
+    h._early_missing_hold = (
+        _ngh['missing_step'] == 'hold' and _ngh['missing_step_early'])
     h._settle_hold_timeout_s = _ngh['hold_timeout_s']
     h._settle_hold_event_id = _ngh['hold_event_id']
     h._settle_hold = None
@@ -600,7 +610,9 @@ def _apply_pipeline_config(h, config, pipeline_config):
     if (_ngh['violation'] != 'none' or _ngh['missing_step'] != 'ng'
             or _allow_count or _ngh['gate_enabled']):
         print(f"NG 处置: 违规当场={_ngh['violation']}(事件{_ngh['violation_event_id']}) "
-              f"缺步={_ngh['missing_step']}(超时{_ngh['hold_timeout_s']}s/事件{_ngh['hold_event_id']}) "
+              f"缺步={_ngh['missing_step']}"
+              f"{'[提前发现]' if h._early_missing_hold else ''}"
+              f"(超时{_ngh['hold_timeout_s']}s/事件{_ngh['hold_event_id']}) "
               f"少装={_ngh['short_count']} 数量门={_ngh['gate_enabled']}"
               f"{sorted(h._closing_gate_steps)}(事件{_ngh['gate_event_id']}, "
               f"升级放行{sorted(h._closing_gate_escalate_steps)})")

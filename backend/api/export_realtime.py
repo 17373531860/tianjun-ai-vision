@@ -48,7 +48,7 @@ class _RuleBase(BaseModel):
     filename_template: str = "{{ cycle.id }}.txt"
     input_file_mode: str = Field("none", pattern="^(none|read_template|append)$")
     input_dir: Optional[str] = None
-    trigger_event: str = Field("cycle_end", pattern="^(cycle_end|session_end|box_complete)$")
+    trigger_event: str = Field("cycle_end", pattern="^(cycle_end|session_end|box_complete|scan_group_end)$")
     channel_filter: Optional[List[int]] = None
     project_filter: Optional[List[int]] = None
     overwrite_policy: str = Field("overwrite", pattern="^(overwrite|rename|skip)$")
@@ -78,7 +78,7 @@ class RuleUpdate(BaseModel):
     filename_template: Optional[str] = None
     input_file_mode: Optional[str] = Field(None, pattern="^(none|read_template|append)$")
     input_dir: Optional[str] = None
-    trigger_event: Optional[str] = Field(None, pattern="^(cycle_end|session_end|box_complete)$")
+    trigger_event: Optional[str] = Field(None, pattern="^(cycle_end|session_end|box_complete|scan_group_end)$")
     channel_filter: Optional[List[int]] = None
     project_filter: Optional[List[int]] = None
     overwrite_policy: Optional[str] = Field(None, pattern="^(overwrite|rename|skip)$")

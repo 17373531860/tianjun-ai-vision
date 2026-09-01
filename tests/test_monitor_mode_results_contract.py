@@ -58,3 +58,41 @@ def test_results_per_item_state_passthrough(client, monkeypatch):
     body = client.get("/api/v1/source/detection/results").json()
     assert body["project_config"]["logic_mode"] == "per_item"
     assert body["per_item_state"] == snapshot
+
+
+def test_results_slim_snapshot_exposes_sequence_identity(client, monkeypatch):
+    """多工位 SOP 建卡身份：瘦快照带 sequence/detection/custom，不带完整条件重载。"""
+    from backend.api import source_routes
+
+    mgr = _make_mock_mgr([])
+    mgr.project_config = {
+        "id": 90,
+        "name": "顺序项目",
+        "logic_mode": "sequential",
+        "steps_config": [
+            {"id": 1, "label": "检查外观", "enabled": True},
+            {"id": 2, "label": "未进序列", "enabled": True},
+        ],
+        "pipeline_config": {
+            "sequence_order": [{"step_id": 1, "extra": "drop-me"}],
+            "detection_steps": [1],
+            "custom_based_on": "sequential",
+            "custom_sequence_order": [{"step_id": 1}],
+            "custom_detection_steps": [2],
+            "custom_conditions": [
+                {"name": "条件A", "event_id": 9, "sequence": [1, 2]},
+            ],
+            "settlement_mode": "first_step",
+        },
+    }
+    monkeypatch.setattr(source_routes, "_get_mgr", lambda channel=0: mgr)
+
+    pipe = client.get("/api/v1/source/detection/results").json()["project_config"]["pipeline_config"]
+    assert pipe["sequence_order"] == [{"step_id": 1}]
+    assert pipe["detection_steps"] == [1]
+    assert pipe["custom_based_on"] == "sequential"
+    assert pipe["custom_sequence_order"] == [{"step_id": 1}]
+    assert pipe["custom_detection_steps"] == [2]
+    assert pipe["custom_conditions"] == [{"sequence": [1, 2]}]
+    assert "settlement_mode" not in pipe
+    assert "name" not in pipe["custom_conditions"][0]

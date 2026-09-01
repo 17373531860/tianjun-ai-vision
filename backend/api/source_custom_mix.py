@@ -81,7 +81,10 @@ class _ContainerAccumulator:
                  yield_primary: bool = False,
                  unified_book_source: bool = False,
                  slot_check_label: str = '', slot_total: int = 0,
-                 item_dedup_iou: float = 0.45, tray_dedup_iou: float = 0.0):
+                 item_dedup_iou: float = 0.45, tray_dedup_iou: float = 0.0,
+                 stable_anchor_s: float = 0.0,
+                 slot_verified_drop: bool = False,
+                 stable_pick: str = 'max'):
         self.container_label = container_label
         self.item_expected = {k: int(v) for k, v in (item_expected or {}).items()}
         # v3.44.4 每盘峰值封顶 (可配, 默认 0=关): 模型偶发重复框瞬时数出 25/26,
@@ -143,6 +146,25 @@ class _ContainerAccumulator:
         self.slot_check_label = (slot_check_label or '').strip()
         self.slot_total = max(0, int(slot_total or 0))
         self.slot_check_on = bool(self.slot_check_label) and self.slot_total > 0
+        # v3.49 稳定值取值锚点 (秒, 0 = 动作成立瞬间, 就是字面上的 0):
+        # 锚点 = 动作成立时刻 - N 秒。取值只看"锚点或更早"的稳定记录 — 放盘前
+        # 手已伸进画面的那 N 秒是污染区, 填 N 即明确跳过它。往回不设限
+        # (账期内找到就用; 记账后账本重开, 不会串到上一盘)。
+        self.stable_anchor_s = max(0.0, float(stable_anchor_s or 0.0))
+        # v3.49 看全下修 (默认关, 且必须配合槽位门): 过了槽位门的帧 = 确认
+        # 看全整盘 — 看全了数还变少, 就是真被拿走, 允许稳定值向下修正 (作废
+        # 账上更高的旧记录), 不再死守"取最大"。治"装满 24 后拿走 1 个
+        # 随即放盘, 取最大仍记 24"的多记账。遮挡帧本就进不了稳定窗口,
+        # 不受影响; 没开槽位门时无从区分遮挡与拿走, 该开关强制不生效。
+        self.slot_verified_drop = bool(slot_verified_drop) and self.slot_check_on
+        # v3.49 稳定值取值口径 (默认 max = 老口径):
+        # - max: 锚点前稳定记录取最大 — 免疫"收尾手悬停稳定只露 2 个"
+        #   (7-27 取证真实发生, 取最近会把 24 的盘记成 2), 但拿走后马上放盘
+        #   仍按旧高值记;
+        # - latest: 取锚点前最近一条稳定记录 — 拿走一个当场跟到 23, 但稳定的
+        #   遮挡也会跟下去 (悬停露 2 记 2), 对策是把锚点拨到伸手之前。
+        self.stable_pick = ('latest' if str(stable_pick or '').strip().lower()
+                            == 'latest' else 'max')
         # v3.46 两处"同一目标被画两个框"的去重阈值 (可配, 0 = 关闭该项去重):
         #   物品框 — v3.45 起硬编码常开 0.45, 现改为可配, 默认值保持 0.45 = 零差异
         #   托盘框 — 新增, 默认 0 关闭: 一个盘被吐两个框会多出一张影子工牌, 长期
@@ -158,11 +180,10 @@ class _ContainerAccumulator:
             self.tray_dedup_iou = 0.45
         self.reset()
 
-    # 稳定值回看窗口 (秒): 稳定值取近 N 秒内有效窗口众数的最大值 — 免疫收尾
-    # 伸手"骤降尾巴", 同时让上一盘进箱余像 (内袋盖住前箱内短暂可见) 自动过期。
-    # 4s 由 7-27 视频取证定标: 盘的完整视角常只在账期早段 (紧凑连放时工人手
-    # 悬停变长, 后段永远缺 1 个), 2.5s 会把它剪掉; 余像距下次动作 ≥4.9s 仍过期
-    STABLE_LOOKBACK_S = 4.0
+    # 稳定记录内存上限 (秒): 只是防账期超长时 modes 列表无限膨胀的内存阈值,
+    # 不参与取值语义 (v3.49 起取值由锚点 stable_anchor_s + 口径 stable_pick
+    # 决定, 账期内往回不设限; 记账后账本重开自然清账)。
+    MODES_KEEP_S = 300.0
 
     def reset(self):
         self._trays = {}        # tid -> {bbox, first_seen, last_seen, gone, peak:{label:cnt}}
@@ -203,9 +224,13 @@ class _ContainerAccumulator:
                     # v3.44.5 动作成立瞬间: 快照各身份的稳定计数 = 本次动作要
                     # 放的这盘"手接触前"的真实数量 (训练端验证方案)。
                     # 不要求身份仍在场 — 手先拿盘、动作标签滞后半秒是常态
-                    # (7-27 箱2取证: 持真值 23 的身份此刻 gone=9), 新鲜度由
-                    # 回看窗口重剪保证: 停更身份 (箱内余像) 的陈旧稳定值进不来
+                    # (7-27 箱2取证: 持真值 23 的身份此刻 gone=9)。
+                    # v3.49 锚点语义: 只认"动作前 N 秒 (锚点) 或更早"的记录 —
+                    # 动作临近的 N 秒是伸手污染区, 由锚点显式跳过; 位置过滤
+                    # 继续拦身份漂移 (bbox 箱上→堆上) 带来的陈旧记录。
                     if self.stable_min_frames > 0:
+                        # +1e-6: 抹浮点尘埃, 别让 100.2 ≤ 100.2 因 1e-13 判负
+                        _anchor_t = current_time - self.stable_anchor_s + 1e-6
                         for _t in self._trays.values():
                             _b = _t['bbox']
                             _ccx = _b['x'] + _b['w'] / 2.0
@@ -214,11 +239,20 @@ class _ContainerAccumulator:
                             for _lbl, _ml in (_t.get('modes') or {}).items():
                                 _recent = [
                                     e[1] for e in _ml
-                                    if e[0] >= current_time - self.STABLE_LOOKBACK_S
+                                    if e[0] <= _anchor_t
                                     and abs(e[2] - _ccx) <= _b['w'] * 0.5
                                     and abs(e[3] - _ccy) <= _b['h'] * 0.5]
                                 if _recent:
-                                    _snap[_lbl] = max(_recent)
+                                    # 取值口径: max=锚点前最大;
+                                    # latest=锚点前最近一条 (ml 按时间序, 尾即最近)
+                                    _snap[_lbl] = (_recent[-1]
+                                                   if self.stable_pick == 'latest'
+                                                   else max(_recent))
+                            # v3.49 锚点前无任何稳定记录 → 峰值兜底进快照。
+                            # 不能只留空快照: AND 组合的结算门认"持快照者",
+                            # 空快照会把整次结算饿死 (动作白按, 连峰值都记不上)
+                            if not _snap and self._eff_peak(_t):
+                                _snap = dict(self._eff_peak(_t))
                             if _snap:
                                 _t['pre_action_stable'] = _snap
                                 _t['pre_action_ts'] = current_time
@@ -652,10 +686,10 @@ class _ContainerAccumulator:
             #   (7-27 帧级取证: 真实计数流天然 ±1 抖动 22,23,23,21,23…, "连续
             #   同值"永远凑不齐; 而偶发重复框把单帧数成 24/25, 取最大值会把
             #   23 的盘记成 24 — 众数两头都免疫);
-            # - 稳定值 = 近 STABLE_LOOKBACK_S 秒内有效窗口众数的最大值:
-            #   遮挡只会看少不会看多 (最大=最全视角, 免疫收尾伸手的"骤降尾巴"
-            #   22→20), 重复框已被窗口众数滤掉; 回看有限期让"上一盘刚进箱、
-            #   内袋盖住前箱内 24 短暂可见"这类早期余像自动过期, 不压真值 22;
+            # - 稳定值 = 锚点 (stable_anchor_s, 0=当下) 前的记录按口径取值:
+            #   max 口径取最大 (遮挡只会看少不会看多, 免疫收尾伸手"骤降尾巴"),
+            #   latest 口径取最近一条 (拿走当场跟账, 污染区靠锚点跳过);
+            #   重复框已被窗口众数滤掉;
             # - 动作进行中冻结更新 (盘被拿起后堆顶接上的下一盘会提前曝光,
             #   不许把下一盘的满值攒进本盘账期; 记账后账期重开再攒)。
             # 冻结解除条件放宽: 动作标签一缺席就恢复计数 (7-27 取证: 末盘真值
@@ -687,9 +721,34 @@ class _ContainerAccumulator:
                         ml.append((current_time, mode,
                                    _b['x'] + _b['w'] / 2.0,
                                    _b['y'] + _b['h'] / 2.0))
-                        while ml and ml[0][0] < current_time - self.STABLE_LOOKBACK_S:
+                        # v3.49 看全下修: 槽位门开着时能走到这里的帧都已确认
+                        # "看全整盘" — 看全了众数还变低 = 真被拿走, 作废账上
+                        # 更高的旧记录, 稳定值当场跟下来 (默认关 = 取最大老口径)
+                        if self.slot_verified_drop and mode < st.get(lbl, 0):
+                            try:
+                                from backend.core import debug_center
+                                if debug_center.is_on("backend.packaging"):
+                                    debug_center.dbg(
+                                        "backend.packaging", "看全下修",
+                                        f"tid={count_tid} {lbl}: "
+                                        f"{st.get(lbl)}→{mode} t={current_time:.1f}")
+                            except Exception:
+                                pass
+                            ml[:] = [e for e in ml if e[1] <= mode]
+                        # 只按内存上限修剪, 不参与取值语义 (锚点往回不设限)
+                        while ml and ml[0][0] < current_time - self.MODES_KEEP_S:
                             ml.pop(0)
-                        st[lbl] = max(e[1] for e in ml)
+                        # 展示/预计进箱与记账同口径: 锚点前的记录按口径取值;
+                        # 锚点前还没有任何记录 → 无稳定值 (预计进箱退峰值)
+                        _cands = [e for e in ml
+                                  if e[0] <= current_time
+                                  - self.stable_anchor_s + 1e-6]
+                        if _cands:
+                            st[lbl] = (_cands[-1][1]
+                                       if self.stable_pick == 'latest'
+                                       else max(e[1] for e in _cands))
+                        else:
+                            st.pop(lbl, None)
                 # 本帧没出现的标签窗口中断 (盘空/全遮挡)
                 for lbl in list(hist.keys()):
                     if lbl not in cnt:
@@ -1271,6 +1330,9 @@ class _TrackingMixEngine:
                 slot_total=container_cfg.get('slot_total', 0),
                 item_dedup_iou=container_cfg.get('item_dedup_iou', 0.45),
                 tray_dedup_iou=container_cfg.get('tray_dedup_iou', 0.0),
+                stable_anchor_s=container_cfg.get('stable_anchor_s', 0.0),
+                slot_verified_drop=container_cfg.get('slot_verified_drop', False),
+                stable_pick=container_cfg.get('stable_pick', 'max'),
             )
         # 静态期望清单 (verdict 用, 不依赖喂帧): 与真 loader 的注入规则一致 —
         # event 行 → event_required_count; 堆叠行 → stack_required_count;
@@ -1546,6 +1608,39 @@ class _TrackingMixEngine:
             return self._container.pending_booking_peak_total()
         return None
 
+    def container_box_complete(self):
+        """整箱达标 (v3.49 容器虚拟步骤注入口径; 无容器时 None)。
+
+        items_total 模式: 已进箱总数 ≥ 整箱目标 (尾箱目标由包装结算反向下调,
+        自动跟随余数); trays 模式: 已装盘数 ≥ 每箱盘数。
+        只认已确认进箱的账 (booked), 在途/在位不凑数 — 与数量门同源同口径,
+        末盘在放托盘动作结账瞬间即翻真, 无死窗口。
+        """
+        c = self._container
+        if c is None:
+            return None
+        if c.count_mode == 'items_total' and int(getattr(c, 'item_target', 0) or 0) > 0:
+            return c.booked_item_total() >= int(c.item_target)
+        box_n = int(getattr(c, 'box_count', 0) or 0)
+        if box_n > 0:
+            return len(c._done) >= box_n
+        return False
+
+    def container_activity(self):
+        """容器"已开始干活" (v3.49.1 虚拟步骤缺步提前发现口径; 无容器时 False)。
+
+        只认「已确认进箱的盘」(booked) — 第一盘结账瞬间视同虚拟步骤已开始,
+        当场做前置缺步检查 (8-28 现场实测: 只在达标注入才查, 跳过套内袋直接
+        装滑块要到末盘才被发现)。
+        不看在位/在途: 现场备盘堆常有装满的托盘一直在视野里 (在位有货),
+        帧数达标条件也会被静置盘满足 (在途非零) — 都会在贴标一开周期就误报
+        "已开工" (8-28 现场第一步贴标即弹框实测)。
+        """
+        c = self._container
+        if c is None:
+            return False
+        return bool(c._done)
+
     @staticmethod
     def _stack_partials_with_live(host, label):
         """已落账的不完整批次 + 当前在场/刚离场但还没闩锁的批次 (结算时最后一批
@@ -1616,8 +1711,8 @@ class _PerItemMixEngine:
             if s.step_label:
                 watch.add(s.step_label)
             watch.update(s.item_label)
-            if s.action_label:
-                watch.add(s.action_label)
+            # v3.56+: action_label 与 item_label 同为 tuple (多标签 OR)
+            watch.update(s.action_label)
         self.watch_labels = frozenset(watch)
         self._frame_id = 0
         self.last_ng_detail = None
@@ -1670,7 +1765,7 @@ class _PerItemMixEngine:
                 step.cleanup_stale_items(
                     current_time, self.item_timeout_seconds,
                     lock_count_on_start=False)
-            action_boxes = boxes_by_label.get(step.action_label, [])
+            action_boxes = PerItemMixin._collect_item_boxes(boxes_by_label, step.action_label)
             step.apply_coverage(action_boxes, self._frame_id, current_time)
             if not step.completed and step.check_completion():
                 step.completed = True
@@ -1744,6 +1839,9 @@ class CustomMixMachine:
         self.mix_type = mix_type
         self._cycle_token = '__init__'
         self._host = None
+        # v3.49 容器虚拟步骤: 非空时, 整箱达标瞬间把该标签注入步骤侧稳定标签流
+        # (build_custom_mix_machine 解析 pipeline 后回填; ''=关闭零差异)
+        self.virtual_step_label = ''
         if mix_type == 'tracking':
             self._engine = _TrackingMixEngine(item_cfgs, container_cfg)
             # 跟踪混合: 物品行标签全部由本组件独占消费
@@ -1821,6 +1919,16 @@ class CustomMixMachine:
         """在途主盘峰值 (数量门竞态补丁; 非容器混合返回 None)。"""
         fn = getattr(self._engine, 'container_pending_peak_total', None)
         return fn() if fn is not None else None
+
+    def container_box_complete(self):
+        """整箱达标 (v3.49 容器虚拟步骤注入口径; 非容器混合返回 None)。"""
+        fn = getattr(self._engine, 'container_box_complete', None)
+        return fn() if fn is not None else None
+
+    def container_activity(self):
+        """容器已开始干活 (虚拟步骤缺步提前发现口径; 非容器混合返回 False)。"""
+        fn = getattr(self._engine, 'container_activity', None)
+        return bool(fn()) if fn is not None else False
 
     def to_state(self):
         state = self._engine.to_state(self._host)
@@ -1972,6 +2080,15 @@ def build_custom_mix(config: dict):
                         pipeline.get('custom_mix_container_item_dedup_iou') or 0.0))),
                 'tray_dedup_iou': max(0.0, float(
                     pipeline.get('custom_mix_container_tray_dedup_iou', 0) or 0)),
+                # v3.49 稳定值取值锚点 (秒, 0=动作成立瞬间) + 看全下修 (默认关,
+                # 需槽位门配齐才生效, 详见累加器 __init__)
+                'stable_anchor_s': max(0.0, float(pipeline.get(
+                    'custom_mix_container_stable_anchor_s', 0) or 0)),
+                'slot_verified_drop': bool(pipeline.get(
+                    'custom_mix_container_slot_verified_drop', False)),
+                # v3.49 稳定值取值口径 (max=窗口内最大老口径 / latest=最近一条)
+                'stable_pick': str(pipeline.get(
+                    'custom_mix_container_stable_pick', 'max') or 'max'),
             }
             confirm_desc = []
             if confirm_by_frames:
@@ -2002,6 +2119,21 @@ def build_custom_mix(config: dict):
                                step_labels=step_labels,
                                extra_item_labels=skipped_item_labels,
                                container_cfg=container_cfg)
+    # v3.49 容器虚拟步骤: 把整箱装托盘/滑块过程合并为一个可排序的顺序步骤。
+    # 整箱达标 (booked ≥ 目标) 瞬间, 该标签注入步骤侧稳定标签流, 走常规步骤机 —
+    # 严格顺序 / 单次接受 / 缺步提前发现 / 结算期望全部自然生效, 零特殊分支。
+    # 需配套: steps_config 中存在同名 enabled 步骤行 (前端开开关时自动维护)。
+    if container_cfg and container_cfg.get('label'):
+        _virt_on = bool(pipeline.get('custom_mix_container_virtual_step', False))
+        _virt_label = str(
+            pipeline.get('custom_mix_container_virtual_step_label') or '').strip()
+        if _virt_on and _virt_label:
+            if _virt_label in machine.strip_labels:
+                print(f"[CustomMix] ⚠️ 容器虚拟步骤名[{_virt_label}]与物品/容器/"
+                      f"动作标签冲突, 已忽略 (请改名)")
+            else:
+                machine.virtual_step_label = _virt_label
+                print(f"[CustomMix] 容器虚拟步骤=开: 整箱达标注入顺序步骤[{_virt_label}]")
     print(f"[CustomMix] 混合子状态机就绪: mix={mix_type} 物品={sorted(machine.item_labels)}")
     return machine
 

@@ -745,6 +745,17 @@ def set_stream_config(req: StreamConfigRequest):
     video_manager.target_stream_fps = max(1, min(120, req.target_stream_fps))
     video_manager.use_half = req.use_half
 
+    # use_half/frame_limit 是全局字段 (所有通道共用, 见 _load_device_config 注释),
+    # 但本端点原来只写 ch0 实例 — 通道 1/2 要等重启重读配置文件才继承,
+    # 多工位 FP16 开关形同虚设 (2026-08-25 三工位 MPS 提速时踩到)。同步到所有通道;
+    # mi.use_half 在 load_model 时快照, 与 CUDA 语义一致: 改开关需重载模型生效。
+    from backend.api.channel_manager import channel_manager as _cm
+    for _cid, _mgr in _cm.channels.items():
+        if _mgr is not video_manager:
+            _mgr.frame_limit_enabled = req.frame_limit_enabled
+            _mgr.target_stream_fps = video_manager.target_stream_fps
+            _mgr.use_half = req.use_half
+
     mp_was_enabled = video_manager.mediapipe_enabled
     old_conf = video_manager.mediapipe_confidence
     old_complexity = int(getattr(video_manager, "mediapipe_model_complexity", 0))
@@ -1344,11 +1355,36 @@ def resume_inference(channel: int = Query(0)):
 # (operator 只能开始/停止/待机, 不能清零计数; engineer/admin 可以)
 @router.post("/detection/reset-stats",
               dependencies=[Depends(require_perm("monitor.detection.advanced"))])
-def reset_detection_stats(channel: int = Query(0)):
-    """重置统计数据（计数器、步骤计数等），同时结束当前会话"""
+def reset_detection_stats(channel: int = Query(0), scope: str = Query("all")):
+    """重置统计数据.
+
+    scope=all   (默认): 全部清零 — 结束会话 + 全量重置 (计数器/步骤/周期/容器账),
+        在途包装工单一并作废 (落库留 aborted 审计行), 面板回"等扫工单"白板
+    scope=cycle: 仅清理本周期 — 丢弃在制周期就地重来: OK/NG 计数、会话、
+        历史统计一概不动; 解除定格/挂起 (不落 NG)、清容器箱账; 包装流当前箱
+        回退到「等扫箱标签」态 (工单与已完成箱数保留, 同一张箱标签可重扫)。
+    """
     mgr = _get_mgr(channel)
+    if scope == "cycle":
+        desc = mgr.reset_current_cycle()
+        return {"status": "success",
+                "message": "本周期数据已清理" + (f"；{desc}" if desc else "")}
     mgr.end_session()
     mgr.reset_stats()
+    # 全部清零 = 工单也清 (在途作废 + 面板快照清空); 异常隔离不影响清零本身
+    _order_msg = ""
+    try:
+        from backend.services.packaging_flow_coordinator import get_coordinator as _pkg_coord
+        from backend.db.database import SessionLocal as _PkgSession
+        _pkg_db = _PkgSession()
+        try:
+            _desc = _pkg_coord().on_stats_reset(channel, _pkg_db)
+            if _desc:
+                _order_msg = f"；{_desc}"
+        finally:
+            _pkg_db.close()
+    except Exception as e:
+        print(f"[清零] 联动作废在途工单失败 (忽略): {e}")
     # v3.39 川南反馈: 上游不回推消除命令时在途报警一直挂着。入站配置
     # alarm_banner.clear_on_counter_reset 开启时 (默认关), 清零顺带清全部在途报警,
     # 方便联调; 失败不影响清零本身。
@@ -1364,12 +1400,13 @@ def reset_detection_stats(channel: int = Query(0)):
                 db.commit()
                 if res.get("cleared"):
                     return {"status": "success",
-                            "message": f"统计数据已重置; 在途报警已消除 {res['cleared']} 条"}
+                            "message": f"统计数据已重置; 在途报警已消除 {res['cleared']} 条"
+                                       + _order_msg}
         finally:
             db.close()
     except Exception as e:
         print(f"[清零] 联动消除在途报警失败 (忽略): {e}")
-    return {"status": "success", "message": "统计数据已重置"}
+    return {"status": "success", "message": "统计数据已重置" + _order_msg}
 
 
 def _do_ack_pending(mgr, channel: int, action: Optional[str] = None,
@@ -2025,6 +2062,26 @@ def get_detection_results(
                     if isinstance(_rr, dict)
                 ],
             } if _pcfg.get('region_events') else {},
+            # SOP 建卡身份 (只 step_id / id 数组, 不要整份 pipeline).
+            # 多工位不能用顶部 currentProject 兜底 sequence, 否则异项目会串工位.
+            'sequence_order': [
+                {'step_id': _it.get('step_id')}
+                for _it in (_pcfg.get('sequence_order') or [])
+                if isinstance(_it, dict) and _it.get('step_id') is not None
+            ],
+            'detection_steps': list(_pcfg.get('detection_steps') or []),
+            'custom_based_on': _pcfg.get('custom_based_on'),
+            'custom_sequence_order': [
+                {'step_id': _it.get('step_id')}
+                for _it in (_pcfg.get('custom_sequence_order') or [])
+                if isinstance(_it, dict) and _it.get('step_id') is not None
+            ],
+            'custom_detection_steps': list(_pcfg.get('custom_detection_steps') or []),
+            'custom_conditions': [
+                {'sequence': list(_cc.get('sequence') or [])}
+                for _cc in (_pcfg.get('custom_conditions') or [])
+                if isinstance(_cc, dict)
+            ],
         },
     }
 
@@ -2164,6 +2221,19 @@ def get_detection_results(
 
     if mes_data:
         result['mes'] = mes_data
+
+    # v3.56 周期多码采集实况 (槽位进度/已扫列表/上一件结算) — 项目未启用时
+    # get_state 返回 None 零开销 (配置有进程内缓存, 不开 DB 会话)
+    try:
+        _sc_pid = mgr.project_config.get('id') if mgr.project_config else None
+        if _sc_pid:
+            from backend.services.scan_collect import get_scan_collect_engine
+            _sc_state = get_scan_collect_engine().get_state(
+                None, mgr.channel_id, _sc_pid)
+            if _sc_state:
+                result['scan_collect'] = _sc_state
+    except Exception:
+        pass
 
     # v3.10+ 阶段 4: 当前活跃用户 (字段名 operator/employee_no 保留兼容外部脚本; 值改填 User)
     try:

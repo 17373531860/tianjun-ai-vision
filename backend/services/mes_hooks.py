@@ -1612,6 +1612,31 @@ class MESHookManager:
         except Exception as _e_wfc_scan:
             print(f"[WorkpieceFlow] on_scan_received error (isolated, fallback to scan_pair): {_e_wfc_scan}")
 
+        # v3.56 周期多码采集优先路径: 项目启用多码采集 → 码进槽位状态机
+        # (分类/去重/数量门/收尾结算), 跳过单码 scan_pair / pending_workpiece
+        # 状态机 (互斥, 同 WorkpieceFlow 姿势)。任何异常隔离回落原路径。
+        try:
+            from backend.services.scan_collect import get_scan_collect_engine
+            _sc_engine = get_scan_collect_engine()
+            if _sc_engine.handles(db, channel_id, project_id):
+                _sc_result = _sc_engine.on_scan(
+                    db, channel_id, serial_no, raw_data,
+                    project_id, device_id=device_id)
+                try:
+                    scan_log = ScanLog(
+                        device_id=device_id, channel_id=channel_id,
+                        raw_data=raw_data, parsed_serial=serial_no,
+                        success=bool(_sc_result.get("accepted")),
+                        error_msg=f"多码采集: {_sc_result.get('msg', '')}",
+                    )
+                    db.add(scan_log)
+                    db.commit()
+                except Exception:
+                    db.rollback()
+                return  # 互斥: 不再走单码绑定路径
+        except Exception as _e_sc_scan:
+            print(f"[ScanCollect] on_scan error (isolated, fallback to normal): {_e_sc_scan}")
+
         # v3.50 强制去重: 已判 OK 的条码永久拒绝 (ok_rescan_cooldown 的无限版).
         # 拒绝时发警告 toast (不再静默丢), 让操作员知道"这码已经合格过了".
         if self._get_strict_ok_dedup(channel_id):
@@ -1845,6 +1870,15 @@ class MESHookManager:
         """Cycle 结束: 更新工件状态, 记录缺陷, 更新工单"""
         if debug_center.is_on("backend.mes"):
             debug_center.dbg("backend.mes", "_handle_cycle_end 入口", f"channel={channel_id} cycle={cycle_id} is_good={is_good} event={event_name or '-'} project={project_id or '-'}")
+
+        # v3.56.1 视觉双重验证: 视觉周期判定喂给多码采集引擎缓存
+        # (纯内存单 dict 写, 仅 vision_gate 开启的项目在扫码结算时消费)
+        try:
+            from backend.services.scan_collect import get_scan_collect_engine
+            get_scan_collect_engine().on_vision_cycle(
+                channel_id, is_good, result_reason or event_name or "")
+        except Exception:
+            pass
         # v3.4.2 hotfix-2: ScanPair 模式下, settle_for_scan_pair 触发 end_cycle
         # 是同步链, 但本方法被丢进 worker queue 异步跑. 等 worker 拿到 _inspecting
         # 时, _handle_scan_pair_event 已经 promote 把 _inspecting 改成"新码 wp"

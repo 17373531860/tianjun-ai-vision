@@ -83,6 +83,30 @@
           <div v-if="traceData.workpiece.registered_at"><span class="text-gray-400">登记时间：</span>{{ formatTime(traceData.workpiece.registered_at) }}</div>
         </div>
 
+        <!-- v3.56 多码采集组件码 (确认单 7.5: 输入工件码反查当时绑的所有组件码)。
+             工装码是循环治具码会跨工件重复 → 同一序列号名下可能有多轮码组,
+             按 group_id 分节显示 (新在前), 不同轮次的码不混排 -->
+        <template v-if="scanGroups.length">
+          <h4 class="text-cyan-200 text-sm font-semibold mb-2">组件码（多码采集）</h4>
+          <div class="space-y-3 mb-4" data-testid="wp-scan-codes">
+            <div v-for="g in scanGroups" :key="g.group_id">
+              <div v-if="scanGroups.length > 1" class="text-[0.7rem] text-gray-500 mb-1">
+                {{ formatTime(g.settled_at) }}
+                <el-tag :type="g.result === 'ok' ? 'success' : 'danger'" size="small" class="ml-1">
+                  {{ g.result === 'ok' ? 'OK' : 'NG' }}</el-tag>
+              </div>
+              <div class="space-y-1">
+                <div v-for="r in g.records" :key="r.id"
+                     class="bg-slate-700/50 rounded px-2 py-1 text-xs flex items-center gap-2">
+                  <span class="text-gray-400 flex-shrink-0 w-14">{{ r.slot_label }}</span>
+                  <span class="font-mono text-gray-200 truncate min-w-0" :title="r.code">{{ r.code }}</span>
+                  <span class="ml-auto text-gray-500 flex-shrink-0">{{ formatTime(r.scanned_at) }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
+
         <!-- 检测历史 -->
         <h4 class="text-cyan-200 text-sm font-semibold mb-2">检测历史</h4>
         <div v-if="traceData.inspections.length === 0" class="text-gray-500 text-xs mb-4">暂无检测记录</div>
@@ -122,9 +146,10 @@
 </template>
 
 <script setup>
-import { ref, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getWorkpieces, getWorkpieceTrace, workpieceAction, deleteWorkpiece } from '@/api/mes'
+import { getScanCollectRecords } from '@/api/scanCollect'
 import { getWorkstations } from '@/api/detection'
 import { useProjectStore } from '@/store/useProjectStore'
 import { dbg, dbgErr } from '@/utils/debug'
@@ -143,7 +168,21 @@ const keyword = ref('')
 const filterStatus = ref('')
 const dateRange = ref(null)
 const traceData = ref(null)
+const scanCodes = ref([])  // v3.56 多码采集组件码 (无记录=空数组不渲染区块)
 const selected = ref([])
+
+// 按码组分节 (records 已按 seq 升序; 组间按结算时间倒序 = 最近一轮在前)
+const scanGroups = computed(() => {
+  const map = new Map()
+  for (const r of scanCodes.value) {
+    if (!map.has(r.group_id)) {
+      map.set(r.group_id, { group_id: r.group_id, settled_at: r.settled_at,
+                            result: r.group_result, records: [] })
+    }
+    map.get(r.group_id).records.push(r)
+  }
+  return [...map.values()].sort((a, b) => (b.settled_at || '').localeCompare(a.settled_at || ''))
+})
 
 const handleSelectionChange = (rows) => { selected.value = rows || [] }
 
@@ -184,7 +223,7 @@ const loadList = async () => {
 }
 
 const handleSelect = async (row) => {
-  if (!row) { traceData.value = null; return }
+  if (!row) { traceData.value = null; scanCodes.value = []; return }
   dbg('mes.workpiece', '点击「工件详情/追溯」', `id=${row?.id} serial_no=${row?.serial_no || ''}`)
   try {
     const res = await getWorkpieceTrace(row.id)
@@ -192,6 +231,13 @@ const handleSelect = async (row) => {
   } catch (e) {
     dbgErr('mes.workpiece', '加载追溯详情', e)
     ElMessage.error('加载追溯详情失败')
+  }
+  // 组件码独立拉取, 失败不连坐追溯详情 (老工件/未启用多码采集 = 空)
+  try {
+    const res = await getScanCollectRecords({ workpiece_id: row.id })
+    scanCodes.value = res.data || []
+  } catch {
+    scanCodes.value = []
   }
 }
 

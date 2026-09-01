@@ -145,7 +145,7 @@ def region_events_payload() -> dict:
 
 
 def sequential_payload() -> dict:
-    """默认顺序模式（超出约定通道数时的回落）。"""
+    """默认顺序模式（超出约定通道数时的回落）。空 sequence → 摊 enabled 步骤。"""
     return {
         **_BASE,
         "project_config": {
@@ -156,6 +156,27 @@ def sequential_payload() -> dict:
                 {"id": 2, "label": "step_b", "name": "步骤B", "enabled": True},
             ],
             "pipeline_config": {},
+        },
+    }
+
+
+def sequential_trap_payload() -> dict:
+    """顺序模式陷阱：steps_config 含未进序列类别，sequence 重复同一步。
+
+    用于守住多工位 SOP 按 sequence 建卡，而不是摊开全部 steps_config。
+    """
+    return {
+        **_BASE,
+        "project_config": {
+            "project_name": "__e2e_seq_trap",
+            "logic_mode": "sequential",
+            "steps_config": [
+                {"id": 1, "label": "检查外观", "displayLabel": "检查外观", "enabled": True},
+                {"id": 2, "label": "未进序列", "displayLabel": "未进序列", "enabled": True},
+            ],
+            "pipeline_config": {
+                "sequence_order": [{"step_id": 1}, {"step_id": 1}],
+            },
         },
     }
 

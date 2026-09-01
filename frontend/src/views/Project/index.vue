@@ -1088,6 +1088,21 @@ const initProjectDefaults = (project) => {
   if (project.custom_mix_container_tray_dedup_iou === undefined) {
     project.custom_mix_container_tray_dedup_iou = pipelineConfig.custom_mix_container_tray_dedup_iou ?? 0;
   }
+  if (project.custom_mix_container_stable_anchor_s === undefined) {
+    project.custom_mix_container_stable_anchor_s = pipelineConfig.custom_mix_container_stable_anchor_s ?? 0;
+  }
+  if (project.custom_mix_container_slot_verified_drop === undefined) {
+    project.custom_mix_container_slot_verified_drop = pipelineConfig.custom_mix_container_slot_verified_drop === true;
+  }
+  if (project.custom_mix_container_stable_pick === undefined) {
+    project.custom_mix_container_stable_pick = pipelineConfig.custom_mix_container_stable_pick === 'latest' ? 'latest' : 'max';
+  }
+  if (project.custom_mix_container_virtual_step === undefined) {
+    project.custom_mix_container_virtual_step = pipelineConfig.custom_mix_container_virtual_step === true;
+  }
+  if (project.custom_mix_container_virtual_step_label === undefined) {
+    project.custom_mix_container_virtual_step_label = pipelineConfig.custom_mix_container_virtual_step_label || '';
+  }
   // 物品行原生字段兜底：老数据/手改 JSON 可能缺字段，表C输入框依赖它们存在
   (project.steps_config || []).forEach(s => {
     if (s.detect_role !== 'item') return;
@@ -1370,6 +1385,7 @@ const initProjectDefaults = (project) => {
       violation_event_id: pipelineConfig.strict_order_violation_event_id || null,
       missing_step: cg.hold_enabled ? 'hold'
         : (remOn && rem.allow_step !== false ? 'ack' : 'ng'),
+      missing_step_early: false,
       hold_timeout_s: Number.isFinite(Number(cg.hold_timeout_s)) ? Number(cg.hold_timeout_s) : 120,
       hold_event_id: cg.event_id || null,
       short_count: remOn && rem.allow_count !== false ? 'ack' : 'ng',
@@ -1443,6 +1459,7 @@ const initProjectDefaults = (project) => {
   const nghCfg = project.pipeline_config.ng_handling;
   if (!['none', 'hint', 'instant_ng'].includes(nghCfg.violation)) nghCfg.violation = 'none';
   if (!['ng', 'ack', 'hold'].includes(nghCfg.missing_step)) nghCfg.missing_step = 'ng';
+  if (typeof nghCfg.missing_step_early !== 'boolean') nghCfg.missing_step_early = false;
   if (!['ng', 'ack', 'hold'].includes(nghCfg.short_count)) nghCfg.short_count = 'ng';
   if (nghCfg.violation_event_id === undefined) nghCfg.violation_event_id = null;
   if (nghCfg.hold_event_id === undefined) nghCfg.hold_event_id = null;
@@ -1562,6 +1579,11 @@ const initProjectDefaults = (project) => {
   project.pipeline_config.custom_mix_container_slot_total = project.custom_mix_container_slot_total || 0;
   project.pipeline_config.custom_mix_container_item_dedup_iou = project.custom_mix_container_item_dedup_iou ?? 0.45;
   project.pipeline_config.custom_mix_container_tray_dedup_iou = project.custom_mix_container_tray_dedup_iou || 0;
+  project.pipeline_config.custom_mix_container_stable_anchor_s = project.custom_mix_container_stable_anchor_s || 0;
+  project.pipeline_config.custom_mix_container_slot_verified_drop = project.custom_mix_container_slot_verified_drop === true;
+  project.pipeline_config.custom_mix_container_stable_pick = project.custom_mix_container_stable_pick === 'latest' ? 'latest' : 'max';
+  project.pipeline_config.custom_mix_container_virtual_step = project.custom_mix_container_virtual_step === true;
+  project.pipeline_config.custom_mix_container_virtual_step_label = (project.custom_mix_container_virtual_step_label || '').trim();
   project.pipeline_config.custom_sequence_order = project.custom_sequence_order;
   project.pipeline_config.custom_detection_steps = project.custom_detection_steps;
   project.pipeline_config.accumulate_repeats = project.accumulate_repeats;
@@ -1770,6 +1792,11 @@ const handleSaveProject = async () => {
         custom_mix_container_slot_total: activeProject.value.custom_mix_container_slot_total || 0,
         custom_mix_container_item_dedup_iou: activeProject.value.custom_mix_container_item_dedup_iou ?? 0.45,
         custom_mix_container_tray_dedup_iou: activeProject.value.custom_mix_container_tray_dedup_iou || 0,
+        custom_mix_container_stable_anchor_s: activeProject.value.custom_mix_container_stable_anchor_s || 0,
+        custom_mix_container_slot_verified_drop: activeProject.value.custom_mix_container_slot_verified_drop === true,
+        custom_mix_container_stable_pick: activeProject.value.custom_mix_container_stable_pick === 'latest' ? 'latest' : 'max',
+        custom_mix_container_virtual_step: activeProject.value.custom_mix_container_virtual_step === true,
+        custom_mix_container_virtual_step_label: (activeProject.value.custom_mix_container_virtual_step_label || '').trim(),
         custom_sequence_order: activeProject.value.custom_sequence_order,
         custom_detection_steps: activeProject.value.custom_detection_steps,
         accumulate_repeats: activeProject.value.accumulate_repeats,
@@ -1861,6 +1888,7 @@ const handleSaveProject = async () => {
             violation: lastFirst ? 'none' : violation,
             violation_event_id: lastFirst ? null : (src.violation_event_id || null),
             missing_step: ['ng', 'ack', 'hold'].includes(src.missing_step) ? src.missing_step : 'ng',
+            missing_step_early: src.missing_step === 'hold' && src.missing_step_early === true,
             hold_timeout_s: Number.isFinite(t) && t >= 0 ? t : 120,
             hold_event_id: src.hold_event_id || null,
             short_count: ['ng', 'ack', 'hold'].includes(src.short_count) ? src.short_count : 'ng',

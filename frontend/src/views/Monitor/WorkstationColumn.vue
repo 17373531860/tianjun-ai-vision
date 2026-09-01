@@ -47,8 +47,9 @@
         <span class="text-white truncate max-w-[72px]" :title="it.value">{{ it.value }}</span>
       </template>
     </div>
+    <!-- v3.56: 多码采集启用时隐藏单码"清除" (纠错统一走多码面板) -->
     <el-tooltip
-      v-if="systemStore.display.monitor.showScanButtons !== false && hasScannerFor(ch) && !isScanDisabledFor(ch)"
+      v-if="systemStore.display.monitor.showScanButtons !== false && hasScannerFor(ch) && !isScanDisabledFor(ch) && !scanCollectFor(ch)"
       :content="getDisplayWorkpieceFor(ch) && getDisplayWorkpieceFor(ch).status === 'inspecting'
         ? '本次工件已开始检测，点击可作废本次检测、回到等待扫码状态'
         : '清除待检/扫码状态，让操作员重扫一次条码'"
@@ -84,6 +85,12 @@
       </el-button>
     </el-tooltip>
   </div>
+  <!-- v3.56: 周期多码采集已扫进度 (紧凑态, 点"明细"看逐码列表/纠错) -->
+  <ScanSlotsPanel
+    v-if="scanCollectFor(ch) || layoutEditActive"
+    data-layout-slot="scan-slots" :data-testid="`dual-scan-${ch}`"
+    class="flex-shrink-0" compact
+    :state="scanCollectFor(ch)" :channel-id="ch" />
   <!-- Row 1: Counters (scrollable) + Yield Rate -->
   <div data-layout-slot="counters" :data-testid="`dual-counters-${ch}`" class="flex gap-2 flex-shrink-0">
     <div class="flex-1 flex gap-2 overflow-x-auto min-w-0">
@@ -150,6 +157,20 @@
     </div>
     </template>
   </div>
+  <!-- v3.55.x 混合模式物品校验 (装箱清点三分框/混合逐件): 与上方 SOP 行并存,
+       该工位项目未配 custom_mix 时轮询无 custom_mix_state → 不渲染零差异;
+       显示设置「物品校验面板」(mixPanel) 可整体关, 与单工位/放大态同一开关 -->
+  <PerItemPanel
+    v-if="showMixPanel && mixPerItemStateFor(ch)"
+    data-layout-slot="mix-panel" :data-testid="`dual-mix-${ch}`"
+    class="flex-shrink-0"
+    :state="mixPerItemStateFor(ch)" :channel="ch" mix />
+  <CustomMixItemPanel
+    v-else-if="showMixPanel && mixTrackingStateFor(ch)"
+    data-layout-slot="mix-panel" :data-testid="`dual-mix-${ch}`"
+    class="flex-shrink-0"
+    :state="mixTrackingStateFor(ch)"
+    :tracking-checklist="multiChannelData[ch]?.tracking?.item_checklist || {}" />
   <!-- Controls -->
   <div data-layout-slot="controls" class="flex gap-1.5 flex-shrink-0" data-testid="channel-controls" :data-channel="ch">
     <button @click="startDetectionForChannel(ch)" :disabled="(!multiChannelData[ch]?.project && !currentProject) || multiChannelData[ch]?.isDetecting"
@@ -158,7 +179,7 @@
       class="flex-1 bg-red-600 hover:bg-red-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-1 rounded text-xs font-bold">停止</button>
     <button @click="standbyForChannel(ch)" :disabled="!multiChannelData[ch]?.isDetecting"
       class="flex-1 bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-1 rounded text-xs font-bold">待机</button>
-    <button @click="resetCountersForChannel(ch)" :disabled="multiChannelData[ch]?.isDetecting"
+    <button @click="openResetDialog(ch)"
       class="flex-1 bg-cyan-500 hover:bg-cyan-400 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-1 rounded text-xs font-bold">清零</button>
   </div>
   <!-- Per-workstation event toasts -->
@@ -326,7 +347,8 @@
         <span class="text-white truncate max-w-[72px]" :title="it.value">{{ it.value }}</span>
       </template>
     </div>
-    <el-button v-if="systemStore.display.monitor.showScanButtons !== false && hasScannerFor(ch) && !isScanDisabledFor(ch)"
+    <!-- v3.56: 多码采集启用时隐藏单码"清除" (纠错统一走多码面板) -->
+    <el-button v-if="systemStore.display.monitor.showScanButtons !== false && hasScannerFor(ch) && !isScanDisabledFor(ch) && !scanCollectFor(ch)"
       :class="getMesDataFor(ch)?.order ? '' : 'ml-auto'" size="small" type="warning" plain
       @click.stop="clearPendingScan(ch)">清除</el-button>
     <el-button v-if="systemStore.display.monitor.showScanButtons !== false && hasScannerFor(ch)"
@@ -336,6 +358,12 @@
       {{ isScanDisabledFor(ch) ? '启用扫码' : '禁用扫码' }}
     </el-button>
   </div>
+  <!-- v3.56: 周期多码采集已扫进度 (紧凑态, 与双工位同构) -->
+  <ScanSlotsPanel
+    v-if="scanCollectFor(ch) || layoutEditActive"
+    data-layout-slot="scan-slots" :data-testid="`triple-scan-${ch}`"
+    class="flex-shrink-0" compact
+    :state="scanCollectFor(ch)" :channel-id="ch" />
   <!-- 工艺主面板 (整宽一行) — 受显示设置「SOP 流程卡片」(display.monitor.stepStrip) 控制.
        槽位 id 契约永远是 sop (布局落库); 槽内内容按工位模式切换:
        tracking/per_item/weighing → 专属面板 (阶段3, v3.55); 步骤类模式 → 原 SOP 卡.
@@ -397,6 +425,18 @@
     </table>
     <div v-else class="h-full flex items-center justify-center text-gray-600 text-[0.625rem] px-2 text-center">暂无步骤数据</div>
   </div>
+  <!-- v3.55.x 混合模式物品校验 (装箱清点三分框/混合逐件): 未配 custom_mix 零差异, mixPanel 开关可整体关 -->
+  <PerItemPanel
+    v-if="showMixPanel && mixPerItemStateFor(ch)"
+    data-layout-slot="mix-panel" :data-testid="`triple-mix-${ch}`"
+    class="flex-shrink-0"
+    :state="mixPerItemStateFor(ch)" :channel="ch" mix />
+  <CustomMixItemPanel
+    v-else-if="showMixPanel && mixTrackingStateFor(ch)"
+    data-layout-slot="mix-panel" :data-testid="`triple-mix-${ch}`"
+    class="flex-shrink-0"
+    :state="mixTrackingStateFor(ch)"
+    :tracking-checklist="multiChannelData[ch]?.tracking?.item_checklist || {}" />
   <!-- 控制按钮: 开始/停止/待机/清零 四等宽, 贴底 -->
   <div data-layout-slot="controls" class="flex gap-1.5 flex-shrink-0" data-testid="channel-controls" :data-channel="ch">
     <button @click="startDetectionForChannel(ch)" :disabled="(!multiChannelData[ch]?.project && !currentProject) || multiChannelData[ch]?.isDetecting"
@@ -405,7 +445,7 @@
       class="flex-1 bg-red-600 hover:bg-red-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-1 rounded text-xs font-bold">停止</button>
     <button @click="standbyForChannel(ch)" :disabled="!multiChannelData[ch]?.isDetecting"
       class="flex-1 bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-1 rounded text-xs font-bold">待机</button>
-    <button @click="resetCountersForChannel(ch)" :disabled="multiChannelData[ch]?.isDetecting"
+    <button @click="openResetDialog(ch)"
       class="flex-1 bg-cyan-500 hover:bg-cyan-400 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-1 rounded text-xs font-bold">清零</button>
   </div>
   <!-- 列内 per-工位 Toast (定位上下文 = 本列卡片) -->
@@ -451,6 +491,9 @@ import { Picture } from '@element-plus/icons-vue';
 import ChannelVideoCard from './ChannelVideoCard.vue';
 import TjSlot from '@/components/TjSlot.vue';
 import WorkstationModePanel from './WorkstationModePanel.vue';
+import CustomMixItemPanel from './CustomMixItemPanel.vue';
+import PerItemPanel from './PerItemPanel.vue';
+import ScanSlotsPanel from './ScanSlotsPanel.vue';
 import { resolveModePanelKind } from './monitorModes';
 
 const props = defineProps({
@@ -469,7 +512,7 @@ const {
   getMultiPositionClass, toggleNgTopMode,
   selectOverviewChannel, zoomChannel, clearPendingScan, toggleScanDisableFor,
   startDetectionForChannel, stopDetectionForChannel, standbyForChannel,
-  resetCountersForChannel,
+  resetCountersForChannel, openResetDialog,
 } = props.ctx;
 
 // 阶段3: 本工位的按模式工艺面板 — 模式来源 poll 载荷 project_config 优先,
@@ -482,4 +525,30 @@ const modePanelKind = computed(() => {
     chData?.project || currentProject.value,
   );
 });
+
+// v3.55.x 混合模式物品校验面板多工位同步:
+// 仅该工位轮询带 custom_mix_state (项目配了装箱清点/混合逐件) 才渲染, 未配置零差异;
+// 显示设置「物品校验面板」可整体关 (默认开, 与单工位/放大态同一开关)。
+const showMixPanel = computed(() => systemStore.display.monitor.mixPanel !== false);
+
+// v3.56: 周期多码采集实况 (项目未启用时轮询不带 scan_collect 段 = null 零差异)
+const scanCollectFor = (chId) => multiChannelData.value?.[chId]?.scanCollect || null;
+const mixTrackingStateFor = (chId) => {
+  const s = multiChannelData.value?.[chId]?.customMixState;
+  return (s && s.mix_type === 'tracking') ? s : null;
+};
+// 混合逐件: 与单工位 customMixPerItemState 同构, 适配成 PerItemPanel 的 state 形状
+// (config=null 自动隐藏手动按钮/收尾卡片)
+const mixPerItemStateFor = (chId) => {
+  const s = multiChannelData.value?.[chId]?.customMixState;
+  if (!s || s.mix_type !== 'per_item') return null;
+  return {
+    enabled: true,
+    cycle_active: !!s.cycle_active,
+    cycle_start_time: null,
+    config: null,
+    steps: s.steps || [],
+    last_ng_detail: s.last_ng_detail || null,
+  };
+};
 </script>

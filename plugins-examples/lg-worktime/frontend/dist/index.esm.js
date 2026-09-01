@@ -475,16 +475,13 @@ function buildChannelPanel(host) {
     emits: ["focus"],
     setup(props, { emit }) {
       const streamUrl = ref("");
-      const streamBroken = ref(false);
-      const streamKey = ref(0);           // ++ 强制销毁 <img> DOM, 破 Chrome 死 socket
       const overlayCanvasRef = ref(null);
+      const imgRef = ref(null);
       const trackRef = ref(null);
       const cardRefs = {};
       let refreshTimer = null;
-      let swapTimer = null;
       let resizeObserver = null;
       let lastScrollLabel = null;
-      let reconnectBusy = false;
 
       // 主程序 paintPluginOverlay 按 canvas.fjjl-det-overlay 取画框; 插件侧也主动 paint
       // (对齐 fujian-jinlong / sensor-clean), 避免换页/时序丢帧。
@@ -501,35 +498,91 @@ function buildChannelPanel(host) {
         resizeObserver.observe(wrap);
       };
 
-      // 强制重建 MJPEG 连接: 清 src → ++key 毁 DOM → nextTick 挂新带时间戳 URL
-      // (对齐主程序 connectStream; 单纯改 src 破不了 Chrome keep-alive 死 socket)
-      const forceReconnect = () => {
-        if (reconnectBusy) return;
-        if (typeof props.streamUrlBuilder !== "function") return;
-        reconnectBusy = true;
-        streamBroken.value = false;
-        streamUrl.value = "";
-        streamKey.value += 1;
-        nextTick(() => {
-          try {
-            streamUrl.value = props.streamUrlBuilder(props.chIdx);
-          } catch (e) {
-            console.warn("[lg-worktime] streamUrlBuilder 抛错:", e);
-            streamBroken.value = true;
+      // ==== fetch 流式 MJPEG (2026-08-26 重写, 治「画面冻帧但检测框还在跳」) ====
+      // 旧方案 <img src=video_feed>: socket 半死时 Chrome 不触发 onError, 画面
+      // 静默停在末帧, 只能靠 90s 定期换流兜底 (最长冻 90s, 现场肉眼可见)。
+      // 新方案 fetch + reader 手动解 multipart JPEG → blob 喂 <img>:
+      //   - 字节级掌握 lastFrameAt, 看门狗 3.5s 没新帧就重连 (真·自愈);
+      //   - 每帧独立 blob 解码, 无 Chromium 原生 MJPEG 解码器内存增长, 不再需要
+      //     90s 定期换流 (主程序 STREAM_SWAP 是 <img> 长连接才有的债)。
+      let fetchAbort = null;
+      let lastFrameAt = 0;
+      let curObjUrl = null;
+
+      const _findBytes = (buf, pat, from) => {
+        outer: for (let i = from; i <= buf.length - pat.length; i++) {
+          for (let j = 0; j < pat.length; j++) {
+            if (buf[i + j] !== pat[j]) continue outer;
           }
-          reconnectBusy = false;
-        });
+          return i;
+        }
+        return -1;
       };
 
-      const softConnect = () => {
-        if (typeof props.streamUrlBuilder !== "function") return;
-        try {
-          streamUrl.value = props.streamUrlBuilder(props.chIdx);
-          streamBroken.value = false;
-        } catch (e) {
-          console.warn("[lg-worktime] streamUrlBuilder 抛错:", e);
-        }
+      const showFrame = (bytes) => {
+        lastFrameAt = Date.now();
+        const img = imgRef.value;
+        if (!img) return;  // img 未挂载 (streamUrl 刚置位的同 tick), 丢这帧无妨
+        const url = URL.createObjectURL(new Blob([bytes], { type: "image/jpeg" }));
+        const prev = curObjUrl;
+        curObjUrl = url;
+        img.onload = () => {
+          if (prev) URL.revokeObjectURL(prev);
+          if (img.naturalWidth) {
+            props.actions?.setFrameNaturalSize?.(
+              props.chIdx, img.naturalWidth, img.naturalHeight,
+            );
+          }
+          paintOverlay();
+        };
+        img.onerror = () => { if (prev) URL.revokeObjectURL(prev); };
+        img.src = url;
       };
+
+      const stopFetch = () => {
+        if (fetchAbort) { try { fetchAbort.abort(); } catch (e) { /* 已结束 */ } }
+        fetchAbort = null;
+      };
+
+      const startFetch = () => {
+        if (typeof props.streamUrlBuilder !== "function") return;
+        stopFetch();
+        let url;
+        try { url = props.streamUrlBuilder(props.chIdx); }
+        catch (e) { console.warn("[lg-worktime] streamUrlBuilder 抛错:", e); return; }
+        streamUrl.value = url;   // 仅用于渲染分支 (有源才挂 <img>)
+        lastFrameAt = Date.now();
+        const ctrl = new AbortController();
+        fetchAbort = ctrl;
+        (async () => {
+          try {
+            const resp = await fetch(url, { signal: ctrl.signal, cache: "no-store" });
+            const reader = resp.body.getReader();
+            const SOI = [0xff, 0xd8, 0xff];
+            const EOI = [0xff, 0xd9];
+            let buf = new Uint8Array(0);
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done || ctrl.signal.aborted) break;
+              const nb = new Uint8Array(buf.length + value.length);
+              nb.set(buf); nb.set(value, buf.length);
+              buf = nb;
+              // 取尽 buf 里所有完整 JPEG; 半截留给下一轮拼
+              for (;;) {
+                const s = _findBytes(buf, SOI, 0);
+                if (s < 0) { if (buf.length > 1024) buf = buf.slice(-8); break; }
+                const e = _findBytes(buf, EOI, s + 3);
+                if (e < 0) { if (s > 0) buf = buf.slice(s); break; }
+                showFrame(buf.slice(s, e + 2));
+                buf = buf.slice(e + 2);
+              }
+              if (buf.length > 16 * 1024 * 1024) buf = new Uint8Array(0);  // 异常散包防积压
+            }
+          } catch (e) { /* abort / 网络断: 交给看门狗重连, 不在此自旋 */ }
+        })();
+      };
+
+      const forceReconnect = () => startFetch();
 
       // ---- 视频源进度条: 仅 sourceType=video 时轮询 video/info, 可点击 seek ----
       const videoInfo = ref(null);
@@ -587,26 +640,25 @@ function buildChannelPanel(host) {
       watch(() => props.chIdx, () => { forceReconnect(); });
 
       onMounted(() => {
-        softConnect();
-        // 断流自愈 (onError 置 streamBroken)
+        startFetch();
+        // 冻流看门狗: 源在跑却 3.5s 没收到新帧 → 重连 (fetch 字节级真相,
+        // 覆盖「socket 半死不触发 onError」的全部场景)
         refreshTimer = setInterval(() => {
-          if (streamBroken.value) forceReconnect();
-        }, 3000);
-        // 对齐主程序 STREAM_SWAP (~90s): 主动换流释放 Chromium 解码器,
-        // 同时兜底「中途冻帧但不触发 onError」的 Chrome MJPEG 死 socket
-        swapTimer = setInterval(() => {
           const c = props.chData || {};
-          if (c.isRunning || c.isDetecting) forceReconnect();
-        }, 90000);
+          if ((c.isRunning || c.isDetecting) && Date.now() - lastFrameAt > 3500) {
+            forceReconnect();
+          }
+        }, 2000);
         pollVideoInfo();
         vinfoTimer = setInterval(pollVideoInfo, 1000);
         nextTick(() => { bindResizeObserver(); paintOverlay(); });
       });
       onBeforeUnmount(() => {
         if (refreshTimer) clearInterval(refreshTimer);
-        if (swapTimer) clearInterval(swapTimer);
         if (vinfoTimer) clearInterval(vinfoTimer);
         if (resizeObserver) { resizeObserver.disconnect(); resizeObserver = null; }
+        stopFetch();
+        if (curObjUrl) { URL.revokeObjectURL(curObjUrl); curObjUrl = null; }
       });
 
       const status = computed(() => {
@@ -661,21 +713,9 @@ function buildChannelPanel(host) {
         ]);
 
         const videoNode = h("div", { class: "lgwt-video-wrap" }, [
-          (streamUrl.value && !streamBroken.value)
-            ? h("img", {
-                key: `lgwt-mjpeg-${props.chIdx}-${streamKey.value}`,
-                class: "lgwt-video-img", src: streamUrl.value, alt: "检测画面",
-                onLoad: (e) => {
-                  const img = e?.target;
-                  if (img?.naturalWidth) {
-                    props.actions?.setFrameNaturalSize?.(
-                      props.chIdx, img.naturalWidth, img.naturalHeight,
-                    );
-                  }
-                  paintOverlay();
-                },
-                onError: () => { streamBroken.value = true; },
-              })
+          // src 由 fetch 流解出的 blob 逐帧喂 (showFrame), 不走 <img> 长连接
+          streamUrl.value
+            ? h("img", { ref: imgRef, class: "lgwt-video-img", alt: "检测画面" })
             : h("div", { class: "lgwt-video-none" }, "暂无视频源"),
           // 主程序 querySelectorAll('canvas.fjjl-det-overlay')[ch] 画检测框
           h("canvas", { ref: overlayCanvasRef, class: "fjjl-det-overlay lgwt-det-overlay" }),

@@ -1442,6 +1442,25 @@ class SettlementMixin:
         if self._violation_throttle_pass(label):
             self._fire_instant_ng(f'重复步骤: [{label}] 超出期望次数')
 
+    def _container_virtual_label(self) -> str:
+        """容器虚拟步骤标签 (v3.49; 未启用返回 '')。"""
+        mix = getattr(self, '_custom_mix', None)
+        return (getattr(mix, 'virtual_step_label', '') or '') if mix else ''
+
+    def _virtual_pred_missing(self, label) -> bool:
+        """label 的前置里含"尚未入周期的容器虚拟步骤" (v3.49.2 静默拦截口径)。
+
+        装箱期间后继步骤的误检是现场常态, 虚拟步骤何时完成由容器账机器判定 —
+        它没完成前后继的一切出现都按误检静默过滤, 不报违序轰炸工人。
+        """
+        virt = self._container_virtual_label()
+        if not virt or virt in self.current_cycle_steps:
+            return False
+        expected = self._get_expected_sequence_labels()
+        if not expected or label not in expected or virt not in expected:
+            return False
+        return expected.index(virt) < expected.index(label)
+
     def _fire_strict_order_violation(self, label, reason: str):
         """v3.32 严格顺序违序即时事件 + v3.43 实时NG: 违序动作被守门拦下的当场响应。
 
@@ -1451,6 +1470,11 @@ class SettlementMixin:
         - 提示事件: pipeline_config.strict_order_violation_event_id (None=关, 零差异),
           当场触发所配事件但不动周期; 建议配警告/自定义类事件。
           实时NG不适用时 (开关关/空周期) 才走到这条
+
+        2026-08 修复: 提示走 fire_external_event_response (借事件响应面: 报警/
+        Toast/语音/可选定格), 不再走 _trigger_event —— 后者是结算入口, 任何
+        事件进去都 end_cycle, 在制周期被结掉、容器箱账随周期清零 (合成剧本
+        实测: 提示一响 8/8 变 0/8), 与本方法"不动周期"的承诺矛盾。
         """
         event_id = getattr(self, 'strict_order_violation_event_id', None)
         if not getattr(self, 'instant_ng_on_violation', False) and not event_id:
@@ -1462,10 +1486,58 @@ class SettlementMixin:
         if not event_id:
             return
         try:
-            self._trigger_event(event_id, reason)
+            self.fire_external_event_response(event_id, reason, source='strict_order')
             print(f"[StrictOrder] 违序即时事件已触发: event_id={event_id} {reason}")
         except Exception as e:
             print(f"[StrictOrder] 违序即时事件触发失败: {e}")
+
+    def _is_seq_based(self, logic_mode) -> bool:
+        """顺序型判定口径 (纯顺序 / 基于顺序的自定义), 与回退标记消费方同源。"""
+        if logic_mode == 'sequential':
+            return True
+        _based_on = ((self.project_config.get('pipeline_config', {}) or {})
+                     .get('custom_based_on') if self.project_config else None)
+        return logic_mode == 'custom' and _based_on == 'sequential'
+
+    def _maybe_fire_repeat_hint(self, label, logic_mode) -> bool:
+        """v3.49 回退重复接「当场提示」档: 违规档位为 hint 时, 顺序型周期里
+        已完成步骤的非法重复出现 → 触发所配提示事件 + 拦截不入账。
+
+        返回 True = 提示档已消费本次重复 (调用方不得入账/不得标回退) —— 事件
+        本身可能被 5s 节流吞掉, 但"不入账"的语义不随节流摇摆, 否则同一次多做
+        在节流窗口内外会得到两种判定。返回 False = 非提示档 (none/instant_ng)
+        或非顺序型, 调用方走原路径, 零差异。
+
+        为什么限顺序型: 基于检测的自定义按出现次数结算, 重复可能是合法累计,
+        当场提示会误伤; 顺序型序列里的非法重复才有"多做了"的确定语义。
+        事件建议配「需人工确认」: 定格提醒工人取走多做的实体, 确认后周期
+        原样继续 (ack_keep_cycle), 封箱照常结算。
+
+        提示必须走 fire_external_event_response (不结算的事件响应面), 不能走
+        _trigger_event —— 那是结算入口, 会 end_cycle 把在制周期结掉、容器
+        箱账随周期清零 (合成剧本实测踩雷)。
+        """
+        mode = getattr(self, '_violation_mode', None)
+        if mode is None:
+            # 兜底推导 (老宿主没有 _violation_mode 属性时), 与 resolve_ng_handling
+            # 的 legacy 合成口径一致
+            mode = ('instant_ng' if getattr(self, 'instant_ng_on_violation', False)
+                    else ('hint' if getattr(self, 'strict_order_violation_event_id', None)
+                          else 'none'))
+        if mode != 'hint' or not self._is_seq_based(logic_mode):
+            return False
+        if not self._violation_throttle_pass(label):
+            return True
+        event_id = getattr(self, 'strict_order_violation_event_id', None)
+        if event_id:
+            try:
+                self.fire_external_event_response(
+                    event_id, f'步骤重复: [{label}] 本周期已做过, 多余出现已拦截不入账',
+                    source='repeat_hint')
+                print(f"[RepeatHint] 重复出现提示已触发: {label} event_id={event_id}")
+            except Exception as e:
+                print(f"[RepeatHint] 重复出现提示触发失败: {e}")
+        return True
 
     def _fire_closing_guard_alarm(self, reason: str, event_id=None) -> None:
         """v3.44 收尾防呆报警收口: 借所配事件的响应面 (灯/蜂鸣/Toast/语音),
@@ -1600,6 +1672,88 @@ class SettlementMixin:
         self._dbg_step_rejected(label, f"收尾数量门拦下 (箱内 {int(total)}/{int(target)})")
         return True
 
+    def _maybe_enter_early_missing_hold(self, label, appended=True) -> None:
+        """v3.49 缺步提前发现 (ng_handling.missing_step_early, 默认关零差异).
+
+        后继步骤干净入周期的瞬间检查它的前置是否已做; 缺 → 当场进缺步挂起,
+        完整复用 v3.44 挂起机制: 报警 (挂起提示事件, 配「需人工确认」即弹框
+        定格、点确认才能补做) / 缺失步骤豁免守门入周期 / multiset 补齐按期望
+        顺序重排判 OK / 超时按缺步 NG。相比结算时才暴露, 把发现时刻从末步
+        (封箱) 提前到漏步之后的第一个动作。
+
+        调用方约定: 仅顺序型干净入周期分支 (非回退/非挂起补做) 调用。
+        appended=False (v3.49.1): 触发步骤"已实际开始但尚未入周期"的形态 —
+        容器虚拟步骤要整箱达标才注入, 工序一开始 (第一盘有货) 就要查前置,
+        此时 label 不在 current_cycle_steps 里, 按"即将出现的下一次"核前置。
+        """
+        if not getattr(self, '_early_missing_hold', False):
+            return
+        if getattr(self, '_settle_hold', None) is not None:
+            return
+        if getattr(self, '_cycle_regression', False):
+            return
+        # 挂起机制的销结/改道只接在"自定义-基于顺序"上 (_check_events 分支 +
+        # _maybe_resolve_settle_hold 调 _check_custom_sequential_mode), 与
+        # missing_step=hold 档的适用面一致 — 纯顺序模式挂了没人销, 不进.
+        cfg = self.project_config or {}
+        if not (cfg.get('logic_mode') == 'custom'
+                and (cfg.get('pipeline_config', {}) or {}).get('custom_based_on') == 'sequential'):
+            return
+        expected = self._get_expected_sequence_labels()
+        if not expected or label not in expected:
+            return
+        # 幽灵周期守门: OK 结算瞬间末步余像会单独开一个新周期 (上银视频实测),
+        # 此时"缺全部前置"是余像假象不是真漏步 → 不挂不报, 交结算路径兜底
+        # (与 _maybe_enter_settle_hold 的首步缺失守门同一防线, 口径更窄).
+        if label == expected[-1] and len(self.current_cycle_steps) <= 1:
+            return
+        from collections import Counter
+        # 本次出现对应期望序列中第 n 个同名位置 (期望序列可含合法重复);
+        # 未入周期形态 (appended=False) 按"即将出现的下一次"算
+        n = self.current_cycle_steps.count(label) + (0 if appended else 1)
+        idx = None
+        seen = 0
+        for i, lbl in enumerate(expected):
+            if lbl == label:
+                seen += 1
+                if seen == n:
+                    idx = i
+                    break
+        if not idx:   # 超出期望次数交回退/结算管; 首位 (idx=0) 无前置
+            return
+        have = Counter(self.current_cycle_steps)
+        if appended:
+            have[label] -= 1   # 本次出现不算自己的前置
+        need = Counter(expected[:idx]) - have
+        missing = []
+        for lbl in need.elements():
+            # 替补步骤已见 → 前置视同已做 (与严格顺序守门同口径)
+            backup = (getattr(self, 'step_primary_to_backup', None) or {}).get(lbl)
+            if backup and backup in (getattr(self, 'backup_steps_seen_in_cycle', None) or set()):
+                continue
+            missing.append(lbl)
+        if not missing:
+            return
+        self._settle_hold = {
+            'missing': list(missing),
+            'expected': list(expected),
+            'since': time.time(),
+            # early 挂起在周期中途发生: 销结条件是"缺的前置补齐"而非整周期
+            # 全齐 (工人补完还要做剩余工序, 不能占着补做超时窗), 见
+            # _maybe_resolve_settle_hold 的 early 分支.
+            'early': True,
+            'cycle_at_entry': list(self.current_cycle_steps),
+        }
+        self._fire_closing_guard_alarm(
+            f'缺步提前发现: 做 [{label}] 时前置步骤 {list(missing)} 未做 — '
+            f'周期挂起等补做, 补齐后继续正常流程',
+            event_id=getattr(self, '_settle_hold_event_id', None))
+        print(f"[ClosingGuard] 缺步提前挂起: 触发步骤=[{label}] missing={list(missing)} "
+              f"expected={list(expected)} timeout={getattr(self, '_settle_hold_timeout_s', 0)}s")
+        if debug_center.is_on("backend.settlement"):
+            debug_center.dbg("backend.settlement", "缺步提前挂起",
+                             f"channel={self.channel_id} trigger={label} missing={list(missing)}")
+
     def _maybe_enter_settle_hold(self, missing, expected_labels, next_carry) -> bool:
         """v3.44 缺步结算挂起入口 (True = 已挂起, 调用方不再触发 NG).
 
@@ -1714,6 +1868,30 @@ class SettlementMixin:
             return
         from collections import Counter
         expected = list(hold.get('expected') or [])
+        if hold.get('early'):
+            # 缺步提前挂起: 挂起时周期还在中途, 销结条件 = 缺的前置已补齐
+            entered = Counter(hold.get('cycle_at_entry') or [])
+            added = Counter(self.current_cycle_steps) - entered
+            if Counter(hold.get('missing') or []) - added:
+                return   # 还有前置没补上
+            remain = Counter(self.current_cycle_steps)
+            rebuilt = []
+            for lbl in expected:
+                if remain.get(lbl, 0) > 0:
+                    rebuilt.append(lbl)
+                    remain[lbl] -= 1
+            for lbl in self.current_cycle_steps:
+                if remain.get(lbl, 0) > 0:
+                    rebuilt.append(lbl)
+                    remain[lbl] -= 1
+            print(f"[ClosingGuard] 缺步提前挂起已补齐 {hold.get('missing')} → "
+                  f"重排为 {rebuilt}, 周期继续")
+            if debug_center.is_on("backend.settlement"):
+                debug_center.dbg("backend.settlement", "缺步提前挂起销结",
+                                 f"channel={self.channel_id} rebuilt={rebuilt}")
+            self.current_cycle_steps = rebuilt
+            self._settle_hold = None
+            return
         need_total = hold.get('need_total')
         if need_total:
             mix = getattr(self, '_custom_mix', None)
@@ -1844,6 +2022,13 @@ class SettlementMixin:
                     backup = self.step_primary_to_backup.get(pred)
                     if backup and backup in self.backup_steps_seen_in_cycle:
                         continue
+                    # 缺的前置是容器虚拟步骤 → 静默拦截不报违序。
+                    # 装箱期间手臂/油嘴包误检是常态, 虚拟步骤何时完成由容器账
+                    # 机器判定, 后继在此之前的一切出现都按误检过滤。
+                    if pred == self._container_virtual_label():
+                        self._dbg_step_rejected(
+                            label, f"严格顺序静默拦截: 容器虚拟步骤[{pred}]未完成")
+                        return
                     # v3.32: 拦截照旧, 但支持当场报违序 (工人打错对角顺序立即报警,
                     # 不必等周期结算)。未配置事件时零差异。
                     self._fire_strict_order_violation(
@@ -1925,8 +2110,12 @@ class SettlementMixin:
             # 横放中途被调整) 是现场常态 —— 静默拦截不入周期即可, 报违序是误伤
             # (真实视频验证: 收尾标记与横放二段出现均属此类)。
             if label not in self.current_cycle_steps:
-                self._fire_strict_order_violation(
-                    label, f'违反严格顺序: [{label}] 提前出现')
+                if self._virtual_pred_missing(label):
+                    self._dbg_step_rejected(
+                        label, "严格+单次静默拦截: 容器虚拟步骤未完成")
+                else:
+                    self._fire_strict_order_violation(
+                        label, f'违反严格顺序: [{label}] 提前出现')
             return
 
         # ── accept_once 拦截 ──
@@ -2115,6 +2304,9 @@ class SettlementMixin:
                         self._last_step_added_time = current_time
                         print(f"[ClosingGuard] 挂起补做步骤入周期: {label} "
                               f"(current: {self.current_cycle_steps})")
+                        # 缺步提前挂起: 补齐即销结 (入周期当帧, 不等消失)
+                        if (getattr(self, '_settle_hold', None) or {}).get('early'):
+                            self._maybe_resolve_settle_hold()
                     elif self.last_added_step == label:
                         # v3.19.x: 期望序列支持"连续相同步骤" (如 放托盘×4).
                         # 走到这里说明 is_new_appearance=True, 即上一次出现已经
@@ -2126,8 +2318,11 @@ class SettlementMixin:
                             self.last_added_step = label
                             self._last_step_added_time = current_time
                             print(f"[ExpectedConsecutiveRepeat] {label} is a legal consecutive repeat in expected sequence (current: {self.current_cycle_steps})")
+                            self._maybe_enter_early_missing_hold(label)
                         else:
-                            pass
+                            # 回退重复接「当场提示」档: A-A 去重硬规则维持不入账,
+                            # 但提示档下这是"多做了一次"的最常见形态。
+                            self._maybe_fire_repeat_hint(label, logic_mode)
                     elif label in self.current_cycle_steps:
                         # v3.7.0 客户反馈: 期望序列里允许同一 label 多次出现
                         # (例如 A-B-C-B-D 里 B 出现 2 次)。
@@ -2140,26 +2335,28 @@ class SettlementMixin:
                             self.last_added_step = label
                             self._last_step_added_time = current_time
                             print(f"[ExpectedRepeat] {label} is a legal repeat in expected sequence (current: {self.current_cycle_steps})")
+                            self._maybe_enter_early_missing_hold(label)
                         else:
-                            self._cycle_regression = True
-                            self.current_cycle_steps.append(label)
-                            self.last_added_step = label
-                            self._last_step_added_time = current_time
-                            print(f"[StepRegression] {label} already appeared in cycle and not an expected repeat, marking regression (current: {self.current_cycle_steps})")
-                            # v3.43 二期 实时NG: 回退/非法重复一经入账, 顺序型结算必判
-                            # NG (可证明性准绳) → 当场结。守门只放顺序型: 回退标记仅被
-                            # 顺序型结算分支消费; 基于检测的自定义按出现次数判且不看
-                            # 回退标记, 此处提前结会误杀合法多次出现的周期。
-                            _based_on = ((self.project_config.get('pipeline_config', {}) or {})
-                                         .get('custom_based_on') if self.project_config else None)
-                            if logic_mode == 'sequential' or _based_on == 'sequential':
-                                if self._violation_throttle_pass(label):
-                                    self._fire_instant_ng(
-                                        f'步骤回退: [{label}] 在错误位置重复出现')
+                            # 回退重复接「当场提示」档: hint → 触发提示事件 + 拦截不入账;
+                            # none / instant_ng → 原行为 (入账记回退 / 当场结NG)
+                            if self._maybe_fire_repeat_hint(label, logic_mode):
+                                print(f"[StepRegression] {label} 重复出现 → 提示档拦截不入账 "
+                                      f"(current: {self.current_cycle_steps})")
+                            else:
+                                self._cycle_regression = True
+                                self.current_cycle_steps.append(label)
+                                self.last_added_step = label
+                                self._last_step_added_time = current_time
+                                print(f"[StepRegression] {label} already appeared in cycle and not an expected repeat, marking regression (current: {self.current_cycle_steps})")
+                                if self._is_seq_based(logic_mode):
+                                    if self._violation_throttle_pass(label):
+                                        self._fire_instant_ng(
+                                            f'步骤回退: [{label}] 在错误位置重复出现')
                     else:
                         self.current_cycle_steps.append(label)
                         self.last_added_step = label
                         self._last_step_added_time = current_time
+                        self._maybe_enter_early_missing_hold(label)
                 else:
                     # v3.48: combo 判型标签豁免 accept_once 周期内去重 (重复合法累计)
                     if (not self.step_accept_once.get(label)

@@ -215,6 +215,14 @@ v3.4.2 promote 均为此修过补丁）。
   三条路径不再静默丢码，走 `_emit_scan_warning(ch, sn, reason)` → `_last_scan_event`
   带 `scan_warning=True + warn_reason` → 前端 `handleScanToast` 弹警告；scan_pair 重复码
   警告并入同一字段体系（旧 `scan_pair_dup_warning` 字段保留兼容）
+- **v3.56 周期多码采集优先路径**：`_handle_scan` 里 WorkpieceFlow 互斥检查之后、
+  单码 scan_pair/pending_workpiece 之前，若通道当前项目启用了多码采集
+  （`scan_collect_configs.enabled` 且 slots 非空）→ 码进 `ScanCollectEngine.on_scan`
+  槽位状态机（正则分类入槽/组内去重/槽级跨组去重豁免/数量门/收尾结算）并 **return
+  互斥**，不再走单码绑定。结算时借 `fire_external_event_response` 响应面（不动检测
+  周期），收尾码注册 Workpiece，触发 `scan_group_end` 实时导出。排查"扫码没绑工件"
+  先看项目是否启用了多码采集（ScanLog.error_msg 带 `多码采集:` 前缀即走了该路径）；
+  引擎细节见 `debug-scan-collect` skill
 - **v3.51.1 拒码后重亮灯闭环**（治"扫了已 OK 码后灯永灭产线卡死"）：上面三条拒绝
   路径除弹警告外还调 `mes_hooks._notify_scan_rejected(device_id, ch, sn)` →
   `scanner.notify_scan_rejected` 按本次派发通道集合（`_last_dispatch`）聚合，

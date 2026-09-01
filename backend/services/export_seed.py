@@ -189,6 +189,78 @@ _DESC_SCANNER_BYPASS_3LINE = (
 )
 
 
+# ---- 多码采集码组 TXT (v3.56 六和焊接一号工位场景) ----
+# 现场期望版面 (扫码回传/txt格式期望.png):
+#   工装码: H-C0002-557B-2
+#   母排码: M010200519A100005036272608310061
+#   芯子码1: 9260000154409  (15:47:01)
+#   ...
+#   工位: 工位1
+#   时间: 2026-08-26 15:48:45  结果: OK
+# 模板不写死类别名 — 遍历 scan_collect.slots, 收尾槽(工件身份)置顶,
+# 应扫 >1 的槽位自动编号; 每码带扫码时刻 (确认单 6.5 勾选)。
+_TPL_SCAN_GROUP_TXT = """{% for s in scan_collect.slots if s.role == 'closing' -%}
+{% for c in s.codes -%}
+{{ s.label }}: {{ c.code }}
+{% endfor -%}
+{% endfor -%}
+{% for s in scan_collect.slots if s.role != 'closing' -%}
+{% for c in s.codes -%}
+{{ s.label }}{% if s.expected > 1 %}{{ loop.index }}{% endif %}: {{ c.code }}  ({{ c.ts }})
+{% endfor -%}
+{% endfor -%}
+工位: {{ channel.name or '-' }}
+时间: {{ now_date }} {{ now_time }}  结果: {{ 'OK' if scan_collect.is_good else 'NG' }}
+{% if not scan_collect.is_good -%}
+原因: {{ scan_collect.reason }}
+{% for m in scan_collect.missing -%}
+缺扫: {{ m.label }} {{ m.got }}/{{ m.expected }}
+{% endfor -%}
+{% endif -%}
+"""
+
+_DESC_SCAN_GROUP_TXT = (
+    "多码采集码组 TXT (v3.56 一号工位多码扫码场景) —\n"
+    "  一个工件(码组)结算落一个 txt: 收尾码(工件身份)置顶, 其余按类别逐行,\n"
+    "  应扫多个的类别自动编号, 每码带扫码时刻; NG 时附原因与缺扫明细。\n"
+    "\n"
+    "  输出示例 — OK:\n"
+    "    工装码: H-C035-527-5\n"
+    "    母排码: M010200519A100005036272608310061  (15:47:01)\n"
+    "    芯子码1: 9260000154409  (15:47:12)\n"
+    "    芯子码2: 9260000153896  (15:47:20)\n"
+    "    ...\n"
+    "    工位: 工位1\n"
+    "    时间: 2026-08-26 15:48:45  结果: OK\n"
+    "\n"
+    "  输出示例 — NG(少扫):\n"
+    "    (已扫各码逐行...)\n"
+    "    时间: ...  结果: NG\n"
+    "    原因: 少扫判 NG：芯子码缺2\n"
+    "    缺扫: 芯子码 4/6\n"
+    "\n"
+    "  用法:\n"
+    "  1. 先在「MES管理 → 扫码器 → 多码采集」给项目启用多码采集\n"
+    "  2. 新建「实时规则」, 触发事件选「scan_group_end (码组结算)」\n"
+    "  3. 输出目录 = 客户希望的落盘目录 (可与检测数据同目录)\n"
+    "  4. 文件名模板默认「工件码_时间.txt」(工装码跨工件重复, 时间戳保证不覆盖)\n"
+    "  5. 编码默认 utf-8-sig (带 BOM, Excel 直接打开不乱码), 换行 crlf\n"
+    "  6. NG 的码组同样落盘并标记 NG (确认单 4.6); 不想落 NG 可在模板加 if 守门\n"
+    "  7. 多工位场景用「通道过滤」为不同工位分目录建多条规则"
+)
+
+# 选这个模板新建规则时前端自动填 — 客户只需填输出目录。
+_DEFAULT_RULE_SCAN_GROUP = {
+    "trigger_event": "scan_group_end",
+    "input_file_mode": "none",
+    "filename_template":
+        "{{ scan_collect.workpiece_sn }}_{{ now_ymdhms }}.txt",
+    "encoding": "utf-8-sig",                 # Excel 打开不乱码 (确认单 6.6/6.7)
+    "newline": "crlf",                       # Windows 客户
+    "overwrite_policy": "overwrite",
+}
+
+
 # ============================================================
 # 注册表
 # ============================================================
@@ -257,6 +329,15 @@ _BUILTIN_TEMPLATES = [
         "content": _TPL_SCANNER_BYPASS_3LINE,
         "description": _DESC_SCANNER_BYPASS_3LINE,
         "default_rule_config": _DEFAULT_RULE_SCANNER_BYPASS,
+    },
+    {
+        "builtin_id": "builtin_scan_group_txt",
+        "name": "多码采集码组 TXT (一工件一文件, 分类分行)",
+        "format": "txt",
+        "scope": "realtime",
+        "content": _TPL_SCAN_GROUP_TXT,
+        "description": _DESC_SCAN_GROUP_TXT,
+        "default_rule_config": _DEFAULT_RULE_SCAN_GROUP,
     },
 ]
 

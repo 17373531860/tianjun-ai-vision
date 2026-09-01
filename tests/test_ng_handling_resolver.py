@@ -13,7 +13,8 @@ def test_空配置_全默认零差异():
     r = resolve_ng_handling({})
     assert r == {
         'violation': 'none', 'violation_event_id': None,
-        'missing_step': 'ng', 'hold_timeout_s': 120.0, 'hold_event_id': None,
+        'missing_step': 'ng', 'missing_step_early': False,
+        'hold_timeout_s': 120.0, 'hold_event_id': None,
         'short_count': 'ng',
         'gate_enabled': False, 'gate_steps': [], 'gate_event_id': None,
         'gate_escalate_steps': [],

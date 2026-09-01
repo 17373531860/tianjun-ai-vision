@@ -25,6 +25,11 @@
                 <div class="text-gray-300 mb-2">标签字体大小</div>
                 <el-slider v-model="store.detection.labelFontSize" :min="0" :step="1" @change="saveDetectionSettings" />
               </div>
+              <div class="p-3 bg-slate-900 rounded border border-slate-800">
+                <div class="text-gray-300 mb-2">监控横幅字号</div>
+                <el-slider v-model="store.detection.overlayBannerFontSize" :min="12" :max="48" :step="1" @change="saveDetectionSettings" />
+                <div class="text-xs text-gray-500 mt-1">切步数量门 / 挂起等补等叠加横幅；合格/NG/自定义事件提示框各自有独立字号</div>
+              </div>
               <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
                 <span class="text-gray-300">显示置信度</span>
                 <el-switch v-model="store.detection.showConfidence" @change="saveDetectionSettings" />

@@ -4,6 +4,13 @@
 > 行号锚定当前 `tianjun-main` 工作区源码，后续改动以代码为准。
 > 2026-07-17 v3.41 复核：补账 v3.33~v3.41 变更（数据/导出/项目域），受影响小节的行数与行号已刷新；插件系统（`backend/plugin_system/`）自基线零变更，第六、七节原样有效。
 >
+> **v3.56 补账（2026-09-01，多码采集数据/导出面）**：
+> - **新文件 `models/scan_collect_models.py`（2 表，库表总数 54→56）**：`ScanCollectConfig`（scan_collect_configs：project_id 唯一 + enabled + config JSON——slots 数组每槽 {key,label,count,regex,role,dedup_cross_group,on_overflow} + 全局策略 sequence_fallback/dedup_in_group/dedup_cross_group/settle_on/on_overflow/on_unmatched/timeout_sec/event_ok_id/event_ng_id/ng_pending/vision_gate/vision_window_sec/vision_missing）；`ScanCollectRecord`（scan_collect_records：group_id/channel_id/project_id/slot_key/slot_label/code/seq/status[scanned|deleted|void]/group_result[ok|ng_missing|ng_timeout|ng_vision|void]/workpiece_id/scanned_at/settled_at，索引 group_id/code/workpiece_id）。新表走 create_all 自动建，无迁移。
+> - `services/export_realtime.py`：新增 `dispatch_scan_group_export`——查 `trigger_event == "scan_group_end"` 规则，上下文挂 `scan_collect` 段（结算摘要 + 按槽位分组视图 slots[].codes，模板可按扫码顺序或类别遍历），channel/project 过滤与 skip 台账同既有触发器。
+> - `api/export_realtime.py` + `frontend Data/RealtimeRulesDialog.vue`：触发事件下拉露出 `scan_group_end`（多码采集码组结算）。
+> - `services/export_context.py` / `export_field_registry.py`：字段中央仓库补 `scan_collect.*` 分组（group_id/result/workpiece_sn/total/missing/slots/codes 等）。
+> - `alembic/env.py`：补 scan_collect 模型 import（PG 基线迁移含新表）。
+>
 > **v3.47 补账（2026-08-07）**：
 > - `models/models.py` `Model` 表：加 `source`（'local'/'yolovision'，NULL 视同 local）+ `meta` JSON（训练分析 x-analysis / 包 provenance），迁移 `m0008_model_interconnect_meta`（PG 走 JSONB 分道）；`schemas/model.py` 同步透出
 > - `plugin_system/registry.py`：**F8 插件导出字段 registry 落地**（代码注释标 v3.46，实际随 v3.47 发版）——`registry.export_fields.register(fields, provider)`，字段 path 强制 `plugin.<customer_code_snake>.` 前缀（连字符转下划线），provider 签名 `(db, ctx) -> dict`，重复 register 整体替换

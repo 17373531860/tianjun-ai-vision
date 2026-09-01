@@ -17,8 +17,8 @@ import requests
 from .conftest import E2E_PREFIX
 
 MODE_CARDS = {
-    "sequential": ["结算方式", "顺序模式 - 步骤排序", "NG 判定与处置", "结算冷却"],
-    "detection": ["检测模式 - 需检测的步骤", "NG 判定与处置"],
+    "sequential": ["结算方式", "超时结算", "顺序模式 - 步骤排序", "NG 判定与处置", "结算冷却"],
+    "detection": ["检测模式 - 需检测的步骤", "超时结算", "NG 判定与处置"],
     "custom": ["自定义模式 - 条件配置", "周期性强制动作", "NG 判定与处置"],
     "tracking": ["跟踪模式 - 物品清点配置", "结算冷却"],
     "per_item": ["逐件覆盖 — 通用参数", "逐件覆盖 — 每个步骤的角色"],
@@ -63,6 +63,30 @@ def test_五模式专属卡片按条件渲染(page, base_url, api_url):
         body = _open_logic_tab(page, base_url, name)
         for c in cards:
             assert c in body, f"{mode} 模式应渲染卡片「{c}」"
+
+
+def test_检测模式超时结算_可见可配_保存落库(page, base_url, api_url):
+    """2026-08-21 现场缺口回归: 空闲/周期超时此前挂在仅顺序模式渲染的
+    「结算方式」卡里, 检测模式(缸体判型)无从配置。拆出「超时结算」独立卡后,
+    检测模式必须可见可改且保存落库到 pipeline_config。"""
+    pid, name = _mk_project(api_url, "detection", steps=[
+        {"id": 1, "label": "区A", "name": "区域A", "enabled": True},
+    ])
+    body = _open_logic_tab(page, base_url, name)
+    assert "超时结算" in body, "检测模式应渲染「超时结算」卡"
+    page.screenshot(path="/tmp/t4_timeout_card.png")
+    card = page.locator(".el-card:has-text('超时结算')").first
+    inputs = card.locator(".el-input-number input")
+    inputs.nth(0).fill("30")     # 空闲超时
+    inputs.nth(1).fill("300")    # 周期超时
+    page.locator("button:has-text('保存配置')").click()
+    time.sleep(2.0)
+    detail = requests.get(f"{api_url}/api/v1/projects/{pid}", timeout=5).json()
+    pc = detail.get("pipeline_config") or {}
+    assert pc.get("idle_timeout_seconds") == 30, \
+        f"空闲超时应落库 30, 实际 {pc.get('idle_timeout_seconds')}"
+    assert pc.get("cycle_max_duration") == 300, \
+        f"周期超时应落库 300, 实际 {pc.get('cycle_max_duration')}"
 
 
 def test_sequential序列编辑_保存落库(page, base_url, api_url):
@@ -565,3 +589,80 @@ def test_legacy收尾防呆键_迁移为ng_handling回显(page, base_url, api_ur
     assert ngh.get("gate_enabled") is True and ngh.get("gate_steps") == ["封箱"], f"实际 {ngh}"
     assert ngh.get("short_count") == "ack", f"legacy 补数量应迁为 ack, 实际 {ngh}"
     assert ngh.get("gate_event_id") == 4 and ngh.get("hold_event_id") == 4, f"实际 {ngh}"
+
+
+def test_缺步提前发现_挂起档可见_保存落库(page, base_url, api_url):
+    """SY8 收编: 缺步骤=挂起等补做时露出「缺步提前发现」开关, 保存进 ng_handling。"""
+    pid, name = _mk_project(api_url, "custom")
+    requests.put(f"{api_url}/api/v1/projects/{pid}", json={
+        "pipeline_config": {"custom_based_on": "sequential"},
+        "steps_config": [
+            {"id": 1, "label": "放油嘴包", "enabled": True},
+            {"id": 2, "label": "封箱", "enabled": True},
+        ],
+    }, timeout=5).raise_for_status()
+    _open_logic_tab(page, base_url, name)
+    card = page.locator(".el-card:has-text('NG 判定与处置')").first
+    card.locator("div.flex:has-text('结算缺步骤时') .el-select").first.click()
+    time.sleep(0.5)
+    page.locator(".el-select-dropdown__item:visible", has_text="挂起等补做").first.click()
+    time.sleep(0.4)
+    assert "缺步提前发现" in card.inner_text(), "挂起档应露出「缺步提前发现」"
+    row = card.locator("div.flex:has-text('缺步提前发现')").first
+    row.locator(".el-switch").first.click()
+    time.sleep(0.3)
+    page.locator("button:has-text('保存配置')").click()
+    time.sleep(2.0)
+    pc = (requests.get(f"{api_url}/api/v1/projects/{pid}", timeout=5).json()
+          .get("pipeline_config") or {})
+    ngh = pc.get("ng_handling") or {}
+    assert ngh.get("missing_step") == "hold"
+    assert ngh.get("missing_step_early") is True, f"缺步提前发现应落库 True, 实际 {ngh}"
+
+
+def test_装箱清点取值三开关与虚拟步骤_可见_保存落库(page, base_url, api_url):
+    """SY8 收编: 取值锚点 / max-latest 口径 / 看全下修 / 整箱虚拟步骤。"""
+    pid, name = _mk_project(api_url, "custom")
+    requests.put(f"{api_url}/api/v1/projects/{pid}", json={
+        "pipeline_config": {
+            "custom_based_on": "sequential",
+            "custom_mixed_with": "tracking",
+            "custom_mix_container_label": "托盘",
+            "custom_mix_container_confirm_by_action": True,
+            "custom_mix_container_action_label": "放托盘",
+            "custom_mix_container_stable_min_frames": 6,
+            "custom_mix_container_slot_check_label": "空槽",
+            "custom_mix_container_slot_total": 24,
+        },
+        "steps_config": [
+            {"id": 1, "label": "放托盘", "enabled": True},
+            {"id": 2, "label": "滑块", "enabled": True, "detect_role": "item"},
+            {"id": 3, "label": "托盘", "enabled": True},
+            {"id": 4, "label": "空槽", "enabled": True},
+        ],
+    }, timeout=5).raise_for_status()
+    body = _open_logic_tab(page, base_url, name, tab="装箱清点")
+    page.screenshot(path="/tmp/t4_mix_box_tab.png")
+    for label in ("取值锚点", "稳定值取值口径", "看全下修", "整箱装箱合并为一步"):
+        assert label in body, f"装箱清点应渲染「{label}」"
+    _fill_row_number(page, "取值锚点", 0, 1.5)
+    page.locator("div.flex:has-text('稳定值取值口径') .el-radio-button:has-text('取最近')").first.click()
+    for label in ("看全下修", "整箱装箱合并为一步"):
+        row = page.locator(f".mix-row:has-text('{label}')").first
+        row.evaluate("el => el.scrollIntoView({block:'center'})")
+        row.locator(".el-switch").first.evaluate("el => el.click()")
+    time.sleep(0.3)
+    page.locator("input[placeholder*='放滑块']").fill("放滑块")
+    page.locator("button:has-text('保存配置')").click()
+    time.sleep(2.0)
+    pc = (requests.get(f"{api_url}/api/v1/projects/{pid}", timeout=5).json()
+          .get("pipeline_config") or {})
+    assert pc.get("custom_mix_container_stable_anchor_s") == 1.5, \
+        f"取值锚点应落库 1.5, 实际 {pc.get('custom_mix_container_stable_anchor_s')}"
+    assert pc.get("custom_mix_container_stable_pick") == "latest", \
+        f"口径应落库 latest, 实际 {pc.get('custom_mix_container_stable_pick')}"
+    assert pc.get("custom_mix_container_slot_verified_drop") is True, \
+        f"看全下修应落库 True, 实际 {pc.get('custom_mix_container_slot_verified_drop')}"
+    assert pc.get("custom_mix_container_virtual_step") is True
+    assert pc.get("custom_mix_container_virtual_step_label") == "放滑块", \
+        f"虚拟步骤名应落库, 实际 {pc.get('custom_mix_container_virtual_step_label')}"

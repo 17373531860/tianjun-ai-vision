@@ -313,6 +313,30 @@ class StepStatsMixin:
             frame_detected_labels -= _strip
             just_confirmed_labels -= _strip
 
+            # 容器虚拟步骤: 整箱达标把虚拟标签注入稳定标签流,
+            # 当作一个已确认出现的步骤走常规状态机 (严格顺序守门/缺步提前发现/
+            # 结算期望全部自然生效)。达标由容器账驱动 (booked ≥ 目标), 与数量门
+            # 同口径。
+            # 结束态: 只注入到"入周期"为止 — 入周期后停止注入, 下一帧走常规
+            # 消失路径记完成, 与普通步骤一致 (状态翻已检测/计时停止)。
+            _virt = getattr(_custom_mix, 'virtual_step_label', '') or ''
+            if _virt:
+                try:
+                    if (_virt not in self.current_cycle_steps
+                            and _custom_mix.container_box_complete()):
+                        detected_labels.add(_virt)
+                        frame_detected_labels.add(_virt)
+                    elif (_virt not in self.current_cycle_steps
+                          and self.current_cycle_steps
+                          and _custom_mix.container_activity()):
+                        # 虚拟步骤要整箱达标才"出现", 跳过前置直接装滑块要到末盘
+                        # 才被序列守门发现。容器一开始干活 (在位盘有货/已有盘入账)
+                        # 即视同该步骤已开始, 当场做缺步提前检查 (开关/模式守门
+                        # 在被调方, 关缺步提前发现或非顺序型 = 零差异)。
+                        self._maybe_enter_early_missing_hold(_virt, appended=False)
+                except Exception as _virt_e:
+                    print(f"[CustomMix] 虚拟步骤注入失败 (隔离): {_virt_e}")
+
             # 频闪诊断 (常驻低开销 + 出事自动抓现场): 记录监视标签每帧在场/置信度,
             # 某标签 2s 内在场翻转过频 → 自动转储最近现场到文件, 供事后定位真因。
             try:
@@ -450,6 +474,12 @@ class StepStatsMixin:
         # 注意: detected_labels 已经过滤了 min_frames 且不含本帧未到的标签,
         # 取交集 enabled_labels 进一步限制在"项目配置启用"的步骤范围内.
         meaningful_in_frame = detected_labels & enabled_labels
+        # 容器虚拟步骤不当规则 B 的打断者 — 它是"整箱达标"状态的持续注入
+        # (达标后到入周期每帧在场), 不是"新发生的操作推进"。
+        _mix_v = getattr(self, '_custom_mix', None)
+        _virt_lbl = (getattr(_mix_v, 'virtual_step_label', '') or '') if _mix_v else ''
+        if _virt_lbl:
+            meaningful_in_frame -= {_virt_lbl}
 
         _pending = getattr(self, '_currently_pending_labels', set())
         for label, last_time in list(self.step_last_seen.items()):

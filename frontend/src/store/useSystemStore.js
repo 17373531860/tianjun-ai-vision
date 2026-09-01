@@ -8,6 +8,7 @@ const defaultDetection = {
   boxColorNG: '#FF0000',        // NG 红色
   boxLineWidth: 2,              // 线宽
   labelFontSize: 14,            // 标签字体大小
+  overlayBannerFontSize: 14,    // 监控叠加横幅字号 (切步数量门/挂起等补; 默认=text-sm 零差异)
   showConfidence: true,         // 显示置信度
   
   // NG reason display
@@ -104,6 +105,9 @@ export const useSystemStore = defineStore('system', {
       },
       monitor: {
         stepStrip: true,
+        // v3.55.x: 混合模式物品校验面板 (装箱清点三分框/混合逐件)。
+        // 项目未配 custom_mix 时本开关无感 (面板本就不渲染); 配了也可在此整体隐藏。
+        mixPanel: true,
         statsPanel: true,
         defectChart: true,
         capacityChart: true,

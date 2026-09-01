@@ -5,6 +5,8 @@ import {
   regionEventRuleSteps,
   resolveLogicMode,
   resolveModePanelKind,
+  resolveStepsToShow,
+  projectLikeForChannelSteps,
   buildChannelStepViews,
 } from '../monitorModes';
 
@@ -244,5 +246,139 @@ describe('buildChannelStepViews — SOP 缩略图与隐藏标签', () => {
       },
     }, null, chState());
     expect(r.hiddenLabels).toEqual(new Set(['a']));
+  });
+});
+
+const trapSteps = [
+  { id: 1, label: '检查外观', enabled: true },
+  { id: 2, label: '未进序列', enabled: true },
+];
+
+describe('resolveStepsToShow', () => {
+  it('sequential 按 sequence 排序，重复 label 保留，未进序列的不出现', () => {
+    const steps = resolveStepsToShow({
+      logic_mode: 'sequential',
+      steps_config: trapSteps,
+      pipeline_config: { sequence_order: [{ step_id: 1 }, { step_id: 1 }] },
+    });
+    expect(steps.map(s => s.label)).toEqual(['检查外观', '检查外观']);
+  });
+
+  it('empty sequence 仍摊 enabled 步骤（旧 mock / 缺键语义）', () => {
+    const steps = resolveStepsToShow({
+      logic_mode: 'sequential',
+      steps_config: [
+        { id: 1, label: 'a', enabled: true },
+        { id: 2, label: 'b', enabled: false },
+      ],
+      pipeline_config: {},
+    });
+    expect(steps.map(s => s.label)).toEqual(['a']);
+  });
+
+  it('detection 按 detection_steps 映射', () => {
+    const steps = resolveStepsToShow({
+      logic_mode: 'detection',
+      steps_config: trapSteps,
+      pipeline_config: { detection_steps: [1, 1] },
+    });
+    expect(steps.map(s => s.label)).toEqual(['检查外观', '检查外观']);
+  });
+
+  it('custom sequential 走 custom_sequence_order', () => {
+    const steps = resolveStepsToShow({
+      logic_mode: 'custom',
+      custom_based_on: 'sequential',
+      steps_config: trapSteps,
+      pipeline_config: { custom_sequence_order: [{ step_id: 1 }] },
+    });
+    expect(steps.map(s => s.label)).toEqual(['检查外观']);
+  });
+
+  it('custom 条件模式只展示 sequence 里出现的步骤', () => {
+    const steps = resolveStepsToShow({
+      logic_mode: 'custom',
+      custom_based_on: 'none',
+      steps_config: trapSteps,
+      pipeline_config: { custom_conditions: [{ sequence: [1] }] },
+    });
+    expect(steps.map(s => s.label)).toEqual(['检查外观']);
+  });
+
+  it('滤掉 backup_for', () => {
+    const steps = resolveStepsToShow({
+      logic_mode: 'sequential',
+      steps_config: [
+        { id: 1, label: '主', enabled: true },
+        { id: 2, label: '替', enabled: true, backup_for: 1 },
+      ],
+    });
+    expect(steps.map(s => s.label)).toEqual(['主']);
+  });
+});
+
+describe('projectLikeForChannelSteps — 禁止 fallback sequence 串项目', () => {
+  it('poll 已有 project_config 时不用兜底项目的 sequence', () => {
+    const like = projectLikeForChannelSteps(
+      {
+        logic_mode: 'sequential',
+        steps_config: trapSteps,
+        pipeline_config: { sequence_order: [] },
+      },
+      {
+        logic_mode: 'sequential',
+        steps_config: [{ id: 9, label: 'navbar-only', enabled: true }],
+        pipeline_config: { sequence_order: [{ step_id: 9 }] },
+      },
+    );
+    expect(like.sequence_order).toEqual([]);
+    expect(resolveStepsToShow(like).map(s => s.label)).toEqual(['检查外观', '未进序列']);
+  });
+
+  it('poll 缺 steps_config 时可用兜底步骤，但仍用 poll 的 sequence', () => {
+    const like = projectLikeForChannelSteps(
+      {
+        logic_mode: 'sequential',
+        pipeline_config: { sequence_order: [{ step_id: 1 }] },
+      },
+      { steps_config: trapSteps },
+    );
+    expect(resolveStepsToShow(like).map(s => s.label)).toEqual(['检查外观']);
+  });
+});
+
+describe('buildChannelStepViews — sequence 建卡', () => {
+  it('按 sequence 建卡：排序、重复 label 两张卡、陷阱步骤不出现', () => {
+    const r = buildChannelStepViews({
+      detections: [],
+      project_config: {
+        logic_mode: 'sequential',
+        steps_config: trapSteps,
+        pipeline_config: { sequence_order: [{ step_id: 1 }, { step_id: 1 }] },
+      },
+    }, {
+      steps_config: [{ id: 9, label: 'navbar-only', enabled: true }],
+      pipeline_config: { sequence_order: [{ step_id: 9 }] },
+    }, chState());
+    expect(r.tableData.map(x => x.label)).toEqual(['检查外观', '检查外观']);
+    expect(r.sopSteps.map(x => x.name)).toEqual(['检查外观', '检查外观']);
+  });
+
+  it('poll 空 sequence 不吃兜底项目的 sequence', () => {
+    const r = buildChannelStepViews({
+      detections: [],
+      project_config: {
+        logic_mode: 'sequential',
+        steps_config: [
+          { id: 1, label: 'poll-a', enabled: true },
+          { id: 2, label: 'poll-b', enabled: true },
+        ],
+        pipeline_config: {},
+      },
+    }, {
+      steps_config: [{ id: 9, label: 'navbar-only', enabled: true }],
+      pipeline_config: { sequence_order: [{ step_id: 9 }] },
+    }, chState());
+    expect(r.tableData.map(x => x.label)).toEqual(['poll-a', 'poll-b']);
   });
 });

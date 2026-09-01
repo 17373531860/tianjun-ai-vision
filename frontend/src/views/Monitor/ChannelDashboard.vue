@@ -128,7 +128,7 @@
       <button type="button" class="control-button bg-emerald-500 hover:bg-emerald-400" :disabled="readonly || !hasProject || channelData?.isDetecting" data-testid="single-channel-start" @click="$emit('start')">开始</button>
       <button type="button" class="control-button bg-red-500 hover:bg-red-400" :disabled="readonly || !channelData?.isRunning" data-testid="single-channel-stop" @click="$emit('stop')">停止</button>
       <button type="button" class="control-button bg-yellow-600 hover:bg-yellow-500" :disabled="readonly || !channelData?.isDetecting" data-testid="single-channel-standby" @click="$emit('standby')">待机</button>
-      <button type="button" class="control-button bg-cyan-500 hover:bg-cyan-400" :disabled="readonly || channelData?.isDetecting" data-testid="single-channel-reset" @click="$emit('reset')">清零</button>
+      <button type="button" class="control-button bg-cyan-500 hover:bg-cyan-400" :disabled="readonly" data-testid="single-channel-reset" @click="$emit('reset')">清零</button>
     </div>
   </aside>
 </template>

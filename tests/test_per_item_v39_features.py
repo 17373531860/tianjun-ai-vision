@@ -365,7 +365,7 @@ class TestPatch5_MultiLabelItem:
         _feed(vsm, _frame_18_screws(), repeat=6, vclock=vclock)
         assert vsm._per_item_session.cycle_active
 
-        step_tuhei = next(s for s in vsm._per_item_steps if s.action_label == '涂黑')
+        step_tuhei = next(s for s in vsm._per_item_steps if '涂黑' in s.action_label)
         # 涂黑步骤的个体表应锁定 18 颗 (14 + 4)
         assert len(step_tuhei.items) == 18, \
             f"多标签 OR 应锁定 18 颗, 实际 {len(step_tuhei.items)}"
@@ -376,7 +376,7 @@ class TestPatch5_MultiLabelItem:
         vsm = _make_vsm(cfg)
         _feed(vsm, _frame_18_screws(), repeat=6, vclock=vclock)
 
-        step5n = next(s for s in vsm._per_item_steps if s.action_label == '扭5N螺丝')
+        step5n = next(s for s in vsm._per_item_steps if '扭5N螺丝' in s.action_label)
         # 内部归一化成 tuple
         assert isinstance(step5n.item_label, tuple)
         assert step5n.item_label == ('5N螺丝',)

@@ -969,3 +969,19 @@ def test_resolve_combo_guard_violation_swaps_banner_and_event():
                "label": "区B", "actual": 1, "message": "[区B] 已补齐"})
     assert mgr2._combo_guard_last["kind"] == "resolved"
     assert mgr2.events == []
+
+
+def test_clear_step_runtime_state_resets_positional_engine():
+    """2026-08-24 现场恶性循环回归: 周期超时强制 NG (_force_timeout_ng) /
+    停止-启动 / 切项目都走 _clear_step_runtime_state —— 位置计数引擎必须随之
+    清池。此前只在正常结算路径 (_settle_*_cycle) 清, 超时强制结算后旧工件的
+    残留计数会累加到新工件头上 (现场视频: 盖瓦 5→9 报乱序, 逐件恶化)。"""
+    from backend.api.source import VideoSourceManager
+    from backend.api.source_combo_positional import ComboPositionalCounter
+    vsm = VideoSourceManager(channel_id=0)
+    eng = ComboPositionalCounter(["盖瓦"], min_consecutive=1)
+    eng.feed([_det_at("盖瓦", 0.1, 0.1)])
+    assert eng.counts() == {"盖瓦": 1}
+    vsm._combo_positional = eng
+    vsm._clear_step_runtime_state()
+    assert eng.counts() == {}, "强制结算/启停清场必须清位置计数池, 否则旧账压新件"

@@ -1183,6 +1183,17 @@
     "title": "ClearManualResponse",
     "type": "object"
    },
+   "ClearRequest": {
+    "properties": {
+     "channel_id": {
+      "default": 0,
+      "title": "Channel Id",
+      "type": "integer"
+     }
+    },
+    "title": "ClearRequest",
+    "type": "object"
+   },
    "ClusterConfigUpdate": {
     "properties": {
      "box_scan_interval_sec": {
@@ -1372,6 +1383,114 @@
      "command"
     ],
     "title": "CommandRequest",
+    "type": "object"
+   },
+   "ConfigPayload": {
+    "properties": {
+     "dedup_cross_group": {
+      "default": "off",
+      "pattern": "^(off|reject|ng_alarm)$",
+      "title": "Dedup Cross Group",
+      "type": "string"
+     },
+     "dedup_in_group": {
+      "default": "ng_alarm",
+      "pattern": "^(ng_alarm|reject)$",
+      "title": "Dedup In Group",
+      "type": "string"
+     },
+     "enabled": {
+      "default": false,
+      "title": "Enabled",
+      "type": "boolean"
+     },
+     "event_ng_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": 2,
+      "title": "Event Ng Id"
+     },
+     "event_ok_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": 1,
+      "title": "Event Ok Id"
+     },
+     "ng_pending": {
+      "default": false,
+      "title": "Ng Pending",
+      "type": "boolean"
+     },
+     "on_overflow": {
+      "default": "reject",
+      "pattern": "^(reject|ng_alarm)$",
+      "title": "On Overflow",
+      "type": "string"
+     },
+     "on_unmatched": {
+      "default": "reject",
+      "pattern": "^(reject|ng_alarm)$",
+      "title": "On Unmatched",
+      "type": "string"
+     },
+     "sequence_fallback": {
+      "default": true,
+      "title": "Sequence Fallback",
+      "type": "boolean"
+     },
+     "settle_on": {
+      "default": "closing",
+      "pattern": "^(closing|all_filled)$",
+      "title": "Settle On",
+      "type": "string"
+     },
+     "slots": {
+      "default": [],
+      "items": {
+       "$ref": "#/components/schemas/SlotDef"
+      },
+      "title": "Slots",
+      "type": "array"
+     },
+     "timeout_sec": {
+      "default": 0,
+      "maximum": 86400.0,
+      "minimum": 0.0,
+      "title": "Timeout Sec",
+      "type": "number"
+     },
+     "vision_gate": {
+      "default": false,
+      "title": "Vision Gate",
+      "type": "boolean"
+     },
+     "vision_missing": {
+      "default": "ignore",
+      "pattern": "^(ignore|ng)$",
+      "title": "Vision Missing",
+      "type": "string"
+     },
+     "vision_window_sec": {
+      "default": 300,
+      "maximum": 86400.0,
+      "minimum": 0.0,
+      "title": "Vision Window Sec",
+      "type": "number"
+     }
+    },
+    "title": "ConfigPayload",
     "type": "object"
    },
    "ConfigRequest": {
@@ -8007,6 +8126,24 @@
     "title": "RemediationRedoInput",
     "type": "object"
    },
+   "RemoveCodeRequest": {
+    "properties": {
+     "channel_id": {
+      "default": 0,
+      "title": "Channel Id",
+      "type": "integer"
+     },
+     "record_id": {
+      "title": "Record Id",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "record_id"
+    ],
+    "title": "RemoveCodeRequest",
+    "type": "object"
+   },
    "RenderRequest": {
     "properties": {
      "channel_id": {
@@ -8599,7 +8736,7 @@
      },
      "trigger_event": {
       "default": "cycle_end",
-      "pattern": "^(cycle_end|session_end|box_complete)$",
+      "pattern": "^(cycle_end|session_end|box_complete|scan_group_end)$",
       "title": "Trigger Event",
       "type": "string"
      }
@@ -9417,7 +9554,7 @@
      "trigger_event": {
       "anyOf": [
        {
-        "pattern": "^(cycle_end|session_end|box_complete)$",
+        "pattern": "^(cycle_end|session_end|box_complete|scan_group_end)$",
         "type": "string"
        },
        {
@@ -11055,6 +11192,56 @@
      "station_id"
     ],
     "title": "SlaveHeartbeat",
+    "type": "object"
+   },
+   "SlotDef": {
+    "properties": {
+     "count": {
+      "default": 1,
+      "maximum": 99.0,
+      "minimum": 1.0,
+      "title": "Count",
+      "type": "integer"
+     },
+     "dedup_cross_group": {
+      "default": "inherit",
+      "pattern": "^(inherit|off|reject|ng_alarm)$",
+      "title": "Dedup Cross Group",
+      "type": "string"
+     },
+     "key": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Key",
+      "type": "string"
+     },
+     "label": {
+      "default": "",
+      "title": "Label",
+      "type": "string"
+     },
+     "on_overflow": {
+      "default": "inherit",
+      "pattern": "^(inherit|reject|ng_alarm)$",
+      "title": "On Overflow",
+      "type": "string"
+     },
+     "regex": {
+      "default": "",
+      "title": "Regex",
+      "type": "string"
+     },
+     "role": {
+      "default": "",
+      "pattern": "^(|closing)$",
+      "title": "Role",
+      "type": "string"
+     }
+    },
+    "required": [
+     "key"
+    ],
+    "title": "SlotDef",
     "type": "object"
    },
    "SmsAliyunPayload": {
@@ -27037,6 +27224,345 @@
     ]
    }
   },
+  "/api/v1/scan-collect/clear": {
+   "post": {
+    "operationId": "clear_group_api_v1_scan_collect_clear_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ClearRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Clear Group",
+    "tags": [
+     "ScanCollect",
+     "ScanCollect"
+    ]
+   }
+  },
+  "/api/v1/scan-collect/config": {
+   "get": {
+    "operationId": "get_config_api_v1_scan_collect_config_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "project_id",
+      "required": true,
+      "schema": {
+       "title": "Project Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Get Config",
+    "tags": [
+     "ScanCollect",
+     "ScanCollect"
+    ]
+   },
+   "put": {
+    "operationId": "put_config_api_v1_scan_collect_config_put",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "project_id",
+      "required": true,
+      "schema": {
+       "title": "Project Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ConfigPayload"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Put Config",
+    "tags": [
+     "ScanCollect",
+     "ScanCollect"
+    ]
+   }
+  },
+  "/api/v1/scan-collect/records": {
+   "get": {
+    "operationId": "list_records_api_v1_scan_collect_records_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "workpiece_id",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Workpiece Id"
+      }
+     },
+     {
+      "in": "query",
+      "name": "group_id",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Group Id"
+      }
+     },
+     {
+      "in": "query",
+      "name": "include_deleted",
+      "required": false,
+      "schema": {
+       "default": false,
+       "title": "Include Deleted",
+       "type": "boolean"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 200,
+       "maximum": 1000,
+       "minimum": 1,
+       "title": "Limit",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "List Records",
+    "tags": [
+     "ScanCollect",
+     "ScanCollect"
+    ]
+   }
+  },
+  "/api/v1/scan-collect/remove-code": {
+   "post": {
+    "operationId": "remove_code_api_v1_scan_collect_remove_code_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RemoveCodeRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Remove Code",
+    "tags": [
+     "ScanCollect",
+     "ScanCollect"
+    ]
+   }
+  },
+  "/api/v1/scan-collect/resolve-ng": {
+   "post": {
+    "description": "v3.56.1 NG 挂起人工放行: 挂起组按 NG 结算导出, 开放下一工件。",
+    "operationId": "resolve_ng_api_v1_scan_collect_resolve_ng_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ClearRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Resolve Ng",
+    "tags": [
+     "ScanCollect",
+     "ScanCollect"
+    ]
+   }
+  },
+  "/api/v1/scan-collect/state": {
+   "get": {
+    "operationId": "get_state_api_v1_scan_collect_state_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "channel",
+      "required": false,
+      "schema": {
+       "default": 0,
+       "title": "Channel",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Get State",
+    "tags": [
+     "ScanCollect",
+     "ScanCollect"
+    ]
+   }
+  },
   "/api/v1/scanner/check-container-mode": {
    "get": {
     "description": "v3.4.0 前端切到 scan_mode='D' 时调本接口校验绑定工位是否容器模式项目.\n不是 → 前端弹警告 + 自动回退到 A.",
@@ -30674,7 +31200,7 @@
   },
   "/api/v1/source/detection/reset-stats": {
    "post": {
-    "description": "重置统计数据（计数器、步骤计数等），同时结束当前会话",
+    "description": "重置统计数据.\n\nscope=all   (默认): 全部清零 — 结束会话 + 全量重置 (计数器/步骤/周期/容器账),\n    在途包装工单一并作废 (落库留 aborted 审计行), 面板回\"等扫工单\"白板\nscope=cycle: 仅清理本周期 — 丢弃在制周期就地重来: OK/NG 计数、会话、\n    历史统计一概不动; 解除定格/挂起 (不落 NG)、清容器箱账; 包装流当前箱\n    回退到「等扫箱标签」态 (工单与已完成箱数保留, 同一张箱标签可重扫)。",
     "operationId": "reset_detection_stats_api_v1_source_detection_reset_stats_post",
     "parameters": [
      {
@@ -30685,6 +31211,16 @@
        "default": 0,
        "title": "Channel",
        "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "scope",
+      "required": false,
+      "schema": {
+       "default": "all",
+       "title": "Scope",
+       "type": "string"
       }
      }
     ],
@@ -35185,7 +35721,7 @@
   },
   "/api/v1/workstations/{channel_id}/gpu": {
    "post": {
-    "description": "Assign a GPU device to a specific workstation/channel.",
+    "description": "Assign a GPU device to a specific workstation/channel.\n\n运行态 + 落盘双写: 只改 mgr.device 的话, 激活项目 / 重启后端都会按\nworkstation_config.json 里的旧 gpu_device 重载模型, 用户钉的设备静默丢失\n(2026-08 两次实测: 钉 mps 后一激活项目就弹回 cpu, 推理 9fps)。\n落盘走 save_channel_source(merge=True) 分段写入, 不碰该工位其他字段。",
     "operationId": "set_channel_gpu_api_v1_workstations__channel_id__gpu_post",
     "parameters": [
      {

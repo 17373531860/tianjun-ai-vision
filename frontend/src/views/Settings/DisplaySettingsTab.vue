@@ -145,6 +145,12 @@
                 <el-switch v-model="store.display.monitor.stepStrip" @change="saveDisplaySettings" />
               </div>
               <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
+                <el-tooltip content="混合跟踪(装箱清点)/混合逐件项目的物品校验面板。仅项目配置了装箱清点时出现；关闭后单工位、多工位列与放大态一并隐藏。" placement="top">
+                  <span class="text-gray-300">物品校验面板</span>
+                </el-tooltip>
+                <el-switch v-model="store.display.monitor.mixPanel" @change="saveDisplaySettings" />
+              </div>
+              <div class="flex items-center justify-between p-3 bg-slate-900 rounded border border-slate-800">
                 <span class="text-gray-300">右侧统计数据面板</span>
                 <el-switch v-model="store.display.monitor.statsPanel" @change="saveDisplaySettings" />
               </div>

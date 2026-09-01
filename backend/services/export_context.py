@@ -1324,3 +1324,28 @@ def build_system_context(db: DBSession,
     _fill_app_display_license_system(ctx, db, license_payload)
     _fill_plugin_sections(ctx, db)
     return ctx
+
+
+# ============================================================
+# 入口 4: 多码采集码组上下文 (v3.56, trigger_event='scan_group_end')
+# ============================================================
+
+def build_scan_group_context(db: DBSession,
+                             channel_id: int,
+                             project_id: Optional[int],
+                             scan_collect: Dict[str, Any],
+                             license_payload: Optional[Dict[str, Any]] = None,
+                             ) -> Dict[str, Any]:
+    """码组结算上下文：系统级 + project.* + channel.* + scan_collect.*。
+
+    scan_collect 段由 ScanCollectEngine 结算时构建（summary + slots 视图），
+    这里原样挂载，字段面见 export_field_registry._GROUP_SCAN_COLLECT_FIELDS。
+    """
+    ctx = _empty_context()
+    _fill_app_display_license_system(ctx, db, license_payload)
+    _fill_project(ctx, db, project_id)
+    _fill_channel(ctx, channel_id)
+    ctx["scan_collect"] = dict(scan_collect or {})
+    ctx["scan_collect"].setdefault("channel_id", channel_id)
+    _fill_plugin_sections(ctx, db)
+    return ctx

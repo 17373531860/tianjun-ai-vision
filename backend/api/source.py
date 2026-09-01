@@ -1494,6 +1494,13 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         _combo_guard = getattr(self, '_combo_guard', None)
         if _combo_guard is not None:
             _combo_guard.reset()
+        # 2026-08-24 现场恶性循环修复: positional 位置计数引擎此前只在正常结算路径
+        # (_settle_*_cycle) 复位, 周期超时 _force_timeout_ng / 停止 / 切项目走本清理时
+        # 已入账计数原样残留 → 下一工件被旧账压成"超标/乱序"NG, 工人修不了再超时,
+        # 残留越滚越多 (捷昌挺柱线 8-24 视频复现)。与 guard/hold 同点清理。
+        _combo_pos = getattr(self, '_combo_positional', None)
+        if _combo_pos is not None:
+            _combo_pos.reset()
         # v3.49 二期: 结算挂起等补随运行时清理终结 (停止/切项目/强制结算)
         if getattr(self, '_combo_settle_hold', None) is not None:
             self._combo_settle_hold = None
@@ -1878,7 +1885,70 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         gc.collect()
         
         print("[Stats] fully reset (including all detection states)")
-    
+
+    def reset_current_cycle(self):
+        """监控页「仅清理本周期」: 就地丢弃在制周期重来.
+
+        与 reset_stats (清理所有数据) 的分工:
+          - 不动: 计数器 (OK/NG/总产量), 检测会话, 历史统计/时长/截图, 事件日志,
+                  保养周期计数
+          - 清: 人工确认定格 (直接解除, 不落任何事件), 缺步/收尾挂起 (随周期作废
+                不判 NG), 在制周期 (未结算落库行删除), 步骤运行时, 容器箱账,
+                逐件运行时
+          - 联动: 包装流当前箱回退 (工单号/总箱数/已完成箱数不动, 本箱扫码授权
+                  作废回「等扫箱标签」, 同一张箱标签可重扫)
+        """
+        self._pending_ack = False
+        self._pending_ack_started_at = None
+        self._pending_ack_event_id = None
+        self._pending_ack_event_name = None
+        self._pending_ack_timeout_sec = 0
+        self._pending_ack_reason = None
+        self._ack_clear_runtime_after = False
+
+        if self.current_cycle_uuid:
+            self._discard_empty_cycle()
+
+        self._clear_step_runtime_state()
+        self.cycle_complete = False
+        self.cycle_start_time = None
+        if hasattr(self, 'cycle_start_frame_pos'):
+            self.cycle_start_frame_pos = None
+
+        if hasattr(self, '_tracking_objects'):
+            try:
+                self._reset_counting_cycle()
+            except Exception as _e:
+                print(f"[Stats] reset_current_cycle counting reset failed: {_e}")
+
+        _mix = getattr(self, '_custom_mix', None)
+        if _mix is not None:
+            try:
+                _mix.reset()
+            except Exception as _e:
+                print(f"[CustomMix] reset_current_cycle reset failed: {_e}")
+
+        if hasattr(self, '_per_item_reset_runtime'):
+            try:
+                self._per_item_reset_runtime()
+            except Exception as _e:
+                print(f"[per_item] reset_current_cycle runtime reset failed: {_e}")
+
+        desc = None
+        try:
+            from backend.services.packaging_flow_coordinator import get_coordinator
+            from backend.db.database import SessionLocal
+            _db = SessionLocal()
+            try:
+                desc = get_coordinator().on_cycle_cleared(self.channel_id, _db)
+            finally:
+                _db.close()
+        except Exception as _e:
+            print(f"[PackagingFlow] reset_current_cycle rollback failed (isolated): {_e}")
+
+        print("[Stats] current cycle cleared (counters/session/history preserved)")
+        return desc
+
     def get_frame(self):
         """获取当前帧"""
         with self.frame_lock:

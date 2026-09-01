@@ -29,26 +29,38 @@
     <!-- 容器模式: 显示"当前正在装的托盘"实时滑块数 + 已装托盘进度 -->
     <div v-if="customMixContainer" class="flex-1 p-2 overflow-x-auto">
       <div class="flex items-stretch h-full gap-3">
-        <div v-for="it in customMixContainer.current_tray_items" :key="it.label"
-          class="flex-shrink-0 w-44 bg-slate-800 rounded-lg border p-2 flex flex-col justify-between"
-          :class="!customMixItemTotal && it.expected_per_tray > 0 && (it.peak_count ?? 0) >= it.expected_per_tray ? 'border-green-500/70' : 'border-amber-500/50'">
-          <div class="text-xs text-gray-400 truncate">当前{{ customMixContainer.container_display || '托盘' }}峰值 · {{ it.display_name || it.label }}</div>
-          <div class="text-center my-1">
-            <span class="text-4xl font-bold font-mono"
-              :class="!customMixItemTotal && it.expected_per_tray > 0 && (it.peak_count ?? 0) >= it.expected_per_tray ? 'text-green-400' : 'text-white'"
-            >{{ it.peak_count ?? 0 }}</span>
-            <span v-if="!customMixItemTotal && it.expected_per_tray > 0" class="text-base text-gray-500"> / {{ it.expected_per_tray }}</span>
+        <template v-for="it in customMixContainer.current_tray_items" :key="it.label">
+          <div class="flex-shrink-0 w-32 bg-slate-800 rounded-lg border border-cyan-700/60 p-2 flex flex-col justify-between">
+            <div class="text-xs text-gray-400 truncate">实时 · {{ it.display_name || it.label }}</div>
+            <div class="text-center my-1">
+              <span class="text-4xl font-bold font-mono text-cyan-400">{{ it.current_count ?? 0 }}</span>
+            </div>
+            <div class="text-[0.625rem] text-gray-500 text-center">当前帧在位数</div>
           </div>
-          <div class="text-[0.625rem] text-gray-400 text-center">
-            实时 <span class="text-cyan-400 font-bold">{{ it.current_count }}</span>
-            · 预计进箱 <span class="text-emerald-400 font-bold">{{ it.book_preview ?? it.peak_count ?? 0 }}</span>
+          <div class="flex-shrink-0 w-36 bg-slate-800 rounded-lg border p-2 flex flex-col justify-between"
+            :class="!customMixItemTotal && it.expected_per_tray > 0 && (it.peak_count ?? 0) >= it.expected_per_tray ? 'border-green-500/70' : 'border-amber-500/50'">
+            <div class="text-xs text-gray-400 truncate">{{ customMixContainer.container_display || '托盘' }}峰值 · {{ it.display_name || it.label }}</div>
+            <div class="text-center my-1">
+              <span class="text-4xl font-bold font-mono"
+                :class="!customMixItemTotal && it.expected_per_tray > 0 && (it.peak_count ?? 0) >= it.expected_per_tray ? 'text-green-400' : 'text-white'"
+              >{{ it.peak_count ?? 0 }}</span>
+              <span v-if="!customMixItemTotal && it.expected_per_tray > 0" class="text-base text-gray-500"> / {{ it.expected_per_tray }}</span>
+            </div>
+            <div class="text-[0.625rem] text-gray-500 text-center">本盘在位最高</div>
           </div>
-          <div v-if="slotView" class="text-[0.6rem] text-center mt-0.5"
-            :class="slotView.ok ? 'text-emerald-400' : 'text-amber-400'">
-            {{ slotView.ok ? '本帧看全' : '本帧未看全' }}
-            · 货{{ slotView.items }}+空{{ slotView.empty }}={{ slotView.items + slotView.empty }}/{{ slotView.total }}
+          <div class="flex-shrink-0 w-36 bg-slate-800 rounded-lg border border-emerald-700/60 p-2 flex flex-col justify-between">
+            <div class="text-xs text-gray-400 truncate">预计进箱 · {{ it.display_name || it.label }}</div>
+            <div class="text-center my-1">
+              <span class="text-4xl font-bold font-mono text-emerald-400">{{ it.book_preview ?? it.peak_count ?? 0 }}</span>
+            </div>
+            <div v-if="slotView" class="text-[0.6rem] text-center"
+              :class="slotView.ok ? 'text-emerald-400' : 'text-amber-400'">
+              {{ slotView.ok ? '本帧看全' : '本帧未看全' }}
+              · 货{{ slotView.items }}+空{{ slotView.empty }}={{ slotView.items + slotView.empty }}/{{ slotView.total }}
+            </div>
+            <div v-else class="text-[0.625rem] text-gray-500 text-center">结账将记入的数</div>
           </div>
-        </div>
+        </template>
         <!-- 已装托盘明细 (每盘装了多少) -->
         <div v-if="(customMixContainer.done_detail || []).length"
           class="flex-shrink-0 min-w-32 bg-slate-800/60 rounded-lg border border-slate-700 p-2 flex flex-col">

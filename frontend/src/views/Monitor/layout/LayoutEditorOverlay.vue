@@ -106,6 +106,7 @@ const SLOT_LABELS = {
   'weighing-bar': '称重数值条',
   'packaging-card': '包装箱进度',
   'scan-gun': '虚拟扫码枪',
+  'scan-slots': '多码采集已扫列表',
   'periodic-actions': '周期性动作',
   topbar: '顶部信息栏',
   'context-bar': '上下文信息条',

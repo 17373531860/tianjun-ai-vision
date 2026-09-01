@@ -26,10 +26,14 @@
     <!-- 列级 OK/NG Toast (与原生双工位同结构, 保留 cycle-result.indicator slot).
          RFC12 原限定仅双工位; 2026-08 放开到任意工位数 — layout.body 下单工位/三工位
          的周期 OK/NG 提示同样由宿主渲染 (multiActiveToasts 按工位分列), 插件零负担.
-         列网格与插件面板不一定逐列对齐, 但工位归属方向一致, 提示可见性优先. -->
+         列网格与插件面板不一定逐列对齐, 但工位归属方向一致, 提示可见性优先.
+         2026-08-26 降噪整改 (三工位每3~5s各出一周期, 提示常驻还压在插件顶栏上):
+         - 顶部让出 64px 避开插件 shell 顶栏 (lgwt-topbar 54px + 余量);
+         - OK 只弹当前聚焦工位 (合格是常态, 其他工位看操作日志/计数即可);
+         - NG/自定义事件所有工位都弹并带工位号 — 异常才值得抢注意力. -->
     <div
       v-if="channelCount >= 1"
-      class="pointer-events-none absolute inset-0 z-[45] grid gap-2 p-2"
+      class="pointer-events-none absolute inset-x-0 bottom-0 top-16 z-[45] grid gap-2 p-2"
       :style="{ gridTemplateColumns: `repeat(${channelCount}, minmax(0, 1fr))` }"
     >
       <div v-for="ch in channelCount" :key="'plugin-toast-' + ch" class="relative min-h-0">
@@ -37,7 +41,8 @@
           <div class="absolute z-50 pointer-events-none flex flex-col gap-2" :class="getMultiPositionClass(position)">
             <transition-group name="toast">
               <TjSlot
-                v-for="toast in (multiActiveToasts[ch - 1] || []).filter(t => t.position === position)"
+                v-for="toast in (multiActiveToasts[ch - 1] || []).filter(t => t.position === position
+                  && (t.toastId !== 'ok' || ch - 1 === selectedChannel))"
                 :key="toast.id"
                 name="cycle-result.indicator"
                 :toast="toast"
@@ -48,7 +53,12 @@
                   :style="{ backgroundColor: toast.color, fontSize: (toast.fontSize / 16) + 'rem' }">
                   <div class="flex items-center gap-2 justify-center">
                     <el-icon :size="20"><component :is="toast.icon" /></el-icon>
-                    <div><div class="font-bold">{{ toast.title }}</div><div v-if="toast.subtitle" class="text-sm opacity-80">{{ toast.subtitle }}</div></div>
+                    <div>
+                      <div class="font-bold">
+                        <span v-if="channelCount > 1 && toast.toastId !== 'ok'" class="opacity-80 mr-1">工位{{ ch }}</span>{{ toast.title }}
+                      </div>
+                      <div v-if="toast.subtitle" class="text-sm opacity-80">{{ toast.subtitle }}</div>
+                    </div>
                   </div>
                 </div>
               </TjSlot>
@@ -93,6 +103,7 @@
     :show-defect-chart="systemStore.display.monitor.defectChart !== false"
     :show-capacity-chart="systemStore.display.monitor.capacityChart !== false"
     :show-step-table="systemStore.display.monitor.stepTable !== false"
+    :show-mix-panel="systemStore.display.monitor.mixPanel !== false"
     :step-table-columns="systemStore.display.monitor.stepTableColumns || {}"
     :default-counters="systemStore.display.monitor.defaultCounters || {}"
     :show-ng-top3="systemStore.display.monitor.ngTop3 !== false"
@@ -106,7 +117,7 @@
     @start="startDetectionForChannel(activeSingleChannel)"
     @stop="stopDetectionForChannel(activeSingleChannel)"
     @standby="standbyForChannel(activeSingleChannel)"
-    @reset="resetCountersForChannel(activeSingleChannel)"
+    @reset="openResetDialog(activeSingleChannel)"
     @toggle-ng-top-mode="toggleNgTopMode()"
   >
     <template #context-bar>
@@ -249,6 +260,15 @@
           <!-- MES 迷你条: 工件号 / 未绑码 / 等待扫码 -->
           <div v-if="shouldShowMesBarFor(ch)"
                class="absolute top-7 left-1 right-1 bg-slate-900/85 border border-cyan-800/50 rounded px-1.5 py-0.5 flex items-center gap-1.5 text-[0.625rem] z-10">
+            <!-- v3.56: 多码采集进度徽标 (网格卡空间小, 只给总进度) -->
+            <span v-if="scanCollectFor(ch)" class="flex-shrink-0 px-1 rounded font-mono font-bold border"
+                  :class="scanCollectFor(ch).total_got >= scanCollectFor(ch).total_expected
+                    ? 'border-green-700 bg-green-900/60 text-green-300'
+                    : scanCollectFor(ch).total_got > 0
+                      ? 'border-yellow-700 bg-yellow-900/60 text-yellow-300'
+                      : 'border-slate-600 bg-slate-800/80 text-gray-400'">
+              码 {{ scanCollectFor(ch).total_got }}/{{ scanCollectFor(ch).total_expected }}
+            </span>
             <template v-if="getDisplayWorkpieceFor(ch)">
               <span class="text-cyan-400 font-bold">工件</span>
               <span class="font-mono text-white truncate min-w-0" :title="getDisplayWorkpieceFor(ch).serial_no">{{ getDisplayWorkpieceFor(ch).serial_no }}</span>
@@ -347,17 +367,19 @@
              二期: 补齐消警转绿 (kind='resolved') -->
         <div v-if="comboGuardBanner"
              class="absolute top-16 left-1/2 -translate-x-1/2 z-20 max-w-[90%]
-                    text-white px-4 py-2 rounded shadow-lg text-sm font-bold
+                    text-white px-4 py-2 rounded shadow-lg font-bold
                     border text-center"
-             :class="comboGuardBannerClass">
+             :class="comboGuardBannerClass"
+             :style="overlayBannerStyle">
           {{ comboGuardBanner }}
         </div>
 
         <!-- v3.49 二期 结算挂起等补横幅 (combo_verdict.settle_hold, 琥珀色) -->
         <div v-if="comboSettleHold"
              class="absolute bottom-24 left-1/2 -translate-x-1/2 z-20 max-w-[90%]
-                    bg-amber-600/95 text-white px-4 py-2 rounded shadow-lg text-sm font-bold
-                    border border-amber-300/60 text-center">
+                    bg-amber-600/95 text-white px-4 py-2 rounded shadow-lg font-bold
+                    border border-amber-300/60 text-center"
+             :style="overlayBannerStyle">
           {{ comboSettleHoldText }}
         </div>
 
@@ -531,9 +553,10 @@
         :channel="selectedChannel"
       />
 
-      <!-- v3.19.x 自定义混合模式物品校验面板 (与上方 SOP 并存: 步骤看 SOP, 物品看这里) -->
+      <!-- v3.19.x 自定义混合模式物品校验面板 (与上方 SOP 并存: 步骤看 SOP, 物品看这里)
+           v3.55.x: 挂显示设置「物品校验面板」开关 (mixPanel, 默认开), 与多工位列/放大态同一开关 -->
       <PerItemPanel
-        v-if="customMixPerItemState"
+        v-if="systemStore.display.monitor.mixPanel !== false && customMixPerItemState"
         data-layout-slot="mix-panel"
         :state="customMixPerItemState"
         :channel="selectedChannel"
@@ -541,7 +564,7 @@
       />
       <!-- 混合类型=tracking 物品校验看板（M-3 外置 CustomMixItemPanel） -->
       <CustomMixItemPanel
-        v-else-if="customMixState && customMixState.mix_type === 'tracking'"
+        v-else-if="systemStore.display.monitor.mixPanel !== false && customMixState && customMixState.mix_type === 'tracking'"
         data-layout-slot="mix-panel"
         :state="customMixState"
         :tracking-checklist="trackingChecklist"
@@ -729,8 +752,9 @@
           v-if="systemStore.display.monitor.showScanButtons !== false && hasScannerFor(selectedChannel)"
           class="ml-auto flex items-center gap-2"
         >
+          <!-- v3.56: 多码采集启用时隐藏单码"清除"按钮 (纠错统一走多码面板, 防两个"清除"并存混淆) -->
           <el-tooltip
-            v-if="!isScanDisabledFor(selectedChannel)"
+            v-if="!isScanDisabledFor(selectedChannel) && !scanCollectFor(selectedChannel)"
             :content="displayWorkpiece && displayWorkpiece.status === 'inspecting'
               ? '本次工件已开始检测，点击可作废本次检测、回到等待扫码状态'
               : '清除待检/扫码状态，让操作员重扫一次条码'"
@@ -792,6 +816,16 @@
           </div>
         </div>
       </div>
+
+      <!-- v3.56: 周期多码采集已扫列表 (项目启用多码采集时渲染; 编辑态强制显示保证可排版) -->
+      <ScanSlotsPanel
+        v-if="scanCollectFor(selectedChannel) || layoutEditActive"
+        data-layout-slot="scan-slots"
+        class="flex-shrink-0"
+        :state="scanCollectFor(selectedChannel)"
+        :channel-id="selectedChannel"
+        :readonly="false"
+      />
 
       <!-- Middle: Charts + NG Ranking -->
       <div data-layout-slot="charts" class="h-52 grid grid-cols-3 gap-2">
@@ -1018,8 +1052,8 @@
               待机
             </button>
             <button 
-              @click="resetCounters"
-              :disabled="isDetecting || isOperating"
+              @click="openResetDialog(null)"
+              :disabled="isOperating"
               class="flex-1 bg-cyan-500 hover:bg-cyan-400 disabled:bg-gray-600 disabled:cursor-not-allowed text-white py-2.5 rounded text-lg font-bold shadow transition-colors"
             >
                清零
@@ -1113,6 +1147,53 @@
   <!-- v3.54 检测主页自定义布局编辑器 (route ?layout_edit=1 + monitor.layout.edit 权限时激活) -->
   <LayoutEditorOverlay v-if="!kioskMode" @exited="onLayoutEditorExited" />
 
+  <!-- 清零二选一: 清理所有数据 (需先停止检测) / 仅清理本周期 (运行中可用) -->
+  <div v-if="resetDialog.visible"
+       class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60"
+       @click.self="resetDialog.visible = false">
+    <div class="w-[30rem] max-w-[92vw] bg-slate-900 border border-cyan-700/60 rounded-xl shadow-2xl overflow-hidden">
+      <div class="px-5 py-4 bg-gradient-to-r from-cyan-700 to-slate-800 flex items-center gap-3">
+        <el-icon :size="26" class="text-cyan-100"><Warning /></el-icon>
+        <div class="flex-1">
+          <div class="text-white font-bold text-lg">清零</div>
+          <div class="text-cyan-100 text-xs">请选择清理范围</div>
+        </div>
+        <span v-if="resetDialog.channel !== null"
+              class="bg-slate-900/60 px-2 py-0.5 rounded text-cyan-100 text-xs font-bold">
+          工位 {{ resetDialog.channel + 1 }}
+        </span>
+      </div>
+      <div class="px-5 py-4 space-y-3">
+        <button
+          class="w-full text-left px-4 py-3 rounded-lg border transition-colors"
+          :class="resetDialogDetecting
+            ? 'border-slate-700 bg-slate-800/50 cursor-not-allowed opacity-60'
+            : 'border-red-700/60 bg-slate-800 hover:border-red-500 hover:bg-red-900/20'"
+          :disabled="resetDialogDetecting"
+          @click="confirmResetAll"
+        >
+          <div class="font-bold text-red-400">清理所有数据</div>
+          <div class="text-xs text-gray-400 mt-1">
+            OK/NG 计数、步骤统计、周期记录全部归零并结束当前会话，在途工单一并作废（需重扫工单开工）
+            <span v-if="resetDialogDetecting" class="text-yellow-400">（检测运行中不可用，请先停止检测）</span>
+          </div>
+        </button>
+        <button
+          class="w-full text-left px-4 py-3 rounded-lg border border-cyan-700/60 bg-slate-800 hover:border-cyan-400 hover:bg-cyan-900/20 transition-colors"
+          @click="confirmResetCycle"
+        >
+          <div class="font-bold text-cyan-300">仅清理本周期</div>
+          <div class="text-xs text-gray-400 mt-1">
+            丢弃当前在制周期就地重来：OK/NG 计数、会话、工单进度保留；本箱扫码授权作废可重扫同一张标签
+          </div>
+        </button>
+      </div>
+      <div class="px-5 py-3 border-t border-slate-800 flex justify-end">
+        <button class="text-sm text-gray-400 hover:text-white" @click="resetDialog.visible = false">取消</button>
+      </div>
+    </div>
+  </div>
+
 </template>
 
 <script setup>
@@ -1124,7 +1205,7 @@ import { useSystemStore } from '@/store/useSystemStore';
 import { useSourceStore } from '@/store/useSourceStore';
 import { useScannerDisableStore } from '@/store/useScannerDisableStore';
 import { usePluginThemeStore } from '@/store/usePluginThemeStore';
-import { Check, Folder, Picture } from '@element-plus/icons-vue';
+import { Check, Folder, Picture, Warning } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { startDetection as apiStartDetection, stopDetection as apiStopDetection, pauseDetection, resumeDetection, standbyDetection, resumeInference, resetDetection, resetDetectionStats, resetPeriodicAction, getDetectionResults, getSourceStatus, setProjectConfig, getWorkstations, getMultiMonitorConfig } from '@/api/detection';
 import { getModelDetail, resolveModelPath as apiResolveModelPath } from '@/api/model';
@@ -1142,6 +1223,7 @@ import PendingAckOverlay from './PendingAckOverlay.vue';
 import ElevateAckDialog from './ElevateAckDialog.vue';
 import { useManualAck } from './composables/useManualAck';
 import CustomMixItemPanel from './CustomMixItemPanel.vue';
+import ScanSlotsPanel from './ScanSlotsPanel.vue';
 import ChannelVideoCard from './ChannelVideoCard.vue';
 import WorkstationColumn from './WorkstationColumn.vue';
 import WorkstationModePanel from './WorkstationModePanel.vue';
@@ -1149,7 +1231,7 @@ import GoodBadPieChart from './GoodBadPieChart.vue';
 import SingleChannelMonitor from './SingleChannelMonitor.vue';
 import YieldRateGauge from './YieldRateGauge.vue';
 import { createFramePump } from './framePump';
-import { regionEventRuleSteps, resolveLogicMode, resolveModePanelKind } from './monitorModes';
+import { resolveLogicMode, resolveModePanelKind, resolveStepsToShow } from './monitorModes';
 import { useMultiStreams } from './composables/useMultiStreams';
 import { useSingleStream } from './composables/useSingleStream';
 import { useToastVoice } from './composables/useToastVoice';
@@ -1386,6 +1468,8 @@ const hasScannerFor = (ch) => {
   // 它本身就是"扫码器在场"的证据 — 别把人工恢复按钮一起藏掉
   return mes?.scanner_present !== false || !!mes?.scanner_resume_blocked;
 };
+// v3.56: 周期多码采集实况 (项目未启用时后端不带 scan_collect 段 = null 零差异)
+const scanCollectFor = (ch) => multiChannelData.value[ch]?.scanCollect || null;
 async function toggleScanDisableFor(ch) {
   if (scannerDisableStore.toggling) return;
   const targetDisabled = !isScanDisabledFor(ch);
@@ -1622,6 +1706,13 @@ const comboGuardBannerClass = computed(() =>
   comboGuardLast.value?.kind === 'resolved'
     ? 'bg-emerald-700/95 border-emerald-400/60'
     : 'bg-red-700/95 border-red-400/60');
+// 叠加横幅字号走显示设置 overlayBannerFontSize (默认 14 = 原 text-sm 零差异);
+// 合格/NG/自定义事件提示框各自已有独立 fontSize, 不走这里。
+const overlayBannerStyle = computed(() => {
+  const px = Number(systemStore.detection?.overlayBannerFontSize) || 14;
+  const clamped = Math.max(12, Math.min(48, px));
+  return { fontSize: clamped + 'px', padding: `${Math.round(clamped * 0.35)}px ${Math.round(clamped * 0.9)}px` };
+});
 // SOP 卡片条可见性 (原模板内联表达式抽出, 供判型看板同行布局复用)
 const sopPanelVisible = computed(() =>
   systemStore.display.monitor.stepStrip && steps.value.length > 0
@@ -2741,105 +2832,8 @@ watch(() => currentProject.value, (newProject, oldProject) => {
     isDetecting.value = false;
   }
   
-  // 获取步骤配置
-  const stepsConfig = newProject.steps_config || [];
-  const logicMode = newProject.logic_mode || 'sequential';
-  const pipelineConfig = newProject.pipeline_config || {};
-  
-  // 从顶层或 pipeline_config 获取配置（优先顶层，因为可能有更新的值）
-  const sequenceOrder = newProject.sequence_order || pipelineConfig.sequence_order || [];
-  const detectionSteps = newProject.detection_steps || pipelineConfig.detection_steps || [];
-  const customBasedOn = newProject.custom_based_on || pipelineConfig.custom_based_on || null;
-  const customSequenceOrder = newProject.custom_sequence_order || pipelineConfig.custom_sequence_order || [];
-  const customDetectionSteps = newProject.custom_detection_steps || pipelineConfig.custom_detection_steps || [];
-  
-  let stepsToShow = [];
-  
-  if (logicMode === 'sequential') {
-    if (sequenceOrder.length > 0) {
-      stepsToShow = sequenceOrder.map(seqItem => {
-        return stepsConfig.find(s => s.id === seqItem.step_id);
-      }).filter(Boolean);
-    } else {
-      stepsToShow = stepsConfig.filter(s => s.enabled);
-    }
-  } else if (logicMode === 'detection') {
-    if (detectionSteps.length > 0) {
-      stepsToShow = detectionSteps.map(id => {
-        return stepsConfig.find(s => s.id === id);
-      }).filter(Boolean);
-    } else {
-      stepsToShow = stepsConfig.filter(s => s.enabled);
-    }
-  } else if (logicMode === 'custom') {
-    // 自定义模式：根据 custom_based_on 决定显示哪些步骤
-    if (customBasedOn === 'sequential') {
-      // 基于顺序模式：使用自定义模式独立的顺序配置
-      if (customSequenceOrder.length > 0) {
-        stepsToShow = customSequenceOrder.map(seqItem => {
-          return stepsConfig.find(s => s.id === seqItem.step_id);
-        }).filter(Boolean);
-      } else {
-        stepsToShow = stepsConfig.filter(s => s.enabled);
-      }
-    } else if (customBasedOn === 'detection') {
-      // 基于检测模式：使用自定义模式独立的检测配置
-      if (customDetectionSteps.length > 0) {
-        stepsToShow = customDetectionSteps.map(id => {
-          return stepsConfig.find(s => s.id === id);
-        }).filter(Boolean);
-      } else {
-        stepsToShow = stepsConfig.filter(s => s.enabled);
-      }
-    } else {
-      // 不基于任何模式：显示自定义条件中涉及的步骤
-      const customConditions = newProject.custom_conditions || pipelineConfig.custom_conditions || [];
-      const involvedStepIds = new Set();
-      customConditions.forEach(cond => {
-        (cond.sequence || []).forEach(stepId => involvedStepIds.add(stepId));
-      });
-      if (involvedStepIds.size > 0) {
-        stepsToShow = [...involvedStepIds].map(id => stepsConfig.find(s => s.id === id)).filter(Boolean);
-      } else {
-        stepsToShow = stepsConfig.filter(s => s.enabled);
-      }
-    }
-  } else if (logicMode === 'region_events') {
-    // v3.32+ 区域事件模式: 步骤统计按"事件规则名"展示 (后端 step_counts 以规则名为键),
-    // 不展示模型原始类别 (工件/手/工具本身不是流程步骤)
-    stepsToShow = regionEventRuleSteps(pipelineConfig);
-  } else {
-    stepsToShow = stepsConfig.filter(s => s.enabled);
-  }
-
-  // v3.2.1: 跟踪模式 — 步骤统计/SOP 只展示"每箱期望物品"中的项目,
-  // 不显示作为"容器"的箱子类别(否则容器分组模式会出现"箱子"行)
-  if (logicMode === 'tracking') {
-    const expectedList = newProject.counting_expected_list
-      || pipelineConfig.counting_expected_list
-      || [];
-    const expectedDict = pipelineConfig.counting_expected_items || {};
-    const expectedLabels = new Set();
-    expectedList.forEach(item => {
-      if (item && item.label) expectedLabels.add(item.label);
-    });
-    Object.keys(expectedDict).forEach(label => expectedLabels.add(label));
-
-    if (expectedLabels.size > 0) {
-      stepsToShow = stepsToShow.filter(s => expectedLabels.has(s.label));
-    } else {
-      // 兜底:用户未填期望清单时,仅排除容器 label,其它步骤仍展示
-      const containerLabel = newProject.tracking_container_label
-        || pipelineConfig.tracking_container_label
-        || '';
-      if (containerLabel) {
-        stepsToShow = stepsToShow.filter(s => s.label !== containerLabel);
-      }
-    }
-  }
-
-  // v2.7.4: 过滤掉 backup_for 步骤; v3.31.x 语义收窄: hide_in_view 只隐藏画面检测框, 不再从 SOP/步骤统计剔除
-  stepsToShow = stepsToShow.filter(s => !s.backup_for);
+  // SOP/步骤表步骤源与多工位 buildChannelStepViews 同源（sequence 映射，不是裸 steps_config）
+  const stepsToShow = resolveStepsToShow(newProject);
 
   // 更新步骤条 - 同时保存 label 用于后端匹配
   // v3.10.x: SOP 卡片"图永不空"策略 — 重建步骤数组时按 label 从旧数组继承缩略图.
@@ -3429,6 +3423,8 @@ const startPolling = () => {
       // 不写到 multiChannelData[0].pendingAck 的话, 全屏覆盖层 computed 永远拿不到, 弹不出
       if (!multiChannelData.value[0]) multiChannelData.value[0] = {};
       multiChannelData.value[0]._pollProjectConfig = data.project_config || null;
+      // v3.56: 周期多码采集实况 (与 processChannelResult 多通道路径对齐)
+      multiChannelData.value[0].scanCollect = data.scan_collect || null;
       multiChannelData.value[0].pendingAck = data.pending_ack || { active: false };
       multiChannelData.value[0].pendingRemediation = data.pending_remediation || null;
       multiChannelData.value[0].recentEvents = data.recent_events || [];
@@ -4192,6 +4188,51 @@ const resetCountersForChannel = async (ch) => {
   ElMessage.success(`工位 ${ch + 1} 计数器已清零`);
 };
 
+const resetDialog = ref({ visible: false, channel: null });
+
+const openResetDialog = (ch = null) => {
+  resetDialog.value = { visible: true, channel: ch };
+};
+
+const resetDialogDetecting = computed(() => {
+  const ch = resetDialog.value.channel;
+  return ch === null ? !!isDetecting.value : !!multiChannelData.value[ch]?.isDetecting;
+});
+
+const confirmResetAll = async () => {
+  if (resetDialogDetecting.value) return;
+  const ch = resetDialog.value.channel;
+  resetDialog.value.visible = false;
+  if (ch === null) await resetCounters();
+  else await resetCountersForChannel(ch);
+};
+
+const confirmResetCycle = async () => {
+  const ch = resetDialog.value.channel;
+  resetDialog.value.visible = false;
+  dbg('monitor.control', `点击「仅清理本周期」${ch === null ? '' : ` (工位${ch + 1})`}`);
+  try {
+    const res = await resetDetectionStats(ch === null ? 0 : ch, 'cycle');
+    if (ch === null) {
+      steps.value.forEach(s => { s.status = 'pending'; s.cycleResult = null; });
+      tableData.value.forEach(t => { t.status = 'pending'; t.cycleResult = null; });
+      trackingChecklist.value = {};
+      trackingBoxes.value = {};
+    } else if (multiChannelData.value[ch]) {
+      const chData = multiChannelData.value[ch];
+      multiChannelData.value[ch] = {
+        ...chData,
+        steps: (chData.steps || []).map(s => ({ ...s, status: 'pending' })),
+        tableData: (chData.tableData || []).map(t => ({ ...t, status: 'pending' })),
+      };
+    }
+    ElMessage.success(res?.data?.message || '本周期数据已清理');
+  } catch (e) {
+    dbgErr('monitor.control', '仅清理本周期', e);
+    ElMessage.error('清理本周期失败');
+  }
+};
+
 // v3.7.4: 周期性强制动作 UI 工具
 // 进度条同时考虑次数 + 时间维度, 取"更接近爆表的那个"
 const getPeriodicProgress = (rule) => {
@@ -4555,7 +4596,7 @@ const workstationColumnCtx = {
   getMultiPositionClass, toggleNgTopMode,
   selectOverviewChannel, zoomChannel, clearPendingScan, toggleScanDisableFor,
   startDetectionForChannel, stopDetectionForChannel, standbyForChannel,
-  resetCountersForChannel,
+  resetCountersForChannel, openResetDialog,
 };
 
 // 暴露触发事件方法供测试

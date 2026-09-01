@@ -71,6 +71,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `/interconnect/*` | `interconnect.py` | `interconnect.js` | ★ v3.47 YoloVision 训练平台互连：`/models/push` 接收模型包 + 拉取分发游标轮询 + 现场帧采样回流配置/状态/流水（互连设置页） |
 | `/plc/*` | `plc.py` | `plc.js` | ★ v3.48 RFC 13 通用 PLC 连接器：连接 CRUD/启停/测试 + 驱动清单 + 方案模板 + 点位实时值/手动写/IO 日志 + mock-set 联调 + 配置导入导出（MES 页「PLC 对接」tab） |
 | `/triggers/*` | `triggers.py` | `triggers.js` | ★ v3.48 RFC 14 统一触发中心：触发源实例 CRUD/启停 + 类型/动作/模板清单 + 实时状态/触发历史/日志 + 试触发/mock 注入 + 像素标定 + `fire/{key}` HTTP 触发入口 + 导入导出（MES 管理页「触发中心」tab，信息架构重构自系统设置迁入） |
+| `/scan-collect/*` | `scan_collect.py` | `scanCollect.js` | ★ v3.56 周期多码采集：按项目配置 GET/PUT config + state 实况轮询（参数名是 `channel` 不是 `channel_id`）+ remove-code/clear 纠错 + resolve-ng NG 挂起放行 + records 追溯（默认排除 status=deleted，`include_deleted=true` 才带）；Monitor 面板主数据走检测 results 载荷 `scan_collect` 段，此 API 是配置/纠错/追溯通路 |
 | `/debug/*` | `debug.py` | 无封装（手测用） | 通道诊断 + 调试日志中心 |
 | `/test/synthetic/*` | `test_runtime_routes.py` | —（测试专用） | 仅 `RUNTIME_MODE=test` 挂载：虚拟剧本源 |
 

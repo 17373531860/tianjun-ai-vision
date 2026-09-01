@@ -155,7 +155,8 @@ class TestPerItemConfigApply:
         assert vsm._per_item_config['finish_label'] == '翻面'
         assert len(vsm._per_item_steps) == 2
 
-        labels = [s.action_label for s in vsm._per_item_steps]
+        # v3.56+: action_label 内部为 tuple (多标签 OR), 展开后应含两个动作
+        labels = [lbl for s in vsm._per_item_steps for lbl in s.action_label]
         assert '打螺丝' in labels
         assert '划螺丝' in labels
 
@@ -225,7 +226,7 @@ class TestHappyPath:
             _cover_one_screw(vsm, '打螺丝', i, frames=8)
 
         # 打螺丝步骤应该完成
-        打_step = next(s for s in vsm._per_item_steps if s.action_label == '打螺丝')
+        打_step = next(s for s in vsm._per_item_steps if '打螺丝' in s.action_label)
         assert 打_step.completed, f"打螺丝步骤应完成, covered_count={打_step.covered_count()}/{len(打_step.items)}"
         assert 打_step.covered_count() == 12
 
@@ -237,7 +238,7 @@ class TestHappyPath:
         for i in range(12):
             _cover_one_screw(vsm, '划螺丝', i, frames=8)
 
-        划_step = next(s for s in vsm._per_item_steps if s.action_label == '划螺丝')
+        划_step = next(s for s in vsm._per_item_steps if '划螺丝' in s.action_label)
         assert 划_step.completed
 
         # 阶段 4: 翻面 (连续 5 帧, 超过 finish_sustain_frames=3)
@@ -259,7 +260,7 @@ class TestHappyPath:
         for i in range(10):
             _cover_one_screw(vsm, '打螺丝', i, frames=8)
 
-        打_step = next(s for s in vsm._per_item_steps if s.action_label == '打螺丝')
+        打_step = next(s for s in vsm._per_item_steps if '打螺丝' in s.action_label)
         assert not 打_step.completed
         assert 打_step.covered_count() == 10
 
@@ -326,7 +327,7 @@ class TestNGPaths:
         # 工序框消失
         _feed(vsm, _screws_frame(), repeat=2)
 
-        打_step = next(s for s in vsm._per_item_steps if s.action_label == '打螺丝')
+        打_step = next(s for s in vsm._per_item_steps if '打螺丝' in s.action_label)
         assert 打_step.covered_count() == 0, \
             f"闪现 3 帧不应触发覆盖, 实际 covered={打_step.covered_count()}"
 
