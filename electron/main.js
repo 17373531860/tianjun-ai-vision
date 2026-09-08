@@ -437,8 +437,8 @@ function destroyStationWindows(reason = '布局关闭') {
   }
 }
 
-function loadStationRoute(window, channelId, readonly) {
-  const routeHash = buildKioskHash(channelId, readonly);
+function loadStationRoute(window, channelId, readonly, role = 'monitor') {
+  const routeHash = buildKioskHash(channelId, readonly, role);
   if (CONFIG.isDev) {
     const base = getFrontendDevURL().replace(/\/$/, '');
     return window.loadURL(`${base}/#${routeHash}`);
@@ -447,8 +447,9 @@ function loadStationRoute(window, channelId, readonly) {
   return window.loadFile(indexPath, { hash: routeHash });
 }
 
-function createStationWindow(channelId, target, readonly, signature) {
+function createStationWindow(channelId, target, readonly, signature, role = 'monitor') {
   const bounds = target.bounds;
+  const roleTitle = role === 'projection' ? '投影引导' : '工位';
   const stationWindow = new BrowserWindow({
     x: bounds.x,
     y: bounds.y,
@@ -461,7 +462,7 @@ function createStationWindow(channelId, target, readonly, signature) {
     minimizable: false,
     maximizable: false,
     resizable: false,
-    title: `${CONFIG.appName} - 工位 ${channelId + 1}`,
+    title: `${CONFIG.appName} - ${roleTitle} ${channelId + 1}`,
     icon: path.join(__dirname, 'build', 'icon.png'),
     backgroundColor: '#02060c',
     webPreferences: {
@@ -518,7 +519,7 @@ function createStationWindow(channelId, target, readonly, signature) {
     if (stationWindows.get(channelId) === entry) stationWindows.delete(channelId);
   });
 
-  loadStationRoute(stationWindow, channelId, readonly).catch((e) => {
+  loadStationRoute(stationWindow, channelId, readonly, role).catch((e) => {
     console.error(`[MultiMonitor] 工位 ${channelId} 页面加载失败: ${e.message}`);
   });
   return entry;
@@ -569,8 +570,10 @@ function applyMultiMonitorConfig(rawConfig) {
       continue;
     }
     occupiedTargets.add(targetKey);
-    const signature = JSON.stringify({ bounds: target.bounds, readonly: config.readonly });
-    desired.set(channelId, { target, signature });
+    const role = assignment.role === 'projection' ? 'projection' : 'monitor';
+    // role 进 signature: 用户把窗口从监控切成投影引导时必须整窗重建换路由
+    const signature = JSON.stringify({ bounds: target.bounds, readonly: config.readonly, role });
+    desired.set(channelId, { target, signature, role });
   }
 
   for (const [channelId, entry] of stationWindows.entries()) {
@@ -588,7 +591,7 @@ function applyMultiMonitorConfig(rawConfig) {
   for (const [channelId, desiredEntry] of desired.entries()) {
     if (!stationWindows.has(channelId)) {
       try {
-        createStationWindow(channelId, desiredEntry.target, config.readonly, desiredEntry.signature);
+        createStationWindow(channelId, desiredEntry.target, config.readonly, desiredEntry.signature, desiredEntry.role);
       } catch (e) {
         warnings.push(`工位 ${channelId} 窗口创建失败: ${e.message}`);
       }

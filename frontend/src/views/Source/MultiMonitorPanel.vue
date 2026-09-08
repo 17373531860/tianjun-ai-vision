@@ -63,6 +63,19 @@
               :value="missingDisplayId(channelId)"
             />
           </el-select>
+          <el-select
+            class="w-36 flex-shrink-0"
+            :model-value="multiMonitorForm.mapping[String(channelId)]?.role || 'monitor'"
+            :disabled="!multiMonitorForm.mapping[String(channelId)]"
+            :data-testid="`multi-monitor-role-${channelId}`"
+            @change="value => onMultiMonitorRoleChange(channelId, value)"
+          >
+            <el-option label="监控画面" value="monitor" />
+            <el-option label="投影光引导" value="projection" />
+          </el-select>
+        </div>
+        <div class="mt-1 text-[10px] text-gray-500">
+          窗口内容：「监控画面」为工位实时监看；「投影光引导」用于该显示口接投影仪，向工作台投射装配引导（需先在投影页完成标定）。
         </div>
         <div v-if="!isElectronEnv" class="mt-2 text-[10px] text-amber-400" data-testid="multi-monitor-browser-hint">
           当前为浏览器环境：可保存映射，但无法枚举或立即应用物理显示器；桌面版启动后生效。
@@ -137,6 +150,7 @@ const applyNormalizedMultiMonitor = (config) => {
     if (!displayId && !bounds) return;
     multiMonitorForm.mapping[String(channelId)] = {
       display_id: displayId,
+      role: item?.role === 'projection' ? 'projection' : 'monitor',
       ...(bounds ? { bounds } : {}),
     };
   });
@@ -191,11 +205,20 @@ function onMultiMonitorDisplayChange(channelId, displayId) {
     return;
   }
   const remembered = multiMonitorForm.mapping[key]?.bounds;
+  const rememberedRole = multiMonitorForm.mapping[key]?.role;
   const bounds = normalizeDisplayBounds(selected?.bounds) || normalizeDisplayBounds(remembered);
   multiMonitorForm.mapping[key] = {
     display_id: String(displayId),
+    role: rememberedRole === 'projection' ? 'projection' : 'monitor',
     ...(bounds ? { bounds } : {}),
   };
+}
+
+function onMultiMonitorRoleChange(channelId, role) {
+  const key = String(channelId);
+  const item = multiMonitorForm.mapping[key];
+  if (!item) return;
+  item.role = role === 'projection' ? 'projection' : 'monitor';
 }
 
 async function loadMultiMonitorConfig() {
@@ -222,6 +245,7 @@ async function saveAndApplyMultiMonitor() {
         .filter(([, item]) => !isMainWindowDisplayId(item?.display_id))
         .map(([channelId, item]) => [channelId, {
           display_id: String(item?.display_id || ''),
+          role: item?.role === 'projection' ? 'projection' : 'monitor',
           ...(normalizeDisplayBounds(item?.bounds) ? { bounds: normalizeDisplayBounds(item.bounds) } : {}),
         }])),
     };

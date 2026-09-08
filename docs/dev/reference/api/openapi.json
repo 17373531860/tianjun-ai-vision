@@ -4890,6 +4890,12 @@
       "description": "Electron Display.id 的字符串形式；为空时仅按 bounds 定位",
       "title": "Display Id",
       "type": "string"
+     },
+     "role": {
+      "default": "monitor",
+      "description": "窗口角色：monitor=工位监控页（默认）；projection=投影光引导画布（接投影仪用）。非法值保存时归一为 monitor",
+      "title": "Role",
+      "type": "string"
      }
     },
     "title": "MultiMonitorMappingItem",
@@ -7271,6 +7277,145 @@
      }
     },
     "title": "PackagingFlowConfigUpdate",
+    "type": "object"
+   },
+   "ParamsUpdate": {
+    "description": "引导参数更新体。全部可选, 只更新给出的键; 越界值钳制、类型不合退默认。",
+    "properties": {
+     "auto_recalibrate": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "漂移后自动重标 (关=仅提示)",
+      "title": "Auto Recalibrate"
+     },
+     "brightness": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "引导亮度系数 (0.3~1.0)",
+      "title": "Brightness"
+     },
+     "calib_settle_ms": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "标定曝光稳定等待 (ms, 300~5000)",
+      "title": "Calib Settle Ms"
+     },
+     "drift_interval_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "漂移自检周期 (秒, 5~600)",
+      "title": "Drift Interval S"
+     },
+     "drift_threshold_px": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "平均漂移阈值 (px, 2~50)",
+      "title": "Drift Threshold Px"
+     },
+     "flow_path": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "流向引导路径动效",
+      "title": "Flow Path"
+     },
+     "hover_delta": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "悬停亮度偏移阈值 (5~60)",
+      "title": "Hover Delta"
+     },
+     "hover_dwell_ms": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "悬停确认时长 (ms, 400~5000)",
+      "title": "Hover Dwell Ms"
+     },
+     "hover_poll_ms": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "悬停采样周期 (ms, 100~1000)",
+      "title": "Hover Poll Ms"
+     },
+     "pattern_cols": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "标定阵列数 (2~8)",
+      "title": "Pattern Cols"
+     },
+     "pattern_rows": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "标定阵行数 (2~6)",
+      "title": "Pattern Rows"
+     }
+    },
+    "title": "ParamsUpdate",
     "type": "object"
    },
    "PresetRequest": {
@@ -10005,6 +10150,31 @@
     "title": "RunModeRequest",
     "type": "object"
    },
+   "SampleRequest": {
+    "properties": {
+     "channel": {
+      "default": 0,
+      "title": "Channel",
+      "type": "integer"
+     },
+     "polygon": {
+      "description": "相机归一化多边形 (>=3 点), 前端用 H⁻¹ 从投影空间反算",
+      "items": {
+       "items": {
+        "type": "number"
+       },
+       "type": "array"
+      },
+      "title": "Polygon",
+      "type": "array"
+     }
+    },
+    "required": [
+     "polygon"
+    ],
+    "title": "SampleRequest",
+    "type": "object"
+   },
    "ScanBody": {
     "properties": {
      "channel_id": {
@@ -12063,6 +12233,47 @@
     "title": "SmsWxpusherPayload",
     "type": "object"
    },
+   "SolveRequest": {
+    "properties": {
+     "channel": {
+      "default": 0,
+      "title": "Channel",
+      "type": "integer"
+     },
+     "cols": {
+      "default": 4,
+      "title": "Cols",
+      "type": "integer"
+     },
+     "grab_frames": {
+      "default": 5,
+      "description": "采样帧数 (多帧平均抗噪)",
+      "maximum": 15.0,
+      "minimum": 1.0,
+      "title": "Grab Frames",
+      "type": "integer"
+     },
+     "proj_h": {
+      "default": 1080,
+      "description": "投影窗实际高 (与 pattern 请求一致)",
+      "title": "Proj H",
+      "type": "integer"
+     },
+     "proj_w": {
+      "default": 1920,
+      "description": "投影窗实际宽 (与 pattern 请求一致)",
+      "title": "Proj W",
+      "type": "integer"
+     },
+     "rows": {
+      "default": 3,
+      "title": "Rows",
+      "type": "integer"
+     }
+    },
+    "title": "SolveRequest",
+    "type": "object"
+   },
    "SplashCameraRequest": {
     "description": "启动动画手势相机 + 闲置超时 + 总开关 配置请求体。",
     "properties": {
@@ -13550,6 +13761,24 @@
      "type"
     ],
     "title": "ValidationError",
+    "type": "object"
+   },
+   "VerifyRequest": {
+    "properties": {
+     "channel": {
+      "default": 0,
+      "title": "Channel",
+      "type": "integer"
+     },
+     "grab_frames": {
+      "default": 2,
+      "maximum": 8.0,
+      "minimum": 1.0,
+      "title": "Grab Frames",
+      "type": "integer"
+     }
+    },
+    "title": "VerifyRequest",
     "type": "object"
    },
    "VideoProgressRequest": {
@@ -21323,6 +21552,483 @@
     "summary": "探活训练平台 health 端点",
     "tags": [
      "interconnect"
+    ]
+   }
+  },
+  "/api/v1/lightguide/calibration/anchors": {
+   "get": {
+    "description": "四角自愈锚点布局 (前端据此在引导画布上绘制锚点 tile)。",
+    "operationId": "get_calibration_anchors_api_v1_lightguide_calibration_anchors_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "proj_w",
+      "required": false,
+      "schema": {
+       "default": 1920,
+       "title": "Proj W",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "proj_h",
+      "required": false,
+      "schema": {
+       "default": 1080,
+       "title": "Proj H",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Get Calibration Anchors Api V1 Lightguide Calibration Anchors Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Get Calibration Anchors",
+    "tags": [
+     "lightguide"
+    ]
+   }
+  },
+  "/api/v1/lightguide/calibration/marker": {
+   "get": {
+    "description": "单个 ArUco 标记 PNG (白底 tile + 内缩标记, 供前端画锚点)。",
+    "operationId": "get_calibration_marker_api_v1_lightguide_calibration_marker_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "marker_id",
+      "required": true,
+      "schema": {
+       "maximum": 49,
+       "minimum": 0,
+       "title": "Marker Id",
+       "type": "integer"
+      }
+     },
+     {
+      "description": "白底 tile 边长 (px)",
+      "in": "query",
+      "name": "size",
+      "required": false,
+      "schema": {
+       "default": 64,
+       "description": "白底 tile 边长 (px)",
+       "maximum": 512,
+       "minimum": 32,
+       "title": "Size",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Get Calibration Marker",
+    "tags": [
+     "lightguide"
+    ]
+   }
+  },
+  "/api/v1/lightguide/calibration/pattern": {
+   "get": {
+    "description": "生成 ArUco 标记阵 PNG。投影窗全屏 1:1 显示 (不得缩放/加黑边)。",
+    "operationId": "get_calibration_pattern_api_v1_lightguide_calibration_pattern_get",
+    "parameters": [
+     {
+      "description": "投影窗宽 (px)",
+      "in": "query",
+      "name": "proj_w",
+      "required": false,
+      "schema": {
+       "default": 1920,
+       "description": "投影窗宽 (px)",
+       "title": "Proj W",
+       "type": "integer"
+      }
+     },
+     {
+      "description": "投影窗高 (px)",
+      "in": "query",
+      "name": "proj_h",
+      "required": false,
+      "schema": {
+       "default": 1080,
+       "description": "投影窗高 (px)",
+       "title": "Proj H",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "cols",
+      "required": false,
+      "schema": {
+       "default": 4,
+       "title": "Cols",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "rows",
+      "required": false,
+      "schema": {
+       "default": 3,
+       "title": "Rows",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Get Calibration Pattern",
+    "tags": [
+     "lightguide"
+    ]
+   }
+  },
+  "/api/v1/lightguide/calibration/solve": {
+   "post": {
+    "description": "从工位帧缓存自动识别标记阵并求解 相机→投影 homography。\n\n前置条件：投影窗正全屏显示 pattern 端点的图案且已稳定 (前端等曝光后再调)。\n多帧采样对每个标记的角点取平均，RANSAC 求解，返回重投影误差。",
+    "operationId": "solve_calibration_api_v1_lightguide_calibration_solve_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SolveRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Solve Calibration Api V1 Lightguide Calibration Solve Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Solve Calibration",
+    "tags": [
+     "lightguide"
+    ]
+   }
+  },
+  "/api/v1/lightguide/calibration/verify": {
+   "post": {
+    "description": "自愈校验: 抽帧找四角锚点, 用存量 homography 推算其投影位置, 与期望比对。\n\n返回漂移量, 阈值判断留给前端 (锚点被手/工件遮挡时 found 少, 前端只在\nfound>=3 时才信任 drift, 防误触发重标)。",
+    "operationId": "verify_calibration_api_v1_lightguide_calibration_verify_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/VerifyRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Verify Calibration Api V1 Lightguide Calibration Verify Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Verify Calibration",
+    "tags": [
+     "lightguide"
+    ]
+   }
+  },
+  "/api/v1/lightguide/config": {
+   "delete": {
+    "description": "清除工位标定 (重标前/换投影仪时用)。",
+    "operationId": "delete_config_api_v1_lightguide_config_delete",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "channel",
+      "required": false,
+      "schema": {
+       "default": 0,
+       "title": "Channel",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Delete Config Api V1 Lightguide Config Delete",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Delete Config",
+    "tags": [
+     "lightguide"
+    ]
+   },
+   "get": {
+    "description": "工位标定状态 + 当前帧可用性。投影窗启动时调用。",
+    "operationId": "get_config_api_v1_lightguide_config_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "channel",
+      "required": false,
+      "schema": {
+       "default": 0,
+       "title": "Channel",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Get Config Api V1 Lightguide Config Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Get Config",
+    "tags": [
+     "lightguide"
+    ]
+   }
+  },
+  "/api/v1/lightguide/interaction/sample": {
+   "post": {
+    "description": "采样相机帧上指定多边形区域的平均亮度 (投影按钮悬停判定的传感原语)。\n\n悬停判定逻辑全在前端: 按钮亮起时采一次基线, 之后轮询比对亮度差 —\n手伸进按钮投影区反射率变化 → 亮度偏移。后端只读帧不留状态。",
+    "operationId": "interaction_sample_api_v1_lightguide_interaction_sample_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SampleRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Interaction Sample Api V1 Lightguide Interaction Sample Post",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Interaction Sample",
+    "tags": [
+     "lightguide"
+    ]
+   }
+  },
+  "/api/v1/lightguide/params": {
+   "get": {
+    "description": "引导参数 (全局一份, 缺省即出厂默认)。投影窗进入引导态时拉取。",
+    "operationId": "get_params_api_v1_lightguide_params_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Get Params Api V1 Lightguide Params Get",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Get Params",
+    "tags": [
+     "lightguide"
+    ]
+   },
+   "put": {
+    "description": "更新引导参数 (只改给出的键), 返回归一化后的完整参数。",
+    "operationId": "set_params_api_v1_lightguide_params_put",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ParamsUpdate"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "title": "Response Set Params Api V1 Lightguide Params Put",
+         "type": "object"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Set Params",
+    "tags": [
+     "lightguide"
     ]
    }
   },

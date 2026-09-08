@@ -38,6 +38,7 @@ def mount_all_routers(app: FastAPI) -> None:
     from backend.api import triggers          # RFC 14 统一触发中心
     from backend.api import video_archive     # v3.53 录像归档规则
     from backend.api import scan_collect      # v3.56 周期多码采集
+    from backend.api import lightguide        # 投影光引导 (feat/light-sensor)
 
     app.include_router(projects.router, prefix=f"{v1}/projects", tags=["projects"])
     app.include_router(models.router, prefix=f"{v1}/models", tags=["models"])
@@ -61,6 +62,7 @@ def mount_all_routers(app: FastAPI) -> None:
     app.include_router(plc.router, prefix=f"{v1}/plc", tags=["plc"])
     app.include_router(triggers.router, prefix=f"{v1}/triggers", tags=["triggers"])
     app.include_router(scan_collect.router, prefix=v1, tags=["ScanCollect"])
+    app.include_router(lightguide.router, prefix=f"{v1}/lightguide", tags=["lightguide"])
 
     # -------- 核心/重量级路由（原 main.py 直挂段，保持原注册顺序） --------
     from backend.api.source import router as source_router          # 视频源 + 检测核心

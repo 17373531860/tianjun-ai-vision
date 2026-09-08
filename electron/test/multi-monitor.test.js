@@ -42,10 +42,24 @@ test('默认关闭且只读，非法映射会被过滤', () => {
   assert.equal(config.enabled, false);
   assert.equal(config.readonly, true);
   assert.deepEqual(config.mapping, {
-    '0': { display_id: '100' },
-    '1': { display_id: '', bounds: { x: 1920, y: 0, width: 1920, height: 1080 } },
+    '0': { display_id: '100', role: 'monitor' },
+    '1': { display_id: '', role: 'monitor', bounds: { x: 1920, y: 0, width: 1920, height: 1080 } },
   });
   assert.equal(warnings.length, 3);
+});
+
+test('窗口角色 projection 保留、非法值归一 monitor、缺省 monitor', () => {
+  const { config } = normalizeMultiMonitorConfig({
+    mapping: {
+      '0': { display_id: 'a', role: 'projection' },
+      '1': { display_id: 'b', role: 'hologram' },
+      '2': { display_id: 'c' },
+    },
+  });
+
+  assert.equal(config.mapping['0'].role, 'projection');
+  assert.equal(config.mapping['1'].role, 'monitor');
+  assert.equal(config.mapping['2'].role, 'monitor');
 });
 
 test('优先按 display_id 定位并使用当前 bounds', () => {
@@ -94,6 +108,18 @@ test('kiosk hash 固定同一路由并显式携带 readonly', () => {
   assert.equal(
     buildKioskHash(3, false),
     '/monitor?channel=3&kiosk=1&readonly=0&multi_monitor=1',
+  );
+});
+
+test('projection 角色路由到投影引导画布', () => {
+  assert.equal(
+    buildKioskHash(2, true, 'projection'),
+    '/projection?channel=2&kiosk=1&multi_monitor=1',
+  );
+  // 未显式传 role 时保持一期 monitor 行为
+  assert.equal(
+    buildKioskHash(2, true),
+    '/monitor?channel=2&kiosk=1&readonly=1&multi_monitor=1',
   );
 });
 

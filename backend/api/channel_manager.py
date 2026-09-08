@@ -53,6 +53,10 @@ class MultiMonitorMappingItem(BaseModel):
 
     display_id: str = Field("", description="Electron Display.id 的字符串形式；为空时仅按 bounds 定位")
     bounds: Optional[DisplayBounds] = Field(None, description="显示器 ID 变化或枚举失败时使用的持久化坐标")
+    role: str = Field(
+        "monitor",
+        description="窗口角色：monitor=工位监控页（默认）；projection=投影光引导画布（接投影仪用）。非法值保存时归一为 monitor",
+    )
 
 
 class MultiMonitorConfig(BaseModel):
@@ -699,9 +703,14 @@ class ChannelManager:
                 except (TypeError, ValueError):
                     normalized_bounds = None
 
+            # v3.57 投影光引导: 窗口角色, 非法值静默归一 monitor, 老配置无 role 键零差异
+            role = raw_item.get("role")
+            if role not in ("monitor", "projection"):
+                role = "monitor"
+
             if not display_id and normalized_bounds is None:
                 continue
-            item = {"display_id": display_id}
+            item = {"display_id": display_id, "role": role}
             if normalized_bounds is not None:
                 item["bounds"] = normalized_bounds
             normalized[str(channel_id)] = item
