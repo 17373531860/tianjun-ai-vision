@@ -31,7 +31,7 @@ export const resolveLogicMode = (pollProjectConfig, fallbackProject) =>
   pollProjectConfig?.logic_mode || fallbackProject?.logic_mode;
 
 /** 多工位列应换成专属工艺面板的模式（步骤类模式仍走 SOP 卡） */
-export const MODE_PANEL_KINDS = Object.freeze(['tracking', 'per_item', 'weighing']);
+export const MODE_PANEL_KINDS = Object.freeze(['tracking', 'per_item', 'weighing', 'ocr', 'anomaly']);
 
 /** tracking/per_item/weighing → 模式名；步骤类 → null（调用方走原 SOP） */
 export const resolveModePanelKind = (pollProjectConfig, fallbackProject) => {

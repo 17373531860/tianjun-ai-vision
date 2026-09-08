@@ -32,7 +32,9 @@ API = "/api/v1/interconnect"
 # ============================================================
 def _build_package(tmp_path, *, name, version="1.0.0", artifact=b"fake-onnx-bytes",
                    fmt="onnx", role="primary", x_project=None, analysis=None,
-                   sha_override=None, extra_member=None, contract="1.0.0"):
+                   sha_override=None, extra_member=None, contract="1.0.0",
+                   postprocess=None, preprocess=None, x_trial=None,
+                   task_type="detection"):
     pkg = tmp_path / f"{uuid.uuid4().hex}.yvmodel"
     art_path = "artifacts/model.onnx"
     sha = sha_override or hashlib.sha256(artifact).hexdigest()
@@ -43,7 +45,7 @@ def _build_package(tmp_path, *, name, version="1.0.0", artifact=b"fake-onnx-byte
         "version": version,
         "releaseChannel": "stable",
         "createdAtUtc": "2026-08-07T00:00:00+00:00",
-        "task": {"type": "detection"},
+        "task": {"type": task_type},
         "classes": [
             {"id": 1, "key": "defect_b", "displayName": "缺陷B"},
             {"id": 0, "key": "defect_a", "displayName": "划痕A"},
@@ -60,6 +62,12 @@ def _build_package(tmp_path, *, name, version="1.0.0", artifact=b"fake-onnx-byte
         manifest["extensions"]["x-project-name"] = x_project
     if analysis is not None:
         manifest["extensions"]["x-analysis"] = analysis
+    if postprocess is not None:
+        manifest["postprocess"] = postprocess
+    if preprocess is not None:
+        manifest["preprocess"] = preprocess
+    if x_trial is not None:
+        manifest["extensions"]["x-trial"] = x_trial
     with zipfile.ZipFile(pkg, "w") as zf:
         zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False))
         zf.writestr(art_path, artifact)
@@ -188,6 +196,171 @@ def test_push_unsupported_contract_rejected(client, tmp_path, interconnect_enabl
                          contract="2.0.0")
     resp = _push(client, pkg, interconnect_enabled)
     assert resp.status_code == 400
+
+
+# ============================================================
+# 包契约 1.1: 后处理形态 / 预处理声明 / 试用标记
+# ============================================================
+def test_push_default_postprocess_is_class_nms(client, tmp_path, db_session,
+                                               interconnect_enabled):
+    """1.0.0 包 (无 postprocess 字段) 缺省登记为 class_nms — 全量向后兼容。"""
+    from backend.models.models import Model
+    pkg = _build_package(tmp_path, name=f"旧包-{uuid.uuid4().hex[:6]}")
+    resp = _push(client, pkg, interconnect_enabled)
+    assert resp.status_code == 200, resp.text
+    row = db_session.query(Model).filter(
+        Model.id == resp.json()["model_id"]).first()
+    assert row.meta["postprocess_mode"] == "class_nms"
+    assert row.meta["trial"] is False
+
+
+def test_push_end_to_end_postprocess_registered(client, tmp_path, db_session,
+                                                interconnect_enabled):
+    """契约 1.1: end_to_end 包入库成功, meta 登记形态并带运行时提示 warning。"""
+    from backend.models.models import Model
+    pkg = _build_package(
+        tmp_path, name=f"e2e-{uuid.uuid4().hex[:6]}", contract="1.1",
+        postprocess={"mode": "end_to_end"},
+        preprocess={"letterbox": {"mode": "center", "padValue": 114},
+                    "colorOrder": "rgb"})
+    resp = _push(client, pkg, interconnect_enabled)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert any("end_to_end" in w for w in body["warnings"])
+    row = db_session.query(Model).filter(Model.id == body["model_id"]).first()
+    assert row.meta["postprocess_mode"] == "end_to_end"
+    assert row.meta["preprocess"]["letterbox"]["padValue"] == 114
+
+
+def test_push_unknown_postprocess_mode_rejected(client, tmp_path,
+                                                interconnect_enabled):
+    """未知后处理形态必须拒收 — 语义错的框比收不进来危害大。"""
+    pkg = _build_package(tmp_path, name=f"坏形态-{uuid.uuid4().hex[:6]}",
+                         contract="1.1", postprocess={"mode": "magic"})
+    resp = _push(client, pkg, interconnect_enabled)
+    assert resp.status_code == 400
+    assert "postprocess.mode" in resp.json()["detail"]
+
+
+def test_push_trial_flag_stored(client, tmp_path, db_session,
+                                interconnect_enabled):
+    from backend.models.models import Model
+    pkg = _build_package(tmp_path, name=f"试用-{uuid.uuid4().hex[:6]}",
+                         contract="1.1", x_trial=True)
+    resp = _push(client, pkg, interconnect_enabled)
+    assert resp.status_code == 200, resp.text
+    row = db_session.query(Model).filter(
+        Model.id == resp.json()["model_id"]).first()
+    assert row.meta["trial"] is True
+
+
+def test_push_end_to_end_writes_sidecar(client, tmp_path, db_session,
+                                        interconnect_enabled):
+    """end_to_end 包入库时在产物旁写 .tjmeta.json sidecar (加载层分流无 NMS 直推)。"""
+    import os
+
+    from backend.api.source_e2e_onnx import sidecar_path
+    from backend.models.models import Model
+    pkg = _build_package(
+        tmp_path, name=f"E2E侧车-{uuid.uuid4().hex[:6]}", contract="1.1",
+        postprocess={"mode": "end_to_end"},
+        preprocess={"letterbox": {"padValue": 114}})
+    resp = _push(client, pkg, interconnect_enabled)
+    assert resp.status_code == 200, resp.text
+    row = db_session.query(Model).filter(
+        Model.id == resp.json()["model_id"]).first()
+    sp = sidecar_path(row.file_path)
+    assert os.path.isfile(sp), "end_to_end 模型产物旁应有 sidecar"
+    with open(sp, encoding="utf-8") as f:
+        side = json.load(f)
+    assert side["postprocess_mode"] == "end_to_end"
+    assert side["labels"] == ["划痕A", "缺陷B"]  # classes 按 id 排序
+    assert side["preprocess"]["letterbox"]["padValue"] == 114
+
+
+def test_push_class_nms_no_sidecar(client, tmp_path, db_session,
+                                   interconnect_enabled):
+    """class_nms (缺省) 包不写 sidecar, 加载层 0 行为变化。"""
+    import os
+
+    from backend.api.source_e2e_onnx import sidecar_path
+    from backend.models.models import Model
+    pkg = _build_package(tmp_path, name=f"NMS包-{uuid.uuid4().hex[:6]}")
+    resp = _push(client, pkg, interconnect_enabled)
+    assert resp.status_code == 200, resp.text
+    row = db_session.query(Model).filter(
+        Model.id == resp.json()["model_id"]).first()
+    assert not os.path.isfile(sidecar_path(row.file_path))
+
+
+def test_push_detection_task_runtime_supported(client, tmp_path, db_session,
+                                               interconnect_enabled):
+    from backend.models.models import Model
+    pkg = _build_package(tmp_path, name=f"检测-{uuid.uuid4().hex[:6]}")
+    resp = _push(client, pkg, interconnect_enabled)
+    assert resp.status_code == 200, resp.text
+    row = db_session.query(Model).filter(
+        Model.id == resp.json()["model_id"]).first()
+    assert row.meta["task_type"] == "detection"
+    assert row.meta["runtime_supported"] is True
+
+
+def test_push_ocr_task_archived_with_warning(client, tmp_path, db_session,
+                                             interconnect_enabled):
+    """契约 1.1 新任务类型 (ocr/anomaly): 照收入库存档, 带 warning 不误跑推理。"""
+    from backend.models.models import Model
+    pkg = _build_package(tmp_path, name=f"读码-{uuid.uuid4().hex[:6]}",
+                         contract="1.1", task_type="ocr")
+    resp = _push(client, pkg, interconnect_enabled)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert any("暂不支持推理" in w for w in body.get("warnings") or [])
+    row = db_session.query(Model).filter(
+        Model.id == body["model_id"]).first()
+    assert row.meta["task_type"] == "ocr"
+    assert row.meta["runtime_supported"] is False
+
+
+# ============================================================
+# 安装包预置模型 seeding
+# ============================================================
+def test_preset_seeding_idempotent_and_isolated(tmp_path, db_session, monkeypatch):
+    """预置目录 seeding: 入库/幂等跳过/坏包隔离 三合一。"""
+    from backend.models.models import Model
+    from backend.services.preset_models import seed_preset_models
+
+    preset_dir = tmp_path / "preset_models"
+    preset_dir.mkdir()
+    monkeypatch.setenv("TIANJUN_PRESET_MODELS_DIR", str(preset_dir))
+
+    name_a = f"预置A-{uuid.uuid4().hex[:6]}"
+    name_b = f"预置B-{uuid.uuid4().hex[:6]}"
+    _build_package(preset_dir, name=name_a, x_trial=True).rename(
+        preset_dir / "pack_a.yvmodel")
+    _build_package(preset_dir, name=name_b).rename(
+        preset_dir / "pack_b.yvmodel")
+    (preset_dir / "broken.yvmodel").write_bytes(b"not a zip at all")
+
+    stats = seed_preset_models()
+    assert stats == {"scanned": 3, "seeded": 2, "skipped": 0, "failed": 1}
+
+    row_a = db_session.query(Model).filter(Model.name == name_a).first()
+    assert row_a is not None
+    assert row_a.source == "preset"
+    assert row_a.meta["trial"] is True
+    assert "预置" in (row_a.description or "")
+
+    # 第二轮: 全部幂等跳过, 坏包仍隔离
+    stats2 = seed_preset_models()
+    assert stats2 == {"scanned": 3, "seeded": 0, "skipped": 2, "failed": 1}
+
+
+def test_preset_seeding_missing_dir_noop(monkeypatch, tmp_path):
+    from backend.services.preset_models import seed_preset_models
+    monkeypatch.setenv("TIANJUN_PRESET_MODELS_DIR",
+                       str(tmp_path / "不存在的目录"))
+    assert seed_preset_models() == {
+        "scanned": 0, "seeded": 0, "skipped": 0, "failed": 0}
 
 
 # ============================================================

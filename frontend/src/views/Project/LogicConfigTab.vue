@@ -1651,6 +1651,18 @@
             所有阈值与区域运行时可调，不需要重训模型。
           </p>
 
+          <div class="flex items-center gap-2 flex-wrap text-xs bg-slate-900 p-2 rounded border border-slate-700">
+            <span class="text-gray-400 whitespace-nowrap">监控模板：</span>
+            <el-button size="small" plain @click="addRegionTemplate('intrusion')">区域闯入</el-button>
+            <el-button size="small" plain @click="addRegionTemplate('absence')">离岗检测</el-button>
+            <el-button size="small" plain @click="addRegionTemplate('crowd')">人员聚集</el-button>
+            <el-button size="small" plain @click="addRegionTemplate('proximity')">人车距离</el-button>
+        <el-button size="small" plain @click="addRegionTemplate('flow')">人流计数</el-button>
+            <el-button size="small" plain @click="addRegionTemplate('patrol')">巡检超时未检</el-button>
+            <el-button size="small" plain @click="addRegionTemplate('facing')">面向仪表点检</el-button>
+            <span class="text-gray-500">一键加规则骨架（配合预置行人/车辆模型）；添加后请绘制区域，并按模型实际类别名修改主体/目标类别</span>
+          </div>
+
           <div v-for="(rule, rIdx) in regionEventsCfg.rules" :key="rule.id || rIdx" class="bg-slate-900 p-3 rounded border border-slate-700 space-y-3">
             <div class="flex items-center gap-3">
               <span class="text-cyan-400 font-bold whitespace-nowrap">动作 {{ rIdx + 1 }}</span>
@@ -1659,6 +1671,11 @@
                 <el-option label="工具作用（框重叠）" value="overlap" />
                 <el-option label="进区/驻留（进入区域）" value="region_enter" />
                 <el-option label="出区消失（下料）" value="region_exit" />
+                <el-option label="区域计数（聚集告警）" value="region_count" />
+                <el-option label="区域无人（离岗告警）" value="region_empty" />
+                <el-option label="距离预警（两类接近）" value="proximity" />
+                <el-option label="过线计数（进区计次）" value="cross_count" />
+                <el-option label="朝向驻留（面向仪表点）" value="facing_dwell" />
               </el-select>
               <label class="flex items-center gap-1 text-xs text-gray-400">
                 <el-switch v-model="rule.settle" size="small" />
@@ -1670,14 +1687,14 @@
 
             <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
               <div>
-                <label class="block text-gray-400 mb-1">{{ rule.type === 'overlap' ? '主体类别（工具）' : rule.type === 'region_enter' ? '主体类别（对象）' : '跟踪对象类别' }}</label>
+                <label class="block text-gray-400 mb-1">{{ regionSubjectLabelText(rule.type) }}</label>
                 <el-select v-model="rule.subject_label" size="small" filterable allow-create default-first-option class="w-full" placeholder="如 测硬度笔">
                   <el-option v-for="lbl in regionLabelOptions" :key="lbl" :label="lbl" :value="lbl" />
                 </el-select>
               </div>
-              <div v-if="rule.type === 'overlap'">
-                <label class="block text-gray-400 mb-1">目标类别（被作用）</label>
-                <el-select v-model="rule.object_label" size="small" filterable allow-create default-first-option class="w-full" placeholder="如 工件">
+              <div v-if="rule.type === 'overlap' || rule.type === 'proximity'">
+                <label class="block text-gray-400 mb-1">{{ rule.type === 'proximity' ? '目标类别（被接近，如 叉车）' : '目标类别（被作用）' }}</label>
+                <el-select v-model="rule.object_label" size="small" filterable allow-create default-first-option class="w-full" :placeholder="rule.type === 'proximity' ? '如 叉车/car' : '如 工件'">
                   <el-option v-for="lbl in regionLabelOptions" :key="lbl" :label="lbl" :value="lbl" />
                 </el-select>
               </div>
@@ -1688,7 +1705,7 @@
                   <el-option label="或：重叠 或 主体中心在区域内" value="or" />
                 </el-select>
               </div>
-              <div v-if="rule.type !== 'region_exit'">
+              <div v-if="rule.type === 'overlap' || rule.type === 'region_enter'">
                 <label class="block text-gray-400 mb-1">辅助约束类别（主体须与其相交，可空）</label>
                 <el-select :model-value="rule.require_label ?? null" size="small" clearable filterable class="w-full" placeholder="如 手（压误报）"
                   @update:model-value="rule.require_label = $event || null">
@@ -1696,21 +1713,21 @@
                 </el-select>
               </div>
               <div>
-                <label class="block text-gray-400 mb-1">{{ rule.type === 'region_exit' ? '区域内最少观察帧数' : '连续满足帧数 N' }}</label>
+                <label class="block text-gray-400 mb-1">{{ rule.type === 'region_exit' ? '区域内最少观察帧数' : rule.type === 'cross_count' ? '入区确认帧数' : '连续满足帧数 N' }}</label>
                 <el-input-number v-model="rule.min_frames" size="small" :min="1" :max="600" class="w-full" />
               </div>
-              <div v-if="rule.type !== 'region_exit'">
+              <div v-if="rule.type !== 'region_exit' && rule.type !== 'cross_count'">
                 <label class="block text-gray-400 mb-1" title="动作持续满足该秒数才确认，替代帧数门槛（帧数退化为3帧防噪底线）。相机/推理帧率漂移（24/30fps、GPU负载波动）时帧数门槛松紧会变，按秒判定与帧率无关。0=不启用，按帧数门槛">
                   确认时长（秒，0=按帧数）
                 </label>
-                <el-input-number :model-value="rule.min_seconds ?? 0" size="small" :min="0" :max="30" :step="0.1" :precision="1" class="w-full"
+                <el-input-number :model-value="rule.min_seconds ?? 0" size="small" :min="0" :max="3600" :step="0.1" :precision="1" class="w-full"
                   @update:model-value="rule.min_seconds = ($event && $event > 0) ? $event : 0" />
               </div>
-              <div v-if="rule.type === 'region_exit'">
-                <label class="block text-gray-400 mb-1">消失确认帧数</label>
+              <div v-if="rule.type === 'region_exit' || rule.type === 'cross_count'">
+                <label class="block text-gray-400 mb-1">{{ rule.type === 'cross_count' ? '轨迹消失清理帧数' : '消失确认帧数' }}</label>
                 <el-input-number v-model="rule.gone_frames" size="small" :min="1" :max="600" class="w-full" />
               </div>
-              <div v-if="rule.type === 'region_exit'">
+              <div v-if="rule.type === 'region_exit' || rule.type === 'cross_count'">
                 <label class="block text-gray-400 mb-1">帧间关联 IoU 下限</label>
                 <el-input-number v-model="rule.match_iou" size="small" :min="0.05" :max="0.95" :step="0.05" class="w-full" />
               </div>
@@ -1731,13 +1748,37 @@
                 <el-input-number :model-value="rule.object_margin ?? 0" size="small" :min="0" :max="0.2" :step="0.01" :precision="2" class="w-full"
                   @update:model-value="rule.object_margin = ($event && $event > 0) ? $event : 0" />
               </div>
-              <div v-if="rule.type !== 'region_exit'">
+              <div v-if="rule.type === 'overlap' || rule.type === 'region_enter'">
                 <label class="block text-gray-400 mb-1" title="动作确认前，主体(工具)在本段时间内必须移动过的最小距离（画面宽高归一化，如0.04≈画面4%）。工具搁在原地不动只有检测抖动(约0.01)，真动作要拿起来挪动——用来压掉静置工具的误触发。0=不要求移动">
                   位移门槛（0=不要求移动）
                 </label>
                 <el-input-number v-model="rule.min_move" size="small" :min="0" :max="1" :step="0.01" :precision="2" class="w-full" />
               </div>
-              <div v-if="rule.type !== 'region_exit'">
+              <div v-if="rule.type === 'region_count'">
+                <label class="block text-gray-400 mb-1" title="区域内该类别同时达到此数量并持续满足帧数/秒数门槛后告警。如危险区同时超过3人">
+                  区域内最少数量
+                </label>
+                <el-input-number v-model="rule.min_count" size="small" :min="1" :max="100" class="w-full" />
+              </div>
+              <div v-if="rule.type === 'proximity'">
+                <label class="block text-gray-400 mb-1" title="主体与目标框中心的归一化距离上限（画面宽高归一化，0.15≈画面15%）。任一对主体-目标距离小于该值并持续达标即告警">
+                  距离上限（归一化）
+                </label>
+                <el-input-number v-model="rule.max_distance" size="small" :min="0.01" :max="1" :step="0.01" :precision="2" class="w-full" />
+              </div>
+              <div v-if="rule.type === 'facing_dwell'">
+                <label class="block text-gray-400 mb-1" title="人的身体/头部朝向与「人→仪表点」连线的最大夹角（度）。仪表挨得近时给小（如25°），只有一台给大（如45°）">
+                  朝向容差（度）
+                </label>
+                <el-input-number v-model="rule.tolerance_deg" size="small" :min="5" :max="180" :step="5" class="w-full" />
+              </div>
+              <div v-if="rule.type === 'facing_dwell'" class="flex items-end pb-1">
+                <label class="flex items-center gap-1 text-gray-400" title="关：有人面向仪表并驻留满时长→确认（点检合规打卡）。开：条件取反——超过时长没有任何人面向仪表→告警（巡检哨兵）">
+                  <el-switch v-model="rule.alert_on_absent" size="small" />
+                  无人面向才告警
+                </label>
+              </div>
+              <div v-if="rule.type !== 'region_exit' && rule.type !== 'cross_count'">
                 <label class="block text-gray-400 mb-1" title="动作条件消失超过该秒数才算结束。真动作中途被手/身体遮挡零点几秒不会被切成两段、重复计数。0=不启用，沿用全局漏检容忍帧数">
                   消失确认（秒，0=用全局容忍）
                 </label>
@@ -1755,12 +1796,32 @@
 
             <div class="flex items-center gap-3 pt-2 border-t border-slate-800 text-xs">
               <span class="text-gray-400">判定区域：</span>
-              <span :class="(rule.region || []).length >= 3 ? 'text-emerald-400' : 'text-gray-500'">
-                {{ (rule.region || []).length >= 3 ? `已标定 (${rule.region.length} 个顶点)` : (rule.type === 'overlap' ? '未标定（不限区域）' : '未标定（该类型规则必须标定）') }}
-              </span>
-              <el-button type="primary" size="small" plain @click="$emit('open-region-roi-editor', rIdx)">绘制区域</el-button>
-              <el-button v-if="(rule.region || []).length" size="small" link type="danger" @click="rule.region = null">清除</el-button>
+              <template v-if="rule.type !== 'proximity'">
+                <span :class="(rule.region || []).length >= 3 ? 'text-emerald-400' : 'text-gray-500'">
+                  {{ (rule.region || []).length >= 3 ? `已标定 (${rule.region.length} 个顶点)` : (rule.type === 'overlap' ? '未标定（不限区域）' : '未标定（该类型规则必须标定）') }}
+                </span>
+                <el-button type="primary" size="small" plain @click="$emit('open-region-roi-editor', rIdx)">绘制区域</el-button>
+                <el-button v-if="(rule.region || []).length" size="small" link type="danger" @click="rule.region = null">清除</el-button>
+              </template>
+              <span v-else class="text-gray-500">距离预警按全画面逐对判定主体-目标距离，不使用区域</span>
               <span v-if="rule.type === 'region_enter'" class="text-gray-500">提示：帧数给小 = 进区即触发；给大 + 挂警告事件 = 驻留超时告警</span>
+              <span v-else-if="rule.type === 'region_empty'" class="text-gray-500">提示：配合「确认时长（秒）」= 区域无人超过 N 秒才告警，防走动误报</span>
+              <span v-else-if="rule.type === 'region_count'" class="text-gray-500">提示：区域内同时 ≥ 最少数量并持续达标才告警</span>
+              <span v-else-if="rule.type === 'cross_count'" class="text-gray-500">提示：逐对象计次——两人同时进区计 2 次；同一对象在区内只计 1 次，离开后再进算新一次</span>
+              <span v-else-if="rule.type === 'facing_dwell'" class="text-gray-500">提示：区域可选=只考察站位区内的人；配合「确认时长（秒）」= 面向仪表驻留满 N 秒才确认</span>
+            </div>
+
+            <!-- facing_dwell: 仪表点标定 (单点, 独立于区域多边形) -->
+            <div v-if="rule.type === 'facing_dwell'" class="flex items-center gap-3 pt-2 border-t border-slate-800 text-xs">
+              <span class="text-gray-400">仪表点：</span>
+              <span :class="(Array.isArray(rule.target_point) && rule.target_point.length >= 2) ? 'text-emerald-400' : 'text-amber-400'">
+                {{ (Array.isArray(rule.target_point) && rule.target_point.length >= 2)
+                  ? `已标定 (${Number(rule.target_point[0]).toFixed(3)}, ${Number(rule.target_point[1]).toFixed(3)})`
+                  : '未标定（该类型规则必须标定，否则保存时被丢弃）' }}
+              </span>
+              <el-button type="primary" size="small" plain @click="$emit('open-region-point-editor', rIdx)">在画面上点标仪表位置</el-button>
+              <el-button v-if="Array.isArray(rule.target_point) && rule.target_point.length" size="small" link type="danger" @click="rule.target_point = null">清除</el-button>
+              <span class="text-gray-500">人的朝向需 MediaPipe（已内置），检测框类别须为人</span>
             </div>
 
             <!-- 区域锚点跟随 (可选): 区域随锚点类别当前位置平移+缩放 -->
@@ -1894,7 +1955,150 @@
         </div>
       </el-card>
 
-      <el-card v-if="project.logic_mode !== 'tracking' && project.logic_mode !== 'region_events'" shadow="never" class="bg-slate-800 border-slate-700">
+      <!-- ==================== 2026-09 OCR 读字模式 ==================== -->
+      <el-card v-if="project.logic_mode === 'ocr' && ocrCfg" shadow="never" class="bg-slate-800 border-slate-700">
+        <template #header>
+          <div class="flex justify-between items-center">
+            <span class="font-bold text-white">OCR 读字模式 - 读字规则</span>
+            <el-button type="primary" size="small" link @click="addOcrRule">+ 新增规则</el-button>
+          </div>
+        </template>
+        <div class="space-y-4 text-sm text-gray-300">
+          <p class="text-xs text-gray-400">
+            无需检测模型：按采样间隔读取画面文字，同一文本连续稳定 N 次后按匹配规则判定。
+            匹配式为空 = 读到任意文字即触发合格事件；填正则（如 <code class="text-cyan-400">^SN\d{8}$</code>）= 匹配→合格事件、不匹配→不良事件。识别文本会记入周期原因，可在数据页追溯。
+          </p>
+
+          <div class="grid grid-cols-2 md:grid-cols-3 gap-3 text-xs bg-slate-900 p-3 rounded border border-slate-700">
+            <div>
+              <label class="block text-gray-400 mb-1" title="每隔多少秒读一次画面。OCR 是重操作，不要低于 0.5 秒">采样间隔（秒）</label>
+              <el-input-number v-model="ocrCfg.interval_s" size="small" :min="0.2" :max="3600" :step="0.5" :precision="1" class="w-full" />
+            </div>
+            <div>
+              <label class="block text-gray-400 mb-1" title="OCR 识别置信度门槛，低于丢弃">识别置信度下限</label>
+              <el-input-number v-model="ocrCfg.min_score" size="small" :min="0.05" :max="1" :step="0.05" class="w-full" />
+            </div>
+            <div>
+              <label class="block text-gray-400 mb-1" title="同一文本连续读到 N 次才判定（防运动模糊/半帧误读）">文本稳定次数</label>
+              <el-input-number v-model="ocrCfg.stable_reads" size="small" :min="1" :max="20" class="w-full" />
+            </div>
+          </div>
+
+          <div v-for="(rule, rIdx) in ocrCfg.rules" :key="rule.id || rIdx" class="bg-slate-900 p-3 rounded border border-slate-700 space-y-3">
+            <div class="flex items-center gap-3">
+              <span class="text-cyan-400 font-bold whitespace-nowrap">规则 {{ rIdx + 1 }}</span>
+              <el-input v-model="rule.name" size="small" placeholder="规则名（如 序列号核对）" class="!w-40" />
+              <label class="flex items-center gap-1 text-xs text-gray-400" title="开：判定后走标准结算链收口周期。关：只触发事件响应（Toast/报警/计数），不结算">
+                <el-switch v-model="rule.settle" size="small" />
+                结算周期
+              </label>
+              <label class="flex items-center gap-1 text-xs text-gray-400" title="开：同一文本只触发一次，换新文本才再判（流水线逐件读码）。关：每次稳定读到都触发">
+                <el-switch v-model="rule.on_change_only" size="small" />
+                文本变化才触发
+              </label>
+              <div class="flex-1"></div>
+              <el-button type="danger" size="small" link @click="ocrCfg.rules.splice(rIdx, 1)">删除</el-button>
+            </div>
+            <div class="grid grid-cols-2 md:grid-cols-3 gap-3 text-xs">
+              <div>
+                <label class="block text-gray-400 mb-1" title="正则表达式。空 = 读到任意文字即算匹配">匹配式（正则，可空）</label>
+                <el-input v-model="rule.pattern" size="small" placeholder="如 ^SN\d{8}$" />
+              </div>
+              <div>
+                <label class="block text-gray-400 mb-1">匹配 → 触发事件</label>
+                <el-select v-model="rule.ok_event_id" size="small" class="w-full">
+                  <el-option v-for="ev in (project.events_config || [])" :key="ev.id" :label="ev.name" :value="ev.id" />
+                </el-select>
+              </div>
+              <div>
+                <label class="block text-gray-400 mb-1">不匹配 → 触发事件</label>
+                <el-select v-model="rule.ng_event_id" size="small" class="w-full">
+                  <el-option v-for="ev in (project.events_config || [])" :key="ev.id" :label="ev.name" :value="ev.id" />
+                </el-select>
+              </div>
+            </div>
+            <div class="flex items-center gap-3 pt-2 border-t border-slate-800 text-xs">
+              <span class="text-gray-400">读字区域：</span>
+              <span :class="(Array.isArray(rule.roi) && rule.roi.length >= 4) ? 'text-emerald-400' : 'text-gray-500'">
+                {{ (Array.isArray(rule.roi) && rule.roi.length >= 4) ? '已框定' : '未框定（读整幅画面，慢且易串字，建议框定）' }}
+              </span>
+              <el-button type="primary" size="small" plain @click="$emit('open-ai-roi-editor', { kind: 'ocr', rIdx })">框定读字区域</el-button>
+              <el-button v-if="Array.isArray(rule.roi) && rule.roi.length" size="small" link type="danger" @click="rule.roi = null">清除</el-button>
+            </div>
+          </div>
+          <p v-if="!ocrCfg.rules.length" class="text-xs text-amber-400">尚无读字规则——点右上「+ 新增规则」；无规则时开始检测不会产生任何判定</p>
+        </div>
+      </el-card>
+
+      <!-- ==================== 2026-09 异常检测模式 ==================== -->
+      <el-card v-if="project.logic_mode === 'anomaly' && anomalyCfg" shadow="never" class="bg-slate-800 border-slate-700">
+        <template #header>
+          <div class="flex justify-between items-center">
+            <span class="font-bold text-white">异常检测模式 - 哨兵配置</span>
+            <el-button size="small" plain @click="loadAnomalyBanks">刷新记忆库列表</el-button>
+          </div>
+        </template>
+        <div class="space-y-4 text-sm text-gray-300">
+          <p class="text-xs text-gray-400">
+            无需检测模型与缺陷样本：先在「AI 能力试用」页用 5~50 张<b>好样本</b>照片建记忆库，运行时按间隔给画面打「异常分」，
+            连续 N 次超阈值→触发不良事件报警（带冷却防刷屏）。适合缺陷形态未知/样本稀缺的表面质检、状态监控。
+          </p>
+
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs bg-slate-900 p-3 rounded border border-slate-700">
+            <div class="col-span-2">
+              <label class="block text-gray-400 mb-1">好样本记忆库（必选）</label>
+              <el-select v-model="anomalyCfg.bank_id" size="small" filterable class="w-full" placeholder="选择记忆库（在 AI 能力试用页创建）">
+                <el-option v-for="b in anomalyBanks" :key="b.id" :label="`${b.name}（阈值 ${b.threshold}，${b.num_images} 张样本）`" :value="b.id" />
+              </el-select>
+            </div>
+            <div>
+              <label class="block text-gray-400 mb-1" title="留空 = 用记忆库自带阈值（建库时按训练分布自动估计）。填数 = 覆盖">阈值覆盖（空=库值）</label>
+              <el-input-number :model-value="anomalyCfg.threshold" size="small" :min="0" :step="0.1" :precision="2" class="w-full"
+                @update:model-value="anomalyCfg.threshold = ($event && $event > 0) ? $event : null" />
+            </div>
+            <div>
+              <label class="block text-gray-400 mb-1" title="每隔多少秒打一次分。评分是重操作，不要低于 0.5 秒">采样间隔（秒）</label>
+              <el-input-number v-model="anomalyCfg.interval_s" size="small" :min="0.2" :max="3600" :step="0.5" :precision="1" class="w-full" />
+            </div>
+            <div>
+              <label class="block text-gray-400 mb-1" title="连续 N 次超阈值才报警（防单帧反光/路人误报）">连续超阈值次数</label>
+              <el-input-number v-model="anomalyCfg.consecutive" size="small" :min="1" :max="60" class="w-full" />
+            </div>
+            <div>
+              <label class="block text-gray-400 mb-1">异常 → 触发事件</label>
+              <el-select v-model="anomalyCfg.ng_event_id" size="small" class="w-full">
+                <el-option v-for="ev in (project.events_config || [])" :key="ev.id" :label="ev.name" :value="ev.id" />
+              </el-select>
+            </div>
+            <div>
+              <label class="block text-gray-400 mb-1" title="报警后多少秒内不再重复报警">报警冷却（秒）</label>
+              <el-input-number v-model="anomalyCfg.ng_cooldown_s" size="small" :min="0" :max="3600" :step="5" class="w-full" />
+            </div>
+            <div class="col-span-2 flex items-end gap-3 pb-1">
+              <label class="flex items-center gap-1 text-gray-400" title="报警态下连续 N 次恢复正常时，触发一次合格事件收口（默认关 = 静默恢复）">
+                <el-switch v-model="anomalyCfg.recover_ok_event" size="small" />
+                恢复正常时触发事件
+              </label>
+              <el-select v-if="anomalyCfg.recover_ok_event" v-model="anomalyCfg.ok_event_id" size="small" class="!w-40">
+                <el-option v-for="ev in (project.events_config || [])" :key="ev.id" :label="ev.name" :value="ev.id" />
+              </el-select>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-3 text-xs bg-slate-900 p-3 rounded border border-slate-700">
+            <span class="text-gray-400">监测区域：</span>
+            <span :class="(Array.isArray(anomalyCfg.roi) && anomalyCfg.roi.length >= 4) ? 'text-emerald-400' : 'text-gray-500'">
+              {{ (Array.isArray(anomalyCfg.roi) && anomalyCfg.roi.length >= 4) ? '已框定' : '未框定（评估整幅画面）' }}
+            </span>
+            <el-button type="primary" size="small" plain @click="$emit('open-ai-roi-editor', { kind: 'anomaly' })">框定监测区域</el-button>
+            <el-button v-if="Array.isArray(anomalyCfg.roi) && anomalyCfg.roi.length" size="small" link type="danger" @click="anomalyCfg.roi = null">清除</el-button>
+            <span class="text-gray-500">框定后只评估该区域（建库样本也应是同区域截图）</span>
+          </div>
+          <p v-if="!anomalyCfg.bank_id" class="text-xs text-amber-400">尚未选择记忆库——先到「AI 能力试用」页上传好样本创建，再回来选择</p>
+        </div>
+      </el-card>
+
+      <el-card v-if="!['tracking', 'region_events', 'ocr', 'anomaly'].includes(project.logic_mode)" shadow="never" class="bg-slate-800 border-slate-700">
         <template #header>
           <div class="flex justify-between items-center">
             <span class="font-bold text-white">同时出现组</span>
@@ -2125,7 +2329,7 @@ import { _pi_itemLabelToArray, _pi_itemLabelFromArray } from './perItemLabel';
 const props = defineProps({
   project: { type: Object, required: true },
 });
-defineEmits(['sequence-step-pick', 'mix-type-change', 'open-roi-editor', 'open-region-roi-editor']);
+defineEmits(['sequence-step-pick', 'mix-type-change', 'open-roi-editor', 'open-region-roi-editor', 'open-region-point-editor', 'open-ai-roi-editor']);
 
 // ---------- 步骤候选（自 index.vue 平移, 仅本 Tab 使用） ----------
 // 计算启用的步骤
@@ -2164,6 +2368,51 @@ const regionEventsCfg = computed(() => {
   if (props.project?.logic_mode !== 'region_events') return null;
   return props.project?.pipeline_config?.region_events || null;
 });
+
+// ==================== 2026-09 OCR 读字 / 异常检测模式 ====================
+// 骨架由父级 index.vue ensureOcrDefaults / ensureAnomalyDefaults 兜底; 这里原位编辑。
+const ocrCfg = computed(() => {
+  if (props.project?.logic_mode !== 'ocr') return null;
+  return props.project?.pipeline_config?.ocr || null;
+});
+
+const anomalyCfg = computed(() => {
+  if (props.project?.logic_mode !== 'anomaly') return null;
+  return props.project?.pipeline_config?.anomaly || null;
+});
+
+const addOcrRule = () => {
+  const cfg = ocrCfg.value;
+  if (!cfg) return;
+  if (!Array.isArray(cfg.rules)) cfg.rules = [];
+  const nextNum = cfg.rules.length + 1;
+  cfg.rules.push({
+    id: `ocr_${Date.now().toString(36)}`,
+    name: `读字规则${nextNum}`,
+    roi: null,
+    pattern: '',
+    ok_event_id: 1,
+    ng_event_id: 2,
+    on_change_only: true,
+    settle: true,
+  });
+};
+
+// 异常检测记忆库列表 (AI 能力试用页创建, 这里只读选择)
+const anomalyBanks = ref([]);
+const loadAnomalyBanks = async () => {
+  try {
+    const { listAnomalyBanks } = await import('@/api/aitools');
+    const data = await listAnomalyBanks();
+    anomalyBanks.value = Array.isArray(data?.banks) ? data.banks : (Array.isArray(data) ? data : []);
+  } catch (e) {
+    console.warn('[LogicConfig] 加载异常记忆库列表失败:', e);
+    anomalyBanks.value = [];
+  }
+};
+watch(() => props.project?.logic_mode, (mode) => {
+  if (mode === 'anomaly') loadAnomalyBanks();
+}, { immediate: true });
 
 // ==================== v3.48 计数组合判定表 (检测模式, 纯视觉判型) ====================
 // 存在性由父级 index.vue initProjectDefaults 兜底; 这里原位编辑。
@@ -2289,15 +2538,22 @@ const regionLabelOptions = computed(() => {
   return Array.from(set);
 });
 
-const addRegionRule = () => {
-  const cfg = regionEventsCfg.value;
-  if (!cfg) return;
+const regionSubjectLabelText = (t) => (
+  t === 'overlap' ? '主体类别（工具）'
+    : t === 'region_enter' ? '主体类别（对象）'
+      : t === 'region_exit' ? '跟踪对象类别'
+        : t === 'proximity' ? '主体类别（接近方，如 人）'
+          : t === 'cross_count' ? '计数对象类别（如 人）'
+            : t === 'facing_dwell' ? '主体类别（人）'
+              : '统计类别（如 人）');
+
+const _newRegionRule = (cfg) => {
   if (!Array.isArray(cfg.rules)) cfg.rules = [];
   const nextNum = cfg.rules.reduce((mx, r) => {
     const m = /^r(\d+)$/.exec(r.id || '');
     return m ? Math.max(mx, parseInt(m[1], 10)) : mx;
   }, 0) + 1;
-  cfg.rules.push({
+  return {
     id: `r${nextNum}`,
     name: '',
     type: 'overlap',
@@ -2315,9 +2571,50 @@ const addRegionRule = () => {
     require_label: null,
     gone_frames: 8,
     match_iou: 0.3,
+    min_count: 3,
+    max_distance: 0.15,
+    target_point: null,
+    tolerance_deg: 35,
+    alert_on_absent: false,
     settle: false,
     event_id: null,
-  });
+  };
+};
+
+const addRegionRule = () => {
+  const cfg = regionEventsCfg.value;
+  if (!cfg) return;
+  cfg.rules.push(_newRegionRule(cfg));
+};
+
+// 出厂监控模板 (配合预置行人/车辆模型): 一键加规则骨架, 类别名/区域/事件由用户按现场调整
+const REGION_TEMPLATES = {
+  intrusion: { name: '区域闯入', type: 'region_enter', subject_label: '人', min_frames: 3 },
+  absence: { name: '离岗检测', type: 'region_empty', subject_label: '人', min_frames: 3, min_seconds: 30 },
+  crowd: { name: '人员聚集', type: 'region_count', subject_label: '人', min_frames: 8, min_seconds: 5, min_count: 3 },
+  proximity: { name: '人车距离', type: 'proximity', subject_label: '人', object_label: '叉车', min_frames: 5, min_seconds: 1, max_distance: 0.15 },
+  flow: { name: '人流计数', type: 'cross_count', subject_label: '人', min_frames: 2 },
+  // 巡检合规 (蒸镀点检类场景): 点检位区域超过 N 秒无人出现即告警, 人到位自动重置计时
+  patrol: { name: '巡检超时未检', type: 'region_empty', subject_label: '人', min_frames: 3, min_seconds: 360 },
+  // 朝向点检 (蒸镀点检类场景): 人面向仪表点驻留满 N 秒 → 确认一次点检动作
+  facing: { name: '面向仪表点检', type: 'facing_dwell', subject_label: '人', min_frames: 3, min_seconds: 5, tolerance_deg: 35 },
+};
+
+const addRegionTemplate = (kind) => {
+  const cfg = regionEventsCfg.value;
+  const tpl = REGION_TEMPLATES[kind];
+  if (!cfg || !tpl) return;
+  const rule = { ..._newRegionRule(cfg), ...tpl };
+  // 事件名全局唯一 (后端解析硬校验): 同名模板重复添加时加序号
+  const names = new Set((cfg.rules || []).map(r => r.name));
+  let name = rule.name, n = 2;
+  while (names.has(name)) name = `${rule.name}${n++}`;
+  rule.name = name;
+  // 默认挂"不合格"事件 (id=2 是项目缺省事件) 走报警/Toast 响应面; 没有就留空让用户选
+  rule.event_id = (props.project?.events_config || []).some(e => e.id === 2) ? 2 : null;
+  cfg.rules.push(rule);
+  const needRegion = rule.type !== 'proximity';
+  ElMessage.success(`已添加「${name}」${needRegion ? '，请绘制判定区域' : ''}，并按模型实际类别名核对主体/目标类别`);
 };
 
 const removeRegionRule = (idx) => {
@@ -2331,6 +2628,27 @@ const onRegionRuleTypeChange = (rule) => {
     rule.settle = true;
   } else if (rule.type === 'region_enter') {
     rule.min_frames = 3;
+    rule.settle = false;
+  } else if (rule.type === 'region_empty') {
+    rule.min_frames = 3;
+    rule.min_seconds = rule.min_seconds > 0 ? rule.min_seconds : 30;
+    rule.settle = false;
+  } else if (rule.type === 'region_count') {
+    rule.min_frames = 8;
+    if (!rule.min_count) rule.min_count = 3;
+    rule.settle = false;
+  } else if (rule.type === 'proximity') {
+    rule.min_frames = 5;
+    if (!rule.max_distance) rule.max_distance = 0.15;
+    rule.settle = false;
+  } else if (rule.type === 'cross_count') {
+    rule.min_frames = 2;
+    rule.settle = false;
+  } else if (rule.type === 'facing_dwell') {
+    rule.min_frames = 3;
+    rule.min_seconds = rule.min_seconds > 0 ? rule.min_seconds : 5;
+    if (!rule.tolerance_deg) rule.tolerance_deg = 35;
+    if (rule.alert_on_absent === undefined) rule.alert_on_absent = false;
     rule.settle = false;
   } else {
     rule.min_frames = 10;

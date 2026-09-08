@@ -812,3 +812,219 @@ def test_anchor_exit_rule_follows():
     frames = [[fixture, det('工件', 0.52, 0.5, w=0.08, h=0.1)]] * 4 + [[fixture]] * 10
     events = feed(eng, frames, t0=20.0)
     assert [e['rule_name'] for _, e in events if e['action'] == 'confirmed'] == ['下工件']
+
+
+# ============================================================
+# 监控类规则 (2026-09 出厂模板批次): region_count / region_empty / proximity
+# ============================================================
+
+def crowd_rule(**kw):
+    base = {'id': 'r5', 'name': '人员聚集', 'type': 'region_count',
+            'subject_label': '人', 'region': A_RECT,
+            'min_count': 2, 'min_frames': 3}
+    base.update(kw)
+    return base
+
+
+def absence_rule(**kw):
+    base = {'id': 'r6', 'name': '离岗检测', 'type': 'region_empty',
+            'subject_label': '人', 'region': A_RECT, 'min_frames': 3}
+    base.update(kw)
+    return base
+
+
+def proximity_rule(**kw):
+    base = {'id': 'r7', 'name': '人车距离', 'type': 'proximity',
+            'subject_label': '人', 'object_label': '叉车',
+            'max_distance': 0.15, 'min_frames': 3}
+    base.update(kw)
+    return base
+
+
+PERSON_A = det('人', 0.6, 0.7, w=0.08, h=0.2)
+PERSON_B = det('人', 0.8, 0.7, w=0.08, h=0.2)
+
+
+def test_parse_monitoring_defaults():
+    cfg = parse_region_events({'region_events': {'enabled': True, 'rules': [
+        {'id': 'r1', 'name': '聚集', 'type': 'region_count',
+         'subject_label': '人', 'region': A_RECT},
+        {'id': 'r2', 'name': '离岗', 'type': 'region_empty',
+         'subject_label': '人', 'region': A_RECT, 'min_move': 0.5},
+        {'id': 'r3', 'name': '接近', 'type': 'proximity',
+         'subject_label': '人', 'object_label': '叉车'},
+    ]}})
+    r1, r2, r3 = cfg.rules
+    assert r1.min_count == 3 and r1.min_frames == 8 and r1.settle is False
+    # region_empty 无主体框, 位移门槛配了也强制归零 (否则永远确认不了)
+    assert r2.min_move == 0.0
+    assert r3.max_distance == 0.15 and r3.min_frames == 5 and r3.settle is False
+
+
+@pytest.mark.parametrize('bad_rule, msg', [
+    (crowd_rule(region=None), 'region'),
+    (absence_rule(region=None), 'region'),
+    (proximity_rule(object_label=None), 'object_label'),
+])
+def test_parse_monitoring_invalid(bad_rule, msg):
+    with pytest.raises(ValueError, match=msg):
+        build([bad_rule])
+
+
+def test_region_count_confirms_and_realarm():
+    """区域内达到 min_count 持续 N 帧告警; 散开后重聚 → 再次告警 (不被去重吞)。"""
+    eng = build([crowd_rule()])
+    one = [[PERSON_A]] * 10                       # 只有 1 人: 永不确认
+    assert feed(eng, one) == []
+    both = [[PERSON_A, PERSON_B]] * 5 + [[]] * 8  # 2 人聚集 → 确认; 散开 → 闭合
+    events = feed(eng, both, t0=1.0)
+    confirmed = [e for _, e in events if e['action'] == 'confirmed']
+    assert len(confirmed) == 1 and confirmed[0]['rule_name'] == '人员聚集'
+    assert confirmed[0]['subject'] is not None    # 代表主体框供截图
+    assert [e['action'] for _, e in events if e['action'] == 'closed'] == ['closed']
+    # 重聚 → 第二次告警 (监控类不进动作序列, 连续同名不会被 dedup 吸收)
+    events2 = feed(eng, both, t0=10.0)
+    assert len([e for _, e in events2 if e['action'] == 'confirmed']) == 1
+
+
+def test_region_empty_alarm_and_recovery():
+    """区域无人持续 N 帧 → 离岗告警; 人回来 episode 闭合; 再离开 → 再告警。"""
+    eng = build([absence_rule()])
+    # 人在岗: 不告警 (完全无检测框的空帧也算"无人", 属于告警条件)
+    assert feed(eng, [[PERSON_A]] * 10) == []
+    away = [[]] * 5 + [[PERSON_A]] * 8            # 离岗 5 帧 → 告警; 回岗 → 闭合
+    events = feed(eng, away, t0=1.0)
+    confirmed = [e for _, e in events if e['action'] == 'confirmed']
+    assert len(confirmed) == 1 and confirmed[0]['rule_name'] == '离岗检测'
+    assert confirmed[0]['subject'] is None        # 无人无主体框, 截图走整帧兜底
+    assert len([e for _, e in events if e['action'] == 'closed']) == 1
+    events2 = feed(eng, [[]] * 5, t0=10.0)        # 第二次离岗 → 再次告警
+    assert len([e for _, e in events2 if e['action'] == 'confirmed']) == 1
+
+
+def test_region_empty_min_seconds_gate():
+    """秒基门槛: 无人跨度不足秒数不告警 (30s 离岗典型配置的缩尺验证)。"""
+    eng = build([absence_rule(min_seconds=0.3)])
+    # dt=0.04: 5 帧跨度 0.16s < 0.3s → 不确认; 10 帧跨度 0.36s → 确认
+    assert feed(eng, [[]] * 5) == []
+    events = feed(eng, [[]] * 5, t0=0.2)
+    assert len([e for _, e in events if e['action'] == 'confirmed']) == 1
+
+
+def test_proximity_distance_gate():
+    """人车中心距离 ≤ max_distance 持续 N 帧才告警; 远处不响。"""
+    eng = build([proximity_rule()])
+    far = [[det('人', 0.2, 0.5, w=0.08, h=0.2), det('叉车', 0.8, 0.5, w=0.3, h=0.3)]]
+    assert feed(eng, far * 10) == []
+    near = [[det('人', 0.7, 0.5, w=0.08, h=0.2), det('叉车', 0.8, 0.5, w=0.3, h=0.3)]]
+    events = feed(eng, near * 5, t0=1.0)
+    confirmed = [e for _, e in events if e['action'] == 'confirmed']
+    assert len(confirmed) == 1 and confirmed[0]['rule_name'] == '人车距离'
+    assert confirmed[0]['subject']['label'] == '人'
+
+
+def test_monitoring_orthogonal_to_action_rules():
+    """监控告警与工序动作正交: 不进动作序列、不打断进行中的动作 episode。"""
+    eng = build([hardness_rule(min_frames=15), crowd_rule()])
+    # 测硬度进行中 (5 帧, 未到 15 帧确认门槛) 同时人员聚集确认
+    frames = [[*PEN_ON_WORK, PERSON_A, PERSON_B]] * 5
+    events = feed(eng, frames)
+    assert [e['rule_name'] for _, e in events if e['action'] == 'confirmed'] \
+        == ['人员聚集']
+    snap = eng.snapshot()
+    by_name = {r['name']: r for r in snap['rules']}
+    # 测硬度 episode 未被聚集确认打断 (仍在累计中)
+    assert by_name['测硬度']['in_progress'] is True
+    assert by_name['测硬度']['hit_frames'] == 5
+    # 监控确认不进动作序列 (否则会撕碎工序结算判定)
+    assert snap['pending_sequence'] == []
+    # 快照对监控类型不抛 KeyError 且带确认计数
+    assert by_name['人员聚集']['total'] == 1
+
+
+def test_action_confirm_does_not_interrupt_monitoring():
+    """反向正交: 工序动作确认时, 进行中的监控 episode 不被打断。"""
+    # 离岗计时进行中 (工位区无人) + 测硬度在区域外发生 → 测硬度确认
+    pen_work_outside = [det('测硬度笔', 0.2, 0.2, w=0.04, h=0.04),
+                        det('工件', 0.2, 0.2, w=0.2, h=0.2)]
+    eng2 = build([hardness_rule(min_frames=3, region=None), absence_rule(min_frames=30)])
+    events = feed(eng2, [pen_work_outside] * 5)
+    assert [e['rule_name'] for _, e in events if e['action'] == 'confirmed'] \
+        == ['测硬度']
+    by_name = {r['name']: r for r in eng2.snapshot()['rules']}
+    # 离岗 episode (工位区无人) 仍在累计, 未被测硬度确认打断
+    assert by_name['离岗检测']['in_progress'] is True
+    assert by_name['离岗检测']['hit_frames'] == 5
+
+
+# ============================================================
+# cross_count 规则 (过线/人流计数, 逐对象轨迹): 2026-09 全量批次
+# ============================================================
+
+def flow_rule(**kw):
+    base = {'id': 'r8', 'name': '人流计数', 'type': 'cross_count',
+            'subject_label': '人', 'region': A_RECT,
+            'min_frames': 2, 'gone_frames': 4}
+    base.update(kw)
+    return base
+
+
+def test_cross_count_parse_defaults_and_region_required():
+    cfg = parse_region_events({'region_events': {'enabled': True, 'rules': [
+        {'id': 'r1', 'name': '计数', 'type': 'cross_count',
+         'subject_label': '人', 'region': A_RECT},
+    ]}})
+    r = cfg.rules[0]
+    assert r.min_frames == 2 and r.settle is False
+    with pytest.raises(ValueError, match='region'):
+        build([flow_rule(region=None)])
+
+
+def test_cross_count_once_per_track():
+    """同一对象在区内持续在场只计一次 (与 region_enter 的 episode 语义等价场景)。"""
+    eng = build([flow_rule()])
+    events = feed(eng, [[PERSON_A]] * 10)
+    confirmed = [e for _, e in events if e['action'] == 'confirmed']
+    assert len(confirmed) == 1 and confirmed[0]['rule_name'] == '人流计数'
+    assert confirmed[0]['subject']['label'] == '人'
+    by_name = {r['name']: r for r in eng.snapshot()['rules']}
+    assert by_name['人流计数']['total'] == 1
+    assert by_name['人流计数']['entered_tracks'] == 1
+
+
+def test_cross_count_per_object_not_per_episode():
+    """两人同时进区 → 计 2 次 (region_enter 只会计 1 次, 这是本类型存在的意义)。"""
+    eng = build([flow_rule()])
+    events = feed(eng, [[PERSON_A, PERSON_B]] * 5)
+    assert len([e for _, e in events if e['action'] == 'confirmed']) == 2
+    assert {r['name']: r for r in eng.snapshot()['rules']}['人流计数']['total'] == 2
+
+
+def test_cross_count_reentry_counts_again():
+    """离开消失 ≥ gone_frames 后再进区 → 新轨迹再计一次。"""
+    eng = build([flow_rule()])
+    frames = [[PERSON_A]] * 3 + [[]] * 6 + [[PERSON_A]] * 3
+    events = feed(eng, frames)
+    assert len([e for _, e in events if e['action'] == 'confirmed']) == 2
+
+
+def test_cross_count_outside_region_never_counts():
+    """区域外对象 (跟踪中) 永不计数。"""
+    eng = build([flow_rule()])
+    outside = det('人', 0.2, 0.2, w=0.08, h=0.2)   # A_RECT 之外
+    assert feed(eng, [[outside]] * 10) == []
+    assert {r['name']: r for r in eng.snapshot()['rules']}['人流计数']['total'] == 0
+
+
+def test_cross_count_orthogonal_to_actions():
+    """计数确认不进动作序列、不打断工序 episode (监控语义)。"""
+    eng = build([hardness_rule(min_frames=15), flow_rule()])
+    frames = [[*PEN_ON_WORK, det('人', 0.6, 0.9, w=0.08, h=0.2)]] * 5
+    events = feed(eng, frames)
+    assert [e['rule_name'] for _, e in events if e['action'] == 'confirmed'] \
+        == ['人流计数']
+    snap = eng.snapshot()
+    by_name = {r['name']: r for r in snap['rules']}
+    assert by_name['测硬度']['in_progress'] is True
+    assert by_name['测硬度']['hit_frames'] == 5
+    assert snap['pending_sequence'] == []

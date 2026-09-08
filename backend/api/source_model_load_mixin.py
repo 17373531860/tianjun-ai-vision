@@ -87,7 +87,11 @@ class ModelLoadMixin:
                 self._release_model()
 
             try:
-                self.model = YOLO(model_path)
+                # 契约 1.1: 有 end_to_end sidecar 的模型走无 NMS 直推 runner,
+                # 其余模型 0 行为变化 (仍走 ultralytics YOLO)
+                from backend.api.source_e2e_onnx import maybe_load_end_to_end
+                e2e = maybe_load_end_to_end(model_path)
+                self.model = e2e if e2e is not None else YOLO(model_path)
             except Exception as e:
                 if self._original_pt_path and model_path != self._original_pt_path:
                     print(f"[ModelLoad] converted model load failed ({e}), fallback to original model: {self._original_pt_path}")
@@ -432,7 +436,10 @@ class ModelLoadMixin:
                 self._release_model_from(mi)
 
             try:
-                mi.model = YOLO(model_path)
+                # 契约 1.1: end_to_end sidecar → 无 NMS 直推 runner (同 load_model)
+                from backend.api.source_e2e_onnx import maybe_load_end_to_end
+                e2e = maybe_load_end_to_end(model_path)
+                mi.model = e2e if e2e is not None else YOLO(model_path)
             except Exception as e:
                 if mi._original_pt_path and model_path != mi._original_pt_path:
                     print(f"[ModelLoad] [{mi.name}] converted model load failed ({e}), fallback: {mi._original_pt_path}")

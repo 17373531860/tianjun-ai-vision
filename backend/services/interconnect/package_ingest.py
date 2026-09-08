@@ -47,14 +47,29 @@ _FORMAT_TO_FRAMEWORK = {
     "torchscript": "TorchScript",
     "tensorrt": "TensorRT",
 }
+# 包契约 1.1: 后处理形态枚举。class_nms = 1.0.0 既有语义 (模型出重叠框, 运行时按
+# 类别 NMS); end_to_end = 模型直接输出最终框 (YOLO26 / RF-DETR 形态), 运行时不做
+# NMS。未声明视同 class_nms (1.0.0 包全量兼容)。未知取值必须拒收——语义错的框
+# 比收不进来危害大得多。
+_POSTPROCESS_MODES = {"class_nms", "end_to_end"}
+# 检测运行时当前可直接推理的任务类型。其外的类型 (ocr / anomaly / openvocab 等,
+# 契约 1.1 起平台可能下发) 照收入库存档——包是合法的, 只是推理引擎还没接——
+# 带 warning + meta.runtime_supported=False, 让 UI/运维一眼看到状态, 不误绑项目跑推理。
+_RUNTIME_TASK_TYPES = {"detection", "segmentation"}
+# 模型来源 → 模型仓库 description 文案
+_SOURCE_DESCRIPTIONS = {
+    "yolovision": "YoloVision 训练平台推送 (包 {pkg})",
+    "preset": "安装包预置模型 (包 {pkg})",
+}
 _MAX_TOTAL_UNCOMPRESSED = 8 * 1024 ** 3   # 8 GB
 _MAX_COMPRESSION_RATIO = 300              # 单文件压缩比上限 (>10MB 时校验)
 _CHUNK = 4 * 1024 * 1024
 
 
-def ingest_package(package_path: str, db) -> dict:
+def ingest_package(package_path: str, db, source: str = "yolovision") -> dict:
     """解析并入库一个 .yvmodel 包, 返回契约响应体 (不含 HTTP 状态)。
 
+    source: 模型来源标记 (yolovision=平台推/拉, preset=安装包预置)。
     Raises: PackageError / PackageConflict
     """
     from backend.core.config import settings
@@ -95,6 +110,33 @@ def ingest_package(package_path: str, db) -> dict:
         warnings: list[str] = []
         for art in artifacts:
             _verify_artifact_sha(zf, art)
+
+        # 包契约 1.1: 后处理形态 (缺省 = class_nms, 即 1.0.0 语义)
+        postprocess = manifest.get("postprocess")
+        if postprocess is not None and not isinstance(postprocess, dict):
+            raise PackageError("manifest.postprocess 必须是 JSON 对象")
+        pp_mode = ((postprocess or {}).get("mode") or "class_nms").strip().lower()
+        if pp_mode not in _POSTPROCESS_MODES:
+            raise PackageError(
+                f"不支持的后处理形态 postprocess.mode='{pp_mode}' "
+                f"(支持: {', '.join(sorted(_POSTPROCESS_MODES))})")
+        if pp_mode == "end_to_end":
+            warnings.append(
+                "primary 产物声明端到端后处理 (end_to_end), "
+                "已登记并启用无 NMS 直推路径 (跟踪模式暂不支持端到端模型)")
+
+        # 包契约 1.1: 预处理参数化声明 (原样存 meta, 运行时按需消费)
+        preprocess = manifest.get("preprocess")
+        if preprocess is not None and not isinstance(preprocess, dict):
+            raise PackageError("manifest.preprocess 必须是 JSON 对象")
+
+        # 任务类型运行时感知: 检测/分割可直接推理; 其余 (ocr/anomaly 等) 入库存档
+        task_type = ((manifest.get("task") or {}).get("type") or "").strip().lower() or None
+        runtime_supported = task_type is None or task_type in _RUNTIME_TASK_TYPES
+        if not runtime_supported:
+            warnings.append(
+                f"任务类型 '{task_type}' 当前检测运行时暂不支持推理, "
+                f"模型已入库存档 (推理支持随对应能力批次启用)")
 
         # 幂等: name + version 唯一
         existing = db.query(Model).filter(
@@ -138,18 +180,39 @@ def ingest_package(package_path: str, db) -> dict:
             _safe_remove(file_path)
             raise PackageError(f"提取模型产物失败: {e}") from e
 
+        # 契约 1.1: end_to_end 模型写 sidecar 元数据, 加载层据此切无 NMS 直推
+        # runner (backend/api/source_e2e_onnx)。加载入口只拿 file_path 拿不到
+        # Model.meta, sidecar 是最小侵入的元数据通道。
+        if pp_mode == "end_to_end":
+            try:
+                from backend.api.source_e2e_onnx import sidecar_path
+                with open(sidecar_path(file_path), "w", encoding="utf-8") as f:
+                    json.dump({
+                        "postprocess_mode": pp_mode,
+                        "preprocess": preprocess if isinstance(preprocess, dict) else {},
+                        "labels": labels or [],
+                    }, f, ensure_ascii=False)
+            except Exception as e:
+                _safe_remove(file_path)
+                raise PackageError(f"写入端到端模型元数据 sidecar 失败: {e}") from e
+
         analysis = extensions.get("x-analysis")
         meta = {
-            "source": "yolovision",
+            "source": source,
             "contract_version": contract,
             "package_id": manifest.get("packageId"),
             "release_channel": manifest.get("releaseChannel"),
             "created_at_utc": manifest.get("createdAtUtc"),
-            "task_type": (manifest.get("task") or {}).get("type"),
+            "task_type": task_type,
+            "runtime_supported": runtime_supported,
             "x_project_name": x_project or None,
             "project_matched": project is not None,
             "provenance": manifest.get("provenance") or {},
             "analysis": analysis if isinstance(analysis, dict) else None,
+            # 包契约 1.1: 后处理形态 + 预处理声明 + 试用标记
+            "postprocess_mode": pp_mode,
+            "preprocess": preprocess if isinstance(preprocess, dict) else None,
+            "trial": bool(extensions.get("x-trial")),
             "artifacts": [
                 {"id": a.get("id"), "format": a.get("format"),
                  "precision": a.get("precision"), "role": a.get("role"),
@@ -159,6 +222,7 @@ def ingest_package(package_path: str, db) -> dict:
             "received_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         }
 
+        desc_tpl = _SOURCE_DESCRIPTIONS.get(source, _SOURCE_DESCRIPTIONS["yolovision"])
         model = Model(
             name=name,
             file_path=file_path,
@@ -166,10 +230,10 @@ def ingest_package(package_path: str, db) -> dict:
             file_size=file_size,
             framework=framework,
             labels=labels,
-            description=f"YoloVision 训练平台推送 (包 {manifest.get('packageId') or '未知'})",
+            description=desc_tpl.format(pkg=manifest.get("packageId") or "未知"),
             version=version,
             project_id=project.id if project is not None else None,
-            source="yolovision",
+            source=source,
             meta=meta,
         )
         try:

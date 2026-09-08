@@ -80,3 +80,11 @@ asyncua>=1.0.0           # OPC UA 兜底 (杂牌 PLC 走 UA 网关的行业标�
 # RFC 14 统一触发中心 - 触发源依赖 (惰性 import, 缺库只影响对应类型)
 pynput>=1.7.6            # hid_key 触发源: 脚踏板/USB 按钮盒全局按键钩子
 # pixel_region/timer/http/mock 纯内置; serial_pattern 复用既有 pyserial
+
+# 2026-09 全量批次 - OCR 读字 + 端到端 (无 NMS) ONNX 直推
+# rapidocr: Apache-2.0, PP-OCR 系模型内嵌 pip 包 → 可直接进离线安装包
+# onnxruntime: OCR 后端 + backend/api/source_e2e_onnx 端到端直推 runner
+#   (CI/CUDA 机器若装 onnxruntime-gpu 则本行可去重, 两者互斥)
+onnxruntime>=1.17.0
+rapidocr_onnxruntime>=1.3.0
+# 异常检测 (services/anomaly_engine) 复用既有 torch/torchvision, 无新增依赖

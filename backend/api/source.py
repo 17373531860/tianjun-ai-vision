@@ -178,6 +178,7 @@ from backend.api.source_periodic_actions_mixin import PeriodicActionsMixin  # no
 from backend.api.source_synthetic_mixin import SyntheticMixin  # noqa: E402  v3.6.x: 虚拟剧本源（功能测试）
 from backend.api.source_per_item_mixin import PerItemMixin  # noqa: E402  v3.6.x: 逐件覆盖模式 (logic_mode='per_item')
 from backend.api.source_region_events_mixin import RegionEventsMixin  # noqa: E402  v3.32+: 区域事件模式 (logic_mode='region_events', TP 工位流程监测)
+from backend.api.source_ai_modes_mixin import AiModesMixin  # noqa: E402  2026-09: AI 采样模式 (logic_mode='ocr'|'anomaly', 无 YOLO 节流采样)
 from backend.api.source_drawer import Drawer  # noqa: E402  P7 阶段一第一刀: DrawMixin 重构为 has-a 组合 (自持 kalman 状态)
 from backend.api.source_mediapipe import MediaPipeOverlay  # noqa: E402  P7 第二刀: MediaPipe 子系统改组合 (自持 _mp_* 状态)
 from backend.api.source_counters import Counters  # noqa: E402  P7 第三刀: 计数器子系统改组合 (自持 counters dict + 持久化)
@@ -186,7 +187,7 @@ from backend.api.source_inference_executor import InferenceExecutor  # noqa: E40
 from backend.api.source_sequence_labels import SequenceLabels  # noqa: E402  P7 第九刀: 步骤标签查询改组合 (无状态, 仅依赖 project_config)
 
 
-class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, CaptureLoopMixin, EventTriggerMixin, ModelLoadMixin, CheckModesMixin, SettlementMixin, DetectRunnersMixin, CameraStartMixin, SessionLifecycleMixin, RecordingThreadMixin, RecordingApiMixin, LifecycleMixin, SyntheticMixin, PeriodicActionsMixin, PerItemMixin, RegionEventsMixin):
+class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, CaptureLoopMixin, EventTriggerMixin, ModelLoadMixin, CheckModesMixin, SettlementMixin, DetectRunnersMixin, CameraStartMixin, SessionLifecycleMixin, RecordingThreadMixin, RecordingApiMixin, LifecycleMixin, SyntheticMixin, PeriodicActionsMixin, PerItemMixin, RegionEventsMixin, AiModesMixin):
     """主管理器 (P7 进行中: DrawMixin 已改组合 → self.drawer)"""
 
     # ===== P7 兼容层: 把已迁移到组件的属性/方法名映射回组件实例 =====
@@ -1532,7 +1533,9 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             if not self.load_model(model_path):
                 raise Exception("模型加载失败")
         
-        if self.model is None and getattr(self, 'source_type', None) != 'synthetic':
+        # AI 采样模式 (ocr/anomaly) 不依赖 YOLO 模型, 放行无模型启动
+        if (self.model is None and getattr(self, 'source_type', None) != 'synthetic'
+                and not self._ai_mode_active()):
             raise Exception("未加载模型")
         
         # Camera released during pause → re-open before starting
@@ -1615,7 +1618,10 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             print("[Image] image detection started")
             return True
         
-        if self.is_running and (self.model is not None or self.source_type == 'synthetic'):
+        if self._ai_mode_active():
+            # AI 采样模式: 独立节流采样线程替代 YOLO 推理线程 (即使已加载模型也不跑推理)
+            self._start_ai_sampling_thread()
+        elif self.is_running and (self.model is not None or self.source_type == 'synthetic'):
             self._start_inference_thread()
         
         self._ensure_session_active()
@@ -1686,6 +1692,9 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
 
         # 停止推理线程
         self._stop_inference_thread()
+
+        # 停止 AI 采样线程 (ocr/anomaly 模式; 非该模式为 no-op)
+        self._stop_ai_sampling_thread()
         
         # 关闭推理线程池
         self._shutdown_inference_executor()

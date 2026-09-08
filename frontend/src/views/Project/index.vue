@@ -101,7 +101,9 @@
               @sequence-step-pick="onSequenceStepPick"
               @mix-type-change="onCustomMixTypeChange"
               @open-roi-editor="openRoiEditor"
-              @open-region-roi-editor="openRegionRoiEditor" />
+              @open-region-roi-editor="openRegionRoiEditor"
+              @open-region-point-editor="openRegionPointEditor"
+              @open-ai-roi-editor="openAiRoiEditor" />
           </el-tab-pane>
 
           <!-- 装箱清点 Tab：仅自定义模式 × 混合跟踪时出现（信息架构重构：原逻辑设置内嵌块外置） -->
@@ -187,7 +189,10 @@
       ref="roiEditorDialogRef"
       v-model:visible="roiEditorVisible"
       :title="roiEditorDialogTitle"
+      :mode="roiEditorMode"
       @save="handleRoiSave"
+      @save-point="handleRoiSavePoint"
+      @save-rect="handleRoiSaveRect"
       @close="resetRoiEditorTargets" />
 
     <LabelSplitDialog
@@ -392,6 +397,18 @@ const guardRuleEditingIdx = ref(-1);
 // v3.39 流水线称重: 秤台区 (标签"工件上秤"有效域) 编辑标记 (互斥)
 const pipelineZoneEditing = ref(false);
 
+// 2026-09 facing_dwell 仪表点标定: 指向 region_events.rules 下标 (point 模式, 互斥)
+const regionPointEditingIdx = ref(-1);
+// 2026-09 OCR 读字区 / 异常监测区: {kind:'ocr', rIdx} 或 {kind:'anomaly'} (rect 模式, 互斥)
+const aiRoiEditing = ref(null);
+
+// 对话框绘制模式: 仪表点=单点, OCR/异常=矩形, 其余=多边形 (历史行为)
+const roiEditorMode = computed(() => {
+  if (regionPointEditingIdx.value >= 0) return 'point';
+  if (aiRoiEditing.value) return 'rect';
+  return 'polygon';
+});
+
 const resetRoiEditorTargets = () => {
   extraModelRoiEditingIdx.value = -1;
   stepRoiEditingStepId.value = null;
@@ -399,6 +416,8 @@ const resetRoiEditorTargets = () => {
   regionRuleEditingIdx.value = -1;
   guardRuleEditingIdx.value = -1;
   pipelineZoneEditing.value = false;
+  regionPointEditingIdx.value = -1;
+  aiRoiEditing.value = null;
 };
 
 // v3.35 融合模式判定: 顺序 SOP + 步骤外设门控 (称重配置页签的第二种出现条件)
@@ -429,8 +448,75 @@ const roiEditorDialogTitle = computed(() => {
   if (pipelineZoneEditing.value) {
     return '绘制秤台区（"工件上秤"标签只在此区域内有效）';
   }
+  if (regionPointEditingIdx.value >= 0) {
+    const rule = ap?.pipeline_config?.region_events?.rules?.[regionPointEditingIdx.value];
+    return `标定规则 [${rule?.name || `规则 ${regionPointEditingIdx.value + 1}`}] 的仪表位置（单击一次）`;
+  }
+  if (aiRoiEditing.value?.kind === 'ocr') {
+    const rule = ap?.pipeline_config?.ocr?.rules?.[aiRoiEditing.value.rIdx];
+    return `框定 OCR 规则 [${rule?.name || `规则 ${(aiRoiEditing.value.rIdx ?? 0) + 1}`}] 的读字区域`;
+  }
+  if (aiRoiEditing.value?.kind === 'anomaly') {
+    return '框定异常检测监测区域（只评估该区域）';
+  }
   return '绘制 ROI 检测区域';
 });
+
+// 2026-09 facing_dwell 仪表点: LogicConfigTab 发起, 复用同一个编辑器 (point 模式)
+const openRegionPointEditor = async (ruleIdx) => {
+  resetRoiEditorTargets();
+  regionPointEditingIdx.value = ruleIdx;
+  const rule = activeProject.value?.pipeline_config?.region_events?.rules?.[ruleIdx];
+  await _openRoiDialog(rule?.target_point || null);
+};
+
+// 2026-09 OCR 读字区 / 异常监测区: LogicConfigTab 发起 (rect 模式)
+const openAiRoiEditor = async (target) => {
+  resetRoiEditorTargets();
+  aiRoiEditing.value = target || null;
+  let existing = null;
+  if (target?.kind === 'ocr') {
+    existing = activeProject.value?.pipeline_config?.ocr?.rules?.[target.rIdx]?.roi || null;
+  } else if (target?.kind === 'anomaly') {
+    existing = activeProject.value?.pipeline_config?.anomaly?.roi || null;
+  }
+  await _openRoiDialog(existing);
+};
+
+// point 模式保存: 写 facing_dwell 规则的 target_point
+const handleRoiSavePoint = (point) => {
+  if (regionPointEditingIdx.value >= 0 && Array.isArray(point) && point.length >= 2) {
+    const rule = activeProject.value?.pipeline_config?.region_events?.rules?.[regionPointEditingIdx.value];
+    if (rule) {
+      rule.target_point = point;
+      ElMessage.success(`规则 [${rule.name || `规则 ${regionPointEditingIdx.value + 1}`}] 仪表点已标定 (${point[0]}, ${point[1]})，记得点右上角"保存配置"落库`);
+    }
+  }
+  resetRoiEditorTargets();
+  roiEditorVisible.value = false;
+};
+
+// rect 模式保存: 写 OCR 规则 roi / 异常检测 roi
+const handleRoiSaveRect = (rect) => {
+  const t = aiRoiEditing.value;
+  if (t && Array.isArray(rect) && rect.length >= 4) {
+    if (t.kind === 'ocr') {
+      const rule = activeProject.value?.pipeline_config?.ocr?.rules?.[t.rIdx];
+      if (rule) {
+        rule.roi = rect;
+        ElMessage.success(`OCR 规则 [${rule.name || `规则 ${(t.rIdx ?? 0) + 1}`}] 读字区域已框定，记得点右上角"保存配置"落库`);
+      }
+    } else if (t.kind === 'anomaly') {
+      const a = activeProject.value?.pipeline_config?.anomaly;
+      if (a) {
+        a.roi = rect;
+        ElMessage.success('异常检测监测区域已框定，记得点右上角"保存配置"落库');
+      }
+    }
+  }
+  resetRoiEditorTargets();
+  roiEditorVisible.value = false;
+};
 
 // v3.35 视觉料源防错规则区域: WeighingConfigTab 发起, 复用同一个 ROI 编辑器
 const openGuardRoiEditor = async (idx) => {
@@ -613,7 +699,7 @@ const _sanitizeRegionEvents = (re) => {
   const rules = (Array.isArray(src.rules) ? src.rules : [])
     .filter(r => r && (r.name || '').trim() && (r.subject_label || '').trim())
     .map((r, i) => {
-      const type = ['region_exit', 'region_enter'].includes(r.type) ? r.type : 'overlap';
+      const type = ['region_exit', 'region_enter', 'region_count', 'region_empty', 'proximity', 'cross_count', 'facing_dwell'].includes(r.type) ? r.type : 'overlap';
       const region = Array.isArray(r.region) && r.region.length >= 3 ? r.region : null;
       const out = {
         id: r.id || `r${i + 1}`,
@@ -634,18 +720,33 @@ const _sanitizeRegionEvents = (re) => {
         out.require_label = (r.require_label || '').trim() || null;
       } else if (type === 'region_enter') {
         out.require_label = (r.require_label || '').trim() || null;
-      } else {
+      } else if (type === 'region_count') {
+        out.min_count = Math.max(1, Math.floor(Number(r.min_count) || 3));
+      } else if (type === 'proximity') {
+        out.object_label = (r.object_label || '').trim();
+        out.max_distance = Math.max(0.01, Math.min(1, Number(r.max_distance) || 0.15));
+      } else if (type === 'region_exit' || type === 'cross_count') {
         out.gone_frames = Math.max(1, Math.floor(Number(r.gone_frames) || 8));
         out.match_iou = Math.max(0.05, Math.min(0.95, Number(r.match_iou) || 0.3));
+        if (type === 'cross_count') out.min_frames = Math.max(1, Math.floor(Number(r.min_frames) || 2));
+      } else if (type === 'facing_dwell') {
+        // 仪表点独立字段 (单点, 不能塞 region 多边形——会被 >=3 点约束洗掉)
+        const pt = Array.isArray(r.target_point) ? r.target_point : null;
+        out.target_point = (pt && pt.length >= 2 && Number.isFinite(Number(pt[0])) && Number.isFinite(Number(pt[1])))
+          ? [Math.max(0, Math.min(1, Number(pt[0]))), Math.max(0, Math.min(1, Number(pt[1])))]
+          : null;
+        out.tolerance_deg = Math.max(5, Math.min(180, Number(r.tolerance_deg) || 35));
+        out.alert_on_absent = !!r.alert_on_absent;
       }
       // 消失确认秒数 / 位移门槛 / 确认时长秒基 (overlap/enter 可选): >0 才落库
-      if (type !== 'region_exit') {
+      if (type !== 'region_exit' && type !== 'cross_count') {
         const gs = Number(r.gone_seconds);
         if (Number.isFinite(gs) && gs > 0) out.gone_seconds = Math.min(30, gs);
         const mm = Number(r.min_move);
         if (Number.isFinite(mm) && mm > 0) out.min_move = Math.min(1, mm);
         const ms = Number(r.min_seconds);
-        if (Number.isFinite(ms) && ms > 0) out.min_seconds = Math.min(30, ms);
+        // 上限 3600s: 巡检合规类规则 (如蒸镀点检每 5~10 分钟到位确认) 需要分钟级时长, 后端解析本无上限
+        if (Number.isFinite(ms) && ms > 0) out.min_seconds = Math.min(3600, ms);
       }
       // 区域锚点跟随 (可选): 锚点类别 + 标定框齐全才落库, 半截配置直接丢弃
       const a = r.anchor || {};
@@ -661,7 +762,9 @@ const _sanitizeRegionEvents = (re) => {
         };
       }
       return out;
-    });
+    })
+    // facing_dwell 未标定仪表点 = 半截配置, 后端解析会整体拒载, 存库时直接丢弃
+    .filter(r => r.type !== 'facing_dwell' || r.target_point);
   const class_conf = {};
   Object.entries(src.class_conf || {}).forEach(([label, conf]) => {
     const v = Number(conf);
@@ -698,6 +801,54 @@ const _sanitizeRegionEvents = (re) => {
       order,
       event_id: seqSrc.event_id ?? null,
     },
+  };
+};
+
+// 2026-09 OCR 读字模式: 存库前收敛 (丢空规则 / 数值钳位; 后端 parse_ocr_config 是最终裁判)
+const _sanitizeOcrConfig = (o) => {
+  const src = o || {};
+  const rules = (Array.isArray(src.rules) ? src.rules : [])
+    .filter(r => r && (r.name || '').trim())
+    .map((r, i) => {
+      const roi = Array.isArray(r.roi) && r.roi.length >= 4
+        && Number(r.roi[2]) > 0 && Number(r.roi[3]) > 0
+        ? r.roi.slice(0, 4).map(Number) : null;
+      return {
+        id: r.id || `ocr_${i + 1}`,
+        name: r.name.trim(),
+        roi,
+        pattern: String(r.pattern || '').trim(),
+        ok_event_id: r.ok_event_id ?? 1,
+        ng_event_id: r.ng_event_id ?? 2,
+        on_change_only: r.on_change_only !== false,
+        settle: r.settle !== false,
+      };
+    });
+  return {
+    interval_s: Math.max(0.2, Math.min(3600, Number(src.interval_s) || 2.0)),
+    min_score: Math.max(0.05, Math.min(1, Number(src.min_score) || 0.5)),
+    stable_reads: Math.max(1, Math.floor(Number(src.stable_reads) || 2)),
+    rules,
+  };
+};
+
+// 2026-09 异常检测模式: 存库前收敛 (后端 parse_anomaly_config 是最终裁判)
+const _sanitizeAnomalyConfig = (a) => {
+  const src = a || {};
+  const thr = Number(src.threshold);
+  const roi = Array.isArray(src.roi) && src.roi.length >= 4
+    && Number(src.roi[2]) > 0 && Number(src.roi[3]) > 0
+    ? src.roi.slice(0, 4).map(Number) : null;
+  return {
+    bank_id: String(src.bank_id || '').trim(),
+    threshold: Number.isFinite(thr) && thr > 0 ? thr : null,
+    interval_s: Math.max(0.2, Math.min(3600, Number(src.interval_s) || 2.0)),
+    consecutive: Math.max(1, Math.floor(Number(src.consecutive) || 3)),
+    roi,
+    ng_event_id: src.ng_event_id ?? 2,
+    ok_event_id: src.ok_event_id ?? 1,
+    ng_cooldown_s: Math.max(0, Math.min(3600, Number(src.ng_cooldown_s) || 30)),
+    recover_ok_event: !!src.recover_ok_event,
   };
 };
 
@@ -782,7 +933,61 @@ watch(() => activeProject.value?.logic_mode, (mode) => {
   if (mode === 'region_events' && activeProject.value) {
     ensureRegionEventsDefaults(activeProject.value);
   }
+  if (mode === 'ocr' && activeProject.value) {
+    ensureOcrDefaults(activeProject.value);
+  }
+  if (mode === 'anomaly' && activeProject.value) {
+    ensureAnomalyDefaults(activeProject.value);
+  }
 });
+
+// 2026-09 OCR 读字模式: 补齐 pipeline_config.ocr 骨架 (字段与后端 parse_ocr_config 对齐)
+const ensureOcrDefaults = (project) => {
+  if (!project.pipeline_config) project.pipeline_config = {};
+  const o = project.pipeline_config.ocr;
+  if (!o || typeof o !== 'object') {
+    project.pipeline_config.ocr = {
+      interval_s: 2.0, min_score: 0.5, stable_reads: 2, rules: [],
+    };
+    return;
+  }
+  if (o.interval_s === undefined) o.interval_s = 2.0;
+  if (o.min_score === undefined) o.min_score = 0.5;
+  if (o.stable_reads === undefined) o.stable_reads = 2;
+  if (!Array.isArray(o.rules)) o.rules = [];
+  o.rules.forEach(r => {
+    if (!r || typeof r !== 'object') return;
+    if (r.pattern === undefined) r.pattern = '';
+    if (r.roi === undefined) r.roi = null;
+    if (r.ok_event_id === undefined) r.ok_event_id = 1;
+    if (r.ng_event_id === undefined) r.ng_event_id = 2;
+    if (r.on_change_only === undefined) r.on_change_only = true;
+    if (r.settle === undefined) r.settle = true;
+  });
+};
+
+// 2026-09 异常检测模式: 补齐 pipeline_config.anomaly 骨架 (字段与后端 parse_anomaly_config 对齐)
+const ensureAnomalyDefaults = (project) => {
+  if (!project.pipeline_config) project.pipeline_config = {};
+  const a = project.pipeline_config.anomaly;
+  if (!a || typeof a !== 'object') {
+    project.pipeline_config.anomaly = {
+      bank_id: '', threshold: null, interval_s: 2.0, consecutive: 3,
+      roi: null, ng_event_id: 2, ok_event_id: 1,
+      ng_cooldown_s: 30, recover_ok_event: false,
+    };
+    return;
+  }
+  if (a.bank_id === undefined) a.bank_id = '';
+  if (a.threshold === undefined) a.threshold = null;
+  if (a.interval_s === undefined) a.interval_s = 2.0;
+  if (a.consecutive === undefined) a.consecutive = 3;
+  if (a.roi === undefined) a.roi = null;
+  if (a.ng_event_id === undefined) a.ng_event_id = 2;
+  if (a.ok_event_id === undefined) a.ok_event_id = 1;
+  if (a.ng_cooldown_s === undefined) a.ng_cooldown_s = 30;
+  if (a.recover_ok_event === undefined) a.recover_ok_event = false;
+};
 
 // v3.32+ 区域事件模式: 补齐 pipeline_config.region_events 骨架 (字段与后端 parse_region_events 对齐)
 const ensureRegionEventsDefaults = (project) => {
@@ -941,6 +1146,13 @@ const initProjectDefaults = (project) => {
   // v3.32+ 区域事件模式: 同款零污染策略
   if (project.logic_mode === 'region_events') {
     ensureRegionEventsDefaults(project);
+  }
+  // 2026-09 OCR 读字 / 异常检测模式: 同款零污染策略
+  if (project.logic_mode === 'ocr') {
+    ensureOcrDefaults(project);
+  }
+  if (project.logic_mode === 'anomaly') {
+    ensureAnomalyDefaults(project);
   }
   
   // 使用 pipeline_config 中的值，如果没有则使用默认值
@@ -1999,6 +2211,13 @@ const handleSaveProject = async () => {
         // v3.32+ 区域事件模式配置 (仅 region_events 模式写入, 字段与后端 parse_region_events 对齐)
         region_events: activeProject.value.logic_mode === 'region_events'
           ? _sanitizeRegionEvents(activeProject.value.pipeline_config?.region_events)
+          : undefined,
+        // 2026-09 OCR 读字 / 异常检测模式配置 (仅对应模式写入, 零污染; 后端 parse_*_config 是最终裁判)
+        ocr: activeProject.value.logic_mode === 'ocr'
+          ? _sanitizeOcrConfig(activeProject.value.pipeline_config?.ocr)
+          : undefined,
+        anomaly: activeProject.value.logic_mode === 'anomaly'
+          ? _sanitizeAnomalyConfig(activeProject.value.pipeline_config?.anomaly)
           : undefined,
         rod_companion_filter: _sanitizeCompanionFilter(activeProject.value.rod_companion_filter),
         rod_session_gate: _sanitizeSessionGate(activeProject.value.rod_session_gate),

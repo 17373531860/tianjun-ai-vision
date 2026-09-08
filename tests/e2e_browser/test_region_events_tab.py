@@ -268,6 +268,81 @@ def test_结算判定与进区规则落库(page, base_url, api_url):
         f"结算判定应落库: {srules}"
 
 
+def test_监控模板一键添加与落库(page, base_url, api_url):
+    """2026-09 出厂监控模板: 六模板一键加规则 (闯入/离岗/聚集/人车距离/人流计数/巡检超时未检) →
+    默认挂不合格事件 → 画区域 → 保存 → 新规则类型与专属字段全落库。
+    巡检模板 360 秒同时守门 min_seconds 上限放宽 (曾被前端钳制 30 秒, 分钟级巡检配不进)。"""
+    pid, name = _mk_project(api_url)
+    requests.put(f"{api_url}/api/v1/projects/{pid}", json={"events_config": [
+        {"id": 1, "name": "合格(OK)", "actions": []},
+        {"id": 2, "name": "不合格(NG)", "actions": []},
+    ]}, timeout=5).raise_for_status()
+    _open_logic_tab(page, base_url, name)
+    card = _rules_card(page)
+
+    for label in ("区域闯入", "离岗检测", "人员聚集", "人车距离", "人流计数", "巡检超时未检"):
+        card.locator(f"button:has-text('{label}')").first.click()
+        time.sleep(0.5)
+
+    body = page.evaluate("document.body.innerText")
+    assert "动作 6" in body, "六条模板规则应全部出现"
+    assert "区域无人超过 N 秒才告警" in body, "离岗规则应显示秒基用法提示"
+    assert "不使用区域" in body, "距离预警规则应显示不使用区域说明"
+
+    # 给"离岗检测"(动作 2) 画判定区域, 验证新类型的区域落库链路
+    rule2 = card.locator("div.bg-slate-900").filter(has_text="动作 2").first
+    rule2.locator("button:has-text('绘制区域')").click()
+    time.sleep(1.2)
+    roi_dlg = page.locator(".el-dialog:has-text('绘制区域事件规则')")
+    canvas = roi_dlg.locator("canvas").first
+    box = canvas.bounding_box()
+    for rx, ry in [(0.3, 0.3), (0.7, 0.3), (0.7, 0.8), (0.3, 0.8)]:
+        page.mouse.click(box["x"] + box["width"] * rx, box["y"] + box["height"] * ry)
+        time.sleep(0.2)
+    roi_dlg.locator("button:has-text('完成绘制')").click()
+    time.sleep(0.4)
+    roi_dlg.locator("button:has-text('保存 ROI')").click()
+    time.sleep(0.8)
+
+    page.locator("button:has-text('保存配置')").click()
+    time.sleep(2.0)
+    detail = requests.get(f"{api_url}/api/v1/projects/{pid}", timeout=5).json()
+    re_cfg = (detail.get("pipeline_config") or {}).get("region_events") or {}
+    by_name = {r.get("name"): r for r in (re_cfg.get("rules") or [])}
+    assert set(by_name) == {"区域闯入", "离岗检测", "人员聚集", "人车距离", "人流计数", "巡检超时未检"}, \
+        f"六条模板规则应落库: {list(by_name)}"
+
+    intr = by_name["区域闯入"]
+    assert intr["type"] == "region_enter" and intr["event_id"] == 2
+
+    absence = by_name["离岗检测"]
+    assert absence["type"] == "region_empty" and absence["event_id"] == 2
+    assert abs(absence.get("min_seconds", 0) - 30) < 1e-6, \
+        f"离岗默认 30 秒秒基应落库: {absence.get('min_seconds')}"
+    assert len(absence.get("region") or []) == 4, \
+        f"离岗判定区域应落库: {absence.get('region')}"
+
+    crowd = by_name["人员聚集"]
+    assert crowd["type"] == "region_count" and crowd.get("min_count") == 3
+
+    prox = by_name["人车距离"]
+    assert prox["type"] == "proximity"
+    assert prox.get("object_label") == "叉车"
+    assert abs(prox.get("max_distance", 0) - 0.15) < 1e-6
+    assert not prox.get("region"), "距离预警不使用区域"
+
+    flow = by_name["人流计数"]
+    assert flow["type"] == "cross_count"
+    assert flow.get("min_frames") == 2, f"入区确认帧数默认 2: {flow.get('min_frames')}"
+    assert flow.get("gone_frames") == 8 and abs(flow.get("match_iou", 0) - 0.3) < 1e-6, \
+        "轨迹清理帧数/关联 IoU 默认应落库"
+
+    patrol = by_name["巡检超时未检"]
+    assert patrol["type"] == "region_empty" and patrol["event_id"] == 2
+    assert abs(patrol.get("min_seconds", 0) - 360) < 1e-6, \
+        f"巡检 360 秒应原样落库 (min_seconds 上限已放宽到 3600, 不得再被钳到 30): {patrol.get('min_seconds')}"
+
+
 def test_空名规则被保存守门剔除(page, base_url, api_url):
     pid, name = _mk_project(api_url)
     _open_logic_tab(page, base_url, name)

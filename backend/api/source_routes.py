@@ -2000,6 +2000,11 @@ def get_detection_results(
         print(f"[API] /detection/results 取 label_split_rounds 失败: {_e}")
         result['label_split_rounds'] = None
 
+    # 2026-09: AI 采样模式运行态 (logic_mode='ocr'|'anomaly', Monitor 专属面板消费)
+    _ai_snap = getattr(mgr, '_ai_mode_snapshot', None)
+    if _ai_snap is not None:
+        result['ai_mode'] = _ai_snap
+
     # 多通道场景下前端不能用 currentProject (顶部下拉框单一值) 兜底,
     # 必须每帧带上 tracking 过滤所需的字段, 否则容器模式表格里"箱子"行
     # 过滤不掉 (前端 Monitor/index.vue 的 _trkExpectedLabels 依赖这里).

@@ -949,6 +949,14 @@ def apply_project_config(h, config: dict):
     except Exception as e:
         print(f"[Weighing] 登记通道配置失败: {e}")
 
+    # 2026-09 AI 采样模式 (logic_mode='ocr'|'anomaly'): 解析配置 + 重置运行时状态。
+    # 非该模式清空全部状态, 零差异。线程启停跟随 start/stop_detection。
+    try:
+        from backend.api.source_ai_modes_mixin import apply_ai_modes_config
+        apply_ai_modes_config(h, config, pipeline_config)
+    except Exception as e:
+        print(f"[AiMode] 应用配置失败: {e}")
+
     # v3.35 步骤外设门控 (steps_config[].device_gate): {label: gate_cfg}
     # 默认无任何步骤配置 → 空 dict → _process_single_step 一次 get 早退, 零差异。
     h.step_device_gates = {}

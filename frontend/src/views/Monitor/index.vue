@@ -1458,6 +1458,8 @@ const channelModelStats = ref({});
 // v3.8+: per_item 逐件模式运行时状态, 来自 /detection/results 的 per_item_state 字段.
 // 非 per_item 模式或后端尚未启用时为 null. PerItemPanel 直接消费该结构.
 const perItemState = ref(null);
+// 2026-09: OCR/异常检测模式运行态 (results.ai_mode, 单工位轮询落这里)
+const aiModeState = ref(null);
 
 // v3.21: 包装箱结算进度. 仅当前工位有启用配置才显示 + 轮询, 否则不渲染/不请求 (零差异).
 const packagingConfigs = ref([]);   // 已启用的包装配置 (进 Monitor 时探测一次)
@@ -1623,9 +1625,11 @@ const comboGuardBannerClass = computed(() =>
     ? 'bg-emerald-700/95 border-emerald-400/60'
     : 'bg-red-700/95 border-red-400/60');
 // SOP 卡片条可见性 (原模板内联表达式抽出, 供判型看板同行布局复用)
+// 2026-09: ocr/anomaly 走专属模式面板, SOP 同样让位 (singleModePanelKind 已含判定, 双保险)
 const sopPanelVisible = computed(() =>
   systemStore.display.monitor.stepStrip && steps.value.length > 0
-  && !isTrackingMode.value && !isPerItemMode.value && !isWeighingMode.value);
+  && !isTrackingMode.value && !isPerItemMode.value && !isWeighingMode.value
+  && singleLogicMode.value !== 'ocr' && singleLogicMode.value !== 'anomaly');
 // v3.49 二期 Monitor 判型实时看板 (combo_table.live_display, 默认关):
 // 各判型标签实时计数 + 当前 PLC 缸型 (plc_type 随轮询即时刷新)。
 // 2026-08-13 起与 SOP 卡片条同行右侧停靠, 配置里的 position 字段保留但不再使用 (向后兼容)
@@ -2127,6 +2131,8 @@ const singleModeChData = computed(() => ({
     settled_ng: trackingSettledNg.value,
   },
   perItemState: perItemState.value,
+  // 2026-09 OCR/异常检测模式运行态: 单工位轮询优先, 回退多通道轮询落的通道态
+  aiMode: aiModeState.value || multiChannelData.value[selectedChannel.value]?.aiMode || null,
 }));
 
 // ==================== 检测框/叠加层绘制 ====================
@@ -3260,6 +3266,8 @@ const startPolling = () => {
       modelStats.value = Array.isArray(data.models) ? data.models : [];
       // v3.8+: 逐件模式状态 (非 per_item 项目时后端返回 null, 这里原样转交 PerItemPanel)
       perItemState.value = data.per_item_state || null;
+      // 2026-09: OCR/异常检测模式运行态 (非该模式后端不带该字段, 这里原样转交专属面板)
+      aiModeState.value = data.ai_mode || null;
       // v3.19.x: 自定义混合模式物品校验状态 (未启用混合时后端返回 null)
       customMixState.value = data.custom_mix_state || null;
       cycleTime.value = data.average_cycle_time || 0;

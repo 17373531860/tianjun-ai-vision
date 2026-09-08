@@ -986,6 +986,12 @@ def _start_heavy_init_async():
             auto_restore_video_sources()
         except Exception as _e:
             print(f"[启动] 后台视频源恢复失败 (隔离, 不影响主流程): {_e}")
+        # 安装包预置模型 seeding (幂等增量, 坏包跳过, 失败不影响主流程)
+        try:
+            from backend.services.preset_models import seed_preset_models
+            seed_preset_models()
+        except Exception as _e:
+            print(f"[启动] 预置模型 seeding 失败 (隔离, 不影响主流程): {_e}")
         _heavy_init_done.set()
         print(f"[启动] 重初始化后台线程完成, 耗时 {_t.time() - _t0:.1f}s")
     threading.Thread(target=_worker, daemon=True, name="startup-heavy-init").start()

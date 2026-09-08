@@ -77,6 +77,22 @@
             <span class="text-xs text-gray-400 block mt-1">模型只检测"物"（工具/工件/手），动作由时序规则判定：工具与工件重叠 N 帧→事件（如测硬度/扫码），对象出区消失→结算周期（如下工件）。规则在「逻辑设置」页签配置</span>
           </div>
         </label>
+
+        <label class="flex items-start p-3 bg-slate-800 rounded border border-slate-700 cursor-pointer hover:border-cyan-500/50 transition-colors">
+          <input type="radio" v-model="project.logic_mode" value="ocr" class="mt-1 accent-cyan-500">
+          <div class="ml-3 flex-1">
+            <span class="font-bold text-white block">OCR 读字模式</span>
+            <span class="text-xs text-gray-400 block mt-1">无需检测模型：按设定间隔读取画面指定区域文字（序列号/批次号/标签），文本稳定后按匹配规则判定→事件1/事件2。规则在「逻辑设置」页签配置</span>
+          </div>
+        </label>
+
+        <label class="flex items-start p-3 bg-slate-800 rounded border border-slate-700 cursor-pointer hover:border-cyan-500/50 transition-colors">
+          <input type="radio" v-model="project.logic_mode" value="anomaly" class="mt-1 accent-cyan-500">
+          <div class="ml-3 flex-1">
+            <span class="font-bold text-white block">异常检测模式</span>
+            <span class="text-xs text-gray-400 block mt-1">无需检测模型：先用好样本在「AI 能力试用」页建记忆库，运行时按间隔对画面打分，连续超阈值→事件2 报警（带冷却）。适合缺陷样本稀缺的表面质检。配置在「逻辑设置」页签</span>
+          </div>
+        </label>
       </div>
     </div>
   </div>

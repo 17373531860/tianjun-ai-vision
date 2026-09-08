@@ -30,6 +30,32 @@
                         默认结算周期。例: 下工件 = 工件进 C 区后消失 N3 帧。
                         从未进过区域的对象 (如打码位夹具上的常驻工件) 自然排除。
 
+监控类规则 (2026-09, 出厂规则模板批次; 与预置行人/车辆模型配套):
+  - region_count 规则 : 区域内主体类别数量 ≥ min_count 并持续达标 → 事件确认
+                        (聚集告警: 危险区同时超过 N 人)。
+  - region_empty 规则 : 区域内主体类别数量 = 0 并持续达标 → 事件确认
+                        (离岗告警: 值守区超过 N 秒无人, 建议配 min_seconds)。
+  - proximity 规则    : 任一主体与任一目标的中心归一化距离 ≤ max_distance
+                        并持续达标 → 事件确认 (人车距离预警: 人靠近叉车)。
+  - cross_count 规则  : 主体类别对象 (帧间 IoU 关联跟踪, region_exit 同款) 进入
+                        区域满 min_frames 帧 → 逐对象计一次 (过线/人流计数)。
+                        与 region_enter 的差别: enter 是规则级 episode (两人同时
+                        进只算一次), cross_count 按轨迹逐对象计数; 同一对象在区
+                        内持续在场只计一次, 消失 ≥ gone_frames 后再进算新一次。
+  - facing_dwell 规则 : 朝向驻留 (2026-09 蒸镀点检批次): 主体框携带的朝向角
+                        ('facing' 字段, VSM 层经 person_orientation 注入) 与
+                        "主体中心→仪表点 (target_point)"连线的夹角 ≤ tolerance_deg
+                        并持续达标 → 事件确认 ("面向仪表确认了 N 秒", 点检台账);
+                        alert_on_absent=true 时条件取反 ("持续 min_seconds 无人
+                        面向仪表" → 超时未点检告警, 与 region_empty 反向语义同款)。
+                        可选 region 限定站位区; 朝向角与 bearing 同为归一化空间角
+                        (坐标畸变一致抵消), 无朝向字段的主体框视为不满足。
+  region_count/region_empty/proximity/facing_dwell 共用 overlap 的 episode 状态机
+  (min_frames/min_seconds/gone_seconds 同义),
+  但语义是"持续观测告警"而非"工序动作": 非结算确认时不进动作序列、不参与连续
+  同动作去重、不打断其他 episode、也不被其他动作确认打断——否则单规则监控项目
+  第二次告警会被去重静默吞掉 (seq 尾部永远是同名), 混合项目里告警会撕碎工序序列。
+
 结算判定 (settlement_rules, 可选): 结算时对"本周期确认事件序列 (含结算事件)"
 按配置顺序逐条匹配, 先匹配先赢, 命中即用该条的事件结算 (自定义模式同款语义):
   - exact    : 序列与给定序列完全一致 (标准流程 → 合格)
@@ -63,6 +89,7 @@
 """
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 from backend.api.source_label_split import _parse_bbox, _parse_polygon, _point_in_polygon
@@ -97,6 +124,11 @@ def _pair_overlaps(a: dict, b: dict, min_iou: float) -> bool:
     return _intersect_area(a, b) > 0
 
 
+# 监控类规则: 持续观测告警/计数, 不是工序动作 (语义差异见模块 docstring)
+_MONITORING_TYPES = ('region_count', 'region_empty', 'proximity', 'cross_count',
+                     'facing_dwell')
+
+
 # ==================== 配置解析 ====================
 
 class RegionEventRule:
@@ -107,17 +139,21 @@ class RegionEventRule:
                  'gone_frames', 'match_iou', 'settle', 'event_id',
                  'anchor_label', 'anchor_ref', 'anchor_hold',
                  'gone_seconds', 'min_overlap_ratio', 'min_move', 'min_seconds',
-                 'object_margin')
+                 'object_margin', 'min_count', 'max_distance',
+                 'target_point', 'tolerance_deg', 'alert_on_absent')
 
     def __init__(self, rule_id, name, rule_type, subject_label, object_label,
                  region, region_mode, min_frames, min_iou, require_label,
                  gone_frames, match_iou, settle, event_id,
                  anchor_label=None, anchor_ref=None, anchor_hold=3.0,
                  gone_seconds=None, min_overlap_ratio=0.0, min_move=0.0,
-                 min_seconds=0.0, object_margin=0.0):
+                 min_seconds=0.0, object_margin=0.0, min_count=3,
+                 max_distance=0.15, target_point=None, tolerance_deg=35.0,
+                 alert_on_absent=False):
         self.rule_id = rule_id
         self.name = name                    # 事件名 = 步骤落库/流水显示名, 全局唯一
         self.rule_type = rule_type          # 'overlap' | 'region_enter' | 'region_exit'
+        #                                     | 'region_count' | 'region_empty' | 'proximity'
         self.subject_label = subject_label  # 主体类别 (工具 / 被跟踪对象)
         self.object_label = object_label    # overlap: 目标类别 (通常是工件)
         self.region = region                # 归一化多边形; overlap 可为 None
@@ -141,6 +177,12 @@ class RegionEventRule:
         self.min_seconds = min_seconds      # overlap/enter: 确认时长秒基门槛
         #                                     (>0 按命中跨度秒判定, 帧数退化为
         #                                      3 帧硬下限; 0=按 min_frames 帧数)
+        self.min_count = min_count          # region_count: 区域内最少目标数
+        self.max_distance = max_distance    # proximity: 两类中心归一化距离上限
+        self.target_point = target_point    # facing_dwell: 仪表点 (归一化 x, y)
+        self.tolerance_deg = tolerance_deg  # facing_dwell: 朝向夹角容差 (度)
+        self.alert_on_absent = alert_on_absent  # facing_dwell: True=条件取反
+        #                                     ("持续无人面向仪表"超时告警)
         self.object_margin = object_margin  # overlap: 目标框虚拟扩边 (归一化,
         #                                     0=不扩)。真动作发生在目标框边缘
         #                                     外侧几个百分点时 (如扫工件下沿
@@ -214,7 +256,9 @@ def _parse_rule(i: int, raw: dict) -> RegionEventRule:
     if not isinstance(raw, dict):
         raise ValueError(f"region_events.rules[{i}] 不是对象")
     rule_type = raw.get('type')
-    if rule_type not in ('overlap', 'region_enter', 'region_exit'):
+    if rule_type not in ('overlap', 'region_enter', 'region_exit',
+                         'region_count', 'region_empty', 'proximity',
+                         'cross_count', 'facing_dwell'):
         raise ValueError(f"region_events.rules[{i}].type 非法: {rule_type!r}")
     name = str(raw.get('name') or '').strip()
     if not name:
@@ -234,10 +278,24 @@ def _parse_rule(i: int, raw: dict) -> RegionEventRule:
         if not object_label:
             raise ValueError(f"region_events.rules[{i}] ({name}) overlap 规则缺少 object_label")
         default_min_frames, default_settle = 10, False
+    elif rule_type == 'proximity':
+        if not object_label:
+            raise ValueError(f"region_events.rules[{i}] ({name}) proximity 规则缺少 object_label")
+        default_min_frames, default_settle = 5, False
     elif rule_type == 'region_enter':
         if region is None:
             raise ValueError(f"region_events.rules[{i}] ({name}) region_enter 规则必须配置 region")
         default_min_frames, default_settle = 3, False
+    elif rule_type in ('region_count', 'region_empty'):
+        if region is None:
+            raise ValueError(f"region_events.rules[{i}] ({name}) {rule_type} 规则必须配置 region")
+        default_min_frames, default_settle = 8, False
+    elif rule_type == 'cross_count':
+        if region is None:
+            raise ValueError(f"region_events.rules[{i}] ({name}) cross_count 规则必须配置 region")
+        default_min_frames, default_settle = 2, False
+    elif rule_type == 'facing_dwell':
+        default_min_frames, default_settle = 3, False  # region 可选 (站位区限定)
     else:
         if region is None:
             raise ValueError(f"region_events.rules[{i}] ({name}) region_exit 规则必须配置 region")
@@ -268,6 +326,8 @@ def _parse_rule(i: int, raw: dict) -> RegionEventRule:
         min_move = max(0.0, float(raw.get('min_move') or 0.0))
     except (TypeError, ValueError):
         raise ValueError(f"region_events.rules[{i}] ({name}) min_move 非数值")
+    if rule_type in ('region_empty', 'facing_dwell'):
+        min_move = 0.0  # 区域无人/朝向驻留 (驻留本就要求站定) 时位移门槛无意义, 强制忽略
 
     try:
         min_seconds = max(0.0, float(raw.get('min_seconds') or 0.0))
@@ -280,6 +340,47 @@ def _parse_rule(i: int, raw: dict) -> RegionEventRule:
         raise ValueError(f"region_events.rules[{i}] ({name}) object_margin 非数值")
     # 上限 0.2: 扩边是"桥接目标框边缘几个百分点"的微调, 更大就该重画区域了
     object_margin = min(0.2, max(0.0, object_margin))
+
+    try:
+        min_count = max(1, int(raw.get('min_count') or 3))
+    except (TypeError, ValueError):
+        raise ValueError(f"region_events.rules[{i}] ({name}) min_count 非整数")
+
+    try:
+        max_distance = float(raw.get('max_distance') or 0.15)
+    except (TypeError, ValueError):
+        raise ValueError(f"region_events.rules[{i}] ({name}) max_distance 非数值")
+    max_distance = min(1.0, max(0.0, max_distance))
+
+    # facing_dwell: 仪表点 (target_point [x,y]) / 兼容 target_region 小框取质心
+    # (前端复用 ROI 编辑器画小框标仪表位置, 解析期收敛为一个点)
+    target_point = None
+    if rule_type == 'facing_dwell':
+        raw_pt = raw.get('target_point')
+        if (isinstance(raw_pt, (list, tuple)) and len(raw_pt) == 2):
+            try:
+                target_point = (min(1.0, max(0.0, float(raw_pt[0]))),
+                                min(1.0, max(0.0, float(raw_pt[1]))))
+            except (TypeError, ValueError):
+                raise ValueError(f"region_events.rules[{i}] ({name}) target_point 非数值")
+        elif raw.get('target_region') is not None:
+            poly = _parse_polygon(raw.get('target_region'))
+            if poly is None:
+                raise ValueError(f"region_events.rules[{i}] ({name}) target_region 多边形非法")
+            target_point = (sum(p[0] for p in poly) / len(poly),
+                            sum(p[1] for p in poly) / len(poly))
+        if target_point is None:
+            raise ValueError(
+                f"region_events.rules[{i}] ({name}) facing_dwell 规则必须标定仪表点 "
+                f"(target_point 或 target_region)")
+
+    tolerance_deg = 35.0
+    if raw.get('tolerance_deg') is not None:
+        try:
+            tolerance_deg = float(raw['tolerance_deg'])
+        except (TypeError, ValueError):
+            raise ValueError(f"region_events.rules[{i}] ({name}) tolerance_deg 非数值")
+        tolerance_deg = min(90.0, max(5.0, tolerance_deg))
 
     settle = raw.get('settle')
     return RegionEventRule(
@@ -305,6 +406,11 @@ def _parse_rule(i: int, raw: dict) -> RegionEventRule:
         min_move=min_move,
         min_seconds=min_seconds,
         object_margin=object_margin,
+        min_count=min_count,
+        max_distance=max_distance,
+        target_point=target_point,
+        tolerance_deg=tolerance_deg,
+        alert_on_absent=bool(raw.get('alert_on_absent', False)),
     )
 
 
@@ -451,9 +557,10 @@ class _OverlapState:
 
 
 class _Track:
-    """region_exit 规则的单对象轨迹 (帧间 IoU 关联)。"""
+    """region_exit / cross_count 规则的单对象轨迹 (帧间 IoU 关联)。"""
 
-    __slots__ = ('bbox', 'in_frames', 'entered', 'miss', 'first_ts', 'last_ts')
+    __slots__ = ('bbox', 'in_frames', 'entered', 'miss', 'first_ts', 'last_ts',
+                 'counted')
 
     def __init__(self, bbox, in_region: bool, ts: float):
         self.bbox = bbox
@@ -462,6 +569,7 @@ class _Track:
         self.miss = 0                            # 连续消失帧
         self.first_ts = ts
         self.last_ts = ts
+        self.counted = False                     # cross_count: 本轨迹已计数
 
 
 class _ExitState:
@@ -495,13 +603,17 @@ class RegionEventEngine:
         self.cfg = cfg
         self._overlap_states = {r.rule_id: _OverlapState()
                                 for r in cfg.rules
-                                if r.rule_type in ('overlap', 'region_enter')}
+                                if r.rule_type not in ('region_exit', 'cross_count')}
         self._exit_states = {r.rule_id: _ExitState()
-                             for r in cfg.rules if r.rule_type == 'region_exit'}
+                             for r in cfg.rules
+                             if r.rule_type in ('region_exit', 'cross_count')}
         self._confirmed_seq = []  # 自上次结算以来确认的事件名序列 (顺序校验/结算判定用)
         # 锚点缓存: {锚点类别: (bbox, ts)} —— 锚点短暂被遮挡时沿用最近位置
         self._anchor_labels = {r.anchor_label for r in cfg.rules if r.anchor_label}
         self._anchor_cache = {}
+        # facing_dwell: 帧高宽比 (H/W, VSM 注帧时更新)。朝向角在像素平面,
+        # 归一化坐标的方位角必须按纵横比还原, 否则 16:9 下最差偏 ~20°
+        self.frame_aspect = 0.5625
 
     # ---------- 入口 ----------
     def process_frame(self, detections: list, ts: float) -> list:
@@ -521,6 +633,8 @@ class RegionEventEngine:
         for rule in self.cfg.rules:
             if rule.rule_type == 'region_exit':
                 self._step_exit(rule, by_label, ts, events)
+            elif rule.rule_type == 'cross_count':
+                self._step_cross(rule, by_label, ts, events)
             else:
                 self._step_overlap(rule, by_label, ts, events)
         return events
@@ -566,19 +680,21 @@ class RegionEventEngine:
         """
         rules = []
         for r in self.cfg.rules:
-            if r.rule_type in ('overlap', 'region_enter'):
+            if r.rule_id in self._overlap_states:
                 st = self._overlap_states[r.rule_id]
                 rules.append({'name': r.name, 'type': r.rule_type, 'total': st.total,
                               'hit_frames': st.hit, 'confirmed': st.confirmed,
                               'in_progress': st.hit > 0,
                               'suppressed': st.suppressed,
                               'episode_start_ts': st.start_ts if st.hit > 0 else None})
-            else:
+            else:  # region_exit / cross_count (轨迹型状态)
                 st = self._exit_states[r.rule_id]
+                marked = sum(1 for t in st.tracks
+                             if (t.counted if r.rule_type == 'cross_count' else t.entered))
                 rules.append({'name': r.name, 'type': r.rule_type, 'total': st.total,
                               'in_progress': False,
                               'active_tracks': len(st.tracks),
-                              'entered_tracks': sum(1 for t in st.tracks if t.entered)})
+                              'entered_tracks': marked})
         return {'rules': rules, 'pending_sequence': list(self._confirmed_seq)}
 
     # ---------- overlap / region_enter 规则 (共用 episode 状态机) ----------
@@ -619,6 +735,77 @@ class RegionEventEngine:
             if cond:
                 return s
         return None
+
+    def _monitor_condition(self, rule: RegionEventRule, by_label: dict,
+                           ts: float):
+        """监控类规则的本帧条件: (是否满足, 代表主体框|None)。
+
+        region_count : 区域内主体数 ≥ min_count (代表主体取区域内第一个, 供截图)
+        region_empty : 区域内主体数 = 0 (无主体框, 截图走整帧兜底)
+        proximity    : 任一主体与任一目标中心归一化距离 ≤ max_distance
+        facing_dwell : 任一主体的朝向角与"主体中心→仪表点"连线夹角 ≤ tolerance_deg
+                       (alert_on_absent=True 时取反: 无任何主体面向仪表)
+        锚点丢失时区域为 None → 条件不满足 (与 region_enter 语义一致)。
+        """
+        if rule.rule_type == 'facing_dwell':
+            return self._facing_condition(rule, by_label, ts)
+        if rule.rule_type == 'proximity':
+            subjects = by_label.get(rule.subject_label) or []
+            objects = by_label.get(rule.object_label) or []
+            limit_sq = rule.max_distance * rule.max_distance
+            for s in subjects:
+                scx, scy = _bbox_center(s)
+                for o in objects:
+                    ocx, ocy = _bbox_center(o)
+                    dx, dy = scx - ocx, scy - ocy
+                    if dx * dx + dy * dy <= limit_sq:
+                        return True, s
+            return False, None
+        region = self._rule_region(rule, ts)
+        if region is None:
+            return False, None
+        inside = []
+        for s in by_label.get(rule.subject_label) or []:
+            cx, cy = _bbox_center(s)
+            if _point_in_polygon(cx, cy, region):
+                inside.append(s)
+        if rule.rule_type == 'region_count':
+            return len(inside) >= rule.min_count, (inside[0] if inside else None)
+        return not inside, None  # region_empty: 区域内一个主体都没有
+
+    def _facing_condition(self, rule: RegionEventRule, by_label: dict,
+                          ts: float):
+        """facing_dwell 本帧条件: (是否满足, 代表主体框|None)。
+
+        主体框携带 'facing' 字段 (图像平面 yaw 度, VSM 层经 person_orientation
+        节流注入; 无 pose 结果的框视为朝向未知, 不参与判定)。
+        判定: 主体中心→仪表点连线的方位角 与 facing 的最小角差 ≤ tolerance_deg。
+        方位角按像素平面算 (归一化增量 × 帧宽高还原), 与 yaw 口径一致。
+        可选站位区 region: 只考察中心在区域内的主体 (锚点丢失=条件不满足)。
+        alert_on_absent=True 语义取反: "无任何人面向仪表"持续成立 → 告警
+        (配 min_seconds 即"超过 N 秒没人来点检"巡检哨兵)。
+        """
+        region = self._rule_region(rule, ts) if rule.region is not None else None
+        tx, ty = rule.target_point
+        aspect = self.frame_aspect or 0.5625
+        hit = None
+        for s in by_label.get(rule.subject_label) or []:
+            cx, cy = _bbox_center(s)
+            if rule.region is not None:
+                if region is None or not _point_in_polygon(cx, cy, region):
+                    continue
+            yaw = s.get('facing')
+            if yaw is None:
+                continue
+            # 像素平面方位角: dy 乘 H/W 还原纵横比 (dx 已按 W 归一)
+            bearing = math.degrees(math.atan2((ty - cy) * aspect, tx - cx))
+            d = abs(float(yaw) - bearing) % 360.0
+            if (d if d <= 180.0 else 360.0 - d) <= rule.tolerance_deg:
+                hit = s
+                break
+        if rule.alert_on_absent:
+            return hit is None, None
+        return hit is not None, hit
 
     @staticmethod
     def _deep_overlap(rule: RegionEventRule, s: dict, o: dict) -> bool:
@@ -719,14 +906,18 @@ class RegionEventEngine:
 
     def _step_overlap(self, rule, by_label, ts, events):
         st = self._overlap_states[rule.rule_id]
-        subject = self._overlap_condition(rule, by_label, ts)
-        if subject is not None:
+        if rule.rule_type in _MONITORING_TYPES:
+            cond, subject = self._monitor_condition(rule, by_label, ts)
+        else:
+            subject = self._overlap_condition(rule, by_label, ts)
+            cond = subject is not None
+        if cond:
             if st.hit == 0:
                 st.start_ts = ts
             st.hit += 1
             st.miss = 0
             st.last_hit_ts = ts
-            if rule.min_move > 0:
+            if rule.min_move > 0 and subject is not None:
                 self._track_motion(st, subject)
             if (not st.confirmed and self._held_long_enough(rule, st, ts)
                     and self._moved_enough(rule, st)):
@@ -804,6 +995,55 @@ class RegionEventEngine:
             if track.in_frames >= rule.min_frames:
                 track.entered = True
 
+    # ---------- cross_count 规则 (过线/人流计数, 逐对象轨迹) ----------
+    def _step_cross(self, rule, by_label, ts, events):
+        """进区计次: IoU 关联跟踪 (region_exit 同款), 每条轨迹进区满
+        min_frames 计一次, 在场期间不重复计; 消失 ≥ gone_frames 清轨迹,
+        对象离开后再进算新一次。锚点丢失时区域为 None → 本帧不累计。
+        """
+        st = self._exit_states[rule.rule_id]
+        dets = by_label.get(rule.subject_label) or []
+        region = self._rule_region(rule, ts)
+
+        unclaimed = list(range(len(dets)))
+        for track in st.tracks:
+            best_i, best_iou = -1, rule.match_iou
+            for i in unclaimed:
+                iou = _bbox_iou(track.bbox, dets[i])
+                if iou >= best_iou:
+                    best_i, best_iou = i, iou
+            if best_i >= 0:
+                unclaimed.remove(best_i)
+                track.bbox = dets[best_i]
+                track.miss = 0
+                track.last_ts = ts
+                if region is not None:
+                    cx, cy = _bbox_center(dets[best_i])
+                    if _point_in_polygon(cx, cy, region):
+                        track.in_frames += 1
+                        self._maybe_count_cross(rule, st, track, ts, events)
+                    # 中心暂时出区不清 in_frames/counted: 边界抖动不重复计数
+            else:
+                track.miss += 1
+
+        for i in unclaimed:
+            cx, cy = _bbox_center(dets[i])
+            in_region = region is not None and _point_in_polygon(cx, cy, region)
+            track = _Track(dets[i], in_region, ts)
+            st.tracks.append(track)
+            if in_region:
+                self._maybe_count_cross(rule, st, track, ts, events)
+
+        st.tracks = [t for t in st.tracks if t.miss < rule.gone_frames]
+
+    def _maybe_count_cross(self, rule, st, track, ts, events):
+        if track.counted or track.in_frames < rule.min_frames:
+            return
+        track.counted = True
+        st.total += 1
+        self._emit_confirmed(rule, track.first_ts, ts, events,
+                             subject=dict(track.bbox) if track.bbox else None)
+
     # ---------- 事件产出 ----------
     def _dedup_hit(self, rule: RegionEventRule) -> bool:
         """连续同动作去重: 上一个确认的就是同名动作 → 本次确认应被静默吸收。
@@ -827,8 +1067,10 @@ class RegionEventEngine:
           - 未确认的半截命中 → 作废 (人已切到下个动作, 残段不是有效动作)
         """
         for r in self.cfg.rules:
-            if r.rule_type == 'region_exit' or r.rule_id == confirming_rule.rule_id:
-                continue
+            if (r.rule_id not in self._overlap_states
+                    or r.rule_id == confirming_rule.rule_id
+                    or r.rule_type in _MONITORING_TYPES):
+                continue  # 轨迹型规则无 episode; 监控类是独立观测, 不被打断
             st = self._overlap_states[r.rule_id]
             if st.hit == 0:
                 continue
@@ -846,8 +1088,8 @@ class RegionEventEngine:
         未确认的半截 episode / 被去重吸收的 episode 直接作废 (跨周期不接续)。
         """
         for r in self.cfg.rules:
-            if r.rule_type == 'region_exit':
-                continue
+            if r.rule_id not in self._overlap_states:
+                continue  # region_exit / cross_count 是轨迹型状态, 无 episode 可冲
             st = self._overlap_states[r.rule_id]
             if st.confirmed and not st.suppressed:
                 events.append({
@@ -858,6 +1100,15 @@ class RegionEventEngine:
                 st.reset_episode()
 
     def _emit_confirmed(self, rule, start_ts, ts, events, subject=None):
+        if rule.rule_type in _MONITORING_TYPES and not rule.settle:
+            # 监控类告警 (非结算): 不进动作序列 (免被连续同动作去重吞掉第二次
+            # 告警)、不打断其他 episode (与工序动作正交), 只产出确认动作
+            events.append({
+                'action': 'confirmed', 'rule_id': rule.rule_id,
+                'rule_name': rule.name, 'start_ts': start_ts, 'ts': ts,
+                'settle': False, 'event_id': rule.event_id, 'subject': subject,
+            })
+            return
         if rule.settle:
             self._flush_open_episodes(events)
         else:

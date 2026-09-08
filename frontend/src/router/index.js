@@ -65,6 +65,12 @@ const routes = [
         name: 'Interconnect',
         component: () => import('@/views/Interconnect/index.vue'),
       },
+      {
+        // 2026-09 AI 能力试用: OCR 读字 + 异常检测 (谈单演示/现场试用)
+        path: 'ai-tools',
+        name: 'AiTools',
+        component: () => import('@/views/AiTools/index.vue'),
+      },
     ]
   }
 ];

@@ -20,6 +20,9 @@
           <el-option label="跟踪模式" value="tracking" />
           <el-option label="逐件模式" value="per_item" />
           <el-option label="称重投料模式" value="weighing" />
+          <el-option label="区域事件模式" value="region_events" />
+          <el-option label="OCR 读字模式" value="ocr" />
+          <el-option label="异常检测模式" value="anomaly" />
         </el-select>
       </el-form-item>
     </el-form>
