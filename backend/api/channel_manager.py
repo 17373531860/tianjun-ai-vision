@@ -8,7 +8,7 @@ Channel 0 is the default and always exists for backward compatibility.
 import threading
 import json
 import os
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from backend.core.auth_deps import require_perm
@@ -49,17 +49,33 @@ class DisplayBounds(BaseModel):
 
 
 class MultiMonitorMappingItem(BaseModel):
-    """单个工位绑定的显示器标识和离线降级坐标。"""
+    """单个工位主/副屏的显示器标识和离线降级坐标。"""
 
     display_id: str = Field("", description="Electron Display.id 的字符串形式；为空时仅按 bounds 定位")
     bounds: Optional[DisplayBounds] = Field(None, description="显示器 ID 变化或枚举失败时使用的持久化坐标")
+    aux_display_id: Optional[str] = Field(
+        None,
+        description="工位副屏 Electron Display.id；不配置时不创建副屏窗口",
+    )
+    aux_bounds: Optional[DisplayBounds] = Field(
+        None,
+        description="副屏 ID 变化或枚举失败时使用的持久化坐标",
+    )
+    aux_hands_enabled: Optional[bool] = Field(
+        None,
+        description="是否为该工位启用手部裁切副屏；缺失时按关闭处理",
+    )
+    aux_view_mode: Optional[Literal["fixed", "follow"]] = Field(
+        None,
+        description="副屏取景模式：fixed 固定中心，follow 固定尺寸平滑跟随手部",
+    )
 
 
 class MultiMonitorConfig(BaseModel):
     """多屏工位显示配置。"""
 
     enabled: bool = Field(False, description="是否启用多屏工位窗口；默认关闭以保持单窗行为")
-    readonly: bool = Field(True, description="工位副屏是否只读；一期默认只读")
+    readonly: bool = Field(True, description="工位副屏是否只读；不约束可操作的工位主屏")
     mapping: Dict[str, MultiMonitorMappingItem] = Field(
         default_factory=dict,
         description="工位 ID 到显示器 ID/坐标的映射；非法工位或无效尺寸会被规范化",
@@ -670,9 +686,25 @@ class ChannelManager:
     # ------------------------------------------------------------------
     @staticmethod
     def _normalize_multi_monitor_mapping(raw_mapping) -> dict:
-        """规范化工位到显示器的映射，丢弃越界工位和不可定位项。"""
+        """规范化工位主/副屏映射，丢弃越界工位和不可定位项。"""
         if not isinstance(raw_mapping, dict):
             return {}
+
+        def _normalize_bounds(raw_bounds):
+            normalized_bounds = None
+            if isinstance(raw_bounds, dict):
+                try:
+                    candidate = {
+                        "x": int(raw_bounds.get("x")),
+                        "y": int(raw_bounds.get("y")),
+                        "width": int(raw_bounds.get("width")),
+                        "height": int(raw_bounds.get("height")),
+                    }
+                    if candidate["width"] > 0 and candidate["height"] > 0:
+                        normalized_bounds = candidate
+                except (TypeError, ValueError):
+                    normalized_bounds = None
+            return normalized_bounds
 
         normalized = {}
         for raw_channel_id, raw_item in raw_mapping.items():
@@ -684,26 +716,31 @@ class ChannelManager:
                 continue
 
             display_id = str(raw_item.get("display_id") or "").strip()
-            bounds = raw_item.get("bounds")
-            normalized_bounds = None
-            if isinstance(bounds, dict):
-                try:
-                    candidate = {
-                        "x": int(bounds.get("x")),
-                        "y": int(bounds.get("y")),
-                        "width": int(bounds.get("width")),
-                        "height": int(bounds.get("height")),
-                    }
-                    if candidate["width"] > 0 and candidate["height"] > 0:
-                        normalized_bounds = candidate
-                except (TypeError, ValueError):
-                    normalized_bounds = None
+            normalized_bounds = _normalize_bounds(raw_item.get("bounds"))
 
             if not display_id and normalized_bounds is None:
                 continue
             item = {"display_id": display_id}
             if normalized_bounds is not None:
                 item["bounds"] = normalized_bounds
+
+            aux_display_id = str(raw_item.get("aux_display_id") or "").strip()
+            normalized_aux_bounds = _normalize_bounds(raw_item.get("aux_bounds"))
+            if aux_display_id or normalized_aux_bounds is not None:
+                item["aux_display_id"] = aux_display_id
+                if normalized_aux_bounds is not None:
+                    item["aux_bounds"] = normalized_aux_bounds
+                item["aux_hands_enabled"] = (
+                    raw_item.get("aux_hands_enabled") is True
+                )
+                raw_aux_view_mode = str(
+                    raw_item.get("aux_view_mode") or "follow",
+                ).strip().lower()
+                item["aux_view_mode"] = (
+                    raw_aux_view_mode
+                    if raw_aux_view_mode in {"fixed", "follow"}
+                    else "follow"
+                )
             normalized[str(channel_id)] = item
         return normalized
 
@@ -876,6 +913,7 @@ def save_channel_config(body: dict):
     "/multi-monitor",
     summary="读取多屏配置",
     response_model=MultiMonitorConfig,
+    response_model_exclude_none=True,
 )
 def get_multi_monitor_config():
     """[内部端点] 读取多屏工位开关、只读策略和显示器映射。
@@ -889,6 +927,7 @@ def get_multi_monitor_config():
     "/multi-monitor",
     summary="保存多屏配置",
     response_model=MultiMonitorConfig,
+    response_model_exclude_none=True,
     dependencies=[Depends(require_perm("settings.edit"))],
 )
 def set_multi_monitor_config(req: MultiMonitorConfig):

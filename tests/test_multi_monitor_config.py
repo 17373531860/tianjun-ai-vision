@@ -49,6 +49,10 @@ def test_multi_monitor_roundtrip_normalizes_and_preserves_other_sections(
             "0": {
                 "display_id": " 123 ",
                 "bounds": {"x": -1920, "y": 0, "width": 1920, "height": 1080},
+                "aux_display_id": " 124 ",
+                "aux_bounds": {"x": -1920, "y": 1080, "width": 800, "height": 480},
+                "aux_hands_enabled": True,
+                "aux_view_mode": " follow ",
             },
             "1": {
                 "display_id": "456",
@@ -57,6 +61,10 @@ def test_multi_monitor_roundtrip_normalizes_and_preserves_other_sections(
             "2": {
                 "display_id": "",
                 "bounds": {"x": 1920, "y": 0, "width": 1920, "height": 1080},
+                "aux_display_id": "457",
+                "aux_bounds": {"x": 0, "y": 0, "width": -1, "height": 480},
+                "aux_hands_enabled": "true",
+                "aux_view_mode": "unexpected",
             },
             "bad": {"display_id": "789"},
             "64": {"display_id": "999"},
@@ -71,11 +79,18 @@ def test_multi_monitor_roundtrip_normalizes_and_preserves_other_sections(
             "0": {
                 "display_id": "123",
                 "bounds": {"x": -1920, "y": 0, "width": 1920, "height": 1080},
+                "aux_display_id": "124",
+                "aux_bounds": {"x": -1920, "y": 1080, "width": 800, "height": 480},
+                "aux_hands_enabled": True,
+                "aux_view_mode": "follow",
             },
             "1": {"display_id": "456"},
             "2": {
                 "display_id": "",
                 "bounds": {"x": 1920, "y": 0, "width": 1920, "height": 1080},
+                "aux_display_id": "457",
+                "aux_hands_enabled": False,
+                "aux_view_mode": "follow",
             },
         },
     }
@@ -84,6 +99,64 @@ def test_multi_monitor_roundtrip_normalizes_and_preserves_other_sections(
         assert on_disk[key] == value
     assert on_disk["multi_monitor"] == saved
     assert manager.get_multi_monitor_config() == saved
+
+
+def test_legacy_display_id_mapping_stays_main_only(isolated_multi_monitor_config):
+    module, _manager, _config_path = isolated_multi_monitor_config
+
+    assert module.ChannelManager._normalize_multi_monitor_mapping({
+        "0": {"display_id": " 1001 "},
+    }) == {
+        "0": {"display_id": "1001"},
+    }
+
+
+def test_aux_mapping_can_fall_back_to_bounds(isolated_multi_monitor_config):
+    module, _manager, _config_path = isolated_multi_monitor_config
+
+    assert module.ChannelManager._normalize_multi_monitor_mapping({
+        "1": {
+            "display_id": "main",
+            "aux_display_id": "",
+            "aux_bounds": {"x": 1920, "y": 0, "width": 800, "height": 480},
+        },
+    }) == {
+        "1": {
+            "display_id": "main",
+            "aux_display_id": "",
+            "aux_bounds": {"x": 1920, "y": 0, "width": 800, "height": 480},
+            "aux_hands_enabled": False,
+            "aux_view_mode": "follow",
+        },
+    }
+
+
+def test_aux_switch_is_strict_and_requires_a_target(isolated_multi_monitor_config):
+    module, _manager, _config_path = isolated_multi_monitor_config
+
+    normalized = module.ChannelManager._normalize_multi_monitor_mapping({
+        "0": {
+            "display_id": "main-0",
+            "aux_display_id": "aux-0",
+            "aux_hands_enabled": True,
+            "aux_view_mode": "fixed",
+        },
+        "1": {
+            "display_id": "main-1",
+            "aux_display_id": "aux-1",
+            "aux_hands_enabled": 1,
+        },
+        "2": {
+            "display_id": "main-2",
+            "aux_hands_enabled": True,
+        },
+    })
+
+    assert normalized["0"]["aux_hands_enabled"] is True
+    assert normalized["0"]["aux_view_mode"] == "fixed"
+    assert normalized["1"]["aux_hands_enabled"] is False
+    assert normalized["1"]["aux_view_mode"] == "follow"
+    assert "aux_hands_enabled" not in normalized["2"]
 
 
 def test_save_channel_count_keeps_top_level_multi_monitor(isolated_multi_monitor_config):
@@ -131,6 +204,79 @@ def test_multi_monitor_api_roundtrip(isolated_multi_monitor_config, client):
     assert put_response.status_code == 200, put_response.text
     assert get_response.status_code == 200, get_response.text
     assert get_response.json() == payload
+
+
+def test_multi_monitor_api_roundtrip_with_aux(isolated_multi_monitor_config, client):
+    _module, _manager, _config_path = isolated_multi_monitor_config
+    payload = {
+        "enabled": True,
+        "readonly": True,
+        "mapping": {
+            "0": {
+                "display_id": "1001",
+                "bounds": {"x": 0, "y": 0, "width": 1920, "height": 1080},
+                "aux_display_id": "2001",
+                "aux_bounds": {"x": 1920, "y": 0, "width": 800, "height": 480},
+                "aux_hands_enabled": True,
+                "aux_view_mode": "follow",
+            },
+        },
+    }
+
+    put_response = client.put("/api/v1/workstations/multi-monitor", json=payload)
+    get_response = client.get("/api/v1/workstations/multi-monitor")
+
+    assert put_response.status_code == 200, put_response.text
+    assert get_response.status_code == 200, get_response.text
+    assert put_response.json() == payload
+    assert get_response.json() == payload
+
+
+def test_legacy_aux_mapping_defaults_off_and_to_follow_view_mode(
+    isolated_multi_monitor_config,
+    client,
+):
+    _module, _manager, _config_path = isolated_multi_monitor_config
+    payload = {
+        "enabled": True,
+        "readonly": True,
+        "mapping": {
+            "0": {
+                "display_id": "1001",
+                "aux_display_id": "2001",
+            },
+        },
+    }
+
+    put_response = client.put("/api/v1/workstations/multi-monitor", json=payload)
+
+    assert put_response.status_code == 200, put_response.text
+    assert put_response.json()["mapping"]["0"]["aux_hands_enabled"] is False
+    assert put_response.json()["mapping"]["0"]["aux_view_mode"] == "follow"
+
+
+def test_multi_monitor_api_rejects_unknown_aux_view_mode(
+    isolated_multi_monitor_config,
+    client,
+):
+    _module, _manager, _config_path = isolated_multi_monitor_config
+
+    response = client.put(
+        "/api/v1/workstations/multi-monitor",
+        json={
+            "enabled": True,
+            "readonly": True,
+            "mapping": {
+                "0": {
+                    "display_id": "1001",
+                    "aux_display_id": "2001",
+                    "aux_view_mode": "zoom",
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_multi_monitor_routes_have_openapi_contract(isolated_multi_monitor_config):

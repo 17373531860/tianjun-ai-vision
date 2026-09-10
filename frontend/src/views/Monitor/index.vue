@@ -94,6 +94,7 @@
     :model-stats="channelModelStats[activeSingleChannel]"
     :readonly="singleChannelReadonly"
     :kiosk="kioskMode"
+    :show-navigation="!stationViewMode"
     :has-project="!!(multiChannelData[activeSingleChannel]?.project || multiChannelData[activeSingleChannel]?._pollProjectConfig || currentProject)"
     :display-ct="getDisplayCT(multiChannelData[activeSingleChannel])"
     :show-fps="systemStore.display.monitor.showFps !== false"
@@ -1257,6 +1258,7 @@ const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
 const kioskMode = computed(() => route.query.kiosk === '1');
+const stationViewMode = computed(() => route.query.station_view === '1' && !kioskMode.value);
 
 // ==================== v3.54 检测主页自定义布局 ====================
 // 形态键: 布局按形态独立保存。工位数/放大态决定形态族; 单工位再按逻辑模式细分
@@ -1331,7 +1333,9 @@ const kioskReadonly = computed(() => route.query.readonly !== '0');
 
 // v3.13 M2.2b: layout slot 覆盖 (整体 layout / 底栏). 没插件时永远是 null = 走原 layout.
 const layoutBodyOverride = computed(() => pluginThemeStore.getSlotComponent('monitor.layout.body'));
-const effectiveLayoutBodyOverride = computed(() => kioskMode.value ? null : layoutBodyOverride.value);
+const effectiveLayoutBodyOverride = computed(() => (
+  kioskMode.value || stationViewMode.value ? null : layoutBodyOverride.value
+));
 const layoutFooterOverride = computed(() => pluginThemeStore.getSlotComponent('monitor.layout.footer'));
 
 /** layout.body 插件内渲染主程序 TjSlot（步骤表 PT/结果列等） */
@@ -1871,11 +1875,13 @@ const recordingFailureLoading = ref(false);
 const GRID_LAYOUT_KEY = 'monitor_grid_layout';
 const gridLayout = ref(localStorage.getItem(GRID_LAYOUT_KEY) || 'auto');  // 'auto' | '2x2' | '3x3' | '4x4'
 const gridPage = ref(0);
-const zoomedChannel = ref(null);  // null = 总览网格; 数字 = 放大的工位
-const requestedKioskChannel = computed(() => {
+const requestedWindowChannel = computed(() => {
   const value = Number.parseInt(String(route.query.channel ?? '0'), 10);
   return Number.isFinite(value) ? value : 0;
 });
+// station_view 是复用 OS 主屏的正常应用窗：首次加载即锁定指定工位并保留应用侧栏。
+const zoomedChannel = ref(stationViewMode.value ? requestedWindowChannel.value : null);
+const requestedKioskChannel = computed(() => requestedWindowChannel.value);
 const kioskChannel = computed(() => Math.min(Math.max(requestedKioskChannel.value, 0), Math.max(0, channelCount.value - 1)));
 const activeSingleChannel = computed(() => kioskMode.value ? kioskChannel.value : Math.min(Math.max(zoomedChannel.value ?? 0, 0), Math.max(0, channelCount.value - 1)));
 const singleChannelViewActive = computed(() => kioskMode.value || (channelCount.value > 1 && zoomedChannel.value !== null));
@@ -1931,13 +1937,13 @@ const zoomChannel = (ch) => {
   nextTick(() => syncMultiStreams());
 };
 const selectOverviewChannel = (ch) => {
-  if (multiMonitorRuntime.value.enabled) {
-    zoomChannel(ch);
-  } else {
-    selectedChannel.value = ch;
-  }
+  // 双/三工位与 4+ 网格保持同一交互：点击总览视频卡即进入该工位详情。
+  // 多屏开启时的取流隔离由 useMultiStreams 负责，普通主窗口放大仍走 snapshot，
+  // 不与扩展出去的工位主窗争抢同一 channel 的 MJPEG。
+  zoomChannel(ch);
 };
 const exitZoom = () => {
+  if (stationViewMode.value) return;
   const ch = zoomedChannel.value;
   zoomedChannel.value = null;
   if (ch !== null) gridPage.value = Math.floor(ch / gridDims.value.pageSize);  // 返回总览停在该工位所在页
@@ -1945,6 +1951,7 @@ const exitZoom = () => {
 };
 
 const zoomStep = (delta) => {
+  if (stationViewMode.value) return;
   const n = channelCount.value || 1;
   if (zoomedChannel.value === null || n < 1) return;
   zoomChannel((zoomedChannel.value + delta + n) % n);
@@ -1959,6 +1966,13 @@ watch([gridPage, () => gridDims.value.pageSize, zoomedChannel], () => {
 watch(kioskChannel, (ch) => {
   if (!kioskMode.value) return;
   selectedChannel.value = ch;
+  nextTick(() => syncMultiStreams());
+});
+watch([stationViewMode, requestedWindowChannel], ([enabled, ch]) => {
+  if (!enabled) return;
+  const next = Math.min(Math.max(ch, 0), Math.max(0, channelCount.value - 1));
+  zoomedChannel.value = next;
+  selectedChannel.value = next;
   nextTick(() => syncMultiStreams());
 });
 watch(gridPageCount, (n) => { if (gridPage.value >= n) gridPage.value = 0; });
@@ -2073,7 +2087,7 @@ const {
   reconnectChannelStream,
   isMultiStreamRunning,
 } = useMultiStreams({
-  channelCount, kioskMode, kioskChannel, zoomedChannel,
+  channelCount, kioskMode, stationViewMode, kioskChannel, zoomedChannel,
   gridPageChannels, multiMonitorRuntime, effectiveLayoutBodyOverride,
   multiFrameNaturalSize,
   bitmapDecodeEnabled: () => systemStore.performance?.multiChannelBitmapDecode,
@@ -2089,11 +2103,16 @@ const fetchChannelCount = async () => {
     const count = res.data.channel_count || 1;
     channelCount.value = count;
     if (kioskMode.value) selectedChannel.value = kioskChannel.value;
+    if (stationViewMode.value && zoomedChannel.value !== null) {
+      const stationChannel = Math.min(Math.max(requestedWindowChannel.value, 0), count - 1);
+      zoomedChannel.value = stationChannel;
+      selectedChannel.value = stationChannel;
+    }
     if (selectedChannel.value >= count) {
       selectedChannel.value = 0;
     }
     // v3.47: 工位数变化后放大工位可能越界 → 退回总览
-    if (zoomedChannel.value !== null && zoomedChannel.value >= count) {
+    if (!stationViewMode.value && zoomedChannel.value !== null && zoomedChannel.value >= count) {
       zoomedChannel.value = null;
       gridPage.value = 0;
     }

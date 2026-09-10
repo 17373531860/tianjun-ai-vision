@@ -54,6 +54,7 @@ yarn-error.log*
 frontend/dist/
 electron/dist/
 *.tar.gz
+/output/
 
 # IDE
 .idea/
@@ -90,6 +91,9 @@ temp/
 patch*/
 patch*.zip
 frontend/dist.zip
+
+# 现场热补丁包 / 安装器仿真树：不进工作树。本机归档在仓库外 D:\Tianjun\tianjun-deliverables
+/deliverables/
 
 # Old version folder
 tianjun/

@@ -9,6 +9,22 @@ const router = useRouter();
 onMounted(() => {
   console.log(`[⬛ App] App.vue onMounted — 路由: ${router.currentRoute.value.fullPath}`);
 
+  try {
+    // App onMounted 可能早于首个 router navigation 完成，直接读启动 hash 才不会
+    // 在副屏冷启动时误注册主应用回调。
+    const hash = window.location.hash || '';
+    const queryIndex = hash.indexOf('?');
+    const query = new URLSearchParams(queryIndex >= 0 ? hash.slice(queryIndex + 1) : '');
+    if (query.get('kiosk') === '1'
+        && query.get('video_only') === '1'
+        && query.get('hands_crop') === '1') {
+      // 手部副屏只显示快照，不注册可能弹 Toast/写调试日志的主应用生命周期回调。
+      return;
+    }
+  } catch {
+    // 解析失败按普通主应用处理，保持既有生命周期行为。
+  }
+
   // v3.23.x: 加深启动就绪门槛降级提示 — 后端进程起了但数据库探测持续超时,
   // 主进程已降级放主窗进来 (而非死等到 5 分钟超时退出). 给用户一次明确告警,
   // 便于排查数据库异常; 业务照常显示 + 走各自的错误提示/重试。

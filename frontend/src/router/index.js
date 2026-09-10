@@ -22,7 +22,7 @@ const routes = [
       {
         path: 'monitor',
         name: 'Monitor',
-        component: () => import('@/views/Monitor/index.vue'),
+        component: () => import('@/views/Monitor/MonitorRoute.vue'),
       },
       {
         path: 'project',
@@ -88,6 +88,11 @@ const REMEMBERABLE_NAMES = new Set([
 const isMultiMonitorRoute = (route) =>
   route?.query?.kiosk === '1' || route?.query?.multi_monitor === '1';
 
+const isHandsCropRoute = (route) =>
+  route?.query?.kiosk === '1'
+  && route?.query?.video_only === '1'
+  && route?.query?.hands_crop === '1';
+
 /**
  * v3.10.0 用户系统: 在路由守卫中确保 useAuthStore 已 init.
  *
@@ -109,6 +114,22 @@ async function ensureAuthInitialized() {
 
 router.beforeEach(async (to, from) => {
   console.log(`[⬛ Router] 导航: ${from.fullPath} → ${to.fullPath} (name: ${to.name})`);
+
+  // 副屏窗口由 Electron 的 License 守门后创建；这里只保留一次本地 IPC 复核，
+  // 不初始化 AuthStore/插件，确保页面网络只剩 hands snapshot 短轮询。
+  if (isHandsCropRoute(to)) {
+    if (!licenseChecked && window.electronAPI?.isElectron) {
+      try {
+        const status = await window.electronAPI.getLicenseStatus();
+        licenseChecked = true;
+        if (!status.valid) return { name: 'Activation' };
+      } catch (e) {
+        console.error('[⬛ Router] 副屏授权检查异常:', e);
+        return { name: 'Activation' };
+      }
+    }
+    return;
+  }
 
   // 冷启动恢复: 第一次进入且目标是默认 /monitor 时, 尝试取上次路由
   if (!lastRouteRestored && from.name === undefined && to.path === '/monitor' && !isMultiMonitorRoute(to)) {
@@ -189,7 +210,9 @@ router.beforeEach(async (to, from) => {
 router.afterEach((to, from) => {
   console.log(`[⬛ Router] ✓ 导航完成: ${to.fullPath}`);
   // 调试设置 'page.nav': 每次页面切换留痕 (开关关闭时零开销)
-  dbg('page.nav', `页面切换 ${from.fullPath} → ${to.fullPath}`, `name=${String(to.name || '')}`);
+  if (!isHandsCropRoute(to)) {
+    dbg('page.nav', `页面切换 ${from.fullPath} → ${to.fullPath}`, `name=${String(to.name || '')}`);
+  }
   // 只记可恢复的页面
   if (to.name && REMEMBERABLE_NAMES.has(to.name) && !isMultiMonitorRoute(to)) {
     try {

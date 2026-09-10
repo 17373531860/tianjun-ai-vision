@@ -7,10 +7,15 @@ const LicenseManager = require('./license-manager');
 const {
   advanceCrashWindow,
   buildKioskHash,
+  buildMainWindowHash,
+  buildStationAssignments,
+  displayTargetsOverlap,
   enumerateDisplaysForApply,
+  filterStationAssignmentsByChannelCount,
   isMainRenderer,
-  isReservedMainDisplayTarget,
+  isWindowOnOccupiedTarget,
   normalizeMultiMonitorConfig,
+  partitionResolvedStationAssignments,
   resolveDisplayTarget,
   toDisplayDto,
 } = require('./multi-monitor');
@@ -158,6 +163,13 @@ let backendManager = null;
 let isQuitting = false;
 let shutdownCancelled = false;
 const stationWindows = new Map();
+let reusedMainWindowAssignment = null;
+let mainWindowStationRouteTimer = null;
+let mainWindowMinimizedForMultiMonitor = false;
+let mainWindowParkedForMultiMonitor = false;
+let mainWindowUrlBeforeMultiMonitor = '';
+let multiMonitorOccupiedTargets = [];
+let mainWindowAvoidanceTransition = false;
 let renderGoneReloadTimer = null;
 let unresponsiveReloadTimer = null;
 let gpuCrashReloadTimer = null;
@@ -416,20 +428,14 @@ function getDisplayDtos() {
   ));
 }
 
-function getMainWindowDisplayDto() {
-  const primary = screen.getPrimaryDisplay();
-  const mainDisplay = getMainWindowDisplay(primary);
-  return toDisplayDto(mainDisplay, primary.id, mainDisplay && mainDisplay.id);
-}
-
 function destroyStationWindows(reason = '布局关闭') {
   const removedCount = stationWindows.size;
-  for (const [channelId, entry] of stationWindows.entries()) {
-    stationWindows.delete(channelId);
+  for (const [windowKey, entry] of stationWindows.entries()) {
+    stationWindows.delete(windowKey);
     try {
       if (entry.window && !entry.window.isDestroyed()) entry.window.destroy();
     } catch (e) {
-      console.warn(`[MultiMonitor] 关闭工位 ${channelId} 窗口失败: ${e.message}`);
+      console.warn(`[MultiMonitor] 关闭工位 ${entry.channelId} ${entry.role} 窗口失败: ${e.message}`);
     }
   }
   if (removedCount > 0) {
@@ -437,8 +443,236 @@ function destroyStationWindows(reason = '布局关闭') {
   }
 }
 
-function loadStationRoute(window, channelId, readonly) {
-  const routeHash = buildKioskHash(channelId, readonly);
+function getStationWindowDescriptors() {
+  const descriptors = [...stationWindows.values()]
+    .map((entry) => ({ channel_id: entry.channelId, role: entry.role }));
+  if (reusedMainWindowAssignment) {
+    descriptors.push({
+      channel_id: reusedMainWindowAssignment.channelId,
+      role: 'main',
+      reused_main_window: true,
+    });
+  }
+  return descriptors
+    .sort((left, right) => (
+      left.channel_id - right.channel_id
+      || (left.role === 'main' ? -1 : 1)
+    ));
+}
+
+function loadMainWindowApplicationUrl(savedUrl = '') {
+  if (!mainWindow || mainWindow.isDestroyed()) return Promise.resolve();
+  if (savedUrl && savedUrl !== 'about:blank') return mainWindow.loadURL(savedUrl);
+  if (CONFIG.isDev) return mainWindow.loadURL(getFrontendDevURL());
+  return mainWindow.loadFile(getResourcePath('app', 'dist', 'index.html'));
+}
+
+function loadMainWindowStationRoute(channelId) {
+  if (!mainWindow || mainWindow.isDestroyed()) return Promise.resolve();
+  const routeHash = buildMainWindowHash(channelId);
+  if (CONFIG.isDev) {
+    const base = getFrontendDevURL().replace(/\/$/, '');
+    return mainWindow.loadURL(`${base}/#${routeHash}`);
+  }
+  return mainWindow.loadFile(getResourcePath('app', 'dist', 'index.html'), { hash: routeHash });
+}
+
+function clearMainWindowStationRouteTimer() {
+  if (!mainWindowStationRouteTimer) return;
+  clearManagedTimeout(mainWindowStationRouteTimer);
+  mainWindowStationRouteTimer = null;
+}
+
+function placeMainWindowOnTarget(target) {
+  if (!mainWindow || mainWindow.isDestroyed() || !target || !target.bounds) return;
+  const targetBounds = target.bounds;
+  try {
+    const wasFullScreen = mainWindow.isFullScreen();
+    if (wasFullScreen) {
+      // Windows 全屏窗跨显示器时 setBounds 可能只改“退出全屏后的恢复位置”，
+      // 先退出再回到全屏，保证热应用也落到映射的 OS 主屏。
+      mainWindow.setFullScreen(false);
+      mainWindow.setBounds(targetBounds, false);
+      mainWindow.setFullScreen(true);
+      return;
+    }
+    const currentBounds = mainWindow.getBounds();
+    const width = Math.min(currentBounds.width, targetBounds.width);
+    const height = Math.min(currentBounds.height, targetBounds.height);
+    mainWindow.setBounds({
+      x: targetBounds.x + Math.floor((targetBounds.width - width) / 2),
+      y: targetBounds.y + Math.floor((targetBounds.height - height) / 2),
+      width,
+      height,
+    }, false);
+  } catch (e) {
+    console.warn(`[MultiMonitor] 主窗口移动到映射显示器失败: ${e.message}`);
+  }
+}
+
+function setReusedMainWindowAssignment(nextAssignment) {
+  const previous = reusedMainWindowAssignment;
+  const next = nextAssignment || null;
+  const changed = (previous && previous.key) !== (next && next.key);
+  reusedMainWindowAssignment = next;
+
+  if (!mainWindow || mainWindow.isDestroyed() || isQuitting) return;
+  if (!next) {
+    clearMainWindowStationRouteTimer();
+    if (!previous) return;
+    try {
+      const currentUrl = mainWindow.webContents && mainWindow.webContents.getURL
+        ? mainWindow.webContents.getURL()
+        : '';
+      if (currentUrl.includes('station_view=1')) {
+        Promise.resolve(loadMainWindowApplicationUrl())
+          .catch((e) => console.warn(`[MultiMonitor] 恢复主应用普通路由失败: ${e.message}`));
+      }
+    } catch (e) {
+      console.warn(`[MultiMonitor] 退出主窗口工位复用失败: ${e.message}`);
+    }
+    return;
+  }
+
+  // OS 主屏承担一个工位主屏时，复用正常主应用窗：保留 Layout/侧栏，且不再停车到 about:blank。
+  mainWindowParkedForMultiMonitor = false;
+  mainWindowMinimizedForMultiMonitor = false;
+  mainWindowUrlBeforeMultiMonitor = '';
+  try {
+    placeMainWindowOnTarget(next.target);
+    mainWindow.setSkipTaskbar(false);
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    if (!mainWindow.isVisible()) mainWindow.show();
+    mainWindow.focus();
+  } catch (e) {
+    console.warn(`[MultiMonitor] 恢复复用主窗口失败: ${e.message}`);
+  }
+
+  let currentUrl = '';
+  try {
+    currentUrl = mainWindow.webContents && mainWindow.webContents.getURL
+      ? mainWindow.webContents.getURL()
+      : '';
+  } catch (_e) { /* 页面可能仍在初始化 */ }
+  if (!changed && currentUrl && currentUrl !== 'about:blank') return;
+
+  clearMainWindowStationRouteTimer();
+  mainWindowStationRouteTimer = setManagedTimeout(() => {
+    mainWindowStationRouteTimer = null;
+    if (!mainWindow || mainWindow.isDestroyed() || isQuitting
+        || !reusedMainWindowAssignment
+        || reusedMainWindowAssignment.key !== next.key) return;
+    Promise.resolve(loadMainWindowStationRoute(next.channelId))
+      .catch((e) => console.error(`[MultiMonitor] 主窗口工位页加载失败: ${e.message}`));
+  }, 50);
+}
+
+function parkMainWindowRendererForMultiMonitor() {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindowParkedForMultiMonitor) return false;
+  const webContents = mainWindow.webContents;
+  try {
+    const currentUrl = webContents && webContents.getURL ? webContents.getURL() : '';
+    if (currentUrl && currentUrl !== 'about:blank') mainWindowUrlBeforeMultiMonitor = currentUrl;
+    mainWindowParkedForMultiMonitor = true;
+    // 导航到空白页会立即取消当前页面的 fetch/MJPEG，并阻止最小化 renderer
+    // 在后台继续拉全图；禁用布局时再恢复原 URL。
+    if (webContents && webContents.stop) webContents.stop();
+    Promise.resolve(mainWindow.loadURL('about:blank')).catch((e) => {
+      console.warn(`[MultiMonitor] 主应用 renderer 停车页加载失败: ${e.message}`);
+    });
+    return true;
+  } catch (e) {
+    mainWindowParkedForMultiMonitor = false;
+    console.warn(`[MultiMonitor] 主应用 renderer 停车失败: ${e.message}`);
+    return false;
+  }
+}
+
+function restoreMainWindowAfterMultiMonitor() {
+  const shouldReveal = mainWindowMinimizedForMultiMonitor;
+  const shouldRestoreRenderer = mainWindowParkedForMultiMonitor;
+  if (!shouldReveal && !shouldRestoreRenderer) return;
+
+  const savedUrl = mainWindowUrlBeforeMultiMonitor;
+  mainWindowMinimizedForMultiMonitor = false;
+  mainWindowParkedForMultiMonitor = false;
+  mainWindowUrlBeforeMultiMonitor = '';
+  if (!mainWindow || mainWindow.isDestroyed() || isQuitting) return;
+
+  const reveal = () => {
+    if (!shouldReveal || !mainWindow || mainWindow.isDestroyed() || isQuitting) return;
+    try {
+      mainWindow.setSkipTaskbar(false);
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      if (!mainWindow.isVisible()) mainWindow.show();
+      mainWindow.focus();
+    } catch (e) {
+      console.warn(`[MultiMonitor] 恢复主应用窗口失败: ${e.message}`);
+    }
+  };
+
+  try {
+    mainWindow.setSkipTaskbar(false);
+    if (shouldRestoreRenderer) {
+      Promise.resolve(loadMainWindowApplicationUrl(savedUrl))
+        .catch((e) => console.warn(`[MultiMonitor] 恢复主应用页面失败: ${e.message}`))
+        .finally(reveal);
+    } else {
+      reveal();
+    }
+  } catch (e) {
+    console.warn(`[MultiMonitor] 恢复主应用页面失败: ${e.message}`);
+    reveal();
+  }
+}
+
+function enforceMainWindowAvoidance(reason = '窗口状态变化') {
+  if (!mainWindow || mainWindow.isDestroyed() || isQuitting
+      || reusedMainWindowAssignment || !multiMonitorOccupiedTargets.length) return false;
+  let mainBounds = null;
+  try {
+    mainBounds = mainWindow.getBounds();
+  } catch (e) {
+    console.warn(`[MultiMonitor] 读取主应用窗口位置失败: ${e.message}`);
+    return false;
+  }
+  if (!isWindowOnOccupiedTarget(mainBounds, multiMonitorOccupiedTargets)) return false;
+  if (mainWindowAvoidanceTransition) return true;
+
+  mainWindowAvoidanceTransition = true;
+  try {
+    const newlyParked = parkMainWindowRendererForMultiMonitor();
+    mainWindow.setSkipTaskbar(true);
+    if (!mainWindow.isMinimized()) {
+      // BrowserWindow 已创建即可最小化；启动期无需先 show/showInactive，避免闪屏。
+      mainWindow.minimize();
+      mainWindowMinimizedForMultiMonitor = true;
+    }
+    if (newlyParked) {
+      console.log(`[MultiMonitor] 主应用窗口与工位显示区域重叠，已停车并最小化避让 (${reason})`);
+    }
+    return true;
+  } catch (e) {
+    console.warn(`[MultiMonitor] 主应用窗口避让失败: ${e.message}`);
+    return false;
+  } finally {
+    mainWindowAvoidanceTransition = false;
+  }
+}
+
+function updateMainWindowAvoidanceTargets(occupiedTargets) {
+  multiMonitorOccupiedTargets = Array.isArray(occupiedTargets) ? [...occupiedTargets] : [];
+  if (!multiMonitorOccupiedTargets.length) {
+    restoreMainWindowAfterMultiMonitor();
+    return false;
+  }
+  if (enforceMainWindowAvoidance('应用多屏布局')) return true;
+  restoreMainWindowAfterMultiMonitor();
+  return false;
+}
+
+function loadStationRoute(window, channelId, role, auxViewMode = 'follow') {
+  const routeHash = buildKioskHash(channelId, role, auxViewMode);
   if (CONFIG.isDev) {
     const base = getFrontendDevURL().replace(/\/$/, '');
     return window.loadURL(`${base}/#${routeHash}`);
@@ -447,8 +681,10 @@ function loadStationRoute(window, channelId, readonly) {
   return window.loadFile(indexPath, { hash: routeHash });
 }
 
-function createStationWindow(channelId, target, readonly, signature) {
+function createStationWindow(channelId, role, target, signature, auxViewMode = 'follow') {
   const bounds = target.bounds;
+  const roleLabel = role === 'aux' ? '副屏' : '主屏';
+  const windowKey = `${channelId}:${role}`;
   const stationWindow = new BrowserWindow({
     x: bounds.x,
     y: bounds.y,
@@ -461,7 +697,7 @@ function createStationWindow(channelId, target, readonly, signature) {
     minimizable: false,
     maximizable: false,
     resizable: false,
-    title: `${CONFIG.appName} - 工位 ${channelId + 1}`,
+    title: `${CONFIG.appName} - 工位 ${channelId + 1} ${roleLabel}`,
     icon: path.join(__dirname, 'build', 'icon.png'),
     backgroundColor: '#02060c',
     webPreferences: {
@@ -475,11 +711,13 @@ function createStationWindow(channelId, target, readonly, signature) {
 
   const entry = {
     window: stationWindow,
+    channelId,
+    role,
     signature,
     reloadAttempts: 0,
     lastCrashAt: 0,
   };
-  stationWindows.set(channelId, entry);
+  stationWindows.set(windowKey, entry);
 
   stationWindow.once('ready-to-show', () => {
     if (stationWindow.isDestroyed() || isQuitting) return;
@@ -487,9 +725,9 @@ function createStationWindow(channelId, target, readonly, signature) {
       stationWindow.setBounds(bounds, false);
       stationWindow.setFullScreen(true);
       stationWindow.show();
-      console.log(`[MultiMonitor] 工位 ${channelId} 窗口已显示 (${target.source})`);
+      console.log(`[MultiMonitor] 工位 ${channelId} ${roleLabel}已显示 (${target.source})`);
     } catch (e) {
-      console.error(`[MultiMonitor] 工位 ${channelId} 窗口钉屏失败: ${e.message}`);
+      console.error(`[MultiMonitor] 工位 ${channelId} ${roleLabel}钉屏失败: ${e.message}`);
     }
   });
 
@@ -499,11 +737,11 @@ function createStationWindow(channelId, target, readonly, signature) {
     entry.reloadAttempts = crashState.reloadAttempts;
     entry.lastCrashAt = crashState.lastCrashAt;
     console.error(
-      `[MultiMonitor] 工位 ${channelId} renderer 退出: ${details.reason}, `
+      `[MultiMonitor] 工位 ${channelId} ${roleLabel} renderer 退出: ${details.reason}, `
       + `60 秒窗口内第 ${entry.reloadAttempts} 次`,
     );
     if (entry.reloadAttempts > 2) {
-      console.error(`[MultiMonitor] 工位 ${channelId} renderer 60 秒内第 3 次失败，停止自动重载`);
+      console.error(`[MultiMonitor] 工位 ${channelId} ${roleLabel} renderer 60 秒内第 3 次失败，停止自动重载`);
       return;
     }
     setManagedTimeout(() => {
@@ -515,11 +753,11 @@ function createStationWindow(channelId, target, readonly, signature) {
     }, 1000);
   });
   stationWindow.on('closed', () => {
-    if (stationWindows.get(channelId) === entry) stationWindows.delete(channelId);
+    if (stationWindows.get(windowKey) === entry) stationWindows.delete(windowKey);
   });
 
-  loadStationRoute(stationWindow, channelId, readonly).catch((e) => {
-    console.error(`[MultiMonitor] 工位 ${channelId} 页面加载失败: ${e.message}`);
+  loadStationRoute(stationWindow, channelId, role, auxViewMode).catch((e) => {
+    console.error(`[MultiMonitor] 工位 ${channelId} ${roleLabel}页面加载失败: ${e.message}`);
   });
   return entry;
 }
@@ -528,69 +766,117 @@ function applyMultiMonitorConfig(rawConfig) {
   const { config, warnings } = normalizeMultiMonitorConfig(rawConfig);
   if (!isLicensed) {
     destroyStationWindows('License 未通过');
+    setReusedMainWindowAssignment(null);
+    updateMainWindowAvoidanceTargets([]);
     return { ok: false, enabled: false, windows: [], warnings: [...warnings, 'License 未通过，未创建工位窗口'] };
   }
   if (!config.enabled) {
     destroyStationWindows('多屏模式关闭');
+    setReusedMainWindowAssignment(null);
+    updateMainWindowAvoidanceTargets([]);
     return { ok: true, enabled: false, readonly: config.readonly, windows: [], warnings };
   }
 
   const displayResult = enumerateDisplaysForApply(getDisplayDtos);
   const displays = displayResult.displays;
-  let mainWindowDisplay = displays.find((display) => display.isMainWindowDisplay) || null;
-  if (!mainWindowDisplay) {
+  let primaryDisplay = displays.find((display) => display.isPrimary) || null;
+  if (!primaryDisplay) {
     try {
-      mainWindowDisplay = getMainWindowDisplayDto();
+      const rawPrimaryDisplay = screen.getPrimaryDisplay();
+      const currentMainDisplay = getMainWindowDisplay(rawPrimaryDisplay);
+      primaryDisplay = toDisplayDto(
+        rawPrimaryDisplay,
+        rawPrimaryDisplay.id,
+        currentMainDisplay && currentMainDisplay.id,
+      );
     } catch (e) {
-      warnings.push(`未能定位主窗口显示器: ${e.message}`);
+      warnings.push(`未能定位 OS 主显示器: ${e.message}`);
     }
   }
   warnings.push(...displayResult.warnings);
   if (displayResult.error) {
     console.warn(`[MultiMonitor] 枚举显示器失败: ${displayResult.error}; 按记忆/手工 bounds 降级`);
   }
-  const desired = new Map();
-  const occupiedTargets = new Set();
-  for (const [channelKey, assignment] of Object.entries(config.mapping)) {
-    const channelId = Number(channelKey);
+  const occupiedTargets = [];
+  const workstationConfig = readWorkstationConfig();
+  const activeAssignmentResult = filterStationAssignmentsByChannelCount(
+    buildStationAssignments(config.mapping),
+    workstationConfig.channel_count,
+  );
+  for (const skippedChannelId of activeAssignmentResult.skippedChannelIds) {
+    warnings.push(
+      `工位 ${skippedChannelId} 超出当前 channel_count=${workstationConfig.channel_count}，保留配置但不创建窗口`,
+    );
+  }
+  for (const stationAssignment of activeAssignmentResult.assignments) {
+    const {
+      key, channelId, role, assignment, auxViewMode,
+    } = stationAssignment;
+    const roleLabel = role === 'aux' ? '副屏' : '主屏';
     const target = resolveDisplayTarget(assignment, displays);
     if (!target || !target.bounds) {
-      warnings.push(`工位 ${channelId} 无可用显示器位置，已跳过`);
+      warnings.push(`工位 ${channelId} ${roleLabel}无可用显示器位置，已跳过`);
       continue;
     }
-    if (target.warning) warnings.push(`工位 ${channelId}: ${target.warning}`);
-    if (isReservedMainDisplayTarget(target, mainWindowDisplay)) {
-      warnings.push(`工位 ${channelId} 映射到主窗口显示器，已跳过（主屏保留总览/操作）`);
+    if (target.warning) warnings.push(`工位 ${channelId} ${roleLabel}: ${target.warning}`);
+    const conflict = occupiedTargets.find((occupied) => (
+      displayTargetsOverlap(target, occupied.target)
+    ));
+    if (conflict) {
+      const conflictRoleLabel = conflict.role === 'aux' ? '副屏' : '主屏';
+      warnings.push(
+        `工位 ${channelId} ${roleLabel}与工位 ${conflict.channelId} ${conflictRoleLabel}`
+        + '显示区域重叠，已跳过',
+      );
       continue;
     }
-    const targetKey = `${target.bounds.x},${target.bounds.y},${target.bounds.width},${target.bounds.height}`;
-    if (occupiedTargets.has(targetKey)) {
-      warnings.push(`工位 ${channelId} 与其他工位映射到同一显示区域，已跳过`);
-      continue;
-    }
-    occupiedTargets.add(targetKey);
-    const signature = JSON.stringify({ bounds: target.bounds, readonly: config.readonly });
-    desired.set(channelId, { target, signature });
+    const signature = JSON.stringify({
+      bounds: target.bounds,
+      role,
+      ...(role === 'aux' ? { auxViewMode } : {}),
+    });
+    const resolvedEntry = {
+      key, channelId, role, target, signature, auxViewMode,
+    };
+    occupiedTargets.push(resolvedEntry);
   }
 
-  for (const [channelId, entry] of stationWindows.entries()) {
-    const next = desired.get(channelId);
+  const partition = partitionResolvedStationAssignments(occupiedTargets, primaryDisplay);
+  const reusedAssignment = partition.reusedMainAssignments[0] || null;
+  const stationWindowDesired = new Map(
+    partition.stationWindowAssignments.map((item) => [item.key, item]),
+  );
+
+  for (const [windowKey, entry] of stationWindows.entries()) {
+    const next = stationWindowDesired.get(windowKey);
     if (!next || next.signature !== entry.signature || entry.window.isDestroyed()) {
-      stationWindows.delete(channelId);
+      stationWindows.delete(windowKey);
       try {
         if (!entry.window.isDestroyed()) entry.window.destroy();
       } catch (e) {
-        console.warn(`[MultiMonitor] 重建工位 ${channelId} 窗口前清理失败: ${e.message}`);
+        console.warn(`[MultiMonitor] 重建工位 ${entry.channelId} ${entry.role}窗口前清理失败: ${e.message}`);
       }
     }
   }
 
-  for (const [channelId, desiredEntry] of desired.entries()) {
-    if (!stationWindows.has(channelId)) {
+  // 先销毁 OS 主屏上旧的 kiosk 工位窗，再恢复带侧栏的主应用窗，避免热应用时短暂叠屏。
+  setReusedMainWindowAssignment(reusedAssignment);
+  updateMainWindowAvoidanceTargets(
+    partition.stationWindowAssignments.map((item) => item.target),
+  );
+
+  for (const [windowKey, desiredEntry] of stationWindowDesired.entries()) {
+    if (!stationWindows.has(windowKey)) {
       try {
-        createStationWindow(channelId, desiredEntry.target, config.readonly, desiredEntry.signature);
+        createStationWindow(
+          desiredEntry.channelId,
+          desiredEntry.role,
+          desiredEntry.target,
+          desiredEntry.signature,
+          desiredEntry.auxViewMode,
+        );
       } catch (e) {
-        warnings.push(`工位 ${channelId} 窗口创建失败: ${e.message}`);
+        warnings.push(`工位 ${desiredEntry.channelId} ${desiredEntry.role}窗口创建失败: ${e.message}`);
       }
     }
   }
@@ -600,7 +886,7 @@ function applyMultiMonitorConfig(rawConfig) {
     ok: true,
     enabled: true,
     readonly: config.readonly,
-    windows: [...stationWindows.keys()].sort((left, right) => left - right),
+    windows: getStationWindowDescriptors(),
     warnings,
   };
 }
@@ -633,6 +919,11 @@ function createWindow(opts = {}) {
   });
 
   mainWindow.setMenuBarVisibility(false);  // v3.8.2: 杀菜单栏（截图框出来的第二条）
+  // 多屏启用后，Windows 任务栏恢复、最大化或拖动都可能让主窗重新压到工位屏。
+  // 在窗口状态事件内同步复核；命中占用区就立即回停车页并重新最小化。
+  for (const eventName of ['show', 'restore', 'maximize', 'move', 'resize', 'enter-full-screen']) {
+    mainWindow.on(eventName, () => enforceMainWindowAvoidance(eventName));
+  }
   
   // 加载前端页面
   if (CONFIG.isDev) {
@@ -978,14 +1269,15 @@ function cancelShutdown() {
     shutdownWindow.close();
   }
   
-  if (mainWindow) {
+  if (mainWindow && !mainWindow.isDestroyed() && !enforceMainWindowAvoidance('取消关机')) {
     mainWindow.show();
   }
 }
 
 // When a second instance is launched, focus the existing window instead
 app.on('second-instance', () => {
-  if (mainWindow) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (enforceMainWindowAvoidance('second-instance')) return;
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.focus();
   }
@@ -1211,7 +1503,7 @@ ipcMain.handle('multi-monitor:apply', (_evt, rawConfig) => {
     return {
       ok: false,
       enabled: false,
-      windows: [...stationWindows.keys()].sort((left, right) => left - right),
+      windows: getStationWindowDescriptors(),
       warnings: [],
       error: '仅主窗口可应用多屏布局',
     };
@@ -1232,11 +1524,13 @@ function maybeShowMainWindow() {
     return;
   }
   try {
-    mainWindow.show();
-    mainWindow.focus();
     if (isLicensed) {
       const config = readWorkstationConfig();
       applyMultiMonitorConfig(config.multi_monitor);
+    }
+    if (!enforceMainWindowAvoidance('显示主窗') && !mainWindowMinimizedForMultiMonitor) {
+      mainWindow.show();
+      mainWindow.focus();
     }
   } catch (e) {
     console.warn('[App] 显示主窗失败:', e.message);

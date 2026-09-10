@@ -10,7 +10,7 @@
   >
     <header data-layout-slot="topbar" class="flex flex-shrink-0 flex-wrap items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5">
       <button
-        v-if="!kiosk"
+        v-if="!kiosk && showNavigation"
         type="button"
         class="rounded border border-slate-600 bg-slate-800 px-2.5 py-1 text-xs font-bold text-gray-200 hover:border-cyan-500 hover:text-cyan-300"
         data-testid="single-channel-back"
@@ -28,7 +28,7 @@
       </span>
       <span v-if="readonly" class="rounded border border-slate-600 px-2 py-0.5 text-[0.625rem] text-gray-300" data-testid="single-channel-readonly">只读监看</span>
 
-      <div v-if="!kiosk" class="ml-auto flex items-center gap-1.5">
+      <div v-if="!kiosk && showNavigation" class="ml-auto flex items-center gap-1.5">
         <button type="button" class="nav-button" data-testid="single-channel-previous" @click="$emit('previous')">‹ 上一路</button>
         <button type="button" class="nav-button" data-testid="single-channel-next" @click="$emit('next')">下一路 ›</button>
       </div>
@@ -150,6 +150,7 @@ const props = defineProps({
   modelStats: { type: Array, default: () => [] },
   readonly: { type: Boolean, default: true },
   kiosk: { type: Boolean, default: false },
+  showNavigation: { type: Boolean, default: true },
   hasProject: { type: Boolean, default: false },
   displayCt: { type: String, default: '--' },
   showFps: { type: Boolean, default: true },

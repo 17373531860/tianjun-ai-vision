@@ -18,7 +18,12 @@ v3.32.0 异步推理升级:
       后台 worker 线程负责 lazy init / 热重载 / 推理, 采集帧率不再被手部模型拖垮.
     - 代价: 骨架相对画面滞后一次推理周期 (视觉基本无感).
 
-字段所有权 (8 + 5 + 5 个内部状态):
+多屏手部副屏支持:
+    - 仅在副屏请求后短时发布“干净推理帧 + 同帧手框/关节”观测,
+      不改采集循环、默认 snapshot 或 MJPEG 通路.
+    - 裁切、平滑、绘制与 JPEG 缓存均属于本组件.
+
+字段所有权:
   老 baseline:
     _mp_pose / _mp_hands / _mp_landmarker_tasks  : lazy-loaded 模型句柄
     _mp_draw / _mp_draw_styles                   : drawing utils
@@ -28,27 +33,36 @@ v3.32.0 异步推理升级:
     _hand_detector                       : YOLO 检测器实例 (None=未启用)
     _hand_detector_path_loaded           : 已加载的路径 (热更新检测)
     _hand_detector_kind_loaded           : 已加载的 kind
-    _last_two_stage_landmarks            : 帧间复用的 ROI 关键点 [(roi_offset, roi_size, landmarks), ...]
+    _last_two_stage_results              : 帧间复用的 ROI 关键点 [(roi_offset, roi_size, landmarks), ...]
   v3.32.0 新增 (异步推理):
     _worker_thread / _worker_running     : 后台推理线程
     _pending_lock / _pending_cond / _pending_frame : 单槽位帧投递
+  多屏手部副屏:
+    _hand_observation_*                  : 干净帧与同帧手部几何快照
+    _hand_crop_*                         : 裁切坐标平滑与 JPEG 缓存
 
 用户配置 (公共字段保留在 VSM, 通过 __setattr__ 转发):
   老 4 个: mediapipe_enabled / mediapipe_pose / mediapipe_hands / mediapipe_confidence
   新 6 个: mediapipe_hand_detector_path / _conf / _iou / _imgsz / _class / _kind
            mediapipe_hand_roi_pad
 
-公共 API: init() / release() / apply_overlay(frame).
+公共 API: init() / release() / apply_overlay(frame) / get_hands_crop_snapshot().
 """
 from __future__ import annotations
 
+import math
 import os
 import sys
 import threading
+import time
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import cv2
+import numpy as np
+from PIL import Image, ImageDraw
+
+from backend.api.source_geometry import get_chinese_font
 
 # HandLandmarker .task 默认路径 (跟项目同级分发, 客户可换)
 DEFAULT_TASK_MODEL_REL = "backend/data/models/hand_landmarker.task"
@@ -222,6 +236,454 @@ def _expand_bbox(x1: int, y1: int, x2: int, y2: int, frame_w: int, frame_h: int,
     return nx1, ny1, nx2, ny2
 
 
+_HAND_CONNECTIONS = (
+    (0, 1), (1, 2), (2, 3), (3, 4),
+    (0, 5), (5, 6), (6, 7), (7, 8),
+    (5, 9), (9, 10), (10, 11), (11, 12),
+    (9, 13), (13, 14), (14, 15), (15, 16),
+    (13, 17), (0, 17), (17, 18), (18, 19), (19, 20),
+)
+
+_HAND_CROP_ASPECT = 16.0 / 9.0
+_HAND_CROP_MIN_WIDTH_RATIO = 0.3
+# 副屏固定取景：源帧中心、宽度 50%，单双手切换时均不改变。
+_HAND_CROP_VIEW_WIDTH_RATIO = 0.5
+
+
+def _clip_crop_rect(rect, frame_w: int, frame_h: int) -> Optional[Tuple[int, int, int, int]]:
+    """把像素裁切框夹到帧内；空框返回 None。"""
+    if rect is None or frame_w <= 0 or frame_h <= 0:
+        return None
+    try:
+        x1, y1, x2, y2 = (int(round(float(v))) for v in rect)
+    except (TypeError, ValueError):
+        return None
+    x1 = max(0, min(frame_w, x1))
+    y1 = max(0, min(frame_h, y1))
+    x2 = max(0, min(frame_w, x2))
+    y2 = max(0, min(frame_h, y2))
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return x1, y1, x2, y2
+
+
+def _compute_center_crop_rect(
+    frame_shape: Sequence[int],
+    *,
+    width_ratio: float,
+) -> Optional[Tuple[int, int, int, int]]:
+    """按源帧尺寸计算固定居中的 16:9 ROI，不读取任何检测结果。"""
+    if len(frame_shape) < 2:
+        return None
+    frame_h, frame_w = int(frame_shape[0]), int(frame_shape[1])
+    if frame_w <= 0 or frame_h <= 0:
+        return None
+
+    ratio = float(width_ratio)
+    if not math.isfinite(ratio):
+        return None
+    ratio = max(0.1, min(1.0, ratio))
+    viewport_w = min(frame_w, max(96, int(round(frame_w * ratio))))
+    viewport_h = max(1, int(round(viewport_w / _HAND_CROP_ASPECT)))
+    if viewport_h > frame_h:
+        viewport_h = frame_h
+        viewport_w = min(
+            frame_w,
+            max(1, int(round(viewport_h * _HAND_CROP_ASPECT))),
+        )
+
+    crop_x1 = (frame_w - viewport_w) // 2
+    crop_y1 = (frame_h - viewport_h) // 2
+    return (
+        crop_x1,
+        crop_y1,
+        crop_x1 + viewport_w,
+        crop_y1 + viewport_h,
+    )
+
+
+def _compute_hands_crop_rect(
+    frame_shape: Sequence[int],
+    hand_boxes: Sequence[Sequence[float]],
+    landmark_groups: Sequence[Sequence[Sequence[float]]],
+    *,
+    pad_ratio: float,
+    previous_rect: Optional[Sequence[float]] = None,
+    smoothing_alpha: float = 0.35,
+    fixed_width_ratio: Optional[float] = None,
+    follow_center: bool = False,
+) -> Optional[Tuple[int, int, int, int]]:
+    """计算手部裁切框（纯函数）。
+
+    坐标均为当前干净帧上的像素坐标。先取所有 hand-detector 框与双手
+    landmarks 外接框的并集，再复用 ``_expand_bbox`` 按现有
+    ``mediapipe_hand_roi_pad`` 口径外扩。传入 ``fixed_width_ratio`` 时，
+    视窗始终保持固定 16:9 尺寸；手部接近边缘时只平移不缩放，手部并集超过
+    固定视窗时以并集中心为焦点。``follow_center=True`` 会让同尺寸视窗中心
+    按 EMA 平滑跟随手部并集；默认仍保留触边后最小平移的 dead zone 行为。
+    未传 ``fixed_width_ratio`` 时保留“完整容纳并集、必要时扩容”的通用计算。
+    没有新几何时保留上一裁切框。
+    """
+    if len(frame_shape) < 2:
+        return None
+    frame_h, frame_w = int(frame_shape[0]), int(frame_shape[1])
+    if frame_w <= 0 or frame_h <= 0:
+        return None
+
+    xs: List[float] = []
+    ys: List[float] = []
+
+    for box in hand_boxes or ():
+        if box is None or len(box) < 4:
+            continue
+        try:
+            bx1, by1, bx2, by2 = (float(v) for v in box[:4])
+        except (TypeError, ValueError):
+            continue
+        if not all(math.isfinite(v) for v in (bx1, by1, bx2, by2)):
+            continue
+        bx1, bx2 = sorted((bx1, bx2))
+        by1, by2 = sorted((by1, by2))
+        bx1, bx2 = max(0.0, bx1), min(float(frame_w), bx2)
+        by1, by2 = max(0.0, by1), min(float(frame_h), by2)
+        if bx2 > bx1 and by2 > by1:
+            xs.extend((bx1, bx2))
+            ys.extend((by1, by2))
+
+    for landmarks in landmark_groups or ():
+        for point in landmarks or ():
+            if point is None or len(point) < 2:
+                continue
+            try:
+                px, py = float(point[0]), float(point[1])
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(px) or not math.isfinite(py):
+                continue
+            xs.append(max(0.0, min(float(frame_w), px)))
+            ys.append(max(0.0, min(float(frame_h), py)))
+
+    if not xs or not ys:
+        return _clip_crop_rect(previous_rect, frame_w, frame_h)
+
+    x1 = int(math.floor(min(xs)))
+    y1 = int(math.floor(min(ys)))
+    x2 = int(math.ceil(max(xs)))
+    y2 = int(math.ceil(max(ys)))
+    if x2 <= x1:
+        x2 = min(frame_w, x1 + 1)
+    if y2 <= y1:
+        y2 = min(frame_h, y1 + 1)
+    required = _expand_bbox(
+        x1, y1, x2, y2, frame_w, frame_h,
+        max(0.0, float(pad_ratio)),
+    )
+
+    previous = _clip_crop_rect(previous_rect, frame_w, frame_h)
+    required_w = required[2] - required[0]
+    required_h = required[3] - required[1]
+    previous_w = previous[2] - previous[0] if previous is not None else 0
+    previous_h = previous[3] - previous[1] if previous is not None else 0
+
+    if fixed_width_ratio is not None:
+        # 与 fixed 中心模式共用同一尺寸算法，保证低分辨率输入也不会因
+        # 模式切换改变缩放比例（follow 只移动视窗中心）。
+        center_rect = _compute_center_crop_rect(
+            frame_shape,
+            width_ratio=float(fixed_width_ratio),
+        )
+        if center_rect is None:
+            return previous
+        viewport_w = center_rect[2] - center_rect[0]
+        viewport_h = center_rect[3] - center_rect[1]
+
+        required_cx = (required[0] + required[2]) / 2.0
+        required_cy = (required[1] + required[3]) / 2.0
+        required_w = required[2] - required[0]
+        required_h = required[3] - required[1]
+
+        if previous is None:
+            crop_x1 = int(round(required_cx - viewport_w / 2.0))
+            crop_y1 = int(round(required_cy - viewport_h / 2.0))
+        elif follow_center:
+            alpha = max(0.0, min(1.0, float(smoothing_alpha)))
+            previous_cx = (previous[0] + previous[2]) / 2.0
+            previous_cy = (previous[1] + previous[3]) / 2.0
+            center_x = previous_cx * (1.0 - alpha) + required_cx * alpha
+            center_y = previous_cy * (1.0 - alpha) + required_cy * alpha
+            crop_x1 = int(round(center_x - viewport_w / 2.0))
+            crop_y1 = int(round(center_y - viewport_h / 2.0))
+
+            # 连续移动时以 EMA 为主；若手部突然跳位且 padded union 能放入
+            # 固定窗口，则只做刚好容纳它的最小修正，避免副屏短暂完全丢手。
+            if required_w <= viewport_w:
+                if required[0] < crop_x1:
+                    crop_x1 = required[0]
+                elif required[2] > crop_x1 + viewport_w:
+                    crop_x1 = required[2] - viewport_w
+            if required_h <= viewport_h:
+                if required[1] < crop_y1:
+                    crop_y1 = required[1]
+                elif required[3] > crop_y1 + viewport_h:
+                    crop_y1 = required[3] - viewport_h
+        else:
+            # 固定摄像头下保留上一取景位置作为 dead zone：手还在窗口内就
+            # 完全不移动，只有触边才做最小平移，避免画面跟着 bbox 抖动。
+            previous_cx = (previous[0] + previous[2]) / 2.0
+            previous_cy = (previous[1] + previous[3]) / 2.0
+            crop_x1 = int(round(previous_cx - viewport_w / 2.0))
+            crop_y1 = int(round(previous_cy - viewport_h / 2.0))
+
+            if required_w <= viewport_w:
+                if required[0] < crop_x1:
+                    crop_x1 = required[0]
+                elif required[2] > crop_x1 + viewport_w:
+                    crop_x1 = required[2] - viewport_w
+            else:
+                alpha = max(0.0, min(1.0, float(smoothing_alpha)))
+                center_x = previous_cx * (1.0 - alpha) + required_cx * alpha
+                crop_x1 = int(round(center_x - viewport_w / 2.0))
+
+            if required_h <= viewport_h:
+                if required[1] < crop_y1:
+                    crop_y1 = required[1]
+                elif required[3] > crop_y1 + viewport_h:
+                    crop_y1 = required[3] - viewport_h
+            else:
+                alpha = max(0.0, min(1.0, float(smoothing_alpha)))
+                center_y = previous_cy * (1.0 - alpha) + required_cy * alpha
+                crop_y1 = int(round(center_y - viewport_h / 2.0))
+
+        crop_x1 = max(0, min(frame_w - viewport_w, crop_x1))
+        crop_y1 = max(0, min(frame_h - viewport_h, crop_y1))
+        return (
+            crop_x1,
+            crop_y1,
+            crop_x1 + viewport_w,
+            crop_y1 + viewport_h,
+        )
+
+    min_w = min(
+        frame_w,
+        max(96, int(round(frame_w * _HAND_CROP_MIN_WIDTH_RATIO))),
+    )
+    min_h = min(frame_h, max(96, int(math.ceil(min_w / _HAND_CROP_ASPECT))))
+
+    # 正常帧严格复用既有宽高，只让中心移动。只有 padded union 或首次
+    # 最小视窗放不下时才扩容；扩容后不会因下一帧手框变小而回缩。
+    if (
+        previous is not None
+        and previous_w >= required_w
+        and previous_h >= required_h
+        and previous_w >= min_w
+        and previous_h >= min_h
+    ):
+        viewport_w, viewport_h = previous_w, previous_h
+    else:
+        base_w = min(frame_w, max(required_w, previous_w, min_w))
+        base_h = min(frame_h, max(required_h, previous_h, min_h))
+        viewport_w = int(math.ceil(max(base_w, base_h * _HAND_CROP_ASPECT)))
+        viewport_h = int(math.ceil(viewport_w / _HAND_CROP_ASPECT))
+
+        if viewport_w > frame_w or viewport_h > frame_h:
+            # 优先保住 16:9；当源画幅本身不足以容纳 required 时，退到
+            # 能完整包含它的最小窗口。输出端仍会 letterbox 到 640x360。
+            fit_w = frame_w
+            fit_h = int(math.ceil(fit_w / _HAND_CROP_ASPECT))
+            if fit_h >= base_h and fit_h <= frame_h:
+                viewport_w, viewport_h = fit_w, fit_h
+            else:
+                fit_h = frame_h
+                fit_w = int(math.ceil(fit_h * _HAND_CROP_ASPECT))
+                if fit_w >= base_w and fit_w <= frame_w:
+                    viewport_w, viewport_h = fit_w, fit_h
+                else:
+                    viewport_w = min(
+                        frame_w,
+                        max(base_w, int(math.ceil(base_h * _HAND_CROP_ASPECT))),
+                    )
+                    viewport_h = min(
+                        frame_h,
+                        max(base_h, int(math.ceil(base_w / _HAND_CROP_ASPECT))),
+                    )
+
+    required_cx = (required[0] + required[2]) / 2.0
+    required_cy = (required[1] + required[3]) / 2.0
+    if previous is None:
+        center_x, center_y = required_cx, required_cy
+    else:
+        alpha = max(0.0, min(1.0, float(smoothing_alpha)))
+        previous_cx = (previous[0] + previous[2]) / 2.0
+        previous_cy = (previous[1] + previous[3]) / 2.0
+        center_x = previous_cx * (1.0 - alpha) + required_cx * alpha
+        center_y = previous_cy * (1.0 - alpha) + required_cy * alpha
+
+    ideal_x1 = int(round(center_x - viewport_w / 2.0))
+    ideal_y1 = int(round(center_y - viewport_h / 2.0))
+    # 可行区间同时保证：窗口不出帧、required 始终完整落在窗口内。
+    min_x1 = max(0, required[2] - viewport_w)
+    max_x1 = min(required[0], frame_w - viewport_w)
+    min_y1 = max(0, required[3] - viewport_h)
+    max_y1 = min(required[1], frame_h - viewport_h)
+    crop_x1 = max(min_x1, min(max_x1, ideal_x1))
+    crop_y1 = max(min_y1, min(max_y1, ideal_y1))
+    return (
+        crop_x1,
+        crop_y1,
+        crop_x1 + viewport_w,
+        crop_y1 + viewport_h,
+    )
+
+
+def _render_hands_crop(
+    frame,
+    crop_rect: Sequence[int],
+    hand_boxes: Sequence[Sequence[float]],
+    landmark_groups: Sequence[Sequence[Sequence[float]]],
+    *,
+    max_edge: int = 640,
+    box_color: Tuple[int, int, int] = (0, 255, 0),
+    line_color: Tuple[int, int, int] = (0, 255, 0),
+    point_color: Tuple[int, int, int] = (0, 255, 0),
+    thickness: int = 2,
+    draw_landmarks=None,
+    connections=_HAND_CONNECTIONS,
+    landmark_drawing_spec=None,
+    connection_drawing_spec=None,
+):
+    """先裁切干净帧，再输出固定 640x360 并只画手框与指关节。"""
+    if frame is None or getattr(frame, "size", 0) == 0:
+        return None
+    frame_h, frame_w = frame.shape[:2]
+    clipped = _clip_crop_rect(crop_rect, frame_w, frame_h)
+    if clipped is None:
+        return None
+    x1, y1, x2, y2 = clipped
+
+    # 必须先裁切，禁止把全图编码后交给前端 CSS/canvas 再裁。
+    crop = frame[y1:y2, x1:x2].copy()
+    crop_h, crop_w = crop.shape[:2]
+    if crop_w <= 0 or crop_h <= 0:
+        return None
+    target_edge = max(1, int(max_edge))
+    out_w = target_edge
+    out_h = max(1, int(round(target_edge / _HAND_CROP_ASPECT)))
+    scale = min(out_w / float(crop_w), out_h / float(crop_h))
+    resized_w = max(1, min(out_w, int(round(crop_w * scale))))
+    resized_h = max(1, min(out_h, int(round(crop_h * scale))))
+    interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+    resized = cv2.resize(crop, (resized_w, resized_h), interpolation=interpolation)
+    offset_x = (out_w - resized_w) // 2
+    offset_y = (out_h - resized_h) // 2
+    crop = np.zeros((out_h, out_w, 3), dtype=frame.dtype)
+    crop[offset_y:offset_y + resized_h, offset_x:offset_x + resized_w] = resized
+
+    scale_x = resized_w / float(crop_w)
+    scale_y = resized_h / float(crop_h)
+    draw_thickness = max(1, min(10, int(thickness)))
+    point_radius = max(2, draw_thickness + 1)
+
+    def _project(px: float, py: float) -> Tuple[int, int]:
+        return (
+            offset_x + int(round((float(px) - x1) * scale_x)),
+            offset_y + int(round((float(py) - y1) * scale_y)),
+        )
+
+    for box in hand_boxes or ():
+        if box is None or len(box) < 4:
+            continue
+        try:
+            bx1, by1, bx2, by2 = (float(v) for v in box[:4])
+        except (TypeError, ValueError):
+            continue
+        bx1, bx2 = sorted((bx1, bx2))
+        by1, by2 = sorted((by1, by2))
+        ix1, iy1 = max(float(x1), bx1), max(float(y1), by1)
+        ix2, iy2 = min(float(x2), bx2), min(float(y2), by2)
+        if ix2 <= ix1 or iy2 <= iy1:
+            continue
+        p1 = _project(ix1, iy1)
+        p2 = _project(ix2, iy2)
+        cv2.rectangle(crop, p1, p2, box_color, draw_thickness)
+
+    for landmarks in landmark_groups or ():
+        points = []
+        for point in landmarks or ():
+            try:
+                points.append((float(point[0]), float(point[1])))
+            except (TypeError, ValueError, IndexError):
+                points.append((float("nan"), float("nan")))
+
+        # 正常运行时复用主屏同一个 MediaPipe draw_landmarks 与 DrawingSpec，
+        # 包括默认的逐手指花色；无 MediaPipe 绘图句柄的纯函数测试才走 cv2 回退。
+        if draw_landmarks is not None and \
+           landmark_drawing_spec is not None and \
+           connection_drawing_spec is not None:
+            from mediapipe.framework.formats import landmark_pb2
+
+            normalized_landmarks = []
+            for px, py in points:
+                if not math.isfinite(px) or not math.isfinite(py):
+                    normalized_landmarks.append(
+                        landmark_pb2.NormalizedLandmark(x=-1.0, y=-1.0)
+                    )
+                    continue
+                projected_x, projected_y = _project(px, py)
+                normalized_landmarks.append(landmark_pb2.NormalizedLandmark(
+                    x=projected_x / float(out_w),
+                    y=projected_y / float(out_h),
+                ))
+            draw_landmarks(
+                crop,
+                landmark_pb2.NormalizedLandmarkList(
+                    landmark=normalized_landmarks,
+                ),
+                connections,
+                landmark_drawing_spec,
+                connection_drawing_spec,
+            )
+            continue
+
+        for start_idx, end_idx in _HAND_CONNECTIONS:
+            if start_idx >= len(points) or end_idx >= len(points):
+                continue
+            start, end = points[start_idx], points[end_idx]
+            if not all(math.isfinite(v) for v in (*start, *end)):
+                continue
+            cv2.line(crop, _project(*start), _project(*end), line_color, draw_thickness)
+        for px, py in points:
+            if not math.isfinite(px) or not math.isfinite(py):
+                continue
+            if x1 <= px <= x2 and y1 <= py <= y2:
+                cv2.circle(crop, _project(px, py), point_radius, point_color, -1)
+    return crop
+
+
+def _make_no_hands_frame():
+    """生成 640x360 黑底“未检测到手”占位图。"""
+    frame = np.zeros((360, 640, 3), dtype=np.uint8)
+    text = "未检测到手"
+    try:
+        image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        draw = ImageDraw.Draw(image)
+        font = get_chinese_font(30)
+        bbox = draw.textbbox((0, 0), text, font=font)
+        text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        draw.text(
+            ((640 - text_w) // 2, (360 - text_h) // 2),
+            text,
+            font=font,
+            fill=(220, 220, 220),
+        )
+        return cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR).copy()
+    except Exception:
+        cv2.putText(
+            frame, "No hands detected", (180, 185),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (220, 220, 220), 2,
+        )
+        return frame
+
+
 # ==================== MediaPipeOverlay 主类 ====================
 
 class MediaPipeOverlay:
@@ -268,6 +730,23 @@ class MediaPipeOverlay:
         self._pending_lock = threading.Lock()
         self._pending_cond = threading.Condition(self._pending_lock)
         self._pending_frame = None
+
+        # ---------- 手部裁切快照 ----------
+        # worker 发布的 observation 把“干净帧 + 同帧手框/关键点”绑成一个原子快照；
+        # HTTP 短轮询只读该快照，不碰采集热循环，也不会读带 pose 的 current_frame。
+        self._hand_observation_lock = threading.Lock()
+        self._hand_crop_epoch = 0
+        self._hand_observation_seq = 0
+        self._hand_crop_observation = None
+        # 没有副屏短轮询时不做任何裁切几何整理，保持功能关闭零热路径差异。
+        self._hand_crop_requested_until = 0.0
+        # 多个短轮询请求可能并发，裁切框 EMA 与 JPEG cache 单独串行化。
+        self._hand_crop_lock = threading.Lock()
+        self._hand_crop_last_seq = 0
+        self._hand_crop_rect: Optional[Tuple[int, int, int, int]] = None
+        self._hand_crop_cache_key = None
+        self._hand_crop_jpeg: Optional[bytes] = None
+        self._no_hands_jpeg: Optional[bytes] = None
 
     # ---------------- 公共 API ----------------
 
@@ -343,7 +822,206 @@ class MediaPipeOverlay:
         self._mp_last_hands_results = None
         self._last_two_stage_results = []
         self._mp_frame_counter = 0
+        self._clear_hand_crop_state()
         print("[MediaPipe] 资源已释放")
+
+    def _clear_hand_crop_state(self):
+        """清掉跨会话的手部裁切缓存，避免停用/重载后展示陈旧画面。"""
+        with self._hand_observation_lock:
+            self._hand_crop_epoch += 1
+            self._hand_observation_seq += 1
+            barrier_seq = self._hand_observation_seq
+            self._hand_crop_observation = None
+            self._hand_crop_requested_until = 0.0
+        with self._hand_crop_lock:
+            # 已抓到旧 observation、但尚未进入 crop 锁的 HTTP 请求，必须被
+            # 这条 barrier 拒绝，不能在 clear 返回后把跨会话旧 JPEG 写回来。
+            self._hand_crop_last_seq = max(self._hand_crop_last_seq, barrier_seq)
+            self._hand_crop_rect = None
+            self._hand_crop_cache_key = None
+            self._hand_crop_jpeg = None
+
+    def _publish_hand_crop_observation(
+        self,
+        frame,
+        hand_boxes,
+        landmark_groups,
+        *,
+        epoch: Optional[int] = None,
+    ):
+        """由 MediaPipe worker 发布同帧干净画面与像素几何。"""
+        frozen_boxes = tuple(
+            tuple(float(value) for value in box[:4])
+            for box in (hand_boxes or ())
+            if box is not None and len(box) >= 4
+        )
+        frozen_landmarks = tuple(
+            tuple((float(point[0]), float(point[1])) for point in (landmarks or ()))
+            for landmarks in (landmark_groups or ())
+        )
+        # frame 是 pending_frame 的独占副本；worker 后续不再修改，直接转移引用，
+        # 避免每次手部推理再复制一张全分辨率图。
+        with self._hand_observation_lock:
+            # release/clear 可能在一次慢推理期间发生。旧代 worker 即使稍后返回，
+            # 也不能重新发布已经失效的帧。
+            if epoch is not None and epoch != self._hand_crop_epoch:
+                return False
+            self._hand_observation_seq += 1
+            self._hand_crop_observation = (
+                self._hand_observation_seq,
+                frame,
+                frozen_boxes,
+                frozen_landmarks,
+            )
+            return True
+
+    def _hand_crop_is_requested(self) -> bool:
+        # CPython 下 float 引用读写原子；默认 0 只做一次比较，不给原热路径加锁。
+        deadline = self._hand_crop_requested_until
+        return deadline > 0.0 and deadline >= time.monotonic()
+
+    @staticmethod
+    def _baseline_hand_geometry(results, frame_w: int, frame_h: int):
+        """把 baseline 全帧归一化 landmarks 转成像素点；不伪造模型手框。"""
+        groups = []
+        for hand_lm in getattr(results, "multi_hand_landmarks", None) or ():
+            points = tuple(
+                (
+                    max(0.0, min(float(frame_w), float(lm.x) * frame_w)),
+                    max(0.0, min(float(frame_h), float(lm.y) * frame_h)),
+                )
+                for lm in getattr(hand_lm, "landmark", ())
+            )
+            if not points:
+                continue
+            groups.append(points)
+        return (), groups
+
+    def _no_hands_snapshot_locked(self) -> Optional[bytes]:
+        if self._no_hands_jpeg is None:
+            ok, buffer = cv2.imencode(
+                ".jpg", _make_no_hands_frame(),
+                [cv2.IMWRITE_JPEG_QUALITY, 60],
+            )
+            if ok:
+                self._no_hands_jpeg = buffer.tobytes()
+        return self._no_hands_jpeg
+
+    def _get_hands_crop_snapshot(self, view_mode: str = "follow") -> Optional[bytes]:
+        host = self._host
+        normalized_view_mode = (
+            "fixed"
+            if str(view_mode).strip().lower() == "fixed"
+            else "follow"
+        )
+        if not getattr(host, "mediapipe_enabled", False) or not getattr(host, "mediapipe_hands", False):
+            self._clear_hand_crop_state()
+            with self._hand_crop_lock:
+                return self._no_hands_snapshot_locked()
+
+        with self._hand_observation_lock:
+            # 前端 10-15fps 轮询会持续续期；窗口关闭后 3 秒自动退出附加整理路径。
+            self._hand_crop_requested_until = time.monotonic() + 3.0
+            observation = self._hand_crop_observation
+
+        with self._hand_crop_lock:
+            if observation is None:
+                return self._hand_crop_jpeg or self._no_hands_snapshot_locked()
+
+            seq, frame, hand_boxes, landmark_groups = observation
+            if seq < self._hand_crop_last_seq:
+                # 较新的并发请求已经提交，旧请求只复用最新缓存，禁止倒退 EMA/JPEG。
+                return self._hand_crop_jpeg or self._no_hands_snapshot_locked()
+            self._hand_crop_last_seq = seq
+            if not hand_boxes and not any(landmark_groups):
+                # 暂时丢手时冻结最后一张裁切，绝不退回整幅工位图。
+                return self._hand_crop_jpeg or self._no_hands_snapshot_locked()
+
+            pad_ratio = max(0.0, min(
+                2.0,
+                float(getattr(host, "mediapipe_hand_roi_pad", 0.3)),
+            ))
+            line_color = _hex_to_bgr(
+                getattr(host, "mediapipe_hands_color", "#00FF00"),
+                (0, 255, 0),
+            )
+            point_hex = getattr(host, "mediapipe_hands_point_color", "") or \
+                getattr(host, "mediapipe_hands_color", "#00FF00")
+            point_color = _hex_to_bgr(point_hex, line_color)
+            thickness = max(1, min(
+                10,
+                int(getattr(host, "mediapipe_hands_thickness", 2)),
+            ))
+            custom_style = bool(getattr(host, "mediapipe_custom_style", False))
+            cache_key = (
+                seq,
+                normalized_view_mode,
+                pad_ratio,
+                custom_style,
+                line_color,
+                point_color,
+                thickness,
+            )
+            if cache_key == self._hand_crop_cache_key and self._hand_crop_jpeg is not None:
+                return self._hand_crop_jpeg
+
+            if normalized_view_mode == "follow":
+                crop_rect = _compute_hands_crop_rect(
+                    frame.shape,
+                    hand_boxes,
+                    landmark_groups,
+                    pad_ratio=pad_ratio,
+                    previous_rect=self._hand_crop_rect,
+                    fixed_width_ratio=_HAND_CROP_VIEW_WIDTH_RATIO,
+                    follow_center=True,
+                )
+            else:
+                crop_rect = _compute_center_crop_rect(
+                    frame.shape,
+                    width_ratio=_HAND_CROP_VIEW_WIDTH_RATIO,
+                )
+            hand_specs = self._hand_draw_specs()
+            crop = _render_hands_crop(
+                frame,
+                crop_rect,
+                hand_boxes,
+                landmark_groups,
+                max_edge=640,
+                box_color=line_color,
+                line_color=line_color,
+                point_color=point_color,
+                thickness=thickness,
+                draw_landmarks=(
+                    self._mp_draw.draw_landmarks
+                    if hand_specs is not None and self._mp_draw is not None
+                    else None
+                ),
+                landmark_drawing_spec=hand_specs[0] if hand_specs is not None else None,
+                connection_drawing_spec=hand_specs[1] if hand_specs is not None else None,
+            ) if crop_rect is not None else None
+            if crop is None:
+                return self._hand_crop_jpeg or self._no_hands_snapshot_locked()
+
+            ok, buffer = cv2.imencode(
+                ".jpg", crop,
+                [cv2.IMWRITE_JPEG_QUALITY, 60],
+            )
+            if not ok:
+                return self._hand_crop_jpeg or self._no_hands_snapshot_locked()
+
+            self._hand_crop_rect = crop_rect
+            self._hand_crop_cache_key = cache_key
+            self._hand_crop_jpeg = buffer.tobytes()
+            return self._hand_crop_jpeg
+
+    def get_hands_crop_snapshot(self, view_mode: str = "follow") -> Optional[bytes]:
+        """返回只含手框/指关节的裁切 JPEG；异常隔离在副屏路径内。"""
+        try:
+            return self._get_hands_crop_snapshot(view_mode=view_mode)
+        except Exception as exc:
+            print(f"[MediaPipe hands crop] 生成快照失败: {exc}", file=sys.stderr)
+            with self._hand_crop_lock:
+                return self._hand_crop_jpeg or self._no_hands_snapshot_locked()
 
     def apply_overlay(self, frame):
         """在帧上画 pose + hands 骨架 (v3.32.0 异步化).
@@ -479,6 +1157,20 @@ class MediaPipeOverlay:
             color=line_color, thickness=thickness, circle_radius=radius)
         return landmark_spec, connection_spec
 
+    def _hand_draw_specs(self):
+        """返回主、副屏共同使用的手部 DrawingSpec。"""
+        if self._mp_draw is None:
+            return None
+        custom_specs = self._custom_draw_specs("hands")
+        if custom_specs is not None:
+            return custom_specs
+        if self._mp_draw_styles is None:
+            return None
+        return (
+            self._mp_draw_styles.get_default_hand_landmarks_style(),
+            self._mp_draw_styles.get_default_hand_connections_style(),
+        )
+
     def _init_hands_pipeline(self, conf: float):
         """根据 host.mediapipe_hand_detector_path 决定走 baseline 还是二段."""
         host = self._host
@@ -606,6 +1298,8 @@ class MediaPipeOverlay:
         """跑 pose + hands 推理 (二段或 baseline 自动选择)."""
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         rgb.flags.writeable = False
+        crop_requested = self._hand_crop_is_requested()
+        crop_epoch = self._hand_crop_epoch
 
         # pose 部分
         if self._mp_pose is not None and self._host.mediapipe_pose:
@@ -620,18 +1314,45 @@ class MediaPipeOverlay:
         if not self._host.mediapipe_hands:
             self._mp_last_hands_results = None
             self._last_two_stage_results = []
+            if crop_requested:
+                self._publish_hand_crop_observation(frame, (), (), epoch=crop_epoch)
             return
 
         if self._two_stage_active and self._hand_detector and self._hand_landmarker_tasks:
-            self._run_two_stage_hands(frame)
+            hand_boxes, landmark_groups = self._run_two_stage_hands(
+                frame,
+                collect_crop_geometry=crop_requested,
+            )
+            if crop_requested:
+                self._publish_hand_crop_observation(
+                    frame,
+                    hand_boxes,
+                    landmark_groups,
+                    epoch=crop_epoch,
+                )
         elif self._mp_hands is not None:
             try:
                 self._mp_last_hands_results = self._mp_hands.process(rgb)
             except Exception:
                 self._mp_last_hands_results = None
+            if crop_requested:
+                frame_h, frame_w = frame.shape[:2]
+                hand_boxes, landmark_groups = self._baseline_hand_geometry(
+                    self._mp_last_hands_results,
+                    frame_w,
+                    frame_h,
+                )
+                self._publish_hand_crop_observation(
+                    frame,
+                    hand_boxes,
+                    landmark_groups,
+                    epoch=crop_epoch,
+                )
+        elif crop_requested:
+            self._publish_hand_crop_observation(frame, (), (), epoch=crop_epoch)
 
-    def _run_two_stage_hands(self, frame):
-        """二段 pipeline 推理: YOLO 检框 -> ROI -> HandLandmarker -> 缓存关键点."""
+    def _run_two_stage_hands(self, frame, collect_crop_geometry: bool = False):
+        """二段 pipeline 推理，并返回同帧原始手框与全帧像素关键点。"""
         h, w = frame.shape[:2]
         pad_ratio = float(getattr(self._host, "mediapipe_hand_roi_pad", 0.3))
         bboxes = self._hand_detector.predict(frame)
@@ -649,6 +1370,22 @@ class MediaPipeOverlay:
             for lm in hands_lm:
                 results.append(((ex1, ey1), (ex2 - ex1, ey2 - ey1), lm))
         self._last_two_stage_results = results
+        if not collect_crop_geometry:
+            return (), ()
+        landmark_groups = []
+        for (offset, roi_size, landmarks) in results:
+            ox, oy = offset
+            rw, rh = roi_size
+            landmark_groups.append(tuple(
+                (
+                    max(0.0, min(float(w), ox + float(lm.x) * rw)),
+                    max(0.0, min(float(h), oy + float(lm.y) * rh)),
+                )
+                for lm in landmarks
+            ))
+        # bboxes 是未外扩的 YOLO 手框。裁切层会把它与 landmarks 并集后只按
+        # mediapipe_hand_roi_pad 外扩一次；不能拿 ex* ROI 再外扩造成双 padding。
+        return bboxes, landmark_groups
 
     def _draw_baseline_hands(self, frame):
         """老 baseline 渲染: mp.solutions.hands 结果."""
@@ -657,24 +1394,17 @@ class MediaPipeOverlay:
         if not getattr(self._mp_last_hands_results, "multi_hand_landmarks", None):
             return
         import mediapipe as mp
-        hand_specs = self._custom_draw_specs("hands")
+        hand_specs = self._hand_draw_specs()
+        if hand_specs is None:
+            return
         for hand_lm in self._mp_last_hands_results.multi_hand_landmarks:
-            if hand_specs is not None:
-                self._mp_draw.draw_landmarks(
-                    frame,
-                    hand_lm,
-                    mp.solutions.hands.HAND_CONNECTIONS,
-                    hand_specs[0],
-                    hand_specs[1],
-                )
-            else:
-                self._mp_draw.draw_landmarks(
-                    frame,
-                    hand_lm,
-                    mp.solutions.hands.HAND_CONNECTIONS,
-                    self._mp_draw_styles.get_default_hand_landmarks_style(),
-                    self._mp_draw_styles.get_default_hand_connections_style(),
-                )
+            self._mp_draw.draw_landmarks(
+                frame,
+                hand_lm,
+                mp.solutions.hands.HAND_CONNECTIONS,
+                hand_specs[0],
+                hand_specs[1],
+            )
 
     def _draw_two_stage_hands(self, frame):
         """二段 pipeline 渲染: ROI 归一化关键点 → 全帧归一化坐标 → 复用 baseline 同款绘制.
@@ -691,7 +1421,9 @@ class MediaPipeOverlay:
             self._mp_draw = mp.solutions.drawing_utils
             self._mp_draw_styles = mp.solutions.drawing_styles
         fh, fw = frame.shape[:2]
-        hand_specs = self._custom_draw_specs("hands")
+        hand_specs = self._hand_draw_specs()
+        if hand_specs is None:
+            return
         for (offset, roi_size, landmarks) in self._last_two_stage_results:
             ox, oy = offset
             rw, rh = roi_size
@@ -703,19 +1435,10 @@ class MediaPipeOverlay:
                 )
                 for lm in landmarks
             ])
-            if hand_specs is not None:
-                self._mp_draw.draw_landmarks(
-                    frame,
-                    lm_list,
-                    mp.solutions.hands.HAND_CONNECTIONS,
-                    hand_specs[0],
-                    hand_specs[1],
-                )
-            else:
-                self._mp_draw.draw_landmarks(
-                    frame,
-                    lm_list,
-                    mp.solutions.hands.HAND_CONNECTIONS,
-                    self._mp_draw_styles.get_default_hand_landmarks_style(),
-                    self._mp_draw_styles.get_default_hand_connections_style(),
-                )
+            self._mp_draw.draw_landmarks(
+                frame,
+                lm_list,
+                mp.solutions.hands.HAND_CONNECTIONS,
+                hand_specs[0],
+                hand_specs[1],
+            )

@@ -1688,10 +1688,19 @@ def video_feed(channel: int = 0):
     )
 
 @app.get("/snapshot")
-def snapshot(channel: int = 0):
-    """单帧快照端点 - 支持多通道 ?channel=0"""
+def snapshot(channel: int = 0, view: str = "", crop_mode: str = "follow"):
+    """单帧快照端点；``view=hands`` 返回副屏专用手部裁切图。"""
     vm = get_video_manager(channel)
-    data = vm.get_snapshot()
+    if view == "hands":
+        normalized_crop_mode = (
+            "fixed"
+            if str(crop_mode).strip().lower() == "fixed"
+            else "follow"
+        )
+        data = vm.mp_overlay.get_hands_crop_snapshot(view_mode=normalized_crop_mode)
+    else:
+        # 默认路径保持原样；MES、标定页和一期多屏快照均继续取整帧。
+        data = vm.get_snapshot()
     if data:
         return Response(content=data, media_type="image/jpeg",
                         headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
