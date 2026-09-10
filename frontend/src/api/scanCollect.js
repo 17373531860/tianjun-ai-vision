@@ -21,6 +21,10 @@ export const clearScanCollectGroup = (channelId) =>
 export const resolveScanCollectNg = (channelId) =>
   api.post('/scan-collect/resolve-ng', { channel_id: channelId })
 
+// v3.56.1b 面板「本件扫完」: 立即按当前已扫码结算（缺码→挂起或判NG）
+export const settleScanCollectNow = (channelId) =>
+  api.post('/scan-collect/settle-now', { channel_id: channelId })
+
 // 追溯（工件详情反查组件码）
 export const getScanCollectRecords = (params) =>
   api.get('/scan-collect/records', { params })

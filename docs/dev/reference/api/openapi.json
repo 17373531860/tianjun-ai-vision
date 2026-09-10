@@ -229,6 +229,24 @@
     "title": "APIKeyResponse",
     "type": "object"
    },
+   "AskFrameRequest": {
+    "properties": {
+     "channel_id": {
+      "default": 0,
+      "title": "Channel Id",
+      "type": "integer"
+     },
+     "question": {
+      "title": "Question",
+      "type": "string"
+     }
+    },
+    "required": [
+     "question"
+    ],
+    "title": "AskFrameRequest",
+    "type": "object"
+   },
    "AsyncDispatchToggle": {
     "properties": {
      "enabled": {
@@ -373,6 +391,106 @@
     "title": "BatchCreate",
     "type": "object"
    },
+   "Body_anomaly_create_bank_api_v1_anomaly_banks_post": {
+    "properties": {
+     "files": {
+      "description": "合格品图片 (≥1 张)",
+      "items": {
+       "contentMediaType": "application/octet-stream",
+       "type": "string"
+      },
+      "title": "Files",
+      "type": "array"
+     },
+     "name": {
+      "default": "",
+      "description": "记忆库名称",
+      "title": "Name",
+      "type": "string"
+     }
+    },
+    "required": [
+     "files"
+    ],
+    "title": "Body_anomaly_create_bank_api_v1_anomaly_banks_post",
+    "type": "object"
+   },
+   "Body_anomaly_score_api_v1_anomaly_banks__bank_id__score_post": {
+    "properties": {
+     "file": {
+      "contentMediaType": "application/octet-stream",
+      "title": "File",
+      "type": "string"
+     },
+     "threshold": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Threshold"
+     },
+     "with_heatmap": {
+      "default": false,
+      "title": "With Heatmap",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "file"
+    ],
+    "title": "Body_anomaly_score_api_v1_anomaly_banks__bank_id__score_post",
+    "type": "object"
+   },
+   "Body_ask_api_v1_vlm_ask_post": {
+    "properties": {
+     "file": {
+      "contentMediaType": "application/octet-stream",
+      "description": "图片文件 (jpg/png/bmp)",
+      "title": "File",
+      "type": "string"
+     },
+     "question": {
+      "description": "要问的问题",
+      "title": "Question",
+      "type": "string"
+     }
+    },
+    "required": [
+     "file",
+     "question"
+    ],
+    "title": "Body_ask_api_v1_vlm_ask_post",
+    "type": "object"
+   },
+   "Body_import_pack_api_v1_site_pack_import_post": {
+    "properties": {
+     "file": {
+      "contentMediaType": "application/octet-stream",
+      "title": "File",
+      "type": "string"
+     },
+     "password": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Password"
+     }
+    },
+    "required": [
+     "file"
+    ],
+    "title": "Body_import_pack_api_v1_site_pack_import_post",
+    "type": "object"
+   },
    "Body_install_plugin_api_v1_plugins_install_post": {
     "properties": {
      "file": {
@@ -385,6 +503,65 @@
      "file"
     ],
     "title": "Body_install_plugin_api_v1_plugins_install_post",
+    "type": "object"
+   },
+   "Body_ocr_read_api_v1_ocr_read_post": {
+    "properties": {
+     "file": {
+      "contentMediaType": "application/octet-stream",
+      "description": "图片文件 (jpg/png/bmp)",
+      "title": "File",
+      "type": "string"
+     },
+     "min_score": {
+      "default": 0.5,
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Min Score",
+      "type": "number"
+     },
+     "roi": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "可选 [x,y,w,h] 归一化矩形 JSON",
+      "title": "Roi"
+     }
+    },
+    "required": [
+     "file"
+    ],
+    "title": "Body_ocr_read_api_v1_ocr_read_post",
+    "type": "object"
+   },
+   "Body_preview_pack_api_v1_site_pack_preview_post": {
+    "properties": {
+     "file": {
+      "contentMediaType": "application/octet-stream",
+      "title": "File",
+      "type": "string"
+     },
+     "password": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Password"
+     }
+    },
+    "required": [
+     "file"
+    ],
+    "title": "Body_preview_pack_api_v1_site_pack_preview_post",
     "type": "object"
    },
    "Body_push_model_package_api_v1_interconnect_models_push_post": {
@@ -1387,6 +1564,11 @@
    },
    "ConfigPayload": {
     "properties": {
+     "count_on_settle": {
+      "default": true,
+      "title": "Count On Settle",
+      "type": "boolean"
+     },
      "dedup_cross_group": {
       "default": "off",
       "pattern": "^(off|reject|ng_alarm)$",
@@ -1428,6 +1610,13 @@
       "default": 1,
       "title": "Event Ok Id"
      },
+     "idle_remind_sec": {
+      "default": 0,
+      "maximum": 86400.0,
+      "minimum": 0.0,
+      "title": "Idle Remind Sec",
+      "type": "number"
+     },
      "ng_pending": {
       "default": false,
       "title": "Ng Pending",
@@ -1463,6 +1652,11 @@
       },
       "title": "Slots",
       "type": "array"
+     },
+     "standby_silent": {
+      "default": false,
+      "title": "Standby Silent",
+      "type": "boolean"
      },
      "timeout_sec": {
       "default": 0,
@@ -3290,6 +3484,56 @@
      }
     },
     "title": "EvidencePackRequest",
+    "type": "object"
+   },
+   "ExportRequest": {
+    "properties": {
+     "domains": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Domains",
+      "type": "array"
+     },
+     "local_settings": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Settings"
+     },
+     "note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Note"
+     },
+     "password": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Password"
+     }
+    },
+    "required": [
+     "domains"
+    ],
+    "title": "ExportRequest",
     "type": "object"
    },
    "ExportSettingResponse": {
@@ -7418,6 +7662,30 @@
     "title": "ParamsUpdate",
     "type": "object"
    },
+   "PathRequest": {
+    "properties": {
+     "password": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Password"
+     },
+     "path": {
+      "title": "Path",
+      "type": "string"
+     }
+    },
+    "required": [
+     "path"
+    ],
+    "title": "PathRequest",
+    "type": "object"
+   },
    "PresetRequest": {
     "properties": {
      "config_id": {
@@ -8241,6 +8509,37 @@
      "device_id"
     ],
     "title": "PulseRequest",
+    "type": "object"
+   },
+   "ReadFrameRequest": {
+    "properties": {
+     "channel_id": {
+      "default": 0,
+      "title": "Channel Id",
+      "type": "integer"
+     },
+     "min_score": {
+      "default": 0.5,
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Min Score",
+      "type": "number"
+     },
+     "roi": {
+      "anyOf": [
+       {
+        "items": {},
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "可选 [x,y,w,h] 归一化矩形",
+      "title": "Roi"
+     }
+    },
+    "title": "ReadFrameRequest",
     "type": "object"
    },
    "RecordingDirUpdate": {
@@ -11030,6 +11329,34 @@
     "title": "ScannerUpdate",
     "type": "object"
    },
+   "ScoreFrameRequest": {
+    "properties": {
+     "channel_id": {
+      "default": 0,
+      "title": "Channel Id",
+      "type": "integer"
+     },
+     "threshold": {
+      "anyOf": [
+       {
+        "exclusiveMinimum": 0.0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Threshold"
+     },
+     "with_heatmap": {
+      "default": false,
+      "title": "With Heatmap",
+      "type": "boolean"
+     }
+    },
+    "title": "ScoreFrameRequest",
+    "type": "object"
+   },
    "SessionCreate": {
     "properties": {
      "name": {
@@ -13305,6 +13632,20 @@
     "title": "TestRunRequest",
     "type": "object"
    },
+   "ThresholdRequest": {
+    "properties": {
+     "threshold": {
+      "exclusiveMinimum": 0.0,
+      "title": "Threshold",
+      "type": "number"
+     }
+    },
+    "required": [
+     "threshold"
+    ],
+    "title": "ThresholdRequest",
+    "type": "object"
+   },
    "TransformConfigRequest": {
     "properties": {
      "flip_h": {
@@ -13823,6 +14164,93 @@
      "file_path"
     ],
     "title": "VideoStartRequest",
+    "type": "object"
+   },
+   "VlmConfigPatch": {
+    "properties": {
+     "api_key": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Api Key"
+     },
+     "enabled": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Enabled"
+     },
+     "endpoint": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Endpoint"
+     },
+     "max_tokens": {
+      "anyOf": [
+       {
+        "maximum": 4096.0,
+        "minimum": 16.0,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Max Tokens"
+     },
+     "model": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Model"
+     },
+     "system_prompt": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "System Prompt"
+     },
+     "timeout_s": {
+      "anyOf": [
+       {
+        "maximum": 600.0,
+        "minimum": 5.0,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Timeout S"
+     }
+    },
+    "title": "VlmConfigPatch",
     "type": "object"
    },
    "WindowConfigRequest": {
@@ -15066,6 +15494,252 @@
     "summary": "Trigger Alarm",
     "tags": [
      "alarm"
+    ]
+   }
+  },
+  "/api/v1/anomaly/banks": {
+   "get": {
+    "operationId": "anomaly_banks_api_v1_anomaly_banks_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "记忆库列表",
+    "tags": [
+     "anomaly"
+    ]
+   },
+   "post": {
+    "operationId": "anomaly_create_bank_api_v1_anomaly_banks_post",
+    "requestBody": {
+     "content": {
+      "multipart/form-data": {
+       "schema": {
+        "$ref": "#/components/schemas/Body_anomaly_create_bank_api_v1_anomaly_banks_post"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "上传合格品图片建记忆库",
+    "tags": [
+     "anomaly"
+    ]
+   }
+  },
+  "/api/v1/anomaly/banks/{bank_id}": {
+   "delete": {
+    "operationId": "anomaly_delete_bank_api_v1_anomaly_banks__bank_id__delete",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "bank_id",
+      "required": true,
+      "schema": {
+       "title": "Bank Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "删除记忆库",
+    "tags": [
+     "anomaly"
+    ]
+   }
+  },
+  "/api/v1/anomaly/banks/{bank_id}/score": {
+   "post": {
+    "operationId": "anomaly_score_api_v1_anomaly_banks__bank_id__score_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "bank_id",
+      "required": true,
+      "schema": {
+       "title": "Bank Id",
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "multipart/form-data": {
+       "schema": {
+        "$ref": "#/components/schemas/Body_anomaly_score_api_v1_anomaly_banks__bank_id__score_post"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "上传图片评分",
+    "tags": [
+     "anomaly"
+    ]
+   }
+  },
+  "/api/v1/anomaly/banks/{bank_id}/score-frame": {
+   "post": {
+    "operationId": "anomaly_score_frame_api_v1_anomaly_banks__bank_id__score_frame_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "bank_id",
+      "required": true,
+      "schema": {
+       "title": "Bank Id",
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ScoreFrameRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "对通道当前画面评分",
+    "tags": [
+     "anomaly"
+    ]
+   }
+  },
+  "/api/v1/anomaly/banks/{bank_id}/threshold": {
+   "put": {
+    "operationId": "anomaly_update_threshold_api_v1_anomaly_banks__bank_id__threshold_put",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "bank_id",
+      "required": true,
+      "schema": {
+       "title": "Bank Id",
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ThresholdRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "调整判定阈值",
+    "tags": [
+     "anomaly"
     ]
    }
   },
@@ -25207,6 +25881,103 @@
     ]
    }
   },
+  "/api/v1/ocr/read": {
+   "post": {
+    "operationId": "ocr_read_api_v1_ocr_read_post",
+    "requestBody": {
+     "content": {
+      "multipart/form-data": {
+       "schema": {
+        "$ref": "#/components/schemas/Body_ocr_read_api_v1_ocr_read_post"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "上传图片识别文字",
+    "tags": [
+     "ocr"
+    ]
+   }
+  },
+  "/api/v1/ocr/read-frame": {
+   "post": {
+    "operationId": "ocr_read_frame_api_v1_ocr_read_frame_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ReadFrameRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "识别通道当前画面文字",
+    "tags": [
+     "ocr"
+    ]
+   }
+  },
+  "/api/v1/ocr/status": {
+   "get": {
+    "operationId": "ocr_status_api_v1_ocr_status_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "OCR 引擎状态",
+    "tags": [
+     "ocr"
+    ]
+   }
+  },
   "/api/v1/operators": {
    "get": {
     "operationId": "list_operators_api_v1_operators_get",
@@ -28227,6 +28998,47 @@
     ]
    }
   },
+  "/api/v1/scan-collect/settle-now": {
+   "post": {
+    "description": "v3.56.1b 面板「本件扫完」: 立即按当前已扫码结算本工件。\n\n码序不固定/用「扫满结算」的现场 (六和), 少扫组没有自然收口点 —\n此端点是人工收口出口: 齐→OK; 缺→挂起(ng_pending 开)或判 NG。",
+    "operationId": "settle_now_api_v1_scan_collect_settle_now_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ClearRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Settle Now",
+    "tags": [
+     "ScanCollect",
+     "ScanCollect"
+    ]
+   }
+  },
   "/api/v1/scan-collect/state": {
    "get": {
     "operationId": "get_state_api_v1_scan_collect_state_get",
@@ -30637,6 +31449,223 @@
     "tags": [
      "WMax Scanner",
      "WMax Scanner"
+    ]
+   }
+  },
+  "/api/v1/site-pack/export": {
+   "post": {
+    "operationId": "export_pack_api_v1_site_pack_export_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ExportRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Export Pack",
+    "tags": [
+     "site-pack"
+    ]
+   }
+  },
+  "/api/v1/site-pack/import": {
+   "post": {
+    "operationId": "import_pack_api_v1_site_pack_import_post",
+    "requestBody": {
+     "content": {
+      "multipart/form-data": {
+       "schema": {
+        "$ref": "#/components/schemas/Body_import_pack_api_v1_site_pack_import_post"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Import Pack",
+    "tags": [
+     "site-pack"
+    ]
+   }
+  },
+  "/api/v1/site-pack/import-path": {
+   "post": {
+    "operationId": "import_pack_path_api_v1_site_pack_import_path_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/PathRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Import Pack Path",
+    "tags": [
+     "site-pack"
+    ]
+   }
+  },
+  "/api/v1/site-pack/overview": {
+   "get": {
+    "description": "各分域当前内容量, 供导出页勾选。",
+    "operationId": "overview_api_v1_site_pack_overview_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Overview",
+    "tags": [
+     "site-pack"
+    ]
+   }
+  },
+  "/api/v1/site-pack/preview": {
+   "post": {
+    "description": "上传 .tjvsite 看内容概要, 不改任何配置。",
+    "operationId": "preview_pack_api_v1_site_pack_preview_post",
+    "requestBody": {
+     "content": {
+      "multipart/form-data": {
+       "schema": {
+        "$ref": "#/components/schemas/Body_preview_pack_api_v1_site_pack_preview_post"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Preview Pack",
+    "tags": [
+     "site-pack"
+    ]
+   }
+  },
+  "/api/v1/site-pack/preview-path": {
+   "post": {
+    "description": "按本机路径预览 (Electron 双击 .tjvsite 打开的场景)。",
+    "operationId": "preview_pack_path_api_v1_site_pack_preview_path_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/PathRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Preview Pack Path",
+    "tags": [
+     "site-pack"
     ]
    }
   },
@@ -35244,6 +36273,159 @@
     "tags": [
      "Users",
      "Users"
+    ]
+   }
+  },
+  "/api/v1/vlm/ask": {
+   "post": {
+    "operationId": "ask_api_v1_vlm_ask_post",
+    "requestBody": {
+     "content": {
+      "multipart/form-data": {
+       "schema": {
+        "$ref": "#/components/schemas/Body_ask_api_v1_vlm_ask_post"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "上传图片问答",
+    "tags": [
+     "vlm"
+    ]
+   }
+  },
+  "/api/v1/vlm/ask-frame": {
+   "post": {
+    "operationId": "ask_frame_api_v1_vlm_ask_frame_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/AskFrameRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "通道当前画面问答",
+    "tags": [
+     "vlm"
+    ]
+   }
+  },
+  "/api/v1/vlm/config": {
+   "get": {
+    "operationId": "get_config_api_v1_vlm_config_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "VLM 坐诊配置",
+    "tags": [
+     "vlm"
+    ]
+   },
+   "put": {
+    "operationId": "put_config_api_v1_vlm_config_put",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/VlmConfigPatch"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "保存 VLM 坐诊配置",
+    "tags": [
+     "vlm"
+    ]
+   }
+  },
+  "/api/v1/vlm/status": {
+   "get": {
+    "operationId": "status_api_v1_vlm_status_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "VLM 端点探活",
+    "tags": [
+     "vlm"
     ]
    }
   },

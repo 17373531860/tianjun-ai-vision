@@ -9,6 +9,7 @@
 - POST /scan-collect/remove-code                纠错：删当前组内一个码
 - POST /scan-collect/clear                      纠错：清空当前组重扫
 - POST /scan-collect/resolve-ng                 NG 挂起人工放行（v3.56.1）
+- POST /scan-collect/settle-now                 面板「本件扫完」立即结算（v3.56.1b）
 - GET  /scan-collect/records                    追溯：按 workpiece_id / group_id 查逐码记录
 """
 from datetime import datetime
@@ -62,6 +63,10 @@ class ConfigPayload(BaseModel):
     vision_gate: bool = False         # 视觉+扫码双重验证
     vision_window_sec: float = Field(300, ge=0, le=86400)
     vision_missing: str = Field("ignore", pattern="^(ignore|ng)$")
+    # v3.56.1b 六和现场反馈增补 (默认全关 = 存量行为):
+    idle_remind_sec: float = Field(0, ge=0, le=86400)  # 催扫提醒(秒), 0=关
+    standby_silent: bool = False      # 待机结算不计数不落txt
+    count_on_settle: bool = True      # 结算执行事件计数动作; 关=只借灯/语音不计数
 
 
 class RemoveCodeRequest(BaseModel):
@@ -140,6 +145,9 @@ def put_config(payload: ConfigPayload,
         "vision_gate": payload.vision_gate,
         "vision_window_sec": payload.vision_window_sec,
         "vision_missing": payload.vision_missing,
+        "idle_remind_sec": payload.idle_remind_sec,
+        "standby_silent": payload.standby_silent,
+        "count_on_settle": payload.count_on_settle,
     }
 
     row = (db.query(ScanCollectConfig)
@@ -196,6 +204,20 @@ def clear_group(req: ClearRequest, db: Session = Depends(get_db)):
 def resolve_ng(req: ClearRequest, db: Session = Depends(get_db)):
     """v3.56.1 NG 挂起人工放行: 挂起组按 NG 结算导出, 开放下一工件。"""
     ok, msg = get_scan_collect_engine().resolve_ng(db, req.channel_id)
+    if not ok:
+        raise HTTPException(status_code=409, detail=msg)
+    return {"success": True, "message": msg}
+
+
+@router.post("/settle-now",
+             dependencies=[Depends(require_perm("monitor.detection.ack"))])
+def settle_now(req: ClearRequest, db: Session = Depends(get_db)):
+    """v3.56.1b 面板「本件扫完」: 立即按当前已扫码结算本工件。
+
+    码序不固定/用「扫满结算」的现场 (六和), 少扫组没有自然收口点 —
+    此端点是人工收口出口: 齐→OK; 缺→挂起(ng_pending 开)或判 NG。
+    """
+    ok, msg = get_scan_collect_engine().settle_now(db, req.channel_id)
     if not ok:
         raise HTTPException(status_code=409, detail=msg)
     return {"success": True, "message": msg}

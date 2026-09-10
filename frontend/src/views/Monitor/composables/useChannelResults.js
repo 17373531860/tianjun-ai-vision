@@ -103,6 +103,7 @@ export function useChannelResults(ctx) {
     chData.placementGuide = d.placement_guide || null;  // v3.32: 就位引导框运行态(已就位/未就位)
     chData.labelSplitRounds = d.label_split_rounds || null;  // v3.32: 多轮次拆分当前轮次
     chData.comboVerdict = d.combo_verdict || null;  // v3.48: 判型表运行态(positional 锁定ROI+实时计数)
+    chData.aiMode = d.ai_mode || null;  // 2026-09: OCR 读字/异常检测模式运行态 (专属面板消费)
     chData.currentCycleSteps = d.current_cycle_steps || [];
     chData.stepInflightDurations = d.step_inflight_durations || {};
     chData.backupCoveredLabels = d.backup_covered_labels || [];

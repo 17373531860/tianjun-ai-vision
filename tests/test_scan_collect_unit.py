@@ -64,8 +64,9 @@ def engine(app, project_id, monkeypatch):
     eng.warns = []
     monkeypatch.setattr(
         eng, "_fire_event",
-        lambda ch, event_id, reason: eng.fired_events.append(
-            {"ch": ch, "event_id": event_id, "reason": reason}) or True)
+        lambda ch, event_id, reason, remind_only=False: eng.fired_events.append(
+            {"ch": ch, "event_id": event_id, "reason": reason,
+             "remind_only": remind_only}) or True)
     monkeypatch.setattr(
         eng, "_warn",
         lambda ch, code, reason: eng.warns.append(
@@ -383,8 +384,9 @@ def field_engine(app, project_id, monkeypatch):
     eng.warns = []
     monkeypatch.setattr(
         eng, "_fire_event",
-        lambda ch, event_id, reason: eng.fired_events.append(
-            {"ch": ch, "event_id": event_id, "reason": reason}) or True)
+        lambda ch, event_id, reason, remind_only=False: eng.fired_events.append(
+            {"ch": ch, "event_id": event_id, "reason": reason,
+             "remind_only": remind_only}) or True)
     monkeypatch.setattr(
         eng, "_warn",
         lambda ch, code, reason: eng.warns.append(
@@ -447,7 +449,9 @@ def test_ng_pending_resupply_to_ok(field_engine, db, project_id):
     state = eng._groups.get(0)
     assert state is not None and state.pending_ng, "应进入挂起态而不是结算"
     assert 0 not in eng._last_settled
-    assert eng.fired_events[-1]["event_id"] == 2  # 挂起即响 NG 铃
+    # v3.56.1b: 挂起报警走 remind_only 提醒档 (响灯不计数 — 此刻不是最终判定)
+    assert eng.fired_events[-1]["event_id"] == 2
+    assert eng.fired_events[-1]["remind_only"] is True
     st_view = eng.get_state(db, 0, project_id)
     assert st_view["pending_ng"] and "缺" in st_view["pending_ng"]["reason"]
     # 补扫缺的芯子 → 自动转 OK
@@ -455,23 +459,30 @@ def test_ng_pending_resupply_to_ok(field_engine, db, project_id):
     assert r["accepted"]
     last = eng._last_settled[0]
     assert last["result"] == "ok" and "补扫" in last["reason"]
+    # 补救留痕: 补扫码带 remedied 标记, 摘要带 was_pending (txt 模板消费)
+    assert last["was_pending"] is True
+    assert last["codes"][-1]["remedied"] is True
+    assert all(not c["remedied"] for c in last["codes"][:-1])
     assert eng.fired_events[-1]["event_id"] == 1
+    assert eng.fired_events[-1]["remind_only"] is False
 
 
 def test_ng_pending_manual_resolve(field_engine, db, project_id):
-    """ng_pending: 挂起后人工按 NG 放行 → ng_missing 结算且不二次响铃"""
+    """ng_pending: 挂起后人工按 NG 放行 → ng_missing 结算, 计数只在放行时记一次"""
     eng = field_engine
     _set_cfg(eng, project_id, _cfg_field(ng_pending=True))
     for c in [BUS1, CHIPS[0], FIX1]:
         _scan(eng, db, project_id, c)
     assert eng._groups[0].pending_ng
-    n_ng = sum(1 for e in eng.fired_events if e["event_id"] == 2)
     ok, msg = eng.resolve_ng(db, 0)
     assert ok, msg
     last = eng._last_settled[0]
     assert last["result"] == "ng_missing" and last["is_good"] is False
-    # 挂起进入时已响过铃, 放行不再二次响
-    assert sum(1 for e in eng.fired_events if e["event_id"] == 2) == n_ng
+    assert last["was_pending"] is True
+    # v3.56.1b 计数语义: 挂起进入=remind_only 提醒(不计数), 放行=最终判定
+    # 完整响一次 NG (计一次数)。v3.56.0 的"挂起响完整NG铃+放行不响"会一件计两次。
+    ng_events = [e for e in eng.fired_events if e["event_id"] == 2]
+    assert [e["remind_only"] for e in ng_events] == [True, False]
     assert 0 not in eng._groups
     # 没挂起时调放行 → 报错
     ok, msg = eng.resolve_ng(db, 0)
@@ -575,3 +586,143 @@ def test_config_roundtrip_new_fields(client, project_id):
     slots = {s["key"]: s for s in got["slots"]}
     assert slots["fixture"]["dedup_cross_group"] == "off"
     assert slots["busbar"]["on_overflow"] == "reject"
+
+
+# ==================== v3.56.1b 六和现场反馈增补 ====================
+# 现场姿势: 母排永远第一, 其余顺序不固定 → 用「扫满结算」, 收尾码没有
+# 自然收口点。增补: 手动「本件扫完」/ 催扫提醒 / 待机静默 / 补扫留痕。
+
+def test_settle_now_missing_enters_pending(field_engine, db, project_id):
+    """扫满结算 + ng_pending: 少扫按「本件扫完」→ 挂起; 补扫 → 转 OK"""
+    eng = field_engine
+    _set_cfg(eng, project_id,
+             _cfg_field(ng_pending=True, settle_on="all_filled"))
+    # 现场顺序: 母排 → 工装(先扫也不结算, 因为扫满结算) → 芯子×1 (缺 1)
+    for c in [BUS1, FIX1, CHIPS[0]]:
+        assert _scan(eng, db, project_id, c)["accepted"]
+    assert 0 not in eng._last_settled, "扫满结算下缺码不应自动结算"
+    ok, msg = eng.settle_now(db, 0)
+    assert ok and "挂起" in msg, (ok, msg)
+    assert eng._groups[0].pending_ng
+    assert eng.fired_events[-1]["event_id"] == 2
+    assert eng.fired_events[-1]["remind_only"] is True
+    # 挂起中重复调 → 拒绝并指路
+    ok2, msg2 = eng.settle_now(db, 0)
+    assert not ok2 and "挂起" in msg2
+    # 补扫缺芯子 → 扫满自动转 OK
+    assert _scan(eng, db, project_id, CHIPS[1])["accepted"]
+    last = eng._last_settled[0]
+    assert last["result"] == "ok" and last["was_pending"] is True
+    assert last["codes"][-1]["remedied"] is True
+
+
+def test_settle_now_hard_ng_without_pending(field_engine, db, project_id):
+    """ng_pending 关: 「本件扫完」缺码直接判 ng_missing 结算"""
+    eng = field_engine
+    _set_cfg(eng, project_id, _cfg_field(settle_on="all_filled"))
+    for c in [BUS1, CHIPS[0]]:
+        assert _scan(eng, db, project_id, c)["accepted"]
+    ok, msg = eng.settle_now(db, 0)
+    assert ok, msg
+    last = eng._last_settled[0]
+    assert last["result"] == "ng_missing" and last["is_good"] is False
+    assert eng.fired_events[-1]["event_id"] == 2
+    assert eng.fired_events[-1]["remind_only"] is False
+    # 没组时调 → 报错
+    ok2, msg2 = eng.settle_now(db, 0)
+    assert not ok2
+
+
+def test_idle_remind_fires_and_resets(field_engine, db, project_id):
+    """催扫提醒: N 秒无新码 → remind_only 报警催扫, 结算后停止"""
+    import time
+    eng = field_engine
+    _set_cfg(eng, project_id,
+             _cfg_field(settle_on="all_filled", idle_remind_sec=0.3))
+    assert _scan(eng, db, project_id, BUS1)["accepted"]
+    time.sleep(0.55)
+    reminds = [e for e in eng.fired_events if e.get("remind_only")]
+    assert reminds, "空闲超时应触发催扫提醒"
+    assert reminds[-1]["event_id"] == 2 and "停留" in reminds[-1]["reason"]
+    assert any("停留" in w["reason"] for w in eng.warns)
+    # 扫满结算后不再催
+    for c in [CHIPS[0], CHIPS[1], FIX1]:
+        assert _scan(eng, db, project_id, c)["accepted"]
+    assert eng._last_settled[0]["result"] == "ok"
+    n = len([e for e in eng.fired_events if e.get("remind_only")])
+    time.sleep(0.5)
+    assert len([e for e in eng.fired_events if e.get("remind_only")]) == n, \
+        "结算后催扫定时器应已取消"
+
+
+def test_standby_silent_settle(field_engine, db, project_id, monkeypatch):
+    """待机静默: 通道未检测时结算 → 不发事件(不计数)不派发导出, 追溯照落"""
+    eng = field_engine
+    _set_cfg(eng, project_id, _cfg_field(standby_silent=True))
+    monkeypatch.setattr(eng, "_channel_detecting", lambda ch: False)
+    exports = []
+    monkeypatch.setattr(eng, "_dispatch_export",
+                        lambda *a, **k: exports.append(a))
+    for c in [BUS1, CHIPS[0], CHIPS[1]]:
+        assert _scan(eng, db, project_id, c)["accepted"]
+    n_events = len(eng.fired_events)
+    assert _scan(eng, db, project_id, FIX1)["accepted"]
+    last = eng._last_settled[0]
+    assert last["result"] == "ok" and last["standby"] is True
+    assert len(eng.fired_events) == n_events, "待机静默不应借事件面计数"
+    assert not exports, "待机静默不应派发 txt 导出"
+    # 检测中则照常
+    monkeypatch.setattr(eng, "_channel_detecting", lambda ch: True)
+    for c in [BUS2, CHIPS[2], CHIPS[3], "H-C035-527-9"]:
+        assert _scan(eng, db, project_id, c)["accepted"]
+    assert eng._last_settled[0]["standby"] is False
+    assert len(eng.fired_events) == n_events + 1
+    assert len(exports) == 1
+
+
+def test_count_on_settle_off_only_borrows_response(field_engine, db, project_id):
+    """count_on_settle=False: 结算事件走 remind_only 档 (亮灯/语音但不计数) —
+    治 2026-09-07 六和"一个工件结算两次"(视觉周期计一次+扫码结算又计一次)"""
+    eng = field_engine
+    _set_cfg(eng, project_id,
+             _cfg_field(settle_on="all_filled", count_on_settle=False))
+    # 扫满 → OK 结算: 事件照发但 remind_only=True (不执行计数动作)
+    for c in [BUS1, CHIPS[0], CHIPS[1], FIX1]:
+        assert _scan(eng, db, project_id, c)["accepted"]
+    last = eng._last_settled[0]
+    assert last["result"] == "ok"
+    assert eng.fired_events[-1]["event_id"] == 1
+    assert eng.fired_events[-1]["remind_only"] is True
+    # 少扫 NG 结算同样不计数
+    for c in [BUS2, CHIPS[2]]:
+        assert _scan(eng, db, project_id, c)["accepted"]
+    ok, msg = eng.settle_now(db, 0)
+    assert ok, msg
+    assert eng._last_settled[0]["result"] == "ng_missing"
+    assert eng.fired_events[-1]["event_id"] == 2
+    assert eng.fired_events[-1]["remind_only"] is True
+
+
+def test_config_roundtrip_v3561b_fields(client, project_id):
+    """PUT/GET 往返: idle_remind_sec / standby_silent + settle-now 无组 409"""
+    payload = {
+        "enabled": True,
+        "slots": [
+            {"key": "busbar", "label": "母排码", "count": 1, "regex": "", "role": ""},
+        ],
+        "settle_on": "all_filled",
+        "idle_remind_sec": 30,
+        "standby_silent": True,
+        "count_on_settle": False,
+    }
+    r = client.put(f"/api/v1/scan-collect/config?project_id={project_id}",
+                   json=payload)
+    assert r.status_code == 200, r.text
+    got = client.get(
+        f"/api/v1/scan-collect/config?project_id={project_id}").json()
+    assert got["idle_remind_sec"] == 30
+    assert got["standby_silent"] is True
+    assert got["count_on_settle"] is False
+    # 手动结算: 当前没有码组 → 409
+    r = client.post("/api/v1/scan-collect/settle-now", json={"channel_id": 77})
+    assert r.status_code == 409

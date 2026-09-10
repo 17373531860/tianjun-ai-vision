@@ -110,6 +110,12 @@ def test_配置UI保存落库(page, base_url, api_url, sc_project):
     # 填入示例按现场确认单预设: NG 挂起补扫 + 视觉双重验证(缺视觉结果按扫码判)
     assert cfg["ng_pending"] is True
     assert cfg["vision_gate"] is True and cfg["vision_missing"] == "ignore"
+    # v3.56.1b 现场反馈预设: 扫满结算 + 30 秒催扫 + 待机静默
+    assert cfg["settle_on"] == "all_filled"
+    assert cfg["idle_remind_sec"] == 30
+    assert cfg["standby_silent"] is True
+    # 2026-09-07 六和"一件结算两次": 视觉工位扫码结算不计数 (计数以视觉为准)
+    assert cfg["count_on_settle"] is False
 
 
 def test_监控面板_扫码_纠错_结算(page, base_url, api_url, sc_project):
@@ -187,6 +193,44 @@ def test_监控面板_扫码_纠错_结算(page, base_url, api_url, sc_project):
     assert "9260000145631" not in text  # 纠错删掉的码不进追溯
 
 
+def test_本件扫完_少扫挂起_补扫转OK(page, base_url, api_url, sc_project):
+    """v3.56.1b 六和现场反馈: 码序不固定少扫无自然收口 → 面板「本件扫完」
+    人工收口 → 挂起报警 → 补扫缺码自动转 OK (答复 3c + 4)。"""
+    _configure_via_ui(page, base_url, sc_project["name"])
+    page.goto(f"{base_url}/#/monitor", wait_until="domcontentloaded")
+    panel, ch = _find_panel_channel(page)
+    total = panel.get_by_test_id("scan-total")
+
+    # 少扫: 母排 + 芯子×1 (缺 1 芯子 + 工装码)
+    _scan(api_url, "M010200519A100005036272608310061", ch)
+    _scan(api_url, "9260000144908", ch)
+    expect(total).to_have_text("2/4", timeout=8000)
+
+    # 紧凑态: 「本件扫完」在明细浮层里
+    panel.get_by_test_id("scan-detail-btn").click()
+    pop = page.locator(".scan-slots-popover")
+    btn = pop.get_by_test_id("scan-settle-now-btn")
+    expect(btn).to_be_visible(timeout=5000)
+    btn.click()
+
+    # T5 双向: 后端进入挂起态 + UI 出挂起徽标
+    expect(panel.get_by_test_id("scan-pending-chip")).to_be_visible(timeout=8000)
+    st = _state(api_url, ch)
+    assert st["pending_ng"] and "缺" in st["pending_ng"]["reason"]
+    page.keyboard.press("Escape")
+
+    # 补扫缺芯子 + 工装码 → 扫满自动转 OK
+    _scan(api_url, "9260000145631", ch)
+    _scan(api_url, "H-C035-527-8", ch)
+    expect(total).to_have_text("0/4", timeout=8000)
+    last = _state(api_url, ch).get("last_settled") or {}
+    assert last.get("result") == "ok", last
+    assert last.get("was_pending") is True and "补扫" in last.get("reason", "")
+    # 补扫码带 remedied 留痕 (txt [补扫] 标记的数据源)
+    remedied = [c["code"] for c in last.get("codes", []) if c.get("remedied")]
+    assert "9260000145631" in remedied and "H-C035-527-8" in remedied
+
+
 def test_kiosk只读无纠错按钮(page, base_url, api_url, sc_project):
     _configure_via_ui(page, base_url, sc_project["name"])
     page.goto(f"{base_url}/#/monitor", wait_until="domcontentloaded")
@@ -200,3 +244,5 @@ def test_kiosk只读无纠错按钮(page, base_url, api_url, sc_project):
     expect(kpanel.get_by_test_id("scan-total")).to_have_text("1/4", timeout=8000)
     assert kpanel.get_by_test_id("scan-clear-btn").count() == 0
     assert kpanel.get_by_test_id("scan-code-remove").count() == 0
+    # v3.56.1b: kiosk 只读也不给「本件扫完」
+    assert kpanel.get_by_test_id("scan-settle-now-btn").count() == 0
