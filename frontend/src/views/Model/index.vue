@@ -23,6 +23,13 @@
           </div>
           <div class="flex gap-1 items-center">
             <el-tag v-if="model.source === 'yolovision'" type="warning" effect="dark" size="small">训练平台</el-tag>
+            <el-tag v-if="model.source === 'preset'" type="info" effect="dark" size="small">预置</el-tag>
+            <el-tooltip v-if="model.meta && model.meta.trial" content="试用模型：精度不代表交付效果，转正需用现场数据重训" placement="top">
+              <el-tag type="danger" effect="plain" size="small">试用</el-tag>
+            </el-tooltip>
+            <el-tooltip v-if="model.meta && model.meta.runtime_supported === false" :content="`任务类型 ${model.meta.task_type || '未知'}：当前检测运行时暂不支持推理，模型已入库存档`" placement="top">
+              <el-tag type="warning" effect="plain" size="small">存档</el-tag>
+            </el-tooltip>
             <el-tag :type="model.status === 'active' ? 'success' : 'info'" effect="dark" size="small">
               {{ model.status === 'active' ? '使用中' : '闲置' }}
             </el-tag>
@@ -140,7 +147,7 @@
           </el-descriptions-item>
           <el-descriptions-item label="类别数">{{ getLabelsCount(currentModel.labels) }} 个</el-descriptions-item>
           <el-descriptions-item label="来源">
-            {{ currentModel.source === 'yolovision' ? 'YoloVision 训练平台' : '本地上传' }}
+            {{ sourceLabel(currentModel) }}
           </el-descriptions-item>
         </el-descriptions>
       </div>
@@ -274,6 +281,13 @@ const getLabelsCount = (labels) => {
   } catch {
     return 0;
   }
+};
+
+const sourceLabel = (model) => {
+  const base = model.source === 'yolovision' ? 'YoloVision 训练平台'
+    : model.source === 'preset' ? '安装包预置'
+      : '本地上传';
+  return model.meta && model.meta.trial ? `${base}（试用模型）` : base;
 };
 
 const formatDate = (dateStr) => {

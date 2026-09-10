@@ -6,6 +6,10 @@
       :state="chData?.perItemState || null" :channel="ch" :readonly="readonly" />
     <WeighingPanel v-else-if="mode === 'weighing'" class="flex-1 min-h-0"
       :channel="ch" :readonly="readonly" />
+    <OcrPanel v-else-if="mode === 'ocr'" class="flex-1 min-h-0"
+      :state="chData?.aiMode || null" :readonly="readonly" />
+    <AnomalyPanel v-else-if="mode === 'anomaly'" class="flex-1 min-h-0"
+      :state="chData?.aiMode || null" :readonly="readonly" />
   </div>
 </template>
 
@@ -20,6 +24,8 @@ import { computed } from 'vue';
 import PerItemPanel from './PerItemPanel.vue';
 import WeighingPanel from './WeighingPanel.vue';
 import TrackingChecklistPanel from './TrackingChecklistPanel.vue';
+import OcrPanel from './OcrPanel.vue';
+import AnomalyPanel from './AnomalyPanel.vue';
 
 const props = defineProps({
   mode: { type: String, required: true },

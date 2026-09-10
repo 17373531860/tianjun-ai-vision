@@ -186,6 +186,14 @@ def _init_step_state(h):
     # 区域事件模式判定引擎 (pipeline_config.region_events, logic_mode='region_events')
     # None = 非该模式 → 推理热路径一次 getattr 早退, 零开销
     h._region_event_engine = None
+    # 2026-09 AI 采样模式 (logic_mode='ocr'|'anomaly'): 独立节流采样线程,
+    # 不进 YOLO 推理热路径。None = 非该模式 → 零开销 (source_ai_modes_mixin)
+    h._ai_mode_thread = None
+    h._ai_mode_running = False
+    h._ai_mode_snapshot = None
+    h._ai_ocr_cfg = None
+    h._ai_anomaly_cfg = None
+    h._ai_rule_states = {}
     # v3.32 严格顺序违序即时事件 (pipeline_config.strict_order_violation_event_id)
     h.strict_order_violation_event_id = None
     h._strict_violation_throttle = {}

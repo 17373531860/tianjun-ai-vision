@@ -36,6 +36,11 @@ class RegionEventsMixin:
             return
         # 供"动作确认"时裁步骤截图 (SOP 卡片缩略图); 引用不拷贝, 帧只在本轮循环内使用
         self._region_frame_for_shot = original_frame
+        # facing_dwell 规则: 给主体框注入朝向角 (MediaPipe Pose 节流估计 + 平滑)
+        try:
+            self._region_inject_facing(engine, detections, original_frame)
+        except Exception as e:
+            print(f"[RegionEvents] 朝向注入失败 (已隔离): {e}")
         # 频闪诊断 (与 custom_mix 同一套环形缓冲 + 自动转储): 监视规则涉及的
         # 全部类别, 某类别 2s 内在场翻转过频 → 现场转储到 diag_flicker/ 供定位真因
         try:
@@ -55,6 +60,77 @@ class RegionEventsMixin:
                 print(f"[RegionEvents] 执行动作 {ev.get('action')} 失败 (已隔离): {e}")
                 import traceback
                 traceback.print_exc()
+
+    # ---------- facing_dwell 朝向注入 ----------
+    _FACING_POSE_INTERVAL = 0.5   # 秒: MediaPipe Pose 节流 (重操作, 绝不逐帧)
+    _FACING_TRACK_TTL = 3.0       # 秒: 朝向轨迹缓存过期 (人离场清理)
+    _FACING_MATCH_IOU = 0.25      # 帧间关联 IoU 下限
+
+    def _region_inject_facing(self, engine, detections: list, frame):
+        """facing_dwell 前置: 给主体检测框注入 'facing' (图像平面 yaw 度)。
+
+        流程: 主体框与朝向轨迹缓存 IoU 关联 → 节流间隔到时对每个主体裁剪跑
+        MediaPipe Pose 估朝向 → YawSmoother (单位向量 EMA + 行进方向先验)
+        平滑 → 平滑值写进 det['facing'] 供引擎判定。间隔内的帧直接沿用缓存
+        平滑值 (人转身是秒级动作, 0.5s 节流足够)。
+
+        无 facing 规则 → 一次集合判定早退, 零开销; mediapipe 缺失 →
+        estimate_yaw 恒 None, 只有轨迹先验托底 (行进方向)。
+        """
+        if getattr(self, '_facing_token', None) is not id(engine):
+            self._facing_labels = {
+                r.subject_label for r in engine.cfg.rules
+                if r.rule_type == 'facing_dwell'}
+            self._facing_token = id(engine)
+            self._facing_entries = []
+            self._facing_last_pose = 0.0
+        labels = self._facing_labels
+        if not labels or frame is None:
+            return
+        subjects = [d for d in detections or [] if d.get('label') in labels]
+        if not subjects:
+            return
+        from backend.api.source_region_events import _bbox_iou
+        from backend.services.person_orientation import estimate_yaw, YawSmoother
+        now = time.time()
+        h, w = frame.shape[:2]
+        engine.frame_aspect = h / float(w) if w else 0.5625
+        run_pose = (now - self._facing_last_pose) >= self._FACING_POSE_INTERVAL
+        if run_pose:
+            self._facing_last_pose = now
+
+        entries = self._facing_entries
+        for d in subjects:
+            box = {k: float(d.get(k) or 0.0) for k in ('x', 'y', 'w', 'h')}
+            best, best_iou = None, self._FACING_MATCH_IOU
+            for e in entries:
+                iou = _bbox_iou(box, e['bbox'])
+                if iou > best_iou:
+                    best, best_iou = e, iou
+            if best is None:
+                best = {'bbox': box, 'smoother': YawSmoother(), 'ts': now}
+                entries.append(best)
+            best['bbox'] = box
+            best['ts'] = now
+            center_px = ((box['x'] + box['w'] / 2) * w,
+                         (box['y'] + box['h'] / 2) * h)
+            obs_yaw, obs_conf = None, 1.0
+            if run_pose:
+                box_px = (box['x'] * w, box['y'] * h,
+                          (box['x'] + box['w']) * w, (box['y'] + box['h']) * h)
+                est = estimate_yaw(frame, box_px)
+                if est is not None:
+                    # 头部 yaw 可用时优先 (仪表挨得近时头转身不转更常见)
+                    obs_yaw = (est['head_yaw_deg']
+                               if est.get('head_yaw_deg') is not None
+                               else est['yaw_deg'])
+                    obs_conf = est['conf']
+            best['smoother'].update(now, center_px, obs_yaw, obs_conf)
+            if best['smoother'].yaw_deg is not None:
+                d['facing'] = best['smoother'].yaw_deg
+        # 人离场清理过期轨迹
+        self._facing_entries = [
+            e for e in entries if now - e['ts'] < self._FACING_TRACK_TTL]
 
     # ---------- 频闪诊断 ----------
     def _diag_region_flicker(self, engine, detections: list, current_time: float):

@@ -39,6 +39,9 @@ def mount_all_routers(app: FastAPI) -> None:
     from backend.api import video_archive     # v3.53 录像归档规则
     from backend.api import scan_collect      # v3.56 周期多码采集
     from backend.api import site_pack         # 现场配方包 .tjvsite 导出/导入
+    from backend.api import ocr               # 2026-09 OCR 读字引擎
+    from backend.api import anomaly           # 2026-09 异常检测 (合格品免缺陷样本质检)
+    from backend.api import vlm               # 2026-09 VLM 坐诊 (按需问答, 默认关)
 
     app.include_router(projects.router, prefix=f"{v1}/projects", tags=["projects"])
     app.include_router(models.router, prefix=f"{v1}/models", tags=["models"])
@@ -63,6 +66,9 @@ def mount_all_routers(app: FastAPI) -> None:
     app.include_router(triggers.router, prefix=f"{v1}/triggers", tags=["triggers"])
     app.include_router(scan_collect.router, prefix=v1, tags=["ScanCollect"])
     app.include_router(site_pack.router, prefix=f"{v1}/site-pack", tags=["site-pack"])
+    app.include_router(ocr.router, prefix=f"{v1}/ocr", tags=["ocr"])
+    app.include_router(anomaly.router, prefix=f"{v1}/anomaly", tags=["anomaly"])
+    app.include_router(vlm.router, prefix=f"{v1}/vlm", tags=["vlm"])
 
     # -------- 核心/重量级路由（原 main.py 直挂段，保持原注册顺序） --------
     from backend.api.source import router as source_router          # 视频源 + 检测核心

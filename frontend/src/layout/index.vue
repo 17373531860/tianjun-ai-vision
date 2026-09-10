@@ -40,6 +40,9 @@
           <router-link v-if="canShow('/interconnect')" to="/interconnect" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
             <el-icon class="mr-2"><Connection /></el-icon> 训练平台互连
           </router-link>
+          <router-link v-if="canShow('/ai-tools')" to="/ai-tools" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+            <el-icon class="mr-2"><MagicStick /></el-icon> AI 能力试用
+          </router-link>
           <router-link v-if="canShow('/settings')" to="/settings" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
             <el-icon class="mr-2"><Setting /></el-icon> {{ $t('menu.settings') }}
           </router-link>
@@ -89,7 +92,7 @@ import Navbar from './Navbar.vue';
 import BottomBar from './BottomBar.vue';
 import { computed, ref, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
-import { Monitor, Folder, Cpu, DataLine, Setting, VideoCamera, Bell, Close, Menu, Tickets, DataAnalysis, Connection } from '@element-plus/icons-vue';
+import { Monitor, Folder, Cpu, DataLine, Setting, VideoCamera, Bell, Close, Menu, Tickets, DataAnalysis, Connection, MagicStick } from '@element-plus/icons-vue';
 import { useSystemStore } from '@/store/useSystemStore';
 import { usePluginThemeStore } from '@/store/usePluginThemeStore';
 import { useAuthStore } from '@/store/useAuthStore';
