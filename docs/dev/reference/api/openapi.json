@@ -373,6 +373,31 @@
     "title": "BatchCreate",
     "type": "object"
    },
+   "Body_import_pack_api_v1_site_pack_import_post": {
+    "properties": {
+     "file": {
+      "contentMediaType": "application/octet-stream",
+      "title": "File",
+      "type": "string"
+     },
+     "password": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Password"
+     }
+    },
+    "required": [
+     "file"
+    ],
+    "title": "Body_import_pack_api_v1_site_pack_import_post",
+    "type": "object"
+   },
    "Body_install_plugin_api_v1_plugins_install_post": {
     "properties": {
      "file": {
@@ -385,6 +410,31 @@
      "file"
     ],
     "title": "Body_install_plugin_api_v1_plugins_install_post",
+    "type": "object"
+   },
+   "Body_preview_pack_api_v1_site_pack_preview_post": {
+    "properties": {
+     "file": {
+      "contentMediaType": "application/octet-stream",
+      "title": "File",
+      "type": "string"
+     },
+     "password": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Password"
+     }
+    },
+    "required": [
+     "file"
+    ],
+    "title": "Body_preview_pack_api_v1_site_pack_preview_post",
     "type": "object"
    },
    "Body_push_model_package_api_v1_interconnect_models_push_post": {
@@ -1428,6 +1478,13 @@
       "default": 1,
       "title": "Event Ok Id"
      },
+     "idle_remind_sec": {
+      "default": 0,
+      "maximum": 86400.0,
+      "minimum": 0.0,
+      "title": "Idle Remind Sec",
+      "type": "number"
+     },
      "ng_pending": {
       "default": false,
       "title": "Ng Pending",
@@ -1463,6 +1520,11 @@
       },
       "title": "Slots",
       "type": "array"
+     },
+     "standby_silent": {
+      "default": false,
+      "title": "Standby Silent",
+      "type": "boolean"
      },
      "timeout_sec": {
       "default": 0,
@@ -3290,6 +3352,56 @@
      }
     },
     "title": "EvidencePackRequest",
+    "type": "object"
+   },
+   "ExportRequest": {
+    "properties": {
+     "domains": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Domains",
+      "type": "array"
+     },
+     "local_settings": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Settings"
+     },
+     "note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Note"
+     },
+     "password": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Password"
+     }
+    },
+    "required": [
+     "domains"
+    ],
+    "title": "ExportRequest",
     "type": "object"
    },
    "ExportSettingResponse": {
@@ -7271,6 +7383,30 @@
      }
     },
     "title": "PackagingFlowConfigUpdate",
+    "type": "object"
+   },
+   "PathRequest": {
+    "properties": {
+     "password": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Password"
+     },
+     "path": {
+      "title": "Path",
+      "type": "string"
+     }
+    },
+    "required": [
+     "path"
+    ],
+    "title": "PathRequest",
     "type": "object"
    },
    "PresetRequest": {
@@ -27521,6 +27657,47 @@
     ]
    }
   },
+  "/api/v1/scan-collect/settle-now": {
+   "post": {
+    "description": "v3.56.1b 面板「本件扫完」: 立即按当前已扫码结算本工件。\n\n码序不固定/用「扫满结算」的现场 (六和), 少扫组没有自然收口点 —\n此端点是人工收口出口: 齐→OK; 缺→挂起(ng_pending 开)或判 NG。",
+    "operationId": "settle_now_api_v1_scan_collect_settle_now_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ClearRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Settle Now",
+    "tags": [
+     "ScanCollect",
+     "ScanCollect"
+    ]
+   }
+  },
   "/api/v1/scan-collect/state": {
    "get": {
     "operationId": "get_state_api_v1_scan_collect_state_get",
@@ -29931,6 +30108,223 @@
     "tags": [
      "WMax Scanner",
      "WMax Scanner"
+    ]
+   }
+  },
+  "/api/v1/site-pack/export": {
+   "post": {
+    "operationId": "export_pack_api_v1_site_pack_export_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ExportRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Export Pack",
+    "tags": [
+     "site-pack"
+    ]
+   }
+  },
+  "/api/v1/site-pack/import": {
+   "post": {
+    "operationId": "import_pack_api_v1_site_pack_import_post",
+    "requestBody": {
+     "content": {
+      "multipart/form-data": {
+       "schema": {
+        "$ref": "#/components/schemas/Body_import_pack_api_v1_site_pack_import_post"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Import Pack",
+    "tags": [
+     "site-pack"
+    ]
+   }
+  },
+  "/api/v1/site-pack/import-path": {
+   "post": {
+    "operationId": "import_pack_path_api_v1_site_pack_import_path_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/PathRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Import Pack Path",
+    "tags": [
+     "site-pack"
+    ]
+   }
+  },
+  "/api/v1/site-pack/overview": {
+   "get": {
+    "description": "各分域当前内容量, 供导出页勾选。",
+    "operationId": "overview_api_v1_site_pack_overview_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Overview",
+    "tags": [
+     "site-pack"
+    ]
+   }
+  },
+  "/api/v1/site-pack/preview": {
+   "post": {
+    "description": "上传 .tjvsite 看内容概要, 不改任何配置。",
+    "operationId": "preview_pack_api_v1_site_pack_preview_post",
+    "requestBody": {
+     "content": {
+      "multipart/form-data": {
+       "schema": {
+        "$ref": "#/components/schemas/Body_preview_pack_api_v1_site_pack_preview_post"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Preview Pack",
+    "tags": [
+     "site-pack"
+    ]
+   }
+  },
+  "/api/v1/site-pack/preview-path": {
+   "post": {
+    "description": "按本机路径预览 (Electron 双击 .tjvsite 打开的场景)。",
+    "operationId": "preview_pack_path_api_v1_site_pack_preview_path_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/PathRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Preview Pack Path",
+    "tags": [
+     "site-pack"
     ]
    }
   },

@@ -200,3 +200,7 @@ register_permission(
     "强制结案进行中工单 (管理员 / 主管; 需填理由)",
     "系统",
 )
+# 现场配方包 (.tjvsite): 一键导出/导入整机逻辑配置。默认只有 admin ("*" 通配)
+# 拥有 —— 导入会覆盖项目/模型/MES 等大面配置, 不下放工程师/操作员。
+register_permission("system.site_pack.export", "导出现场配方包 (.tjvsite)", "系统")
+register_permission("system.site_pack.import", "导入现场配方包 (覆盖本机配置)", "系统")
