@@ -201,16 +201,19 @@ _DESC_SCANNER_BYPASS_3LINE = (
 # 应扫 >1 的槽位自动编号; 每码带扫码时刻 (确认单 6.5 勾选)。
 _TPL_SCAN_GROUP_TXT = """{% for s in scan_collect.slots if s.role == 'closing' -%}
 {% for c in s.codes -%}
-{{ s.label }}: {{ c.code }}
+{{ s.label }}: {{ c.code }}{% if c.remedied %}  [补扫]{% endif %}
 {% endfor -%}
 {% endfor -%}
 {% for s in scan_collect.slots if s.role != 'closing' -%}
 {% for c in s.codes -%}
-{{ s.label }}{% if s.expected > 1 %}{{ loop.index }}{% endif %}: {{ c.code }}  ({{ c.ts }})
+{{ s.label }}{% if s.expected > 1 %}{{ loop.index }}{% endif %}: {{ c.code }}  ({{ c.ts }}){% if c.remedied %}  [补扫]{% endif %}
 {% endfor -%}
 {% endfor -%}
 工位: {{ channel.name or '-' }}
 时间: {{ now_date }} {{ now_time }}  结果: {{ 'OK' if scan_collect.is_good else 'NG' }}
+{% if scan_collect.is_good and scan_collect.was_pending -%}
+备注: 少扫报警后补扫齐全转 OK
+{% endif -%}
 {% if not scan_collect.is_good -%}
 原因: {{ scan_collect.reason }}
 {% for m in scan_collect.missing -%}
@@ -222,7 +225,8 @@ _TPL_SCAN_GROUP_TXT = """{% for s in scan_collect.slots if s.role == 'closing' -
 _DESC_SCAN_GROUP_TXT = (
     "多码采集码组 TXT (v3.56 一号工位多码扫码场景) —\n"
     "  一个工件(码组)结算落一个 txt: 收尾码(工件身份)置顶, 其余按类别逐行,\n"
-    "  应扫多个的类别自动编号, 每码带扫码时刻; NG 时附原因与缺扫明细。\n"
+    "  应扫多个的类别自动编号, 每码带扫码时刻; NG 时附原因与缺扫明细;\n"
+    "  少扫挂起后补扫的码带 [补扫] 标记, 补扫转 OK 附备注行 (v3.56.1b)。\n"
     "\n"
     "  输出示例 — OK:\n"
     "    工装码: H-C035-527-5\n"

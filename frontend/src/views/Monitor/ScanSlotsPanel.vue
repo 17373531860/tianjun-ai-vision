@@ -46,6 +46,11 @@
             <el-button v-if="!readonly" size="small" type="danger" plain class="mt-1"
                        :loading="busy" @click="onResolveNg">按 NG 放行</el-button>
           </div>
+          <!-- v3.56.1b 本件扫完: 码序不固定/扫满结算现场的人工收口出口 -->
+          <div v-else-if="!readonly && state.collecting" class="mb-2">
+            <el-button size="small" type="primary" plain :loading="busy"
+                       data-testid="scan-settle-now-btn" @click="onSettleNow">本件扫完，立即结算</el-button>
+          </div>
           <ScanSlotsDetail :state="state" :readonly="readonly" :busy="busy"
                            @remove="onRemove" @clear="onClear" />
         </div>
@@ -60,11 +65,22 @@
           {{ state.total_got }}/{{ state.total_expected }}
         </span>
         <span v-if="state.collecting" class="text-[0.625rem] text-yellow-400 animate-pulse">采集中</span>
+        <!-- v3.56.1b 本件扫完: 齐→OK; 缺→挂起(补扫转OK)或判NG -->
+        <el-popconfirm v-if="!readonly && state.collecting && !state.pending_ng"
+                       title="按当前已扫码立即结算本工件？缺码将报警处理" width="240"
+                       confirm-button-text="立即结算" cancel-button-text="取消"
+                       @confirm="onSettleNow">
+          <template #reference>
+            <el-button size="small" type="primary" plain class="!ml-auto" :loading="busy"
+                       data-testid="scan-settle-now-btn">本件扫完</el-button>
+          </template>
+        </el-popconfirm>
         <el-popconfirm v-if="!readonly && state.collecting" title="清空本组全部已扫码、整组重扫？"
                        confirm-button-text="清空重扫" cancel-button-text="取消"
                        @confirm="onClear">
           <template #reference>
-            <el-button size="small" type="warning" plain class="!ml-auto" :loading="busy"
+            <el-button size="small" type="warning" plain :loading="busy"
+                       :class="{ '!ml-auto': state.pending_ng }"
                        data-testid="scan-clear-btn">清空重扫</el-button>
           </template>
         </el-popconfirm>
@@ -117,7 +133,7 @@
 <script setup>
 import { ref, computed } from 'vue';
 import { ElMessage } from 'element-plus';
-import { removeScanCollectCode, clearScanCollectGroup, resolveScanCollectNg } from '@/api/scanCollect';
+import { removeScanCollectCode, clearScanCollectGroup, resolveScanCollectNg, settleScanCollectNow } from '@/api/scanCollect';
 import ScanSlotsDetail from './ScanSlotsDetail.vue';
 
 const props = defineProps({
@@ -166,6 +182,19 @@ async function onClear() {
     ElMessage.success('已清空本组，整组重扫');
   } catch (e) {
     ElMessage.error(e?.response?.data?.detail || '清空失败');
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function onSettleNow() {
+  if (busy.value) return;
+  busy.value = true;
+  try {
+    const res = await settleScanCollectNow(props.channelId);
+    ElMessage.success(res?.data?.message || '已手动结算本工件');
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || '手动结算失败');
   } finally {
     busy.value = false;
   }

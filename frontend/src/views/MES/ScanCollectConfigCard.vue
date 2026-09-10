@@ -29,7 +29,7 @@
       <div class="flex items-center justify-between mb-2">
         <h3 class="text-cyan-300 font-semibold text-sm">码类别</h3>
         <div class="flex gap-2">
-          <el-button size="small" plain @click="fillExample">填入示例（母排+盖板+芯子+工件码）</el-button>
+          <el-button size="small" plain @click="fillExample">填入示例（母排+芯子+工装码）</el-button>
           <el-button size="small" type="success" plain data-testid="sc-add-slot" @click="addSlot">加一类</el-button>
         </div>
       </div>
@@ -164,6 +164,31 @@
           <el-switch v-model="form.ng_pending" data-testid="sc-ng-pending" />
         </div>
         <div class="flex items-center justify-between">
+          <el-tooltip content="组开着且超过 N 秒没有新码就报警催扫（借 NG 事件的灯/蜂鸣/提示，不计数），每 N 秒重复催，直到扫码/结算/清空。适合码序不固定、用「扫满结算」的现场——少扫停留会被及时发现。0 = 关闭" placement="top">
+            <span class="text-sm text-gray-400 border-b border-dotted border-gray-600">催扫提醒（秒）</span>
+          </el-tooltip>
+          <el-input-number v-model="form.idle_remind_sec" :min="0" :max="86400" size="small"
+                           controls-position="right" class="!w-44" data-testid="sc-idle-remind" />
+        </div>
+        <div class="flex items-center justify-between">
+          <el-tooltip content="待机（未开始检测）时的扫码：照常=结算计数并落 txt（默认）；静默=面板/追溯照常，但结算不计数、不亮灯、不落 txt——待机练扫/理料不污染产量" placement="top">
+            <span class="text-sm text-gray-400 border-b border-dotted border-gray-600">待机时扫码</span>
+          </el-tooltip>
+          <el-select v-model="form.standby_silent" class="w-44" size="small" data-testid="sc-standby-silent">
+            <el-option :value="false" label="照常计数落盘" />
+            <el-option :value="true" label="静默（不计数不落txt）" />
+          </el-select>
+        </div>
+        <div class="flex items-center justify-between">
+          <el-tooltip content="扫码结算时是否执行事件上的计数动作（检测次数/OK/NG）。本工位同时跑视觉检测时必须选「不计数」——否则视觉结算计一次、扫码结算又计一次，一个工件检测次数 +2。选「不计数」后扫码结算仍亮灯/语音/弹提示，计数以视觉周期为准；纯扫码（无视觉）工位保持「计数」" placement="top">
+            <span class="text-sm text-gray-400 border-b border-dotted border-gray-600">扫码结算计数</span>
+          </el-tooltip>
+          <el-select v-model="form.count_on_settle" class="w-44" size="small" data-testid="sc-count-on-settle">
+            <el-option :value="true" label="计数（纯扫码工位）" />
+            <el-option :value="false" label="不计数（视觉已计）" />
+          </el-select>
+        </div>
+        <div class="flex items-center justify-between">
           <el-tooltip content="开启后：扫码齐了还要看本工位视觉检测最近一次周期判定，两边都 OK 才 OK（视觉装了 6 个但只扫 5 码→NG）。工件开始/结束以扫码为准。关闭=只按扫码判（默认）" placement="top">
             <span class="text-sm text-gray-400 border-b border-dotted border-gray-600">视觉+扫码双重验证</span>
           </el-tooltip>
@@ -216,6 +241,9 @@ const emptyForm = () => ({
   vision_gate: false,
   vision_window_sec: 300,
   vision_missing: 'ignore',
+  idle_remind_sec: 0,
+  standby_silent: false,
+  count_on_settle: true,
 });
 const form = ref(emptyForm());
 
@@ -252,6 +280,14 @@ function fillExample() {
   form.value.vision_gate = true;
   form.value.vision_missing = 'ignore';
   form.value.vision_window_sec = 300;
+  // 2026-09 现场反馈: 母排永远第一、其余顺序不固定、工装可能中间扫
+  // → 必须「数量凑齐即结算」, 否则少扫组永远开着不报警 (v3.56.0 现场实录)
+  form.value.settle_on = 'all_filled';
+  form.value.idle_remind_sec = 30;
+  form.value.standby_silent = true;
+  // 2026-09-07 现场反馈"一个工件结算两次": 本工位视觉 SOP 也在跑并计数,
+  // 扫码结算再借同一对事件会把计数动作重复执行 → 扫码侧不计数
+  form.value.count_on_settle = false;
 }
 
 async function loadConfig() {

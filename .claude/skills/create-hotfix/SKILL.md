@@ -89,6 +89,14 @@ def _patch_xxx():
    即使 `:main` 内部出错，`pause` 一定会执行，窗口不会关闭。
 
 3. **不要用 `chcp 65001`** — 某些 Windows 版本会导致 bat 重新解析出错。所有提示信息用英文/ASCII。
+   - ⚠️ **中文进程名也算**：`taskkill /F /IM "天军科技AI视觉检测系统.exe"` 在 Mac 上写出来是 UTF-8 字节，中文工控机 cmd 按 GBK 解析成乱码。写完必须机器校验，不能只看 `file` 输出：`python -c "d=open('x.bat','rb').read(); assert max(d)<128"`（全 ASCII）+ CRLF 检查。
+
+3b. **补丁 bat 里禁用 `taskkill /F` / `wmic call terminate`**（v3.56.0a 六和真实事故，连续两次现场闪退定位）：工控机上的国产安全软件（360/火绒/管家类）会对「cmd 链里出现强杀进程」做行为拦截，**直接掐死整个 cmd 进程树，无任何报错，连 `call :main` 外层的 `pause` 都兜不住**——症状就是 bat 打到某一步窗口整个消失。两次现场视频：一次纯 ASCII 的 `taskkill /F /IM electron.exe` 同样闪退，实锤与编码无关。正确姿势：
+   - 关软件靠操作员：`echo` 提示手动关 + `pause >nul` 等确认，**不下 kill 命令**；软件没关净靠 `ren dist` 失败检查兜底报错。
+   - `timeout` 也别用（部分环境 stdin 异常会出错），要 sleep 用 `ping -n 3 127.0.0.1 >nul`。
+   - bat 全程只用 echo/copy/xcopy/ren/mkdir/findstr 这类无害命令。
+   - **每一步前后 `echo step >> "%~dp0patch_log.txt"` 落盘留痕**——窗口被外力掐死时截图看不到死因，日志能定位到行。
+   - README 提醒现场：装了安全软件先退出或把补丁文件夹加信任区。
 
 4. **`set /p` 不要放在 `if` 块内** — 提示符中的 `>` 会被当成重定向：
    ```batch

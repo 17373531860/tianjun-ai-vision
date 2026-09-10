@@ -50,6 +50,20 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "vision_gate": False,
     "vision_window_sec": 300,
     "vision_missing": "ignore",  # ignore=无视觉结果按扫码判 | ng=缺视觉结果判 NG
+    # v3.56.1b 六和现场反馈增补 (默认关 = 存量行为零差异):
+    # idle_remind_sec: 催扫提醒 — 组开着且 N 秒无新码 → 借 NG 事件提醒面
+    #   (灯/蜂鸣/Toast, remind_only 不计数不定格), 每 N 秒重复催直到扫码/结算/清空。
+    #   与 timeout_sec (超时直接判 NG 结组) 相互独立, 可同时开。
+    "idle_remind_sec": 0,
+    # standby_silent: 待机静默 — 通道未在检测时, 扫码照常入槽/结算/追溯落库,
+    #   但结算不借事件面 (不计数不亮灯) 也不派发 txt 导出 (现场答复 6=b)。
+    "standby_silent": False,
+    # count_on_settle: 结算是否执行事件上的计数动作。六和现场"一个工件结算两次":
+    #   视觉 SOP 周期结算触发事件 1/2 计一次, 扫码组结算借同一对事件又计一次
+    #   → 检测次数=产量×2。关掉后扫码结算只借 灯/语音/Toast (remind_only 档,
+    #   同时跳过人工确认定格), 计数交给视觉周期 — 一件一次 (现场答复 5)。
+    #   默认 True = 存量行为零差异 (纯扫码无视觉的工位靠它计数)。
+    "count_on_settle": True,
 }
 
 # 槽位级可覆盖键 (值 "inherit"/缺省 = 用全局): dedup_cross_group / on_overflow
@@ -69,10 +83,10 @@ class _GroupState:
         # [{record_id, slot_key, slot_label, code, seq, ts}]
         self.codes: List[Dict[str, Any]] = []
         self.timer: Optional[threading.Timer] = None
+        # v3.56.1b 催扫提醒定时器 (与 timer=超时判NG 相互独立)
+        self.remind_timer: Optional[threading.Timer] = None
         # v3.56.1 NG 挂起态: {"reason", "missing"} — 少扫收尾后等补扫/人工放行
         self.pending_ng: Optional[Dict[str, Any]] = None
-        # 挂起进入时已报过 NG 警报, 人工放行结算时不再二次响铃
-        self.ng_event_fired = False
 
     def slot_count(self, slot_key: str) -> int:
         return sum(1 for c in self.codes if c["slot_key"] == slot_key)
@@ -226,6 +240,8 @@ class ScanCollectEngine:
                 "slot_label": slot.get("label") or slot["key"],
                 "code": code, "seq": state.seq,
                 "ts": state.last_scan_at.strftime("%H:%M:%S"),
+                # v3.56.1b: NG 挂起期间补扫的码打标记 (txt 落盘带 [补扫], 现场答复 7)
+                "remedied": bool(state.pending_ng),
             })
             try:
                 db.commit()
@@ -245,6 +261,9 @@ class ScanCollectEngine:
                 self._settle(db, channel_id, cfg, state, trigger="all_filled")
             else:
                 self._arm_timer(channel_id, cfg, state)
+            # v3.56.1b 催扫提醒: 组仍开着(含挂起) → 重置空闲计时
+            if self._groups.get(channel_id) is state:
+                self._arm_remind(channel_id, cfg, state)
             return {"accepted": True,
                     "msg": f"入槽 {slot.get('label') or slot['key']} ({state.seq})"}
 
@@ -332,8 +351,13 @@ class ScanCollectEngine:
         except Exception as e:
             print(f"[ScanCollect] warn toast 失败(隔离): {e}", flush=True)
 
-    def _fire_event(self, channel_id: int, event_id, reason: str) -> bool:
-        """借事件响应面（灯/Toast/语音/计数器），不动检测周期。"""
+    def _fire_event(self, channel_id: int, event_id, reason: str,
+                    remind_only: bool = False) -> bool:
+        """借事件响应面（灯/Toast/语音/计数器），不动检测周期。
+
+        remind_only=True: 催扫提醒档 — 只借灯/蜂鸣/Toast, 跳过计数器与
+        人工确认定格 (同 v3.45 称重过程提醒姿势, 否则催一次 NG 计数 +1)。
+        """
         if not event_id:
             return False
         try:
@@ -341,11 +365,21 @@ class ScanCollectEngine:
             mgr = get_channel_manager().get(channel_id)
             if hasattr(mgr, "fire_external_event_response"):
                 return bool(mgr.fire_external_event_response(
-                    event_id, reason, source="scan_collect"))
+                    event_id, reason, source="scan_collect",
+                    remind_only=remind_only))
         except Exception as e:
             print(f"[ScanCollect] fire_event 失败(隔离) ch{channel_id} "
                   f"event={event_id}: {e}", flush=True)
         return False
+
+    def _channel_detecting(self, channel_id: int) -> bool:
+        """待机静默档用: 拿不到状态按检测中处理 (保守 = 照常计数/导出)。"""
+        try:
+            from backend.api.channel_manager import get_channel_manager
+            mgr = get_channel_manager().get(channel_id)
+            return bool(getattr(mgr, "is_detecting", True))
+        except Exception:
+            return True
 
     # ============================================================
     # 结算
@@ -358,24 +392,31 @@ class ScanCollectEngine:
         allow_pending=False 用于人工"按NG放行": 跳过挂起分支强制出结果。
         """
         missing = self._missing_detail(cfg, state)
+        # v3.56.1b 待机静默: 待机时结算不借事件面(不计数不亮灯)、不派发导出
+        standby = bool(cfg.get("standby_silent")) \
+            and not self._channel_detecting(channel_id)
 
         # ---- v3.56.1 NG 挂起 (默认关): 少扫收尾不关组, 报警后等补扫/人工放行 ----
-        if (missing and trigger == "closing" and allow_pending
+        # v3.56.1b: trigger 扩到 manual (面板「本件扫完」按钮同样走挂起补扫);
+        #   挂起报警改 remind_only 提醒档 — 此刻还不是最终判定, 借完整 NG 事件面
+        #   会 不良+1/总产量+1, 补扫转 OK 后再 OK 计数 = 一件计两次 (v3.56.0 缺陷)
+        if (missing and trigger in ("closing", "manual") and allow_pending
                 and cfg.get("ng_pending") and not state.pending_ng):
             miss_txt = "、".join(f"{m['label']}缺{m['expected'] - m['got']}"
                                  for m in missing)
             reason = f"少扫 NG 挂起：{miss_txt}，请补扫缺码或按 NG 放行"
             state.pending_ng = {"reason": reason, "missing": missing,
                                 "since": datetime.now().strftime("%H:%M:%S")}
-            if not state.ng_event_fired:
-                self._fire_event(channel_id, cfg.get("event_ng_id", 2), reason)
-                state.ng_event_fired = True
+            if not standby:
+                self._fire_event(channel_id, cfg.get("event_ng_id", 2), reason,
+                                 remind_only=True)
             self._warn(channel_id, "", reason)
             print(f"[ScanCollect] NG挂起 ch{channel_id} group={state.group_id}: "
                   f"{reason}", flush=True)
             return
 
         self._cancel_timer(state)
+        self._cancel_remind(state)
         if trigger == "timeout":
             verdict, result_key = False, "ng_timeout"
             reason = "扫码超时未收尾，本工件判 NG"
@@ -435,10 +476,14 @@ class ScanCollectEngine:
             db.rollback()
             print(f"[ScanCollect] 结算回填失败 group={state.group_id}: {e}", flush=True)
 
-        # 事件响应（灯/Toast/计数器）— 挂起进入时已响过 NG 铃, 放行结算不二次响
-        if verdict or not state.ng_event_fired:
+        # 事件响应（灯/Toast/计数器）— 最终判定只在这里计一次数;
+        # 挂起进入的报警是 remind_only 提醒档不计数 (v3.56.1b)。待机静默跳过。
+        # count_on_settle=False: 只借灯/语音/Toast 不计数 (视觉周期已计过,
+        # 否则视觉+扫码同借事件 1/2 → 一件计两次, 2026-09-07 六和现场)。
+        if not standby:
             event_id = cfg.get("event_ok_id", 1) if verdict else cfg.get("event_ng_id", 2)
-            self._fire_event(channel_id, event_id, reason)
+            self._fire_event(channel_id, event_id, reason,
+                             remind_only=not cfg.get("count_on_settle", True))
 
         summary = {
             "group_id": state.group_id,
@@ -452,18 +497,23 @@ class ScanCollectEngine:
             "settled_at": settled_at.strftime("%H:%M:%S"),
             "codes": list(state.codes),
             "vision": vision_info,
+            # v3.56.1b: 补救留痕 (txt 模板消费) + 待机静默标记
+            "was_pending": bool(state.pending_ng),
+            "standby": standby,
         }
         self._last_settled[channel_id] = summary
         self._groups.pop(channel_id, None)
         print(f"[ScanCollect] 结算 ch{channel_id} group={state.group_id} "
-              f"{result_key}: {reason} wp={workpiece_sn}", flush=True)
+              f"{result_key}: {reason} wp={workpiece_sn}"
+              f"{' [待机静默]' if standby else ''}", flush=True)
 
-        # 实时导出（txt 分类落盘）— 与结算解耦，失败不连坐
-        try:
-            self._dispatch_export(db, channel_id, cfg, state, summary)
-        except Exception:
-            print(f"[ScanCollect] 导出派发失败(隔离):\n{traceback.format_exc()}",
-                  flush=True)
+        # 实时导出（txt 分类落盘）— 与结算解耦，失败不连坐; 待机静默不落盘
+        if not standby:
+            try:
+                self._dispatch_export(db, channel_id, cfg, state, summary)
+            except Exception:
+                print(f"[ScanCollect] 导出派发失败(隔离):\n{traceback.format_exc()}",
+                      flush=True)
 
     def _slot_role(self, cfg: Dict, slot_key: str) -> str:
         for s in (cfg.get("slots") or []):
@@ -527,9 +577,31 @@ class ScanCollectEngine:
                          trigger="closing", allow_pending=False)
             return True, "已按 NG 放行结算"
 
+    def settle_now(self, db: Session, channel_id: int) -> Tuple[bool, str]:
+        """v3.56.1b 面板「本件扫完」按钮: 立即按当前已扫码结算 (现场答复 3c)。
+
+        六和范式下码序不固定、收尾码可能先扫 — 现场用「扫满结算」时少扫组
+        永远开着, 这个按钮是人工收口出口: 齐 → OK; 缺码 → ng_pending 开着走
+        挂起(补扫转 OK / 按 NG 放行), 关着直接判 NG。
+        """
+        with self._lock:
+            state = self._groups.get(channel_id)
+            if state is None or not state.codes:
+                return False, "当前没有在采集的码组"
+            if state.pending_ng:
+                return False, "码组已挂起：请补扫缺码，或点「按 NG 放行」"
+            cfg = self.get_config(db, state.project_id)
+            if cfg is None:
+                return False, "多码采集配置已停用"
+            self._settle(db, channel_id, cfg, state, trigger="manual")
+            if self._groups.get(channel_id) is state and state.pending_ng:
+                return True, "缺码已挂起：请补扫缺码或按 NG 放行"
+            return True, "已手动结算本工件"
+
     def _void_group(self, db: Session, state: _GroupState, *, reason: str):
         """作废一个组（不触发事件不导出）。调用方已持锁。"""
         self._cancel_timer(state)
+        self._cancel_remind(state)
         try:
             record_ids = [c["record_id"] for c in state.codes if c["record_id"]]
             if record_ids:
@@ -584,6 +656,71 @@ class ScanCollectEngine:
             except Exception:
                 pass
             state.timer = None
+
+    # ============================================================
+    # 催扫提醒 (v3.56.1b, 默认关)
+    # ============================================================
+
+    def _arm_remind(self, channel_id: int, cfg: Dict, state: _GroupState):
+        """组开着且 N 秒无新码 → 借 NG 事件提醒面催扫 (remind_only 不计数),
+        然后重新武装 = 每 N 秒重复催, 直到 扫码/结算/清空/裁撤。"""
+        self._cancel_remind(state)
+        interval = float(cfg.get("idle_remind_sec") or 0)
+        if interval <= 0:
+            return
+        group_id = state.group_id
+
+        def _on_remind():
+            from backend.db.database import SessionLocal
+            db = SessionLocal()
+            try:
+                with self._lock:
+                    cur = self._groups.get(channel_id)
+                    if cur is None or cur.group_id != group_id or not cur.codes:
+                        return
+                    cfg_now = self.get_config(db, cur.project_id)
+                    if cfg_now is None:
+                        return
+                    idle = (datetime.now() - cur.last_scan_at).total_seconds()
+                    if idle + 0.5 < interval:
+                        # 期间有新码 (定时器竞态兜底), 按剩余空闲重新武装
+                        self._arm_remind(channel_id, cfg_now, cur)
+                        return
+                    missing = self._missing_detail(cfg_now, cur)
+                    miss_txt = "、".join(
+                        f"{m['label']}缺{m['expected'] - m['got']}"
+                        for m in missing) or "未收尾"
+                    reason = (f"扫码停留提醒：{miss_txt}，已 {int(idle)} 秒无扫码"
+                              f"，请继续扫码或点「本件扫完」")
+                    standby = bool(cfg_now.get("standby_silent")) \
+                        and not self._channel_detecting(channel_id)
+                    if not standby:
+                        self._fire_event(channel_id,
+                                         cfg_now.get("event_ng_id", 2),
+                                         reason, remind_only=True)
+                    self._warn(channel_id, "", reason)
+                    print(f"[ScanCollect] 催扫 ch{channel_id} "
+                          f"group={cur.group_id}: {reason}", flush=True)
+                    self._arm_remind(channel_id, cfg_now, cur)  # 重复催
+            except Exception:
+                print(f"[ScanCollect] 催扫提醒异常:\n{traceback.format_exc()}",
+                      flush=True)
+            finally:
+                db.close()
+
+        t = threading.Timer(interval, _on_remind)
+        t.daemon = True
+        t.name = f"scan-collect-remind-ch{channel_id}"
+        state.remind_timer = t
+        t.start()
+
+    def _cancel_remind(self, state: _GroupState):
+        if state.remind_timer is not None:
+            try:
+                state.remind_timer.cancel()
+            except Exception:
+                pass
+            state.remind_timer = None
 
     # ============================================================
     # 纠错（API 线程）
@@ -669,6 +806,7 @@ class ScanCollectEngine:
             state = self._groups.pop(channel_id, None)
             if state is not None:
                 self._cancel_timer(state)
+                self._cancel_remind(state)
             self._last_settled.pop(channel_id, None)
             self._vision_last.pop(channel_id, None)
 
