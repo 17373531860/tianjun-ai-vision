@@ -68,7 +68,8 @@ export const setProjectConfig = (projectConfig, channel = 0) => {
 
 export const resetDetection = (channel = 0) => api.post(`/detection/reset?channel=${channel}`);
 
-export const resetDetectionStats = (channel = 0) => api.post(`/source/detection/reset-stats?channel=${channel}`);
+export const resetDetectionStats = (channel = 0, scope = 'all') =>
+  api.post(`/source/detection/reset-stats?channel=${channel}&scope=${scope}`);
 
 // v3.9.x 工人确认重做 — 解除 require_ack 触发的阻塞态
 // v3.23 action: 缺步骤延迟落账挂起时 supplement_step(补步骤判OK) / confirm_ng(认NG) / redo(缺省)

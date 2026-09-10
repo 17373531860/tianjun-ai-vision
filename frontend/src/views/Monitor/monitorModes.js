@@ -5,9 +5,11 @@
  * 步骤表行 / SOP 卡片 / 隐藏标签集 / 逻辑模式。
  * 不 import Vue、不碰 DOM、不读全局 store —— 一切靠参数传入，vitest 可直测。
  *
- * 语义契约（勿改，行为与 v3.54.1 的 processChannelResult 内联版逐行等价）：
+ * 语义契约：
  * - tableData / sopSteps 仅在 (d.detections || region_events) 时产出，否则返回
  *   null 表示"本轮不更新，保留旧值"。
+ * - 步骤类 SOP 按 sequence/detection/custom 身份建卡（与单工位 watch 同源）；
+ *   poll 已有 project_config 时禁止用顶部 currentProject 的 sequence 串项目。
  * - region_events 步骤来自 pipeline_config.region_events.rules 规则名
  *   （v3.32 起后端 results 载荷已带；载荷缺失时回退兜底项目的 pipeline_config）。
  * - tracking 模式按 item_checklist counted>0 判完成，容器模式扫 _boxes；
@@ -25,6 +27,138 @@ export const regionEventRuleSteps = (pipelineConfig) =>
       displayLabel: r.name,
       enabled: true,
     }));
+
+/**
+ * 从项目配置算出 SOP/步骤表应展示的步骤（单工位 watch 与多工位建卡同源）。
+ *
+ * 顶层字段优先于 pipeline_config（与 Project 页加载期注入的视图字段对齐）。
+ * sequence 空 → 摊 enabled 步骤（与旧 mock / 旧后端缺键同行为）。
+ */
+export function resolveStepsToShow(projectLike) {
+  const proj = projectLike || {};
+  const stepsConfig = proj.steps_config || [];
+  const logicMode = proj.logic_mode || 'sequential';
+  const pipelineConfig = proj.pipeline_config || {};
+
+  const sequenceOrder = proj.sequence_order || pipelineConfig.sequence_order || [];
+  const detectionSteps = proj.detection_steps || pipelineConfig.detection_steps || [];
+  const customBasedOn = proj.custom_based_on || pipelineConfig.custom_based_on || null;
+  const customSequenceOrder = proj.custom_sequence_order || pipelineConfig.custom_sequence_order || [];
+  const customDetectionSteps = proj.custom_detection_steps || pipelineConfig.custom_detection_steps || [];
+
+  let stepsToShow = [];
+
+  if (logicMode === 'sequential') {
+    if (sequenceOrder.length > 0) {
+      stepsToShow = sequenceOrder.map(seqItem => {
+        return stepsConfig.find(s => s.id === seqItem.step_id);
+      }).filter(Boolean);
+    } else {
+      stepsToShow = stepsConfig.filter(s => s.enabled);
+    }
+  } else if (logicMode === 'detection') {
+    if (detectionSteps.length > 0) {
+      stepsToShow = detectionSteps.map(id => {
+        return stepsConfig.find(s => s.id === id);
+      }).filter(Boolean);
+    } else {
+      stepsToShow = stepsConfig.filter(s => s.enabled);
+    }
+  } else if (logicMode === 'custom') {
+    if (customBasedOn === 'sequential') {
+      if (customSequenceOrder.length > 0) {
+        stepsToShow = customSequenceOrder.map(seqItem => {
+          return stepsConfig.find(s => s.id === seqItem.step_id);
+        }).filter(Boolean);
+      } else {
+        stepsToShow = stepsConfig.filter(s => s.enabled);
+      }
+    } else if (customBasedOn === 'detection') {
+      if (customDetectionSteps.length > 0) {
+        stepsToShow = customDetectionSteps.map(id => {
+          return stepsConfig.find(s => s.id === id);
+        }).filter(Boolean);
+      } else {
+        stepsToShow = stepsConfig.filter(s => s.enabled);
+      }
+    } else {
+      const customConditions = proj.custom_conditions || pipelineConfig.custom_conditions || [];
+      const involvedStepIds = new Set();
+      customConditions.forEach(cond => {
+        (cond.sequence || []).forEach(stepId => involvedStepIds.add(stepId));
+      });
+      if (involvedStepIds.size > 0) {
+        stepsToShow = [...involvedStepIds].map(id => stepsConfig.find(s => s.id === id)).filter(Boolean);
+      } else {
+        stepsToShow = stepsConfig.filter(s => s.enabled);
+      }
+    }
+  } else if (logicMode === 'region_events') {
+    stepsToShow = regionEventRuleSteps(pipelineConfig);
+  } else {
+    stepsToShow = stepsConfig.filter(s => s.enabled);
+  }
+
+  if (logicMode === 'tracking') {
+    const expectedList = proj.counting_expected_list
+      || pipelineConfig.counting_expected_list
+      || [];
+    const expectedDict = pipelineConfig.counting_expected_items || {};
+    const expectedLabels = new Set();
+    expectedList.forEach(item => {
+      if (item && item.label) expectedLabels.add(item.label);
+    });
+    Object.keys(expectedDict).forEach(label => expectedLabels.add(label));
+
+    if (expectedLabels.size > 0) {
+      stepsToShow = stepsToShow.filter(s => expectedLabels.has(s.label));
+    } else {
+      const containerLabel = proj.tracking_container_label
+        || pipelineConfig.tracking_container_label
+        || '';
+      if (containerLabel) {
+        stepsToShow = stepsToShow.filter(s => s.label !== containerLabel);
+      }
+    }
+  }
+
+  return stepsToShow.filter(s => !s.backup_for);
+}
+
+/**
+ * 多工位建卡用的 projectLike。
+ *
+ * R1：poll 只要带了 project_config，sequence/detection/custom 身份只读 poll
+ * （缺键视为空，走 enabled 摊开，禁止用顶部 currentProject 的 sequence 串项目）。
+ * fallback 仅用于：poll 缺 steps_config；region_events 载荷无 rules 数组时回退。
+ */
+export function projectLikeForChannelSteps(pollProjectConfig, fallbackProject) {
+  const fallback = fallbackProject || null;
+  if (!pollProjectConfig) return fallback || {};
+
+  const pollPipe = pollProjectConfig.pipeline_config || {};
+  const pollRules = pollPipe.region_events?.rules;
+  const regionEvents = Array.isArray(pollRules)
+    ? pollPipe.region_events
+    : (fallback?.pipeline_config?.region_events || pollPipe.region_events);
+
+  return {
+    logic_mode: pollProjectConfig.logic_mode || fallback?.logic_mode,
+    steps_config: pollProjectConfig.steps_config || fallback?.steps_config || [],
+    sequence_order: pollProjectConfig.sequence_order || pollPipe.sequence_order || [],
+    detection_steps: pollProjectConfig.detection_steps || pollPipe.detection_steps || [],
+    custom_based_on: pollProjectConfig.custom_based_on || pollPipe.custom_based_on || null,
+    custom_sequence_order: pollProjectConfig.custom_sequence_order || pollPipe.custom_sequence_order || [],
+    custom_detection_steps: pollProjectConfig.custom_detection_steps || pollPipe.custom_detection_steps || [],
+    custom_conditions: pollProjectConfig.custom_conditions || pollPipe.custom_conditions || [],
+    counting_expected_list: pollProjectConfig.counting_expected_list || pollPipe.counting_expected_list || [],
+    tracking_container_label: pollProjectConfig.tracking_container_label || pollPipe.tracking_container_label || '',
+    pipeline_config: {
+      ...pollPipe,
+      region_events: regionEvents,
+    },
+  };
+}
 
 /** 工位逻辑模式判定：轮询配置优先，回退兜底项目（阶段3模式面板同源） */
 export const resolveLogicMode = (pollProjectConfig, fallbackProject) =>
@@ -106,14 +240,9 @@ export function buildChannelStepViews(d, fallbackProject, chState) {
 
   const _logicMode = resolveLogicMode(d.project_config, fallback);
   const _isRegionEvents = _logicMode === 'region_events';
-  const _resultRegionRules = d.project_config?.pipeline_config?.region_events?.rules;
-  const _stepsConf = _isRegionEvents
-    ? regionEventRuleSteps(
-      Array.isArray(_resultRegionRules)
-        ? d.project_config.pipeline_config
-        : fallback?.pipeline_config
-    )
-    : (d.project_config?.steps_config || fallback?.steps_config || []);
+  const _stepsConf = resolveStepsToShow(
+    projectLikeForChannelSteps(d.project_config, fallback)
+  );
   const _stepIsActive = (label) =>
     _isRegionEvents && (stepInflightDurations[label] || 0) > 0;
 

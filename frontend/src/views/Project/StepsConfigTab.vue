@@ -111,6 +111,9 @@
                       <el-tooltip v-if="step.split_origin" content="由「同标签区域拆分」规则自动生成的虚拟步骤：检测框中心落进对应区域时，原始标签会被改写成这个步骤名。删除/改名请在下方拆分规则卡片操作" placement="top">
                         <el-tag size="small" type="primary" effect="plain" class="!h-5 !leading-5">拆分</el-tag>
                       </el-tooltip>
+                      <el-tooltip v-if="step.container_virtual" content="容器虚拟步骤：由「逻辑设置 → 装箱清点 → 合并为顺序步骤」自动生成，整箱达标那一刻自动完成入周期。模型不检测此标签，阈值/ROI/帧数等检测参数对它无效；严格顺序/单次接受等步骤参数照常生效。改名/删除请回装箱清点操作" placement="top">
+                        <el-tag size="small" type="success" effect="plain" class="!h-5 !leading-5">装箱</el-tag>
+                      </el-tooltip>
                     </div>
                   </td>
                   <td class="p-2"><el-switch v-model="step.enabled" size="small" @change="(val) => onStepEnabledChange(step, val)" /></td>

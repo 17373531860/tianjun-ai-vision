@@ -184,7 +184,9 @@ start_channel(0, V_2K[0], PID_2K)
 start_channel(1, V_2K[1], PID_2K)
 run_phase._videos = {0: V_2K[0], 1: V_2K[1]}
 run_phase._pids = {0: PID_2K, 1: PID_2K}
-run_phase("PhaseA 双工位(异视频同模型)", [0, 1], PHASE_A_SEC, min_inf_fps=12)
+# min_inf_fps=20: MPS 读写锁重构 (2026-08-25) 后满帧口径 — 并发推理放行 + FP16,
+# 微基准每路 37.5fps; 旧全局锁时代的及格线 12/8 已作废
+run_phase("PhaseA 双工位(异视频同模型)", [0, 1], PHASE_A_SEC, min_inf_fps=20)
 
 # ---- Phase B: 三工位, ch0/ch1 同视频同模型 + ch2 异视频异模型 ----
 set_mode(3)
@@ -193,7 +195,7 @@ start_channel(1, V_2K[0], PID_2K)
 start_channel(2, V_K1[0], PID_K1)
 run_phase._videos = {0: V_2K[0], 1: V_2K[0], 2: V_K1[0]}
 run_phase._pids = {0: PID_2K, 1: PID_2K, 2: PID_K1}
-run_phase("PhaseB 三工位(2同+1异)", [0, 1, 2], PHASE_B_SEC, min_inf_fps=8)
+run_phase("PhaseB 三工位(2同+1异)", [0, 1, 2], PHASE_B_SEC, min_inf_fps=20)
 
 # ---- 收尾核查 ----
 print("\n[稳定性] === 收尾核查 ===")

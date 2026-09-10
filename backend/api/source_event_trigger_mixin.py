@@ -601,6 +601,13 @@ class EventTriggerMixin:
         if getattr(self, '_ack_clear_runtime_after', False):
             self._ack_clear_runtime_after = False
             self._clear_step_runtime_state()
+            return
+        # 定格期间画面不推进, 工人无法补做 — 缺步挂起若还在身,
+        # 补做计时从确认那一刻重新起算, 否则弹窗停留多久就吃掉多少补做窗口
+        # (ack_timeout=0 无限定格下确认即超时, 秒判 NG 的体验事故).
+        hold = getattr(self, '_settle_hold', None)
+        if hold is not None:
+            hold['since'] = time.time()
 
     def _should_defer_for_remediation(self, reason: str) -> bool:
         """本次 NG 是否应走"缺步骤延迟落账"挂起 (而非立刻落 NG).

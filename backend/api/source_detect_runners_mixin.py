@@ -118,17 +118,18 @@ def _passes_box_size_limit(host, class_name: str, nw: float, nh: float) -> bool:
 
 
 def _gpu_lock_ctx(host, device: str = ''):
-    """返回一个上下文管理器: 串行 GPU 调用.
+    """返回一个上下文管理器: 守卫 GPU 调用.
 
-    - device=mps: 返回**进程级** MPS_LOCK。router.gpu_lock 是每通道实例锁,
-      只能串行单通道内多模型; 双通道各自推理线程并发打 MPS 会撞 Metal 命令
-      缓冲断言直接弑进程 (2026-08-07 三工位稳定性长跑实测)。CUDA 线程安全
-      不受影响。
+    - device=mps: 返回进程级 **MPS 读锁** (mps_infer_guard)。多通道并发推理
+      放行 (torch 2.13 并发 predict 安全, M5 Pro 实测), 只与 mps_guard 写锁
+      (empty_cache/模型加载释放/gc) 互斥 —— 那才是 2026-08-07 Metal 断言
+      弑进程的真正冲突面。最初的全局互斥锁把三路推理串行成 13fps, 已废弃。
+      CUDA 线程安全不受影响。
     - 其它设备: 维持原状 — 多模型场景用 router.gpu_lock, 无 router 时 no-op.
     """
     if device.startswith('mps'):
-        from backend.core.torch_device import MPS_LOCK
-        return MPS_LOCK
+        from backend.core.torch_device import mps_infer_guard
+        return mps_infer_guard()
     router = getattr(host, '_router', None)
     if router is None:
         return _NoopContext()
@@ -141,12 +142,14 @@ class _NoopContext:
 
 
 def _results_off_gpu(results, device: str):
-    """MPS 设备: 在锁内把 Results 张量整体搬回 CPU 再交给状态机.
+    """MPS 设备: 在读锁内把 Results 张量整体搬回 CPU 再交给状态机.
 
     predict 出锁后, 调用方对 Results 的任何取值 (.boxes / .conf / .cpu())
-    仍会编码 Metal blit 命令 —— 与其它通道锁内的 predict 编码竞态, 照样撞
+    仍会编码 Metal blit 命令 —— 与写锁内的 empty_cache/释放竞态, 照样撞
     Metal 断言弑进程 (2026-08-07 二次复现: 锁只包 predict 不包取值不够).
-    在锁内一次性 .cpu() 后, 锁外全是 CPU 张量, MPS 触点彻底归零.
+    在读锁内一次性 .cpu() 后, 锁外全是 CPU 张量, MPS 触点彻底归零.
+    .cpu() 本身会阻塞到该张量的 Metal 命令完成, 不需要 (也**禁止**) 再调
+    synchronize_mps() —— 那是写锁操作, 持读锁调它会互相等死.
     CUDA / CPU 设备原样返回 (CUDA 线程安全, 不需要额外搬运开销).
     """
     if not device.startswith('mps'):
@@ -157,9 +160,6 @@ def _results_off_gpu(results, device: str):
             out.append(r.cpu())
         except Exception:
             out.append(r)  # 极端兜底: 单帧搬运失败不至于丢检测
-    # 把在飞的 blit 命令全部冲干净再出锁, 不给锁外留任何未提交的 Metal 工作
-    from backend.core.torch_device import synchronize_mps
-    synchronize_mps()
     return out
 
 
@@ -200,7 +200,7 @@ class DetectRunnersMixin:
             from concurrent.futures import TimeoutError as FuturesTimeoutError
 
             device = params['device']
-            _half = params['use_half'] and device.startswith('cuda') and params['is_native_pytorch']
+            _half = params['use_half'] and device.startswith(('cuda', 'mps')) and params['is_native_pytorch']
 
             # Step 4: ROI 裁剪 (mi.roi 不可用时直接返回原 frame)
             # 2026-07 缺陷 B: ROI 画在显示帧上, 推理帧是原图 → 传 video_transform 反变换顶点
@@ -369,7 +369,7 @@ class DetectRunnersMixin:
 
         from concurrent.futures import TimeoutError as FuturesTimeoutError
         device = params['device']
-        _half = params['use_half'] and device.startswith('cuda') and params['is_native_pytorch']
+        _half = params['use_half'] and device.startswith(('cuda', 'mps')) and params['is_native_pytorch']
         _frame = frame if frame.flags['C_CONTIGUOUS'] else np.ascontiguousarray(frame)
 
         def run_inference():
@@ -437,7 +437,7 @@ class DetectRunnersMixin:
             from concurrent.futures import TimeoutError as FuturesTimeoutError
 
             device = params['device']
-            _half = params['use_half'] and device.startswith('cuda') and params['is_native_pytorch']
+            _half = params['use_half'] and device.startswith(('cuda', 'mps')) and params['is_native_pytorch']
             _tracker_cfg = self._custom_tracker_yaml or "bytetrack.yaml"
 
             _vt = getattr(self, 'video_transform', None)
@@ -551,7 +551,7 @@ class DetectRunnersMixin:
             from concurrent.futures import TimeoutError as FuturesTimeoutError
 
             device = params['device']
-            _half = params['use_half'] and device.startswith('cuda') and params['is_native_pytorch']
+            _half = params['use_half'] and device.startswith(('cuda', 'mps')) and params['is_native_pytorch']
 
             _vt = getattr(self, 'video_transform', None)
             if mi is not None:

@@ -2,6 +2,19 @@
 
 > 阅读范围：2026-07-05 分段通读 `backend/main.py`、`backend/core/config.py`、`backend/api/source*.py` 全族（含 23 个 mixin + 14 个 has-a 组件）、`router_manifest.py`、`channel_manager.py`、`alarm.py`、`debug.py`、`system_display.py`、`services/weighing_engine.py`。**共 47 个文件**。
 >
+> **v3.56 补账（2026-09-01，多码采集发版随行的后端核心簇）**：
+> - `source_per_item_mixin.py`：逐件五件套——①步骤级 `action_label`/`item_label` 对称支持**数组 OR**（`_collect_item_boxes` 多标签框合并，旧单串兼容）；②`absorb_new_items_sec>0` 时 auto 步骤在周期开始后 N 秒内 `unbounded` 吸收新位置个体（治稳定窗口锁死后放件）；③`warn_uncovered_after_sec`+`warn_event_id` 个体 `first_seen_time` 超时未覆盖借事件响应面报一次（`warn_fired` 防重，不结周期）；④OK 结算按首步 `covered_count` 累加 `item_count_counter_name` 计数器（读取处 `getattr(self,'_per_item_config',None) or {}` 防御，v3.56 BUG-006）；⑤`remediation_event_notify` 待补态走 `fire_external_event_response(remind_only=True)`。回归 `tests/test_per_item_v356_features.py`。
+> - `source_custom_mix.py`：稳定值取值重设计——去固定 4s 回看，改 `stable_anchor_s`（锚点=动作成立−N 秒）+ `stable_pick`（max/latest）+ `slot_verified_drop`（看全帧众数下修才允许向下修正，须配槽位门）；锚点前无稳定记录峰值兜底；内存只留 `MODES_KEEP_S=300`。回归 `tests/test_custom_mix_unit.py`。
+> - `source_step_stats_mixin.py`：`custom_mix_container_virtual_step` 整箱达标注入顺序步骤流（`container_activity` 供缺步提前在未入周期形态触发；虚拟标签不当规则 B 打断者）。
+> - `source_settlement_mixin.py`：①缺步提前发现 `_early_missing_hold`——后继步干净入周期（或虚拟步骤 appended=False）即查前置缺失进 `_settle_hold(early=True)`，补齐销结重排；②`_maybe_fire_repeat_hint` 回退重复 hint 档提示+不入账（节流只吞事件不吞拦截）；③`_clear_step_runtime_state` 同步 reset combo positional 引擎（治超时强制 NG 旧件计数压新件）。
+> - `source_event_trigger_mixin.py`：严格顺序提示改 `fire_external_event_response`（原误走 `_trigger_event`→`end_cycle` 清箱账）；容器虚拟步骤未完成时后继静默拦截不轰炸。
+> - `source_project_config_apply.py`：`resolve_ng_handling` 增 `missing_step_early`（仅 hold 档生效）；运行时增 `_violation_mode`（hint 与 none 原两属性辨不出档位）。
+> - `source_routes.py`：①`reset-stats?scope=cycle` 走 `reset_current_cycle()`（保留计数/会话，见 `source.py`），默认 all 原语义+作废在途包装工单；②results 瘦快照下发本通道 `sequence_order`/`custom_*` 身份字段（多工位 SOP 卡禁止 fallback 顶部项目）；③ack 路径仍有 `_settle_hold` 时 `since` 重记（定格期间不吃补做超时窗）；④`set_stream_config` 把 `use_half`/frame_limit/target_fps 同步全通道；⑤检测结果载荷挂 `scan_collect` 段（Monitor 轮询，未启用=null 零差异）。
+> - `core/torch_device.py`：MPS 全局互斥改**读写锁**——`mps_infer_guard`（读）包 predict+Results.cpu()，`mps_guard`（写）包 empty_cache/sync/加载释放，写者优先可重入，禁止读锁内 sync；CUDA/CPU no-op。三路推理 13→24fps 复原（`tests/uat/bench_mps_*.py`）。
+> - `source_detect_runners_mixin.py` / `source_model_load_mixin.py`：`use_half` 放开 `cuda|mps`（MPS FP16），去读锁内 `synchronize_mps`。
+> - `channel_manager.py`：①`set_channel_gpu` 补 `save_channel_source(..., merge=True)` 落盘 `gpu_device`（治钉选重启弹回，守不变量 17）；②`set_channel_count` 裁撤清理第 6 处——scan_collect 引擎 `on_channel_removed`（不变量 #4）。
+> - `main.py` / `alembic/env.py`：scan_collect 模型 import 进 create_all / alembic 元数据（新表自动建，无需 mXXXX）。
+>
 > **v3.47 补账（2026-08-07，多分支汇合发版）**：
 > - `main.py`：①`migrate_database` 后新增 **startup-heavy-init 后台线程**——逐通道模型加载 + 视频源恢复移出启动主线（置于 MES 初始化后，顺带修检测恢复先于 mes_hook 注入的隐患），uvicorn 秒级绑端口；②模块尾新增 `_start_interconnect_uploader()`（互连配置开着才拉起 uploader worker + puller，默认关零线程）
 > - `channel_manager.py`：`MAX_CHANNELS` 4→64（:22，仅防呆上界），`channel_count` 不再限 1/2/4 枚举；模型加载幂等改按**实际设备**比对（激活/启动尊重通道 `gpu_device`）；`/workstations/mode` 接受任意 1..64

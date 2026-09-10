@@ -7,11 +7,15 @@
   detections 轮询 → 看起来「画面停了但数据还在跑」。
 
 修复:
-  缩略图改轮询 /snapshot 单帧; 主面板独占 /video_feed + 90s 强制换流自愈。
+  缩略图改轮询 /snapshot 单帧; 主面板独占 /video_feed。
+  2026-08-26 二次演进: 主画面 <img src=video_feed> 长连接改为 fetch 流式解
+  multipart JPEG → blob 逐帧喂 <img> (socket 半死不触发 onError 的静默冻帧,
+  从「90s 定期换流兜底」升级为「3.5s 看门狗字节级自愈」)。
+  于是 URL 契约变为: 主画面 img.src 是 blob:, fetch 网络请求打 /video_feed。
 
 验证:
   1. 缩略图 img.src 含 /snapshot, 不含 /video_feed
-  2. 主画面 img.src 含 /video_feed
+  2. 主画面 img.src 是 blob: (fetch 喂帧), 且网络层有对 /video_feed 的请求
   3. 隔 2.5s 采主画面两帧像素, 应有可感知差异 (画面在动)
   4. 后端日志: 同 channel 不应再高频 yielding
 
@@ -28,6 +32,7 @@ from playwright.sync_api import sync_playwright
 
 FRONTEND = "http://localhost:6004"
 BACKEND = "http://localhost:8004/api/v1"
+BACKEND_ROOT = "http://localhost:8004"
 VIDEO_A = "/Users/tianjun/Downloads/飞书20260804-171657.mp4"
 VIDEO_B = "/Users/tianjun/Downloads/飞书20260804-171701.mp4"
 MODEL = ("/Users/tianjun/Projects/tianjun-worktime/backend/uploads/models/"
@@ -144,7 +149,7 @@ def main():
            f"插件主画面应在吃带 t= 的 video_feed (新请求 {len(plugin_feeds)})")
 
         # ---- 1. URL 契约 ----
-        print("[uat] === URL 契约 (缩略=snapshot / 主画面=video_feed) ===")
+        print("[uat] === URL 契约 (缩略=snapshot / 主画面=blob) ===")
         thumbs = page.locator(".lgwt-thumb img")
         main_img = page.locator(".lgwt-video-img").first
         n_thumbs = thumbs.count()
@@ -154,7 +159,8 @@ def main():
             ok("/snapshot" in src and "video_feed" not in src,
                f"缩略图{i+1} 应走 /snapshot (src=...{src[-40:]})")
         main_src = main_img.get_attribute("src") or ""
-        ok("video_feed" in main_src, f"主画面应走 /video_feed (src=...{main_src[-50:]})")
+        ok(main_src.startswith("blob:"),
+           f"主画面应是 fetch 喂的 blob: 帧 (src=...{main_src[-50:]})")
 
         # ---- 2. 画面在动 (隔 2.5s 像素有差) ----
         print("[uat] === 主画面应持续推进 (非冻帧) ===")
@@ -183,14 +189,40 @@ def main():
         page.locator(".lgwt-thumb").nth(2).click()
         time.sleep(3)
         main_src2 = page.locator(".lgwt-video-img").first.get_attribute("src") or ""
-        ok("video_feed" in main_src2 and "channel=2" in main_src2,
-           f"切焦点后主画面应吃 ch2 流 (src=...{main_src2[-50:]})")
+        ok(main_src2.startswith("blob:") and any("channel=2" in u for u in plugin_feeds),
+           f"切焦点后主画面应 fetch ch2 流并喂 blob (src=...{main_src2[-40:]}, "
+           f"ch2请求={sum(1 for u in plugin_feeds if 'channel=2' in u)})")
         s3 = pixel_sample(page, page.locator(".lgwt-video-img").first)
         time.sleep(2.5)
         s4 = pixel_sample(page, page.locator(".lgwt-video-img").first)
         if s3 and s4:
             dist2 = sum(abs(a - b) for a, b in zip(s3, s4))
             ok(dist2 > 2.0, f"工位3 主画面应在动 (Δ={dist2:.1f})")
+
+        # ---- 4. 静默断流自愈 (看门狗核心能力回归) ----
+        # 后端同通道「新连接上位踢旧连接」: 起一条竞争 /video_feed 把插件的
+        # fetch 流踢死 (reader 收 done, 无 onError 可触发 —— 正是静默冻帧工况),
+        # 看门狗应在 3.5s 无新帧后自动重连夺回, 竞争连接反被踢。
+        print("[uat] === 静默断流: 看门狗 3.5s 自愈 ===")
+        import threading
+        import urllib.request as _ur
+
+        def _rival():
+            try:
+                with _ur.urlopen(f"{BACKEND_ROOT}/video_feed?channel=2", timeout=15) as r:
+                    while r.read(65536):
+                        pass
+            except Exception:
+                pass  # 被插件重连踢掉 / 超时, 都是预期结局
+
+        threading.Thread(target=_rival, daemon=True).start()
+        time.sleep(2)   # 竞争连接上位, 插件流此刻已被踢死
+        s5 = pixel_sample(page, page.locator(".lgwt-video-img").first)
+        time.sleep(8)   # 看门狗周期 2s + 阈值 3.5s + 重连出帧, 8s 必然覆盖
+        s6 = pixel_sample(page, page.locator(".lgwt-video-img").first)
+        if s5 and s6:
+            dist3 = sum(abs(a - b) for a, b in zip(s5, s6))
+            ok(dist3 > 2.0, f"被踢后 8s 内画面应自愈恢复推进 (Δ={dist3:.1f})")
 
         page.screenshot(path=str(OUT / "lgwt_stream_nofreeze.png"))
         browser.close()

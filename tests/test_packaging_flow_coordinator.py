@@ -1541,8 +1541,11 @@ def test_label_scan_gate_waits_then_qty_authorizes(client):
     assert st["current_box_scan_qty"] == 0
 
 
-def test_label_scan_bare_code_alarms_rescan_qr(client):
-    """等扫标签时扫到裸条形码 (取不出数量) → 报警"请扫二维码", 继续等, 不放行."""
+def test_label_scan_bare_code_ignored_composite_bad_alarms(client):
+    """等扫标签时的两类"取不出数量":
+
+    裸工单条形码 (无复合分隔符) = 现场 SOP 里先扫的那张工单码重进 → 静默忽略继续等真标签, 不报警;
+    复合串但数量段非法 = 真扫了标签却取不出数 → 保留报警"请扫二维码"."""
     coord, cid = _setup_label_flow(client)
     coord.set_mes_fetcher(lambda c, o: {"dispatch_qty": 48})
     alarms = []
@@ -1550,14 +1553,19 @@ def test_label_scan_bare_code_alarms_rescan_qr(client):
     db = SessionLocal()
 
     coord.on_scan(_ORDER, db, channel_id=0)                    # 开工单+开箱1(等扫)
-    coord.on_scan(_ORDER, db, channel_id=0)                    # 又扫了裸工单条形码
-    assert "label_qty_missing" in alarms
-    assert coord.get_state(cid)["status"] == "waiting_label"   # 仍在等
+    coord.on_scan(_ORDER, db, channel_id=0)                    # 工单条形码又进来一次
+    assert "label_qty_missing" not in alarms                   # 不报警
+    assert coord.get_state(cid)["status"] == "waiting_label"   # 仍在等真标签
 
-    # 数量段非法 (非数字) 同样拒绝
+    # 数量段非法 (非数字) 的复合串 → 仍报警拒绝
     coord.on_scan("ORD1|JOB260600040-67|abc|X", db, channel_id=0)
-    assert alarms.count("label_qty_missing") == 2
+    assert alarms.count("label_qty_missing") == 1
     assert coord.get_state(cid)["status"] == "waiting_label"
+
+    # 扫对带数量的标签二维码 → 正常放行
+    coord.on_scan(_LABEL.format(qty=24), db, channel_id=0)
+    assert coord.get_state(cid)["status"] == "running"
+    assert coord.get_state(cid)["current_box_scan_qty"] == 24
 
 
 def test_label_scan_work_start_alarm_once_per_box(client):

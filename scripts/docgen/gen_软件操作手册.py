@@ -24,7 +24,7 @@ BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 MD = os.path.join(BASE, 'docs', '软件操作手册.md')
 PDF = os.path.join(BASE, 'docs', '软件操作手册.pdf')
 
-VERSION = 'v3.55.0'
+VERSION = 'v3.56.0'
 UPDATED = '2026 年 8 月'
 
 

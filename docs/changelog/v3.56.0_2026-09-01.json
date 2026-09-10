@@ -1,0 +1,218 @@
+{
+  "version": "3.56.0",
+  "date": "2026-09-01",
+  "previous_version": "3.55.0",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "周期多码采集子系统 scan_collect（一工件多码分类/去重/数量门/收尾结算）",
+      "symptom": "焊接组装工位一个工件周期扫 8~11 个码（母排×1/芯子×6或9/工装收尾×1），要分类归档、重复少扫多扫报 NG、逐工件落 txt、主页实时进度、历史追溯，切项目切作业",
+      "root_cause": "原扫码体系一周期一码绑定工件，无多码槽位概念",
+      "fix": "ScanCollectEngine 单例（槽位制正则分类+顺序兜底/本组与跨件去重/收尾结算/超时/切项目作废），借 fire_external_event_response 事件面不动检测周期，新表 scan_collect_configs + scan_collect_records，mes_hooks._handle_scan 优先路径，channel 裁撤清理，/api/v1/scan-collect/* 8 端点",
+      "files": ["backend/services/scan_collect.py", "backend/models/scan_collect_models.py", "backend/api/scan_collect.py", "backend/api/router_manifest.py", "backend/services/mes_hooks.py", "backend/api/channel_manager.py", "backend/api/source_routes.py", "backend/main.py", "alembic/env.py"],
+      "keywords": ["多码采集", "scan_collect", "多码扫码", "槽位", "母排码", "芯子码", "工装码", "收尾码", "去重", "数量门", "multi barcode", "六和", "焊接组装"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "槽位级策略覆盖 + NG 挂起补扫/按 NG 放行（现场确认单增补）",
+      "symptom": "循环工装码跨工件必然重复不能拦；芯子多扫判 NG 但多扫母排只拦提示；少扫收尾后操作员要补扫救回",
+      "root_cause": "去重/多扫策略原为全局一刀切；少扫收尾立即结算无补救窗口",
+      "fix": "槽位级 dedup_cross_group/on_overflow 覆盖（inherit/off/reject/ng_alarm）；ng_pending 挂起态（补齐转 OK / POST /scan-collect/resolve-ng 人工放行按 NG 结算导出，放行不二次响铃）",
+      "files": ["backend/services/scan_collect.py", "backend/api/scan_collect.py", "frontend/src/views/MES/ScanCollectConfigCard.vue", "frontend/src/views/Monitor/ScanSlotsPanel.vue"],
+      "keywords": ["NG挂起", "补扫", "按NG放行", "resolve-ng", "槽位级策略", "工装码豁免", "跨工件去重", "多扫"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "视觉+扫码双重验证 vision_gate（默认关）",
+      "symptom": "现场要求视觉装配判定与扫码数量两边都齐才 OK，工件始末以扫码为准",
+      "root_cause": "扫码结算原独立于视觉周期判定",
+      "fix": "_handle_cycle_end 喂视觉判定入引擎，收尾结算扫码 OK 再看 vision_window_sec 窗口内视觉结果，视觉 NG→ng_vision，无结果按 vision_missing 档",
+      "files": ["backend/services/scan_collect.py", "backend/services/mes_hooks.py", "frontend/src/views/MES/ScanCollectConfigCard.vue"],
+      "keywords": ["双重验证", "vision_gate", "视觉门", "ng_vision", "扫码为准"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "多码采集前端全链 UI（配置卡/五形态面板/纠错/追溯/kiosk 只读）",
+      "symptom": "需要配置入口（MES-扫码器）、检测主页实时进度、删码纠错、结算后保留显示、工件反查组件码",
+      "root_cause": "全新子系统无 UI",
+      "fix": "MES 扫码器「多码采集」tab 配置卡（填入示例=现场三类真实码正则）；ScanSlotsPanel/Detail 接五形态（layout 槽位 scan-slots），kiosk 只读；结算后上组码列表灰显保留（确认单7.4）；工件追溯「组件码」区块按码组分节（确认单7.5）；NG 挂起横幅",
+      "files": ["frontend/src/views/MES/ScannerPanel.vue", "frontend/src/views/MES/ScanCollectConfigCard.vue", "frontend/src/views/Monitor/ScanSlotsPanel.vue", "frontend/src/views/Monitor/ScanSlotsDetail.vue", "frontend/src/views/Monitor/index.vue", "frontend/src/views/Monitor/WorkstationColumn.vue", "frontend/src/views/Monitor/SingleChannelMonitor.vue", "frontend/src/views/Monitor/monitorModes.js", "frontend/src/views/Monitor/layout/monitorLayout.js", "frontend/src/views/Monitor/composables/useChannelResults.js", "frontend/src/views/MES/WorkpiecePanel.vue", "frontend/src/api/scanCollect.js"],
+      "keywords": ["ScanSlotsPanel", "多码采集配置", "填入示例", "组件码", "工件追溯", "kiosk只读", "scan-slots"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-005",
+      "title": "多码采集 txt 实时导出（scan_group_end 触发器）",
+      "symptom": "一工件一 txt（工件码+时间命名），分类逐行+扫码时间+工位号+OK/NG，Excel 可读",
+      "root_cause": "实时导出无码组结算触发事件",
+      "fix": "新增 scan_group_end 触发器 + dispatch_scan_group_export，上下文 scan_collect.*（摘要+槽位分组视图），UTF-8 BOM + CRLF，NG 组照样导出带缺扫明细",
+      "files": ["backend/services/export_realtime.py", "backend/api/export_realtime.py", "backend/services/export_context.py", "backend/services/export_field_registry.py", "frontend/src/views/Data/RealtimeRulesDialog.vue"],
+      "keywords": ["scan_group_end", "txt导出", "实时导出", "UTF-8 BOM", "CRLF", "一工件一txt"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-006",
+      "title": "逐件覆盖 per_item 五件套（多标签OR/吸收窗/超时未覆盖警告/按件计数/待补态通知）",
+      "symptom": "稳定窗口锁死后放件；一行要配产品N↔动作N；在位久未覆盖要提醒；产量按件累计；待补态要Toast语音",
+      "root_cause": "action_label 仅单串、个体表周期开始即锁、无个体级超时提醒、计数器只按周期+1",
+      "fix": "action_label/item_label 数组 OR；absorb_new_items_sec 吸收窗；warn_uncovered_after_sec+warn_event_id 借事件面报警不结周期；item_count_counter_name 按 covered_count 累加；remediation_event_notify 完整事件通知",
+      "files": ["backend/api/source_per_item_mixin.py", "tests/test_per_item_v356_features.py"],
+      "keywords": ["per_item", "逐件覆盖", "多动作标签", "吸收窗", "未覆盖警告", "按件计数", "西门子"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-007",
+      "title": "装箱清点稳定值锚点/取值口径/看全下修 + 容器虚拟步骤",
+      "symptom": "放盘前手伸入污染稳定计数；拿走一个仍按满数入账；整箱达标想当顺序步骤排",
+      "root_cause": "固定 4s 回看取最大，无锚点与下修机制；整箱达标是旁路特殊分支",
+      "fix": "stable_anchor_s 动作前N秒锚点 + stable_pick max/latest + slot_verified_drop 看全下修；custom_mix_container_virtual_step 注入顺序步骤流（打装箱标，不当规则B打断者）",
+      "files": ["backend/api/source_custom_mix.py", "backend/api/source_step_stats_mixin.py", "frontend/src/views/Project/CustomMixBoxTab.vue", "frontend/src/views/Project/StepsConfigTab.vue", "frontend/src/views/Monitor/CustomMixItemPanel.vue"],
+      "keywords": ["stable_anchor_s", "stable_pick", "slot_verified_drop", "虚拟步骤", "装箱清点", "custom_mix", "稳定值"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-008",
+      "title": "顺序型缺步提前发现 + 重复当场提示档",
+      "symptom": "缺步=挂起要等末步才暴露；重复步骤缺提示+拦截不入账档；违序提示曾清空箱账",
+      "root_cause": "缺步检查只在结算期；违序提示误走 _trigger_event 触发 end_cycle",
+      "fix": "ng_handling.missing_step_early 后继入周期即查前置进 _settle_hold(early)；violation=hint 提示+不入账；严格顺序提示改 fire_external_event_response",
+      "files": ["backend/api/source_settlement_mixin.py", "backend/api/source_event_trigger_mixin.py", "frontend/src/views/Project/LogicConfigTab.vue"],
+      "keywords": ["missing_step_early", "缺步提前", "重复提示", "hint", "违序", "挂起"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-009",
+      "title": "监控清零二选一（scope=all/cycle）+ 包装流联动",
+      "symptom": "只想丢当前周期重来却只能全清且检测中不可点；全清后包装面板挂旧工单",
+      "root_cause": "reset-stats 无粒度；包装协调器不感知清零",
+      "fix": "scope=cycle 走 reset_current_cycle 保留计数会话 + 包装 on_cycle_cleared 回退当前箱；scope=all 作废在途工单；前端对话框二选一，检测中可仅清本周期",
+      "files": ["backend/api/source_routes.py", "backend/api/source.py", "backend/services/packaging_flow_coordinator.py", "frontend/src/views/Monitor/index.vue", "frontend/src/views/Monitor/WorkstationColumn.vue", "frontend/src/views/Monitor/ChannelDashboard.vue", "frontend/src/api/detection.js"],
+      "keywords": ["清零", "reset-stats", "scope", "仅本周期", "包装工单作废"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-010",
+      "title": "检测模式「超时结算」独立配置卡",
+      "symptom": "detection 模式现场要超时结算无 UI 入口（后端已支持）",
+      "root_cause": "入口挂在仅顺序模式的结算方式卡里",
+      "fix": "LogicConfigTab 独立超时结算卡对 sequential/detection/custom+sequential 显示，默认 0 不启用",
+      "files": ["frontend/src/views/Project/LogicConfigTab.vue"],
+      "keywords": ["超时结算", "空闲超时", "周期硬上限", "detection"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-011",
+      "title": "Monitor 体验三项（Toast 降噪/混合面板多形态+开关/横幅字号）",
+      "symptom": "三工位 OK Toast 轰炸压顶栏；混合面板仅单工位；叠加横幅字号看不清",
+      "root_cause": "Toast 无工位过滤；面板未挂多形态；字号写死 text-sm",
+      "fix": "OK 只弹选中工位 NG 带工位N；WorkstationColumn/SingleChannelMonitor 挂混合面板 + mixPanel 显示开关；overlayBannerFontSize 默认14",
+      "files": ["frontend/src/views/Monitor/index.vue", "frontend/src/views/Monitor/WorkstationColumn.vue", "frontend/src/views/Monitor/SingleChannelMonitor.vue", "frontend/src/store/useSystemStore.js", "frontend/src/views/Settings/DisplaySettingsTab.vue", "frontend/src/views/Settings/DetectionBoxSettingsTab.vue"],
+      "keywords": ["Toast降噪", "mixPanel", "overlayBannerFontSize", "横幅字号"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-012",
+      "title": "Apple MPS 读写锁并发推理 + FP16 放开 + 多通道 half 同步",
+      "symptom": "三路推理被全局互斥串行每路 24→13fps；MPS 不能 FP16；改 use_half 只写 ch0",
+      "root_cause": "全局 RLock 粒度过粗，真实冲突是推理 vs empty_cache/加载释放",
+      "fix": "mps_infer_guard 读锁包 predict，mps_guard 写锁包 cache/加载释放（写者优先可重入）；use_half 放开 cuda|mps；set_stream_config 同步全通道；CUDA/CPU no-op",
+      "files": ["backend/core/torch_device.py", "backend/api/source_detect_runners_mixin.py", "backend/api/source_model_load_mixin.py", "backend/api/source_routes.py"],
+      "keywords": ["MPS", "读写锁", "mps_infer_guard", "FP16", "use_half", "并发推理"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "循环工装码致工件追溯多轮码组混排",
+      "symptom": "同一工装码序列号名下多轮码组的组件码在追溯详情混在一起",
+      "root_cause": "收尾码注册工件同序列号复用同一工件行，records 全挂同 workpiece_id",
+      "fix": "追溯 UI 按 group_id 分节显示（结算时间抬头+OK/NG标，最近一轮在前）",
+      "files": ["frontend/src/views/MES/WorkpiecePanel.vue"],
+      "keywords": ["工装码重复", "追溯混排", "group_id", "分节"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "包装等扫标签态重扫工单裸码误报警",
+      "symptom": "枪重发/双扫再扫工单码被当标签取量失败报警",
+      "root_cause": "等标签态未区分裸工单码与复合标签串",
+      "fix": "无复合分隔符裸码视为工单重扫静默忽略，复合串数量非法仍报警",
+      "files": ["backend/services/packaging_flow_coordinator.py"],
+      "keywords": ["包装", "箱标签", "工单重扫", "误报警"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "组合位置计数超时强制 NG 后旧件计数污染新件",
+      "symptom": "盖瓦超时 NG 后计数 5→9 乱序恶化",
+      "root_cause": "positional 引擎只在正常结算清池",
+      "fix": "_clear_step_runtime_state 同步 reset positional 引擎",
+      "files": ["backend/api/source_settlement_mixin.py", "tests/test_combo_table.py"],
+      "keywords": ["combo", "positional", "清池", "超时NG"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-004",
+      "title": "多工位 SOP 卡串项目 + 定格确认吃掉补做超时窗",
+      "symptom": "多工位异项目时 SOP 卡吃顶部项目 sequence 串步骤；定格确认后补做计时已耗尽",
+      "root_cause": "前端 fallback currentProject sequence；ack 不重置 hold since",
+      "fix": "results 下发本通道 sequence 身份字段，前端禁止 fallback；ack 后 _settle_hold since 重记",
+      "files": ["backend/api/source_routes.py", "frontend/src/views/Monitor/monitorModes.js", "frontend/src/views/Monitor/index.vue"],
+      "keywords": ["SOP串项目", "sequence_order", "定格确认", "补做计时"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-005",
+      "title": "工位 GPU 钉选不落盘重启弹回",
+      "symptom": "钉 mps 后激活项目/重启弹回 cpu",
+      "root_cause": "set_channel_gpu 只改内存不写 workstation_config",
+      "fix": "save_channel_source merge=True 落盘 gpu_device（守不变量17分段写）",
+      "files": ["backend/api/channel_manager.py"],
+      "keywords": ["GPU钉选", "gpu_device", "落盘", "弹回"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-006",
+      "title": "per_item 计数器读取对旧测试桩 AttributeError",
+      "symptom": "test_per_item_ok_no_false_ng_log 桩缺 _per_item_config 报错",
+      "root_cause": "v3.56 按件计数直取 self._per_item_config 无防御",
+      "fix": "getattr(self,'_per_item_config',None) or {} 防御取值",
+      "files": ["backend/api/source_per_item_mixin.py"],
+      "keywords": ["_per_item_config", "AttributeError", "防御取值"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "PLUGIN-001",
+      "title": "lg-worktime 1.5.3 主画面视频流冻帧自愈",
+      "symptom": "socket 半死 img 不触发 onError 画面停末帧最长 90s",
+      "root_cause": "img src=video_feed 无字节级活性检测",
+      "fix": "fetch multipart 流式→blob 喂帧 + lastFrameAt 3.5s 看门狗重连",
+      "files": ["plugins/lg-worktime/plugin.json", "plugins/lg-worktime/frontend/dist/index.esm.js"],
+      "keywords": ["lg-worktime", "冻帧", "看门狗", "blob", "video_feed"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-scan-collect", "api-sync", "modify-model", "debug-mes"],
+  "files_changed": ["backend/services/scan_collect.py", "backend/models/scan_collect_models.py", "backend/api/scan_collect.py", "backend/api/router_manifest.py", "backend/services/mes_hooks.py", "backend/api/channel_manager.py", "backend/api/source_routes.py", "backend/api/source.py", "backend/api/source_settlement_mixin.py", "backend/api/source_event_trigger_mixin.py", "backend/api/source_per_item_mixin.py", "backend/api/source_custom_mix.py", "backend/api/source_step_stats_mixin.py", "backend/api/source_detect_runners_mixin.py", "backend/api/source_model_load_mixin.py", "backend/api/source_project_config_apply.py", "backend/api/export_realtime.py", "backend/core/torch_device.py", "backend/services/export_realtime.py", "backend/services/export_context.py", "backend/services/export_field_registry.py", "backend/services/packaging_flow_coordinator.py", "backend/main.py", "alembic/env.py", "frontend/src/views/MES/ScannerPanel.vue", "frontend/src/views/MES/ScanCollectConfigCard.vue", "frontend/src/views/MES/WorkpiecePanel.vue", "frontend/src/views/Monitor/ScanSlotsPanel.vue", "frontend/src/views/Monitor/ScanSlotsDetail.vue", "frontend/src/views/Monitor/index.vue", "frontend/src/views/Monitor/WorkstationColumn.vue", "frontend/src/views/Monitor/SingleChannelMonitor.vue", "frontend/src/views/Monitor/ChannelDashboard.vue", "frontend/src/views/Monitor/CustomMixItemPanel.vue", "frontend/src/views/Monitor/monitorModes.js", "frontend/src/views/Monitor/layout/monitorLayout.js", "frontend/src/views/Monitor/composables/useChannelResults.js", "frontend/src/views/Project/index.vue", "frontend/src/views/Project/LogicConfigTab.vue", "frontend/src/views/Project/CustomMixBoxTab.vue", "frontend/src/views/Project/StepsConfigTab.vue", "frontend/src/views/Settings/DisplaySettingsTab.vue", "frontend/src/views/Settings/DetectionBoxSettingsTab.vue", "frontend/src/views/Data/RealtimeRulesDialog.vue", "frontend/src/store/useSystemStore.js", "frontend/src/api/detection.js", "frontend/src/api/scanCollect.js", "plugins/lg-worktime/plugin.json"]
+}

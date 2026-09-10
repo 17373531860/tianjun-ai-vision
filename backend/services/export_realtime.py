@@ -31,7 +31,8 @@ from backend.db.database import SessionLocal
 from backend.models.export_models import ExportRealtimeRule, ExportRunLog
 from backend.models.models import DetectionCycle
 from backend.services.export_context import (
-    build_cycle_context, build_range_context, build_system_context,
+    build_cycle_context, build_range_context, build_scan_group_context,
+    build_system_context,
 )
 from backend.services.export_renderer import (
     render_to_file, RenderResult,
@@ -215,6 +216,103 @@ def dispatch_session_end_export(db: Session,
 
         result = _execute_rule(db, rule, ctx, session_id=session_id)
         results.append({"rule_id": rule.id, "rule_name": rule.name, **result.to_dict()})
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+
+    return results
+
+
+# ============================================================
+# 主入口 — scan_group_end 事件 (v3.56 周期多码采集)
+# ============================================================
+
+def dispatch_scan_group_export(db: Session,
+                               channel_id: int,
+                               project_id: Optional[int],
+                               summary: Dict[str, Any],
+                               slots_cfg: Optional[List[Dict[str, Any]]] = None,
+                               license_payload: Optional[Dict[str, Any]] = None,
+                               ) -> List[Dict[str, Any]]:
+    """多码采集码组结算后调用：把分类码渲染成 txt 等文档落盘。
+
+    调用点：scan_collect.ScanCollectEngine._settle 末尾（隔离 try）。
+    上下文：build_scan_group_context —— scan_collect.* + project/channel/系统级。
+    """
+    results: List[Dict[str, Any]] = []
+    try:
+        rules = (
+            db.query(ExportRealtimeRule)
+            .filter(
+                ExportRealtimeRule.enabled == True,  # noqa: E712
+                ExportRealtimeRule.trigger_event == "scan_group_end",
+            )
+            .order_by(ExportRealtimeRule.id.asc())
+            .all()
+        )
+    except Exception as e:
+        print(f"[ExportRealtime] 查询 scan_group_end 规则失败: {e}", flush=True)
+        return results
+
+    if not rules:
+        return results
+    debug_center.dbg("backend.export", "实时规则触发 scan_group_end",
+                     f"group={summary.get('group_id')} channel={channel_id} "
+                     f"project={project_id} rules={len(rules)}")
+
+    # scan_collect 段 = 结算摘要 + 按槽位分组视图（模板既可按扫码顺序也可按类别遍历）
+    scan_section: Dict[str, Any] = dict(summary or {})
+    slots_view: List[Dict[str, Any]] = []
+    codes = scan_section.get("codes") or []
+    for s in (slots_cfg or []):
+        slot_codes = [c for c in codes if c.get("slot_key") == s.get("key")]
+        slots_view.append({
+            "key": s.get("key"), "label": s.get("label") or s.get("key"),
+            "role": s.get("role") or "",
+            "expected": int(s.get("count") or 1), "got": len(slot_codes),
+            "codes": slot_codes,
+        })
+    scan_section["slots"] = slots_view
+
+    ctx = None
+    ctx_err = None
+    for rule in rules:
+        if rule.channel_filter and channel_id not in rule.channel_filter:
+            _write_skip_log(db, rule,
+                            skip_reason=f"channel_filter:{channel_id}_not_in_list")
+            results.append({"rule_id": rule.id, "status": "skipped",
+                            "reason": "channel_filter"})
+            continue
+        if rule.project_filter and project_id is not None \
+                and project_id not in rule.project_filter:
+            _write_skip_log(db, rule,
+                            skip_reason=f"project_filter:{project_id}_not_in_list")
+            results.append({"rule_id": rule.id, "status": "skipped",
+                            "reason": "project_filter"})
+            continue
+
+        if ctx is None and ctx_err is None:
+            try:
+                ctx = build_scan_group_context(
+                    db, channel_id, project_id, scan_section,
+                    license_payload=license_payload)
+            except Exception as e:
+                ctx_err = f"{type(e).__name__}: {e}"
+                print(f"[ExportRealtime] build_scan_group_context 失败 "
+                      f"group={summary.get('group_id')}: {ctx_err}", flush=True)
+
+        if ctx is None:
+            _write_failure_log(db, rule,
+                               error_msg=f"context_build_failed: {ctx_err}")
+            results.append({"rule_id": rule.id, "status": "failed",
+                            "error": ctx_err})
+            continue
+
+        result = _execute_rule(db, rule, ctx)
+        results.append({"rule_id": rule.id, "rule_name": rule.name,
+                        **result.to_dict()})
 
     try:
         db.commit()

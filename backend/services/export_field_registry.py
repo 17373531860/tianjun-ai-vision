@@ -61,6 +61,7 @@ GROUP_COUNTERS = "counters"
 GROUP_COUNTERS_DAILY = "counters_daily"
 GROUP_MES = "mes"
 GROUP_SCANNER = "scanner"
+GROUP_SCAN_COLLECT = "scan_collect"   # v3.56 周期多码采集（码组）
 GROUP_STATS = "stats"
 GROUP_AGGREGATIONS = "aggregations"
 GROUP_TIME = "time"
@@ -88,6 +89,7 @@ GROUP_LABELS: Dict[str, str] = {
     GROUP_COUNTERS_DAILY: "计数器(当日增量)",
     GROUP_MES: "MES 上下文",
     GROUP_SCANNER: "扫码/外设",
+    GROUP_SCAN_COLLECT: "多码采集(码组)",
     GROUP_STATS: "Session 聚合统计",
     GROUP_AGGREGATIONS: "跨 Session 聚合",
     GROUP_TIME: "时间/日期",
@@ -100,7 +102,7 @@ GROUPS_DISPLAY_ORDER: List[str] = [
     GROUP_CHANNEL, GROUP_PROJECT,
     GROUP_SESSION, GROUP_CYCLE, GROUP_STEPS, GROUP_DEFECTS,
     GROUP_WORKPIECE, GROUP_WORK_ORDER, GROUP_OPERATOR,
-    GROUP_BOX, GROUP_SCANNER, GROUP_MES,
+    GROUP_BOX, GROUP_SCANNER, GROUP_SCAN_COLLECT, GROUP_MES,
     GROUP_LIVE, GROUP_LIVE_TRACKING, GROUP_COUNTERS, GROUP_COUNTERS_DAILY,
     GROUP_STATS, GROUP_AGGREGATIONS,
     GROUP_PLUGIN,
@@ -517,6 +519,42 @@ _GROUP_SCANNER_FIELDS: List[FieldDef] = [
 
 
 # ============================================================
+# scan_collect.*  （v3.56 周期多码采集 — 仅 scan_group_end 触发的实时规则可用）
+# ============================================================
+_GROUP_SCAN_COLLECT_FIELDS: List[FieldDef] = [
+    _f("scan_collect.workpiece_sn", "工件码(收尾码)", TYPE_STR, GROUP_SCAN_COLLECT,
+       "A123456789", "收尾码即工件身份；无收尾码时为 SC-组号", sources=["cycle"],
+       available_in=["realtime"]),
+    _f("scan_collect.result", "码组判定", TYPE_ENUM, GROUP_SCAN_COLLECT, "ok",
+       enum_values=["ok", "ng_missing", "ng_timeout"], sources=["cycle"],
+       available_in=["realtime"]),
+    _f("scan_collect.is_good", "是否合格", TYPE_BOOL, GROUP_SCAN_COLLECT, "true",
+       sources=["cycle"], available_in=["realtime"]),
+    _f("scan_collect.reason", "判定说明", TYPE_STR, GROUP_SCAN_COLLECT,
+       "多码采集完成，共 9 码", sources=["cycle"], available_in=["realtime"]),
+    _f("scan_collect.total", "码总数", TYPE_INT, GROUP_SCAN_COLLECT, "9",
+       sources=["cycle"], available_in=["realtime"]),
+    _f("scan_collect.settled_at", "结算时间", TYPE_STR, GROUP_SCAN_COLLECT,
+       "15:48:45", sources=["cycle"], available_in=["realtime"]),
+    _f("scan_collect.channel_id", "工位号", TYPE_INT, GROUP_SCAN_COLLECT, "0",
+       sources=["cycle"], available_in=["realtime"]),
+    _f("scan_collect.codes", "已扫码数组(按扫码顺序)", TYPE_LIST, GROUP_SCAN_COLLECT,
+       "[{slot_label:'芯子码', code:'C001', seq:3, ts:'15:47:01'}]",
+       "每项含 slot_key/slot_label/code/seq/ts",
+       "{% for c in scan_collect.codes %}{{ c.slot_label }}: {{ c.code }}\n{% endfor %}",
+       sources=["cycle"], available_in=["realtime"]),
+    _f("scan_collect.slots", "槽位分组数组(按类别)", TYPE_LIST, GROUP_SCAN_COLLECT,
+       "[{label:'芯子码', expected:6, got:6, codes:[...]}]",
+       "每项含 key/label/role/expected/got/codes",
+       "{% for s in scan_collect.slots %}{{ s.label }} {{ s.got }}/{{ s.expected }}\n{% endfor %}",
+       sources=["cycle"], available_in=["realtime"]),
+    _f("scan_collect.missing", "缺扫明细数组", TYPE_LIST, GROUP_SCAN_COLLECT,
+       "[{label:'芯子码', expected:6, got:5}]", "NG(少扫) 时非空",
+       sources=["cycle"], available_in=["realtime"]),
+]
+
+
+# ============================================================
 # live.* （仅实时场景；批量场景用上一周期值兜底）
 # ============================================================
 _GROUP_LIVE_FIELDS: List[FieldDef] = [
@@ -795,6 +833,7 @@ ALL_FIELDS: List[FieldDef] = (
     + _GROUP_DEFECTS_FIELDS
     + _GROUP_BOX_FIELDS
     + _GROUP_SCANNER_FIELDS
+    + _GROUP_SCAN_COLLECT_FIELDS
     + _GROUP_LIVE_FIELDS
     + _GROUP_LIVE_TRACKING_FIELDS
     + _GROUP_COUNTERS_FIELDS

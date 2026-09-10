@@ -4,8 +4,12 @@
     <!-- Tab 切换: 基本管理 / WMax 高级（仅检测到 WMax 设备时显示） -->
     <el-tabs v-model="activeTab" class="scanner-tabs mb-4">
       <el-tab-pane label="设备管理" name="basic" />
+      <el-tab-pane label="多码采集" name="collect" />
       <el-tab-pane v-if="hasWmaxDevice" label="WMax 高级控制" name="wmax" />
     </el-tabs>
+
+    <!-- v3.56 周期多码采集配置 (规则按项目存, 与设备级配置分层) -->
+    <ScanCollectConfigCard v-if="activeTab === 'collect'" />
 
     <!-- WMax 高级面板 -->
     <WMaxPanel v-if="activeTab === 'wmax' && hasWmaxDevice" :wmax-ip="firstWmaxIp" :wmax-port="firstWmaxPort" />
@@ -660,6 +664,7 @@ import {
   connectWMaxDevice
 } from '@/api/wmax'
 import WMaxPanel from './WMaxPanel.vue'
+import ScanCollectConfigCard from './ScanCollectConfigCard.vue'
 import UsbScanGunDialog from './UsbScanGunDialog.vue'
 import { pullOrders } from '@/api/gateway'
 import { routeCode, setScanTestCapture } from '@/composables/useScanGun'

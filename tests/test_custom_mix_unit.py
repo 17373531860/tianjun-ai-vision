@@ -673,7 +673,8 @@ def test_build_per_item_machine():
     assert m.item_labels == frozenset({"打滑块", "滑块", "打螺丝"})
     step = m._engine.steps[0]
     assert step.item_label == ("滑块",)
-    assert step.action_label == "打螺丝"
+    # v3.56+: action_label 与 item_label 同为 tuple (多标签 OR), 序列化时单标签还原 str
+    assert step.action_label == ("打螺丝",)
     assert (step.expected_count, step.sustain_frames, step.coverage_use_center) == (3, 2, True)
 
 
@@ -2259,3 +2260,194 @@ def test_dedup_norm_item_custom_threshold_effective():
     acc = _acc_norm(item_dedup_iou=0.9)
     acc.update([_tray(0.0)], dup_items, 0.0)
     assert acc._cur_counts.get("滑块") == 2  # 阈值 0.9 > 实际 IoU, 不判重
+
+
+# ============ v3.49 取值锚点 + 取值口径 + 看全下修 ============
+
+def _lookback_acc(**kw):
+    """稳定计数 + 动作快照记账的累加器 (锚点/口径/看全下修测试用)."""
+    kw.setdefault("stable_min_frames", 3)
+    return _ContainerAccumulator(
+        "托盘", {"滑块": 24}, box_count=0, gone_frames=30,
+        count_mode="items_total", item_target=96,
+        confirm_by_frames=True, confirm_by_action=True, action_label="放托盘",
+        confirm_combine="and", action_min_frames=2, action_gone_frames=3,
+        action_cooldown_s=1.0, **kw)
+
+
+def _pulse(acc, t, n_during=8, dt=0.1):
+    """动作脉冲: 成立 2 帧 + 结束 3 帧 → 触发快照记账. 返回结束时刻."""
+    tray = _tray(0.0)
+    for _ in range(2):
+        acc.update([tray], _tray_items(n_during, 0.0, 0.45), t,
+                   action_present=True); t += dt
+    for _ in range(3):
+        acc.update([tray], _tray_items(n_during, 0.0, 0.45), t,
+                   action_present=False); t += dt
+    return t
+
+
+def test_stable_anchor_zero_means_zero():
+    """0 就是 0 (锚点=动作瞬间), 没有任何'0 当 4 秒'的暗改; 负数钳到 0."""
+    assert _lookback_acc().stable_anchor_s == 0.0
+    assert _lookback_acc(stable_anchor_s=0).stable_anchor_s == 0.0
+    assert _lookback_acc(stable_anchor_s=1.5).stable_anchor_s == 1.5
+    assert _lookback_acc(stable_anchor_s=-3).stable_anchor_s == 0.0
+
+
+def test_stable_anchor_skips_contaminated_zone():
+    """锚点核心场景: 放盘前 1.5s 手已悬进画面稳定只露 2 个 (污染区)。
+    锚点=2s + 取最近 → 跳过污染区, 取锚点前的 24 入账;
+    对照锚点=0 + 取最近 → 如实取最近的 2 (污染区没被跳过)."""
+    def feed(acc):
+        tray = _tray(0.0)
+        t = 100.0
+        for _ in range(6):                      # 看全 24
+            acc.update([tray], _tray_items(24, 0.0, 0.45), t); t += 0.1
+        for _ in range(15):                     # 伸手悬停: 稳定只露 2 (1.5s)
+            acc.update([tray], _tray_items(2, 0.0, 0.45), t); t += 0.1
+        return _pulse(acc, t)
+
+    acc_anchor = _lookback_acc(stable_anchor_s=2.0, stable_pick="latest")
+    feed(acc_anchor)
+    assert acc_anchor._done == [{"滑块": 24}], acc_anchor._done
+
+    acc_zero = _lookback_acc(stable_pick="latest")
+    feed(acc_zero)
+    assert acc_zero._done == [{"滑块": 2}], acc_zero._done
+
+
+def test_stable_anchor_backtrack_unlimited():
+    """锚点前往回不设限: 稳定记录 8 秒前才有一条 (之后计数一直乱跳凑不出
+    稳定窗口), 照样取到它入账, 不退峰值."""
+    acc = _lookback_acc(stable_pick="latest")
+    tray = _tray(0.0)
+    t = 100.0
+    for _ in range(6):                          # 稳定 23 (唯一的稳定段)
+        acc.update([tray], _tray_items(23, 0.0, 0.45), t); t += 0.1
+    for i in range(80):                         # 8 秒乱跳: 波动>2 凑不出稳定
+        n = 5 if i % 2 == 0 else 20
+        acc.update([tray], _tray_items(n, 0.0, 0.45), t); t += 0.1
+    _pulse(acc, t)
+    assert acc._done == [{"滑块": 23}], acc._done
+
+
+def test_stable_anchor_before_any_record_falls_back_to_peak():
+    """锚点前一条稳定记录都没有 (动作来得太早) → 该标签无稳定值,
+    记账退回峰值口径 (绝不漏账)."""
+    acc = _lookback_acc(stable_anchor_s=30.0)   # 锚点拨到账期开始之前
+    tray = _tray(0.0)
+    t = 100.0
+    for _ in range(6):
+        acc.update([tray], _tray_items(22, 0.0, 0.45), t); t += 0.1
+    _pulse(acc, t)
+    assert acc._done == [{"滑块": 22}], acc._done   # 峰值 22 兜底
+
+
+def _drop_acc(**kw):
+    """槽位门 + 稳定计数 + 动作快照的累加器 (看全下修测试用)."""
+    kw.setdefault("stable_min_frames", 3)
+    return _ContainerAccumulator(
+        "托盘", {"滑块": 24}, box_count=0, gone_frames=30,
+        count_mode="items_total", item_target=96,
+        confirm_by_frames=True, confirm_by_action=True, action_label="放托盘",
+        confirm_combine="and", action_min_frames=2, action_gone_frames=3,
+        action_cooldown_s=1.0,
+        slot_check_label="凹槽", slot_total=24, **kw)
+
+
+def test_slot_verified_drop_requires_slot_gate():
+    """没配槽位门时看全下修强制不生效 (无从区分遮挡与拿走)."""
+    acc = _lookback_acc(slot_verified_drop=True)
+    assert acc.slot_verified_drop is False
+    assert _drop_acc(slot_verified_drop=True).slot_verified_drop is True
+
+
+def test_slot_verified_drop_books_reduced_count():
+    """现场坑: 装满 24 后工人拿走 1 个随即放盘 — 看全帧 (23 货+1 空槽=24)
+    确认真拿走 → 稳定值下修, 入账 23; 对照关着 (默认) 仍取最大记 24."""
+    def feed(acc):
+        tray = _tray(0.0)
+        t = 100.0
+        for _ in range(6):                      # 看全 24 货+0 空
+            acc.update([tray], _tray_items(24, 0.0, 0.45), t,
+                       empty_slot_objs=[]); t += 0.1
+        for _ in range(6):                      # 拿走 1 个: 看全 23 货+1 空槽
+            acc.update([tray], _tray_items(23, 0.0, 0.40), t,
+                       empty_slot_objs=_slots(1, 0.42, 0.45)); t += 0.1
+        return _pulse(acc, t)
+
+    acc_on = _drop_acc(slot_verified_drop=True)
+    feed(acc_on)
+    assert acc_on._done == [{"滑块": 23}], acc_on._done
+
+    acc_off = _drop_acc()
+    feed(acc_off)
+    assert acc_off._done == [{"滑块": 24}], acc_off._done
+
+
+def test_stable_pick_default_and_normalize():
+    """缺省/乱填 = max (老口径零差异); 显式 latest 才切最近口径."""
+    assert _lookback_acc().stable_pick == "max"
+    assert _lookback_acc(stable_pick="whatever").stable_pick == "max"
+    assert _lookback_acc(stable_pick="latest").stable_pick == "latest"
+    assert _lookback_acc(stable_pick=" LATEST ").stable_pick == "latest"
+
+
+def test_stable_pick_latest_follows_removal():
+    """取最近口径: 拿走 1 个后新稳定段 23 是最近记录 → 入账 23 (不需槽位门);
+    对照 max 口径同样喂帧取最大仍记 24."""
+    def feed(acc):
+        tray = _tray(0.0)
+        t = 100.0
+        for _ in range(6):                      # 稳定 24
+            acc.update([tray], _tray_items(24, 0.0, 0.45), t); t += 0.1
+        for _ in range(15):                     # 拿走 1 个: 稳定 23 共 1.5s
+            acc.update([tray], _tray_items(23, 0.0, 0.45), t); t += 0.1
+        return _pulse(acc, t)
+
+    acc_latest = _lookback_acc(stable_pick="latest")
+    feed(acc_latest)
+    assert acc_latest._done == [{"滑块": 23}], acc_latest._done
+
+    acc_max = _lookback_acc()
+    feed(acc_max)
+    assert acc_max._done == [{"滑块": 24}], acc_max._done
+
+
+def test_stable_pick_latest_hover_dip_tradeoff():
+    """取最近口径的已知代价 (7-27 现场反例): 放盘前手悬停稳定只露 2 个 →
+    最近一条稳定记录是 2, 入账 2; max 口径同场景仍记 24。这是口径选择的
+    trade-off, 锁进测试防止误当 bug '修掉'."""
+    def feed(acc):
+        tray = _tray(0.0)
+        t = 100.0
+        for _ in range(6):                      # 看全 24
+            acc.update([tray], _tray_items(24, 0.0, 0.45), t); t += 0.1
+        for _ in range(8):                      # 手悬停: 稳定只露 2 个
+            acc.update([tray], _tray_items(2, 0.0, 0.45), t); t += 0.1
+        return _pulse(acc, t)
+
+    acc_latest = _lookback_acc(stable_pick="latest")
+    feed(acc_latest)
+    assert acc_latest._done == [{"滑块": 2}], acc_latest._done
+
+    acc_max = _lookback_acc()
+    feed(acc_max)
+    assert acc_max._done == [{"滑块": 24}], acc_max._done
+
+
+def test_slot_verified_drop_occlusion_immune():
+    """开着看全下修, 遮挡骤降 (23 货+0 空槽 ≠ 24 = 没看全) 进不了稳定窗口,
+    不触发下修 — 入账仍是 24."""
+    acc = _drop_acc(slot_verified_drop=True)
+    tray = _tray(0.0)
+    t = 100.0
+    for _ in range(6):                          # 看全 24
+        acc.update([tray], _tray_items(24, 0.0, 0.45), t,
+                   empty_slot_objs=[]); t += 0.1
+    for _ in range(6):                          # 手挡一格: 23+0 ≠ 24 被门拦
+        acc.update([tray], _tray_items(23, 0.0, 0.40), t,
+                   empty_slot_objs=[]); t += 0.1
+    _pulse(acc, t)
+    assert acc._done == [{"滑块": 24}], acc._done

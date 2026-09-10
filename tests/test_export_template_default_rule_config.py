@@ -51,11 +51,33 @@ def test_scanner_bypass_preset_carries_default_rule_config(db_session):
     assert cfg["dedupe_retry_interval_ms"] == 100
 
 
+# 带推荐 rule 配置的预设白名单: 扫码器旁路 (v3.7.2) + 多码采集 txt (v3.56)
+_PRESETS_WITH_DRC = {
+    "builtin_scanner_bypass_3line_txt",
+    "builtin_scan_group_txt",
+}
+
+
+def test_scan_group_preset_carries_default_rule_config(db_session):
+    """v3.56 多码采集 txt 预设: scan_group_end 触发 + 工件码+时间命名 + Excel 兼容编码"""
+    seed_builtin_templates()
+    tpl = db_session.query(ExportTemplate).filter(
+        ExportTemplate.builtin_id == "builtin_scan_group_txt"
+    ).first()
+    assert tpl is not None
+    cfg = tpl.default_rule_config
+    assert isinstance(cfg, dict)
+    assert cfg["trigger_event"] == "scan_group_end"
+    assert cfg["encoding"] == "utf-8-sig"      # Excel 打开不乱码 (确认单 6.6/6.7)
+    assert cfg["newline"] == "crlf"
+    assert "scan_collect.workpiece_sn" in cfg["filename_template"]  # 工件码+时间 (确认单 6.3)
+
+
 def test_other_presets_have_no_default_rule_config(db_session):
-    """其他预设 (非扫码器旁路场景) 不带 default_rule_config — 避免误用"""
+    """其他预设 (白名单外) 不带 default_rule_config — 避免误用"""
     seed_builtin_templates()
     for tpl_spec in _BUILTIN_TEMPLATES:
-        if tpl_spec["builtin_id"] == "builtin_scanner_bypass_3line_txt":
+        if tpl_spec["builtin_id"] in _PRESETS_WITH_DRC:
             continue
         tpl = db_session.query(ExportTemplate).filter(
             ExportTemplate.builtin_id == tpl_spec["builtin_id"]

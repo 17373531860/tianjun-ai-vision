@@ -34,17 +34,25 @@ _update_step_stats 入口检查 logic_mode == 'per_item' → 进入本 mixin
         item_timeout_seconds: 3.0,             # 个体超时清理时间 (Q4)
         lock_count_on_start: true,             # 周期开始时锁定个体数 (Q5)
         finish_label: "翻面",                  # 收尾标签 (出现即结算)
+        # ── v3.56+ 新增 (默认全关/空 = 老项目零差异) ──
+        absorb_new_items_sec: 0,               # >0: 周期开始后 N 秒内 auto 步骤无上限吸收新个体
+                                               #     (治"工人逐个放件, 稳定窗口先锁了前几件")
+        item_count_counter_name: "",           # 非空: 周期判 OK 时把本周期件数累加进该计数器
+        remediation_event_notify: false,       # true: 进待补态借事件完整响应面 (Toast/语音/灯)
     }
 
 步骤级 steps_config[i] (per_item 步骤新增字段):
     per_item: {
-        item_label: "螺丝",                    # 个体识别标签
-        action_label: "打螺丝",                # 工序覆盖标签
+        item_label: "螺丝",                    # 个体识别标签 (str 或 [str,...] OR 合并)
+        action_label: "打螺丝",                # 工序覆盖标签 (str 或 [str,...] OR 合并, v3.56+)
         item_tracking_iou: 0.3,                # 个体跨帧 IoU 阈值
         coverage_iou: 0.3,                     # 工序与个体的覆盖 IoU 阈值
         sustain_frames: 5,                     # 持续 N 帧重叠才算覆盖
         completion: "all_covered",             # 完成判定 (本版仅实现 all_covered)
         min_item_count: "auto",                # 最低个体数 ("auto" 或固定数字)
+        # ── v3.56+ 单件超时未覆盖警告 (默认 0=关) ──
+        warn_uncovered_after_sec: 0,           # >0: 个体出现 N 秒仍未被覆盖 → 报一次警
+        warn_event_id: 0,                      # 警告借哪个事件的响应面 (Toast/语音/灯, 不结周期)
     }
 
 ==================== 兼容性 ====================
@@ -151,6 +159,9 @@ class _PerItemItemState:
         'item_id', 'bbox', 'last_seen_frame', 'last_seen_time',
         'covered', 'consecutive_overlap_frames', 'first_covered_at',
         'associated', 'last_aligned_frame',
+        # ── 单件超时未覆盖警告 (v3.56+, warn_uncovered_after_sec>0 时才用到) ──
+        'first_seen_time',             # 个体首次进入个体表的时刻 (超时警告计时起点)
+        'warn_fired',                  # 本周期是否已对该件报过"超时未覆盖"警告 (防重)
         # ── 重复打同一颗螺丝防护 (covered 之后才用到, 默认全零 = 老行为) ──
         'released_after_cover',        # covered 后是否已有“目标重现/明确打到其他 ID”的抬枪正证据
         'post_cover_away_frames',      # covered 后抬枪正证据的连续帧数
@@ -178,6 +189,8 @@ class _PerItemItemState:
         self.redup_overlap_frames = 0
         self.redup_warned = False
         self.redup_count = 0
+        self.first_seen_time = ts
+        self.warn_fired = False
 
     def to_dict(self):
         return {
@@ -187,6 +200,7 @@ class _PerItemItemState:
             'covered_at': self.first_covered_at,
             'associated': self.associated,
             'dup': self.redup_count,               # >0 表示本周期被重复打过 (前端可高亮)
+            'warned': self.warn_fired,             # 超时未覆盖警告已发 (前端可高亮)
         }
 
 
@@ -202,6 +216,9 @@ class _PerItemStep:
         'expected_count',                  # v3.9+: 已知固定个体数 (0=未配置, 走 auto 路径)
         'items', 'next_item_id', 'locked_count', 'completed',
         'completed_count_in_session',
+        # ── 单件超时未覆盖警告 (v3.56+, 默认 0=关): 个体出现 N 秒仍未被本步骤动作
+        #    覆盖 → 借 warn_event_id 事件的响应面报一次警 (不结周期不落账, 覆盖后自然恢复) ──
+        'warn_uncovered_after_sec', 'warn_event_id',
     )
 
     def __init__(self, raw_step: dict):
@@ -220,7 +237,15 @@ class _PerItemStep:
             self.item_label = (raw_item_label,)
         else:
             self.item_label = tuple()
-        self.action_label = per.get('action_label', '')
+        # v3.56+: action_label 与 item_label 对称支持数组 OR
+        # (典型: 一行配对 产品1..5 ⟶ 工装1..5上打螺钉, 位置配对由 IoU/中心点判定天然完成)
+        raw_action_label = per.get('action_label', '')
+        if isinstance(raw_action_label, (list, tuple)):
+            self.action_label: tuple = tuple(s for s in raw_action_label if isinstance(s, str) and s)
+        elif isinstance(raw_action_label, str) and raw_action_label:
+            self.action_label = (raw_action_label,)
+        else:
+            self.action_label = tuple()
 
         # ── 阈值与帧数 ──
         self.item_tracking_iou = float(per.get('item_tracking_iou', 0.3))
@@ -233,6 +258,17 @@ class _PerItemStep:
 
         self.completion = per.get('completion', 'all_covered')
         self.min_item_count = per.get('min_item_count', 'auto')
+
+        # ── 单件超时未覆盖警告 (v3.56+, 默认 0=关 → 老项目零差异) ──
+        # 典型: 端子应随产品同时在位, 产品出现 N 秒仍无端子 → 立即报警提示缺件.
+        try:
+            self.warn_uncovered_after_sec = max(0.0, float(per.get('warn_uncovered_after_sec', 0) or 0))
+        except (TypeError, ValueError):
+            self.warn_uncovered_after_sec = 0.0
+        try:
+            self.warn_event_id = max(0, int(per.get('warn_event_id', 0) or 0))
+        except (TypeError, ValueError):
+            self.warn_event_id = 0
 
         # ── 固定数量模式 (v3.9+) ──
         # 配了 expected_count > 0 时:
@@ -519,9 +555,10 @@ class _PerItemStep:
             'step_id': self.step_id,
             'label': self.step_label,
             'display_label': self.display_label,
-            # item_label 内部是 tuple, 序列化时若仅 1 个还原为字符串 (兼容老前端)
+            # item_label / action_label 内部是 tuple, 序列化时若仅 1 个还原为字符串 (兼容老前端)
             'item_label': self.item_label[0] if len(self.item_label) == 1 else list(self.item_label),
-            'action_label': self.action_label,
+            'action_label': self.action_label[0] if len(self.action_label) == 1 else list(self.action_label),
+            'warn_uncovered_after_sec': self.warn_uncovered_after_sec,
             'expected_count': self.expected_count,
             'total': len(self.items),                  # 真实锁定数
             'display_total': display_total,            # 前端展示用分母 (期望优先)
@@ -774,6 +811,19 @@ class PerItemMixin:
         #   离场判定模式 (judge_on_workpiece_leave) 自带离场结算, 不走此兜底.
         workpiece_absent_settle_frames = int(per_item_cfg.get('workpiece_absent_settle_frames', 0) or 0)
 
+        # ── v3.56+ 三个新键 (默认全关/空 = 老项目零差异) ──
+        # absorb_new_items_sec > 0: 周期开始后 N 秒窗口内, expected_count=0 (auto) 的步骤也
+        #   无上限吸收"新位置"的个体 —— 治"工人逐个放件, 稳定窗口先锁了前几件"的场景
+        #   (老 lock_lookahead 只对配了 expected_count 的步骤生效且有封顶, 语义保持不变).
+        absorb_new_items_sec = float(per_item_cfg.get('absorb_new_items_sec', 0) or 0)
+        # item_count_counter_name 非空: 周期判 OK 落账时, 把首个 per_item 步骤本周期
+        #   已覆盖件数累加进该名字的计数器 (计数器需在 counters_config 里定义).
+        #   给"按件计产量"场景用 (一周期 N 件, 客户要累计件数而非周期数).
+        item_count_counter_name = str(per_item_cfg.get('item_count_counter_name', '') or '')
+        # remediation_event_notify=True: 进待补态时借 remediation_event_id 事件的完整响应面
+        #   (灯 + Toast + 语音, remind_only 不计数不定格), 替代"只点灯"的老行为.
+        remediation_event_notify = bool(per_item_cfg.get('remediation_event_notify', False))
+
         self._per_item_config = {
             'stability_window_frames': max(1, stability_window),
             'stability_iou_threshold': stability_iou,
@@ -813,6 +863,9 @@ class PerItemMixin:
             'duplicate_alarm_interval_sec': max(0.0, duplicate_alarm_interval_sec),
             'duplicate_warning_display_sec': max(0.0, duplicate_warning_display_sec),
             'workpiece_absent_settle_frames': max(0, workpiece_absent_settle_frames),
+            'absorb_new_items_sec': max(0.0, absorb_new_items_sec),
+            'item_count_counter_name': item_count_counter_name,
+            'remediation_event_notify': remediation_event_notify,
         }
 
         # ── 步骤级解析 ──
@@ -963,8 +1016,20 @@ class PerItemMixin:
                     and len(step.items) < step.expected_count
                 ):
                     self._per_item_absorb_new_items(step, item_boxes, sess.frame_id, current_time)
-            # 3b. 应用工序覆盖 (按 action_label)
-            action_boxes = boxes_by_label.get(step.action_label, [])
+                # 3a''. 自由吸收窗口 (v3.56+, absorb_new_items_sec>0 才启用):
+                # auto 步骤 (expected_count=0) 在周期开始后 N 秒内无上限吸收新位置个体,
+                # 治"工人逐个放件, 稳定窗口先锁了前几件"的场景.
+                absorb_sec = cfg.get('absorb_new_items_sec', 0)
+                if (
+                    absorb_sec > 0
+                    and step.expected_count <= 0
+                    and sess.cycle_start_time is not None
+                    and (current_time - sess.cycle_start_time) <= absorb_sec
+                ):
+                    self._per_item_absorb_new_items(
+                        step, item_boxes, sess.frame_id, current_time, unbounded=True)
+            # 3b. 应用工序覆盖 (按 action_label, 多标签 OR 合并)
+            action_boxes = self._collect_item_boxes(boxes_by_label, step.action_label)
             if action_boxes:
                 any_action_this_frame = True
             _dup_on = cfg.get('duplicate_screw_alarm', False)
@@ -998,6 +1063,28 @@ class PerItemMixin:
                     f"[per_item] 步骤 [{step.display_label}] 完成 "
                     f"({step.covered_count()}/{len(step.items)})"
                 )
+            # 3e. 单件超时未覆盖警告 (v3.56+, 行级 warn_uncovered_after_sec>0 才启用):
+            # 个体出现 N 秒仍未被本步骤动作覆盖 → 借 warn_event_id 事件报一次警
+            # (不结周期不落账, 每件每周期只报一次; 覆盖为单调翻转, 补上后面板自然恢复绿).
+            if step.warn_uncovered_after_sec > 0 and step.warn_event_id > 0:
+                for _iid, _ist in step.items.items():
+                    if _ist.covered or _ist.warn_fired:
+                        continue
+                    if (current_time - _ist.first_seen_time) >= step.warn_uncovered_after_sec:
+                        _ist.warn_fired = True
+                        _reason = (
+                            f"[{step.display_label}] #{_iid} 超过 "
+                            f"{step.warn_uncovered_after_sec:g} 秒未完成"
+                        )
+                        print(f"[per_item] 单件超时警告: {_reason}")
+                        if debug_center.is_on("backend.per_item"):
+                            debug_center.dbg("backend.per_item", "单件超时警告",
+                                             f"channel={self.channel_id} {_reason}")
+                        try:
+                            self.fire_external_event_response(
+                                step.warn_event_id, _reason, source='per_item_warn')
+                        except Exception as _we:
+                            print(f"[per_item] 单件超时警告事件触发失败: {_we}")
 
         # 刷新 last_activity_time (本帧出现 action 标签 = 工人在做工序 = 有活动)
         # 注意: 只看 action, 不看 item — 工件静置画面里有 item 标签不算"活动",
@@ -1303,7 +1390,8 @@ class PerItemMixin:
 
     # ──── 周期内补锁定 (v3.9+) ────
     @staticmethod
-    def _per_item_absorb_new_items(step, item_boxes, frame_id: int, ts: float):
+    def _per_item_absorb_new_items(step, item_boxes, frame_id: int, ts: float,
+                                   unbounded: bool = False):
         """周期开始后 lookahead 窗口内, 用本帧 item_boxes 补充被遮挡漏锁的个体.
 
         策略: 本帧每个 box 与现有所有 items 计算 IoU, 都低于 item_tracking_iou
@@ -1313,10 +1401,16 @@ class PerItemMixin:
           - 已 covered 的个体永远不会被替换 (单调性, 见不变量 §一.1)
           - 不影响已锁定的 N 个个体, 仅追加缺失的
           - 一旦达到 expected_count 立即停止补锁
+
+        unbounded=True (v3.56+, absorb_new_items_sec 自由吸收窗专用):
+          不看 expected_count、无数量封顶 — auto 步骤在窗口内照单全收新位置.
         """
-        if step.expected_count <= 0:
-            return
-        room = step.expected_count - len(step.items)
+        if unbounded:
+            room = len(item_boxes)
+        else:
+            if step.expected_count <= 0:
+                return
+            room = step.expected_count - len(step.items)
         if room <= 0:
             return
         added = 0
@@ -1339,7 +1433,7 @@ class PerItemMixin:
             step.locked_count = len(step.items)
             print(
                 f"[per_item] 步骤 [{step.step_label}] 补锁定 +{added} → "
-                f"{len(step.items)}/{step.expected_count}"
+                f"{len(step.items)}/{step.expected_count if step.expected_count > 0 else 'auto'}"
             )
 
     # ──── 位置稳定性辅助 ────
@@ -1517,6 +1611,10 @@ class PerItemMixin:
 
         cycle_duration = current_time - (sess.cycle_start_time or current_time)
         ok, reason, ng_details = self._per_item_compute_result()
+        # 按件计数要在 reset 前取数 (首个 per_item 步骤本周期已覆盖件数)
+        settled_item_count = (
+            self._per_item_steps[0].covered_count() if self._per_item_steps else 0
+        )
 
         if ok:
             print(f"[per_item] 周期结算 OK: 步骤数={len(self._per_item_steps)}, 耗时{cycle_duration:.2f}s")
@@ -1526,6 +1624,22 @@ class PerItemMixin:
                 self._trigger_event(1, '逐件覆盖全部完成')
             except Exception as _e:
                 print(f"[per_item] _trigger_event(1) 失败: {_e}")
+            # v3.56+ 按件累计计数 (item_count_counter_name 非空才启用):
+            # 周期判 OK 落账时把本周期件数累加进指定计数器 — 一周期 N 件的现场
+            # 用它拿"累计件数"口径 (标准事件计数器只能按周期 +1).
+            _cname = (getattr(self, '_per_item_config', None) or {}).get('item_count_counter_name') or ''
+            if _cname and settled_item_count > 0:
+                try:
+                    if _cname in self.counters:
+                        self.counters[_cname] += settled_item_count
+                        print(f"[per_item] 按件计数: {_cname} += {settled_item_count} => {self.counters[_cname]}")
+                        from backend.services.counter_daily import record_for_host
+                        record_for_host(self, _cname, settled_item_count)
+                        self._persist_counters()
+                    else:
+                        print(f"[per_item] 按件计数跳过: 计数器 '{_cname}' 未在 counters_config 定义")
+                except Exception as _ce:
+                    print(f"[per_item] 按件计数失败: {_ce}")
             # PLC 完成脉冲 (触发模式 B: cycle_ok) —— 只有判 OK 落账才发,
             # NG / 超时强制结算一律不发。所有 OK 结算路径都汇到这里, 一处挂接即全覆盖。
             self._per_item_notify_plc_pulse('cycle_ok')
@@ -1591,6 +1705,17 @@ class PerItemMixin:
         eid = int(cfg.get('remediation_event_id', 0) or 0)
         if eid <= 0:
             eid = 2
+        # v3.56+ remediation_event_notify=True: 借事件完整响应面 (灯 + Toast + 语音,
+        # remind_only=True 不计数不定格不结周期). 默认 False = 老行为只点灯, 零差异.
+        if cfg.get('remediation_event_notify', False):
+            nd = getattr(self, '_per_item_last_ng_detail', None) or {}
+            reason = nd.get('reason_summary') or '离场判定存在漏件, 请放回补做'
+            try:
+                self.fire_external_event_response(
+                    eid, reason, source='per_item_remediation', remind_only=True)
+                return
+            except Exception as e:
+                print(f"[per_item] 待补报警事件响应面触发失败, 回退只点灯: {e}")
         try:
             from backend.api.alarm import alarm_router
             alarm_router.trigger_alarm(f'event{eid}', channel_id=self.channel_id)
@@ -1979,6 +2104,10 @@ class PerItemMixin:
                 'duplicate_warning_display_sec': cfg.get('duplicate_warning_display_sec', 3.0),
                 # 换板兜底结算 (工件整体消失确认)
                 'workpiece_absent_settle_frames': cfg.get('workpiece_absent_settle_frames', 0),
+                # v3.56+ 自由吸收窗 / 按件计数 / 待补事件通知
+                'absorb_new_items_sec': cfg.get('absorb_new_items_sec', 0.0),
+                'item_count_counter_name': cfg.get('item_count_counter_name', ''),
+                'remediation_event_notify': cfg.get('remediation_event_notify', False),
             },
             'steps': steps_state,
             'last_ng_detail': getattr(self, '_per_item_last_ng_detail', None),

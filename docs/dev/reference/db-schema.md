@@ -1,11 +1,11 @@
 # 数据库表参考
 
 > **类型**：reference（生成物勿手改）
-> **生成命令**：`python scripts/docgen/gen_db_schema.py`（生成日 2026-08-20）
+> **生成命令**：`python scripts/docgen/gen_db_schema.py`（生成日 2026-09-01）
 > **单一事实源**：SQLAlchemy ORM（Base.metadata）。字段含义看模型源文件行内注释；
 > 迁移历史看 backend/db/migrations/ 与 backend/main.py 的 migrate_database。
 
-共 **54** 张表。
+共 **56** 张表。
 
 ## 表索引
 
@@ -45,6 +45,8 @@
 | [`plugins`](#plugins) | `PluginRecord` | `backend/models/plugin_models.py` |
 | [`projects`](#projects) | `Project` | `backend/models/models.py` |
 | [`roles`](#roles) | `Role` | `backend/models/auth_models.py` |
+| [`scan_collect_configs`](#scan_collect_configs) | `ScanCollectConfig` | `backend/models/scan_collect_models.py` |
+| [`scan_collect_records`](#scan_collect_records) | `ScanCollectRecord` | `backend/models/scan_collect_models.py` |
 | [`scan_logs`](#scan_logs) | `ScanLog` | `backend/models/mes_models.py` |
 | [`scanner_devices`](#scanner_devices) | `ScannerDevice` | `backend/models/mes_models.py` |
 | [`session_tokens`](#session_tokens) | `SessionToken` | `backend/models/auth_models.py` |
@@ -840,6 +842,39 @@ ORM 类 `Role`，定义于 `backend/models/auth_models.py`。
 | `is_builtin` | BOOLEAN | NOT NULL | False |
 | `created_at` | DATETIME | NOT NULL | server |
 | `updated_at` | DATETIME | NOT NULL | server |
+
+## scan_collect_configs
+
+ORM 类 `ScanCollectConfig`，定义于 `backend/models/scan_collect_models.py`。
+
+| 字段 | 类型 | 约束 | 默认 |
+|---|---|---|---|
+| `id` | INTEGER | PK INDEX |  |
+| `project_id` | INTEGER | UNIQUE INDEX NOT NULL |  |
+| `enabled` | BOOLEAN | NOT NULL | False |
+| `config` | JSON |  |  |
+| `created_at` | DATETIME |  | now() |
+| `updated_at` | DATETIME |  | now() |
+
+## scan_collect_records
+
+ORM 类 `ScanCollectRecord`，定义于 `backend/models/scan_collect_models.py`。
+
+| 字段 | 类型 | 约束 | 默认 |
+|---|---|---|---|
+| `id` | INTEGER | PK INDEX |  |
+| `group_id` | VARCHAR(64) | INDEX NOT NULL |  |
+| `channel_id` | INTEGER | NOT NULL | 0 |
+| `project_id` | INTEGER | INDEX NOT NULL |  |
+| `slot_key` | VARCHAR(64) | NOT NULL |  |
+| `slot_label` | VARCHAR(128) |  |  |
+| `code` | VARCHAR(256) | INDEX NOT NULL |  |
+| `seq` | INTEGER | NOT NULL | 0 |
+| `status` | VARCHAR(16) | NOT NULL | 'scanned' |
+| `group_result` | VARCHAR(32) |  |  |
+| `workpiece_id` | INTEGER | INDEX |  |
+| `scanned_at` | DATETIME |  | now() |
+| `settled_at` | DATETIME |  |  |
 
 ## scan_logs
 

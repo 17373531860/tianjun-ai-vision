@@ -13,6 +13,15 @@
 > 多屏工位显示卡自 `Settings/DisplaySettingsTab.vue` 抽为 `views/Source/MultiMonitorPanel.vue`；
 > 容器装箱清点块自 `Project/LogicConfigTab.vue` 抽为 `Project/CustomMixBoxTab.vue`（「装箱清点」条件 tab）。
 
+> **v3.56 补账（2026-09-01，多码采集前端全链 + 并行簇）**：
+> - **新文件 `views/Monitor/ScanSlotsPanel.vue`**：多码采集面板双形态——`compact`（徽标条：总进度 N/M + NG 挂起脉冲徽标 + 逐槽 got/expected 徽标 + 「明细」浮层 `.scan-slots-popover`，teleport 到 body 需全局样式压深色）与完整形态（NG 挂起横幅带「按 NG 放行」popconfirm + `ScanSlotsDetail` + 上组结算行 `scan-last-settled` + **上组码列表灰显保留到下一件开扫**（确认单 7.4，`!state.collecting` 时显示 last_settled.codes））。`readonly`（kiosk）屏蔽删码/清空/放行全部写通路。数据源：检测结果轮询载荷 `scan_collect` 段（`composables/useChannelResults.js` 透出），未启用项目=null 零渲染。
+> - **新文件 `views/Monitor/ScanSlotsDetail.vue`**：逐槽码列表（`scan-code-chip`/`scan-code-remove`/`scan-clear-btn`），删码/清空走 `api/scanCollect.js`。
+> - **新文件 `views/MES/ScanCollectConfigCard.vue`**：项目选择器（默认当前激活）+ 槽位表（名称/数量/正则/收尾角色/**槽位级跨件去重与多扫策略下拉**）+ 全局策略 + `ng_pending`/`vision_gate`（含窗口秒/缺视觉结果档）开关 + 「填入示例」预置现场三类真实码正则（母排 `^M.{29,32}$` ×1 / 芯子 `^\d{13}$` ×6 多扫 ng_alarm / 工装 `^H-C` ×1 closing 跨件豁免）；老配置槽位缺新键载入时补 inherit。挂 `views/MES/ScannerPanel.vue` 新「多码采集」tab。
+> - `views/MES/WorkpiecePanel.vue`：追溯详情新增「组件码（多码采集）」区块（`records?workpiece_id=` 独立拉取失败不连坐；**按 group_id 分节**，结算时间抬头+OK/NG 标最近一轮在前——循环工装码同 SN 名下多轮不混排）。
+> - Monitor 五形态挂接：`index.vue`（单/双/三工位）+ `WorkstationColumn.vue` + `SingleChannelMonitor.vue`（放大/kiosk）+ `monitorModes.js` + `layout/monitorLayout.js`（布局槽位 `scan-slots`）。
+> - 并行簇：①清零二选一对话框（`openResetDialog`，「仅清理本周期」检测中可点，`api/detection.js` `resetDetectionStats(ch, scope)`）；②多工位周期 Toast 降噪（OK 只弹选中工位/NG 带工位N/Toast 层 top-16 让插件顶栏）；③混合校验面板多形态（WorkstationColumn/SingleChannelMonitor 挂 CustomMixItemPanel/PerItemPanel，`useSystemStore` `display.monitor.mixPanel` 默认开）+ 容器三分卡（实时/峰值/预计进箱）；④监控横幅字号 `overlayBannerFontSize` 默认 14（`Settings/DetectionBoxSettingsTab.vue` 滑杆 12–48）；⑤`Project/LogicConfigTab.vue` 独立「超时结算」卡（sequential/detection/custom+sequential）+ 缺步提前发现开关（仅 hold 档露出）；⑥`Project/CustomMixBoxTab.vue` 取值锚点/取值口径/看全下修/整箱虚拟步骤四配置（`StepsConfigTab.vue` 打「装箱」标）；⑦多工位 SOP 卡 `resolveStepsToShow` 禁止 fallback 顶部项目 sequence（`monitorModes.js`）。
+> - 插件 lg-worktime 1.5.2→1.5.3：主画面 `<img src=video_feed>` 改 fetch multipart 流式→blob 喂帧 + 字节级 lastFrameAt ~3.5s 看门狗重连（治 socket 半死冻帧 90s）。
+
 ## 当前多屏工位显示指针
 
 一期使用同一个 `/monitor` hash 路由承载主屏放大态与副屏 kiosk，不新增平行页面。

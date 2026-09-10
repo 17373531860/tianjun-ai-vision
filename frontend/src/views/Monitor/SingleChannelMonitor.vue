@@ -73,6 +73,35 @@
         <div v-else-if="showStepStrip && !hasProject" class="flex h-40 flex-shrink-0 items-center justify-center rounded-lg border border-slate-700 bg-slate-900 text-sm text-gray-500">
           请先选择项目
         </div>
+
+        <!-- v3.55.x 混合模式物品校验 (装箱清点三分框/混合逐件): 放大态与 kiosk 同源;
+             未配 custom_mix 零差异, 显示设置「物品校验面板」可整体关。kiosk 只读由 readonly 透传守住写通路。 -->
+        <PerItemPanel
+          v-if="showMixPanel && mixPerItemState"
+          data-layout-slot="mix-panel"
+          class="flex-shrink-0"
+          :state="mixPerItemState"
+          :channel="channelId"
+          :readonly="readonly"
+          mix
+        />
+        <CustomMixItemPanel
+          v-else-if="showMixPanel && mixTrackingState"
+          data-layout-slot="mix-panel"
+          class="flex-shrink-0"
+          :state="mixTrackingState"
+          :tracking-checklist="channelData?.tracking?.item_checklist || {}"
+        />
+
+        <!-- v3.56: 周期多码采集已扫列表 — 放大态与 kiosk 同源; kiosk 只读由 readonly 屏蔽纠错按钮 -->
+        <ScanSlotsPanel
+          v-if="channelData?.scanCollect || layoutEditActive"
+          data-layout-slot="scan-slots"
+          class="flex-shrink-0"
+          :state="channelData?.scanCollect"
+          :channel-id="channelId"
+          :readonly="readonly"
+        />
       </div>
 
       <ChannelDashboard
@@ -108,6 +137,9 @@ import { computed } from 'vue';
 import ChannelVideoCard from './ChannelVideoCard.vue';
 import SopStepPanel from './SopStepPanel.vue';
 import WorkstationModePanel from './WorkstationModePanel.vue';
+import CustomMixItemPanel from './CustomMixItemPanel.vue';
+import PerItemPanel from './PerItemPanel.vue';
+import ScanSlotsPanel from './ScanSlotsPanel.vue';
 import ChannelDashboard from './ChannelDashboard.vue';
 import { layoutRuntimeState } from './layout/monitorLayout';
 import { resolveModePanelKind } from './monitorModes';
@@ -127,6 +159,8 @@ const props = defineProps({
   showDefectChart: { type: Boolean, default: true },
   showCapacityChart: { type: Boolean, default: true },
   showStepTable: { type: Boolean, default: true },
+  // v3.55.x 显示设置「物品校验面板」(display.monitor.mixPanel), 父级传入与其他开关同构
+  showMixPanel: { type: Boolean, default: true },
   stepTableColumns: { type: Object, default: () => ({}) },
   defaultCounters: { type: Object, default: () => ({}) },
   showNgTop3: { type: Boolean, default: true },
@@ -144,6 +178,25 @@ const steps = computed(() => props.channelData?.steps || []);
 const modePanelKind = computed(() =>
   resolveModePanelKind(props.channelData?._pollProjectConfig, props.channelData?.project) || null,
 );
+
+// v3.55.x 混合模式物品校验: 通道轮询带 custom_mix_state 才渲染 (未配置 = null 零差异)
+const mixTrackingState = computed(() => {
+  const s = props.channelData?.customMixState;
+  return (s && s.mix_type === 'tracking') ? s : null;
+});
+// 混合逐件: 与单工位 customMixPerItemState 同构适配 (config=null 隐藏手动按钮/收尾卡片)
+const mixPerItemState = computed(() => {
+  const s = props.channelData?.customMixState;
+  if (!s || s.mix_type !== 'per_item') return null;
+  return {
+    enabled: true,
+    cycle_active: !!s.cycle_active,
+    cycle_start_time: null,
+    config: null,
+    steps: s.steps || [],
+    last_ng_detail: s.last_ng_detail || null,
+  };
+});
 </script>
 
 <style scoped>

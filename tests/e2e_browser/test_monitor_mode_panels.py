@@ -16,7 +16,9 @@ from pathlib import Path
 
 import requests
 
-from .mode_payloads import mixed_mode_router, sequential_payload, weighing_payload
+from .mode_payloads import (
+    mixed_mode_router, sequential_payload, sequential_trap_payload, weighing_payload,
+)
 from .test_multi_workstation_layout import channel_count_guard  # noqa: F401
 
 SHOT_DIR = Path(os.environ.get("TJ_E2E_SHOT_DIR", "/tmp/tj_monitor_baseline"))
@@ -226,3 +228,65 @@ def test_single_tracking_uses_mode_panel_slot(page, base_url, api_url, channel_c
     finally:
         if pid:
             requests.delete(f"{api_url}/api/v1/projects/{pid}", timeout=10)
+
+
+def test_dual_sequential_sop_follows_sequence_not_all_steps(page, base_url, channel_count_guard):
+    """双工位 sequential：SOP 按 sequence 建卡（重复 label 两张），陷阱类别不出现。"""
+    channel_count_guard(2)
+    page.set_viewport_size({"width": 1920, "height": 1080})
+    handler, route = mixed_mode_router({
+        0: sequential_trap_payload,
+        1: sequential_trap_payload,
+    })
+    page.route(route, handler)
+    try:
+        _goto_monitor(page, base_url)
+
+        sop0 = page.locator("[data-testid='dual-sop-0']")
+        sop1 = page.locator("[data-testid='dual-sop-1']")
+        assert sop0.get_attribute("data-layout-slot") == "sop-row"
+        assert sop1.get_attribute("data-layout-slot") == "sop-row"
+        for sop in (sop0, sop1):
+            assert sop.get_attribute("data-mode-panel") in (None, "")
+            assert sop.locator("text=SOP").count() >= 1
+            assert sop.locator("div.w-28").count() == 2
+            assert sop.locator("div.w-28").filter(has_text="检查外观").count() == 2
+            assert sop.locator("text=未进序列").count() == 0
+        _shot(page, "mode_panels_dual_seq_trap")
+    finally:
+        try:
+            page.unroute(route, handler)
+        except Exception:
+            pass
+
+
+def test_triple_sequential_sop_follows_sequence_not_all_steps(page, base_url, channel_count_guard):
+    """三工位 sequential：槽位仍叫 sop；按 sequence 建卡，陷阱类别不出现。"""
+    channel_count_guard(3)
+    page.set_viewport_size({"width": 1920, "height": 1080})
+    handler, route = mixed_mode_router({
+        0: sequential_trap_payload,
+        1: sequential_trap_payload,
+        2: sequential_trap_payload,
+    })
+    page.route(route, handler)
+    try:
+        _goto_monitor(page, base_url)
+
+        for ch in range(3):
+            sop = page.locator(f"[data-testid='triple-sop-{ch}']")
+            assert sop.count() == 1
+            assert sop.get_attribute("data-layout-slot") == "sop"
+            assert sop.locator("text=SOP").count() >= 1
+            assert sop.locator("div.w-28").count() == 2
+            assert sop.locator("div.w-28").filter(has_text="检查外观").count() == 2
+            assert sop.locator("text=未进序列").count() == 0
+            table = page.locator(f"[data-testid='triple-steptable-{ch}']")
+            assert table.locator("text=检查外观").count() == 2
+            assert table.locator("text=未进序列").count() == 0
+        _shot(page, "mode_panels_triple_seq_trap")
+    finally:
+        try:
+            page.unroute(route, handler)
+        except Exception:
+            pass
