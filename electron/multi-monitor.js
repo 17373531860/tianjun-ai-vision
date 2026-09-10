@@ -50,8 +50,13 @@ function normalizeMultiMonitorConfig(rawConfig) {
       continue;
     }
 
+    // 窗口角色: monitor=单工位监控页(默认, 一期行为) / projection=投影光引导画布。
+    // 非法值静默归一到 monitor, 老配置无 role 键零差异。
+    const role = rawItem.role === 'projection' ? 'projection' : 'monitor';
+
     mapping[String(channelId)] = {
       display_id: displayId,
+      role,
       ...(bounds ? { bounds } : {}),
     };
   }
@@ -169,7 +174,11 @@ function enumerateDisplaysForApply(getDisplays) {
   }
 }
 
-function buildKioskHash(channelId, readonly) {
+function buildKioskHash(channelId, readonly, role = 'monitor') {
+  if (role === 'projection') {
+    // 投影引导画布: 本身就是全屏输出介质, 无 readonly 语义 (交互只有标定快捷键)
+    return `/projection?channel=${encodeURIComponent(channelId)}&kiosk=1&multi_monitor=1`;
+  }
   return `/monitor?channel=${encodeURIComponent(channelId)}&kiosk=1&readonly=${readonly ? '1' : '0'}&multi_monitor=1`;
 }
 

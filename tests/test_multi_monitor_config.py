@@ -70,11 +70,13 @@ def test_multi_monitor_roundtrip_normalizes_and_preserves_other_sections(
         "mapping": {
             "0": {
                 "display_id": "123",
+                "role": "monitor",
                 "bounds": {"x": -1920, "y": 0, "width": 1920, "height": 1080},
             },
-            "1": {"display_id": "456"},
+            "1": {"display_id": "456", "role": "monitor"},
             "2": {
                 "display_id": "",
+                "role": "monitor",
                 "bounds": {"x": 1920, "y": 0, "width": 1920, "height": 1080},
             },
         },
@@ -112,6 +114,26 @@ def test_save_channel_count_keeps_top_level_multi_monitor(isolated_multi_monitor
     assert on_disk["window"] == {"fullscreen": True}
 
 
+def test_multi_monitor_role_normalizes_and_persists(isolated_multi_monitor_config):
+    """v3.57 投影光引导: projection 角色保留、非法值归一 monitor、缺省 monitor。"""
+    _module, manager, _config_path = isolated_multi_monitor_config
+
+    saved = manager.set_multi_monitor_config(
+        enabled=True,
+        readonly=True,
+        mapping={
+            "0": {"display_id": "a", "role": "projection"},
+            "1": {"display_id": "b", "role": "hologram"},
+            "2": {"display_id": "c"},
+        },
+    )
+
+    assert saved["mapping"]["0"]["role"] == "projection"
+    assert saved["mapping"]["1"]["role"] == "monitor"
+    assert saved["mapping"]["2"]["role"] == "monitor"
+    assert manager.get_multi_monitor_config() == saved
+
+
 def test_multi_monitor_api_roundtrip(isolated_multi_monitor_config, client):
     _module, _manager, _config_path = isolated_multi_monitor_config
     payload = {
@@ -120,6 +142,7 @@ def test_multi_monitor_api_roundtrip(isolated_multi_monitor_config, client):
         "mapping": {
             "0": {
                 "display_id": "1001",
+                "role": "projection",
                 "bounds": {"x": 0, "y": 0, "width": 1920, "height": 1080},
             },
         },

@@ -15,6 +15,13 @@ const routes = [
     component: () => import('@/views/Login/index.vue'),
   },
   {
+    // 投影光引导输出窗 (feat/light-sensor): 独立全屏路由, 给投影仪副屏用。
+    // 不进 Layout / 不进路由记忆 (REMEMBERABLE_NAMES), 与 Monitor 互不影响。
+    path: '/projection',
+    name: 'Projection',
+    component: () => import('@/views/Projection/index.vue'),
+  },
+  {
     path: '/',
     component: Layout,
     redirect: '/monitor',

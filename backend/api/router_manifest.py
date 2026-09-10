@@ -42,6 +42,7 @@ def mount_all_routers(app: FastAPI) -> None:
     from backend.api import ocr               # 2026-09 OCR 读字引擎
     from backend.api import anomaly           # 2026-09 异常检测 (合格品免缺陷样本质检)
     from backend.api import vlm               # 2026-09 VLM 坐诊 (按需问答, 默认关)
+    from backend.api import lightguide        # 投影光引导 (feat/light-sensor)
 
     app.include_router(projects.router, prefix=f"{v1}/projects", tags=["projects"])
     app.include_router(models.router, prefix=f"{v1}/models", tags=["models"])
@@ -69,6 +70,7 @@ def mount_all_routers(app: FastAPI) -> None:
     app.include_router(ocr.router, prefix=f"{v1}/ocr", tags=["ocr"])
     app.include_router(anomaly.router, prefix=f"{v1}/anomaly", tags=["anomaly"])
     app.include_router(vlm.router, prefix=f"{v1}/vlm", tags=["vlm"])
+    app.include_router(lightguide.router, prefix=f"{v1}/lightguide", tags=["lightguide"])
 
     # -------- 核心/重量级路由（原 main.py 直挂段，保持原注册顺序） --------
     from backend.api.source import router as source_router          # 视频源 + 检测核心

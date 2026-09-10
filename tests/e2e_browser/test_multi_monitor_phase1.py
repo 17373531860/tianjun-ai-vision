@@ -120,10 +120,58 @@ def test_settings_roundtrip_and_electron_apply(page, base_url, workstation_displ
     assert applied["readonly"] is True
     assert applied["mapping"]["0"] == {
         "display_id": "2002",
+        "role": "monitor",  # v3.57: 缺省角色=监控画面, 老行为零差异
         "bounds": {"x": 1920, "y": 0, "width": 1280, "height": 1024},
     }
     assert _get_multi_monitor() == applied
     assert "1 个工位窗口" in page.get_by_test_id("multi-monitor-apply-result").inner_text()
+
+
+def test_settings_projection_role_roundtrip(page, base_url, workstation_display_guard):
+    """v3.57 投影光引导: 窗口内容切「投影光引导」后 role=projection 落库并回读保持。"""
+    _set_channel_count(2)
+    _set_multi_monitor({
+        "enabled": False,
+        "readonly": True,
+        "mapping": {
+            "0": {
+                "display_id": "9001",
+                "bounds": {"x": 1920, "y": 0, "width": 1920, "height": 1080},
+            }
+        },
+    })
+
+    _goto(page, base_url, "/source")
+    page.get_by_role("tab", name="多屏工位显示").click()
+    card = page.get_by_test_id("multi-monitor-card")
+    card.scroll_into_view_if_needed()
+    role_select = page.get_by_test_id("multi-monitor-role-0")
+    role_select.click()
+    page.get_by_role("option", name="投影光引导").click()
+    page.get_by_test_id("multi-monitor-save").click()
+    page.wait_for_timeout(1_000)
+
+    saved = _get_multi_monitor()
+    assert saved["mapping"]["0"]["role"] == "projection"
+
+    # 回读: 重进页面后角色选择保持「投影光引导」
+    _goto(page, base_url, "/source")
+    page.get_by_role("tab", name="多屏工位显示").click()
+    expect(page.get_by_test_id("multi-monitor-role-0")).to_contain_text("投影光引导")
+
+    # 未映射的工位 1 角色选择禁用
+    assert page.get_by_test_id("multi-monitor-role-1").locator(".el-select__wrapper").get_attribute("class").find("is-disabled") >= 0
+
+
+def test_projection_kiosk_route_renders_canvas(page, base_url, workstation_display_guard):
+    """Electron projection 角色子窗加载的 /projection kiosk 路由可渲染引导画布。"""
+    _set_channel_count(1)
+    _goto(page, base_url, "/projection?channel=0&kiosk=1&multi_monitor=1")
+    root = page.locator(".projection-root")
+    root.wait_for(state="visible", timeout=5_000)
+    assert root.locator("canvas.guide-canvas").count() == 1
+    # kiosk 子窗不应渲染主应用导航
+    assert page.locator("button[title='导航菜单']").count() == 0
 
 
 def test_monitor_does_not_render_emergency_exit_button(
@@ -155,10 +203,14 @@ def test_monitor_does_not_render_emergency_exit_button(
     _goto(page, base_url, "/monitor?channel=1&kiosk=1&readonly=1&multi_monitor=1")
     page.get_by_test_id("single-channel-monitor").wait_for(state="visible", timeout=5_000)
     assert page.get_by_test_id("multi-monitor-emergency-exit").count() == 0
+    expected_mapping = {
+        channel_id: {**item, "role": "monitor"}  # v3.57: 后端归一化补缺省角色
+        for channel_id, item in original_mapping.items()
+    }
     assert _get_multi_monitor() == {
         "enabled": True,
         "readonly": True,
-        "mapping": original_mapping,
+        "mapping": expected_mapping,
     }
 
 

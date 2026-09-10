@@ -625,6 +625,8 @@
       <el-tab-pane label="多屏工位显示" lazy>
         <div class="p-4">
           <MultiMonitorPanel />
+          <!-- P3 投影光引导: 标定状态 + 引导参数 (与多屏映射同属显示口管理) -->
+          <LightGuidePanel />
         </div>
       </el-tab-pane>
 
@@ -659,6 +661,7 @@ import { getModelDetail, resolveModelPath as apiResolveModelPath } from '@/api/m
 import { getProjects } from '@/api/project';
 import { dbg, dbgErr } from '@/utils/debug';
 import MultiMonitorPanel from './MultiMonitorPanel.vue';
+import LightGuidePanel from './LightGuidePanel.vue';
 import ChannelGroupPanel from './ChannelGroupPanel.vue';
 import WorkpieceFlowPanel from './WorkpieceFlowPanel.vue';
 
