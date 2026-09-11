@@ -214,6 +214,13 @@ class ChannelManager:
             self.channel_count = count
             self._save_config()
 
+        # 新建/保留的工位都要回灌按工位的手部副屏开关, 否则改工位数后
+        # 吉田那一路的 MediaPipe 会静默失效 (默认关 = 与不配置时零差异)。
+        try:
+            self.apply_hands_aux_to_channels()
+        except Exception as e:  # noqa: BLE001 — 开关回灌失败不该拦住工位数变更
+            print(f"[ChannelManager] 手部副屏开关回灌失败 (已忽略): {e}")
+
         print(f"[ChannelManager] Channel count set to {count}, active: {self.active_channels()}")
 
     # ------------------------------------------------------------------
@@ -744,6 +751,53 @@ class ChannelManager:
             normalized[str(channel_id)] = item
         return normalized
 
+    # ------------------------------------------------------------------
+    # 一拖多: 按工位的「手部裁切副屏」开关 (默认关)
+    # ------------------------------------------------------------------
+    # 吉田特例: 某个工位的一体机再开一块只读副屏, 只显示手部框 + 指关节的裁切
+    # 画面 (不要整幅工位图)。手部识别是每帧的算力, 所以必须逐工位开 ——
+    # "其它客户/工位默认不开 MediaPipe 手部"。
+    #
+    # 落在 channels.<id>.hands_aux_enabled: 复用已有的分段合并写入 (不变量 17),
+    # 不新开顶层段, 也不碰 multi_monitor 段 (那是 Electron 副屏的窗口映射)。
+    def get_hands_aux_config(self) -> dict:
+        """读各工位手部副屏开关; 字段缺失 = 关 (与不配置时零差异)。"""
+        sources = self.get_channel_sources()
+        channels = {}
+        for ch_id in range(max(1, int(self.channel_count or 1))):
+            cfg = sources.get(str(ch_id)) or {}
+            channels[str(ch_id)] = cfg.get("hands_aux_enabled") is True
+        return {"channels": channels}
+
+    def apply_hands_aux_to_channels(self) -> dict:
+        """把落盘开关回灌到运行态各工位 (开机与改开关后都走这里)。"""
+        config = self.get_hands_aux_config()["channels"]
+        applied = {}
+        for ch_str, enabled in config.items():
+            mgr = self.channels.get(int(ch_str))
+            if mgr is None:
+                continue
+            mgr.hands_aux_enabled = bool(enabled)
+            applied[ch_str] = bool(enabled)
+        return applied
+
+    def set_hands_aux_enabled(self, channel_id: int, enabled: bool) -> dict:
+        """写单个工位的手部副屏开关并立即对运行态生效。"""
+        self.save_channel_source(
+            channel_id, {"hands_aux_enabled": bool(enabled)}, merge=True)
+        mgr = self.channels.get(int(channel_id))
+        if mgr is not None:
+            mgr.hands_aux_enabled = bool(enabled)
+            # 关掉时顺手释放该工位的 MediaPipe: 不然模型一直占着显存/线程。
+            # 全局 MediaPipe 开着的工位不能释放 (那是检测逻辑在用)。
+            if not enabled and not getattr(mgr, "mediapipe_enabled", False):
+                try:
+                    mgr._release_mediapipe()
+                except Exception as e:  # noqa: BLE001 — 释放失败不该拖挂配置写入
+                    print(f"[ChannelManager] ch{channel_id} 释放 MediaPipe 失败: {e}")
+        print(f"[ChannelManager] ch{channel_id} 手部裁切副屏 = {'开' if enabled else '关'}")
+        return self.get_hands_aux_config()
+
     def get_multi_monitor_config(self) -> dict:
         """读取多屏工位配置；缺失或损坏时返回默认关闭且只读。"""
         try:
@@ -1060,6 +1114,35 @@ def set_auto_resume_config(req: AutoResumeConfigRequest):
     """写开机自动恢复检测开关; 立即落盘, 下次后端启动生效。"""
     channel_manager.set_auto_resume_config(req.enabled)
     return {"status": "success", **channel_manager.get_auto_resume_config()}
+
+
+class HandsAuxRequest(BaseModel):
+    channel_id: int = Field(..., ge=0, description="工位号 (零基)")
+    enabled: bool = Field(False, description="True=该工位开手部裁切副屏 (会为这一路开 MediaPipe 手部)")
+
+
+@router.get("/hands-aux", summary="读各工位手部裁切副屏开关")
+def get_hands_aux_config():
+    """逐工位返回手部裁切副屏开关（默认全关）。
+
+    开了的工位才会算 MediaPipe 手部几何，供
+    ``GET /snapshot?channel=N&view=hands`` 取裁切画面；其它工位一帧都不算。
+    """
+    return channel_manager.get_hands_aux_config()
+
+
+@router.put("/hands-aux", summary="设置某工位手部裁切副屏开关",
+            dependencies=[Depends(require_perm("settings.edit"))])
+def set_hands_aux_config(req: HandsAuxRequest):
+    """开/关某一工位的手部裁切副屏；立即对运行态生效并落盘。
+
+    关掉且该工位没开全局 MediaPipe 时会释放它的 MediaPipe 资源。
+    """
+    try:
+        channels = channel_manager.set_hands_aux_enabled(req.channel_id, req.enabled)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"保存手部副屏开关失败: {e}") from e
+    return {"status": "success", **channels}
 
 
 class StartupReadyGateRequest(BaseModel):
