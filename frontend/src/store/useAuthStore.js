@@ -48,6 +48,8 @@ const ROUTE_PERM_MAP = {
   '/mes': 'mes.view',
   '/alarm': 'alarm.view',
   '/settings': 'settings.view',
+  // 训练平台互连是工程师级配置页; 漏登记时对所有人默认放行, 工位屏账号会看见它
+  '/interconnect': 'system.view',
 };
 
 // 匹配 permission key (与后端 core/permissions.py: match_permission 同语义)

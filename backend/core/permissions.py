@@ -89,6 +89,18 @@ BUILTIN_ROLES = {
             "monitor.detection.control",
         ],
     },
+    # 一拖多局域网工位屏: 一体机浏览器开 kiosk 页用的账号身份。
+    # 权限面与 operator 相同 (看监控 + 启停待机), 但独立成角色有两个理由:
+    #   1. 工位账号要配 allowed_channels 只管自己那一路, operator 是全厂通用身份
+    #   2. 客户日后想给工位屏加/减能力时, 不会连带动到匿名兜底的 operator
+    "station": {
+        "name": "工位屏",
+        "description": "一体机工位屏身份; 只看绑定工位的监控并启停该工位检测, 无项目/模型/设置入口",
+        "permissions": [
+            "monitor.view",
+            "monitor.detection.control",
+        ],
+    },
 }
 
 

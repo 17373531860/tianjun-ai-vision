@@ -1291,8 +1291,18 @@ app = FastAPI(
 )
 
 # Set all CORS enabled origins
-# 安全：CORS_ALLOW_ORIGINS 环境变量可配置（逗号分隔），未设置时仅允许本机
-# 出厂工控机：前端通过 Electron 直连 127.0.0.1，无需放开公网域
+# 安全：CORS_ALLOW_ORIGINS 环境变量可配置（逗号分隔），未设置时允许本机 + 局域网私网段
+# 出厂工控机：前端通过 Electron 直连 127.0.0.1
+# 一拖多：一体机浏览器用工作站内网 IP 打开，同源时其实不走 CORS，但开发态
+#         （Vite 6001 + 后端 8001）和 nginx 换端口的部署是跨域的，必须放行私网段
+from backend.core.lan_station import LAN_ORIGIN_REGEX, mount_web_dist, web_index_file
+
+# ========== 局域网工位屏: 前端 dist 静态托管 ==========
+# 实现是"404 兜底中间件"而不是捕获路由, 所以跟路由注册顺序无关 (运行时才注册的
+# mes_inbound 别名 / 插件 router 照旧优先)。放在 CORS 之前注册 = 它在中间件栈里
+# 更靠内, CORS 仍然包在外面, 预检与响应头行为不变。
+mount_web_dist(app)
+
 _cors_origins_env = os.environ.get("CORS_ALLOW_ORIGINS", "").strip()
 if _cors_origins_env:
     if _cors_origins_env == "*":
@@ -1301,6 +1311,8 @@ if _cors_origins_env:
     else:
         _cors_origins = [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
         _cors_creds = True
+    # 客户显式配了白名单 = 有意收紧, 不拿私网段把口子撑回去; 只保留老的本机放行
+    _cors_regex = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
 else:
     _cors_origins = [
         "http://localhost:5173", "http://127.0.0.1:5173",
@@ -1310,13 +1322,15 @@ else:
         "app://./", "file://",
     ]
     _cors_creds = True
+    _cors_regex = LAN_ORIGIN_REGEX
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     # 开发场景: 任意本机端口都放行 (Vite 改端口不用动后端)
+    # 一拖多: 默认再放行 RFC1918 私网段任意端口 (一体机/管理电脑走内网 IP)
     # 生产 Electron 走 file:// / app://, 默认列表已含, 不影响安全
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_origin_regex=_cors_regex,
     allow_credentials=_cors_creds,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1515,6 +1529,19 @@ _apply_hotfix_after_app()
 
 @app.get("/")
 def root():
+    """根路径：有前端 dist 就直接送检测页，否则回退成原来的 API 欢迎信息。
+
+    一体机浏览器输 ``http://<工作站IP>:8001`` 就该看到系统本身，不该看到一坨 JSON。
+    Electron 出厂形态走 file:// 加载页面，压根不会请求这里，行为不变。
+    """
+    index_path = web_index_file()
+    if index_path:
+        from fastapi.responses import FileResponse
+        return FileResponse(
+            index_path,
+            media_type="text/html",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
     return {
         "message": "Welcome to Tianjun Machine Vision API",
         "version": "1.0.0",

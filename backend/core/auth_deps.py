@@ -169,6 +169,8 @@ class CurrentUser:
     permissions: List[str]
     is_anonymous: bool
     is_superuser: bool
+    # 一拖多工位屏: 可操作工位白名单; None / [] = 不限工位 (存量账号默认值)
+    allowed_channels: Optional[List[int]] = None
 
 
 _SUPERUSER = CurrentUser(
@@ -220,6 +222,8 @@ def _resolve_real_user(db: Session, user_id: int) -> Optional[CurrentUser]:
         permissions=permissions,
         is_anonymous=False,
         is_superuser=("*" in permissions),
+        allowed_channels=normalize_allowed_channels(
+            getattr(user, "allowed_channels", None)),
     )
 
 
@@ -316,6 +320,61 @@ def require_role(*required_roles: str):
             ),
         )
     return _dep
+
+
+def normalize_allowed_channels(raw) -> Optional[List[int]]:
+    """把库里存的工位白名单洗成 ``[int]``；空/脏数据一律当"不限工位"。
+
+    不限工位是老行为，脏数据宁可放行也不能把产线锁死 —— 一个手抖写坏的 JSON
+    不该让整条线开不了工。
+    """
+    if not raw:
+        return None
+    if isinstance(raw, (int, str)):
+        raw = [raw]
+    if not isinstance(raw, (list, tuple, set)):
+        return None
+    channels = []
+    for item in raw:
+        try:
+            value = int(item)
+        except (TypeError, ValueError):
+            continue
+        if value >= 0 and value not in channels:
+            channels.append(value)
+    return sorted(channels) or None
+
+
+def user_can_access_channel(user: CurrentUser, channel: int) -> bool:
+    """该身份能不能操作这一路工位。白名单为空 = 不限工位。"""
+    if user.is_superuser:
+        return True
+    allowed = user.allowed_channels
+    if not allowed:
+        return True
+    return int(channel) in allowed
+
+
+def require_channel_scope(channel: int = 0,
+                          user: CurrentUser = Depends(get_current_user)
+                          ) -> CurrentUser:
+    """FastAPI 依赖: 校验当前身份有权操作 ``?channel=N`` 这一路工位。
+
+    一拖多场景下每台一体机配一个工位账号 (allowed_channels=[本工位])，
+    工位屏就算被人改了 URL 的 channel 也动不了隔壁工位。
+
+    未配白名单的账号 (含 admin / engineer / 匿名 operator / 鉴权关闭时的
+    SUPERUSER) 一律放行 —— 这条依赖对存量客户零差异。
+    """
+    if user_can_access_channel(user, channel):
+        return user
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=(
+            f"账号 {user.username} 无权操作 {channel} 号工位 "
+            f"(可操作工位: {', '.join(str(c) for c in user.allowed_channels)})"
+        ),
+    )
 
 
 def require_login(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:

@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.core.auth import delete_all_tokens_for_user, hash_password
-from backend.core.auth_deps import require_perm
+from backend.core.auth_deps import normalize_allowed_channels, require_perm
 from backend.db.database import get_db
 from backend.models.auth_models import Role, User, UserRole
 
@@ -40,6 +40,8 @@ class UserCreate(BaseModel):
     role_codes: List[str] = Field(default_factory=list)
     active: bool = True
     must_change_password: bool = False
+    # 一拖多工位屏: 可操作工位白名单; 不传 / 空 = 不限工位 (老行为)
+    allowed_channels: Optional[List[int]] = None
 
 
 class UserUpdate(BaseModel):
@@ -50,6 +52,8 @@ class UserUpdate(BaseModel):
     new_password: Optional[str] = Field(None, min_length=6)
     # 完整替换角色列表 (None = 不动)
     role_codes: Optional[List[str]] = None
+    # 完整替换工位白名单 (None = 不动; [] = 清空 = 不限工位)
+    allowed_channels: Optional[List[int]] = None
 
 
 # ============================================================
@@ -75,6 +79,7 @@ def _serialize(user: User) -> dict:
         "must_change_password": user.must_change_password,
         "roles": role_codes,
         "permissions": permissions,
+        "allowed_channels": normalize_allowed_channels(user.allowed_channels) or [],
         "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
         "created_at": user.created_at.isoformat() if user.created_at else None,
         "updated_at": user.updated_at.isoformat() if user.updated_at else None,
@@ -128,6 +133,7 @@ def create_user(body: UserCreate, db: Session = Depends(get_db)):
         display_name=body.display_name or body.username,
         active=body.active,
         must_change_password=body.must_change_password,
+        allowed_channels=normalize_allowed_channels(body.allowed_channels),
     )
     db.add(user)
     db.flush()
@@ -160,6 +166,11 @@ def update_user(user_id: int, body: UserUpdate, db: Session = Depends(get_db)):
         for r in new_roles:
             db.add(UserRole(user_id=user.id, role_id=r.id))
     data.pop("role_codes", None)
+
+    # 改工位白名单 (完整替换; 传 [] = 清空 = 恢复成不限工位)
+    if "allowed_channels" in data:
+        user.allowed_channels = normalize_allowed_channels(data["allowed_channels"])
+    data.pop("allowed_channels", None)
 
     # 改普通字段
     for field, val in data.items():

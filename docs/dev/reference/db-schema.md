@@ -1,7 +1,7 @@
 # 数据库表参考
 
 > **类型**：reference（生成物勿手改）
-> **生成命令**：`python scripts/docgen/gen_db_schema.py`（生成日 2026-09-01）
+> **生成命令**：`python scripts/docgen/gen_db_schema.py`（生成日 2026-09-11）
 > **单一事实源**：SQLAlchemy ORM（Base.metadata）。字段含义看模型源文件行内注释；
 > 迁移历史看 backend/db/migrations/ 与 backend/main.py 的 migrate_database。
 
@@ -1097,6 +1097,7 @@ ORM 类 `User`，定义于 `backend/models/auth_models.py`。
 | `active` | BOOLEAN | INDEX NOT NULL | True |
 | `must_change_password` | BOOLEAN | NOT NULL | False |
 | `last_login_at` | DATETIME |  |  |
+| `allowed_channels` | JSON |  |  |
 | `created_at` | DATETIME | NOT NULL | server |
 | `updated_at` | DATETIME | NOT NULL | server |
 

@@ -122,6 +122,10 @@ def _init_streaming_state(h):
     h._mjpeg_encode_lock = threading.Lock()
     h._mjpeg_next_conn_id = 0
     h._mjpeg_active_conn_ids = {}
+    # 槽位最近一次成功推帧的 monotonic 时刻。Chrome keep-alive 下断开的连接
+    # generator 可能迟迟不进 finally, 只看 _mjpeg_active_conn_ids 会把僵尸连接
+    # 当成"一体机还在看"; 用推帧心跳判活才准。
+    h._mjpeg_slot_seen = {}
     h._mjpeg_active_streams = 0
     h._mjpeg_cached_seq = -1
     h._mjpeg_cached_chunk = None

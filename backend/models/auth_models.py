@@ -41,6 +41,9 @@ class User(Base):
     active = Column(Boolean, default=True, nullable=False, index=True)
     must_change_password = Column(Boolean, default=False, nullable=False)
     last_login_at = Column(DateTime(timezone=True), nullable=True)
+    # 一拖多工位屏: 可操作工位白名单, 例如 [0] = 只能启停 0 号工位。
+    # NULL / [] = 不限工位 (存量账号与单工位客户零差异)。
+    allowed_channels = Column(JSON, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(),

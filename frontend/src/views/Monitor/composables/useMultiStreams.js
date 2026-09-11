@@ -14,6 +14,7 @@
  *   bitmapDecodeEnabled() — 性能开关 getter（systemStore.performance.multiChannelBitmapDecode）
  */
 import { getBackendHost } from '@/api/index';
+import { getStreamViewers } from '@/api/detection';
 import { createFramePump } from '../framePump';
 
 export function useMultiStreams(ctx) {
@@ -69,6 +70,53 @@ export function useMultiStreams(ctx) {
   const snapshotLastStart = {};         // ch -> 上次取帧起始时刻 (节奏控制)
   let snapshotChannels = new Set();     // 当前走快照轮询的工位 (定时器常驻读取)
   const mjpegZeroFrameFails = {};       // ch -> 连续"零帧断流"次数, 出过帧即归零
+
+  // ── 一拖多: 一体机正在直播的工位, 总览给它让流 ──────────────────────────
+  // 一体机工位屏占 station 槽、工作站总览占 main 槽, 后端不互踢 —— 但同一路画面
+  // 会被编码/发送两遍。8~16 工位时这是实打实的带宽与 CPU, 所以总览主动降成快照。
+  // 判据来自后端推帧心跳 (GET /source/stream/viewers), 一体机断开后自动恢复 MJPEG,
+  // 不需要任何配置开关。轮询周期必须短于后端 3s 判活窗口, 否则状态会来回抖。
+  const STATION_PROBE_MS = 2000;
+  let stationBusyChannels = new Set();
+  let stationProbeTimer = null;
+
+  // 只有"工作站主窗总览"才需要让流: kiosk/station_view 自己就是工位屏,
+  // 放大详情是工程师主动要全帧率, 都不让。
+  const shouldYieldToStation = () => (
+    !kioskMode.value && !stationViewMode.value && zoomedChannel.value === null
+  );
+
+  const probeStationViewers = async () => {
+    if (!multiStreamRunning || !shouldYieldToStation()) return;
+    let next;
+    try {
+      const resp = await getStreamViewers();
+      const channels = resp?.data?.channels || {};
+      next = new Set(
+        Object.keys(channels)
+          .filter((ch) => channels[ch]?.station === true)
+          .map(Number)
+      );
+    } catch {
+      return;   // 探测失败保持现状, 不因为一次网络抖动把画面切来切去
+    }
+    if (!multiStreamRunning) return;
+    const changed = next.size !== stationBusyChannels.size
+      || [...next].some((ch) => !stationBusyChannels.has(ch));
+    stationBusyChannels = next;
+    if (changed) syncMultiStreams();
+  };
+
+  const startStationProbe = () => {
+    if (stationProbeTimer) return;
+    stationProbeTimer = setInterval(probeStationViewers, STATION_PROBE_MS);
+    probeStationViewers();
+  };
+
+  const stopStationProbe = () => {
+    if (stationProbeTimer) { clearInterval(stationProbeTimer); stationProbeTimer = null; }
+    stationBusyChannels = new Set();
+  };
 
   // 快照取帧间隔按并发工位数自适应: 放大单路 ~12fps, 3x3 九宫格 5fps。
   // 不能一味调快: 每张快照是一次完整 JPEG 编码+HTTP 往返, 工位越多请求越挤
@@ -142,8 +190,14 @@ export function useMultiStreams(ctx) {
         && !stationViewMode.value
         && zoomedChannel.value === null
       );
+    // 一体机独占该工位直播时, 总览这一格走快照 (逐工位, 不影响其它没接屏的工位)。
+    // 探测随形态开关: 放大/kiosk 期间停掉, 退回总览立刻重新探一次, 不必等下一拍。
+    const yieldToStation = shouldYieldToStation();
+    if (yieldToStation) startStationProbe(); else stopStationProbe();
     const snapWant = visible.filter(
-      (ch) => useSnapshotAll || (mjpegZeroFrameFails[ch] || 0) >= MJPEG_FALLBACK_FAILS
+      (ch) => useSnapshotAll
+        || (yieldToStation && stationBusyChannels.has(ch))
+        || (mjpegZeroFrameFails[ch] || 0) >= MJPEG_FALLBACK_FAILS
     );
     const mjpegWant = new Set(visible.filter((ch) => !snapWant.includes(ch)));
     const desiredViewer = desiredMjpegViewer();
@@ -353,6 +407,7 @@ export function useMultiStreams(ctx) {
   const stopMultiStreams = () => {
     multiStreamRunning = false;
     stopSnapshotPolling();
+    stopStationProbe();
     Object.keys(mjpegZeroFrameFails).forEach(k => delete mjpegZeroFrameFails[k]);
     Object.keys(multiStreamReconnectTimers).forEach(k => clearMjpegReconnectTimer(k));
     Object.values(multiStreamAborts).forEach(a => { try { a.abort(); } catch {} });

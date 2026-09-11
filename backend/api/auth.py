@@ -108,6 +108,8 @@ def _current_user_to_dict(user: CurrentUser) -> dict:
         "permissions": user.permissions,
         "is_anonymous": user.is_anonymous,
         "is_superuser": user.is_superuser,
+        # 一拖多工位屏: [] = 不限工位; [N] = 只管这几路 (前端据此锁死工位切换)
+        "allowed_channels": user.allowed_channels or [],
     }
 
 
