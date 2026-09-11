@@ -8,7 +8,7 @@
  *   逻辑搬运不改语义；MAX_MJPEG_STREAMS/降级阈值/自适应取帧节奏勿随意调。
  *
  * ctx 依赖（全部由 index.vue 注入，本文件不 import store/不读全局）：
- *   channelCount, kioskMode, kioskChannel, zoomedChannel  — refs
+ *   channelCount, kioskMode, stationViewMode, kioskChannel, zoomedChannel  — refs
  *   gridPageChannels, multiMonitorRuntime, effectiveLayoutBodyOverride — refs/computed
  *   multiFrameNaturalSize — 共享 plain object（overlay 点击换算也读它，属主留 index）
  *   bitmapDecodeEnabled() — 性能开关 getter（systemStore.performance.multiChannelBitmapDecode）
@@ -18,7 +18,7 @@ import { createFramePump } from '../framePump';
 
 export function useMultiStreams(ctx) {
   const {
-    channelCount, kioskMode, kioskChannel, zoomedChannel,
+    channelCount, kioskMode, stationViewMode, kioskChannel, zoomedChannel,
     gridPageChannels, multiMonitorRuntime, effectiveLayoutBodyOverride,
     multiFrameNaturalSize, bitmapDecodeEnabled,
   } = ctx;
@@ -51,7 +51,8 @@ export function useMultiStreams(ctx) {
   // 每路 MJPEG 是一条永久占用的连接, 3x3 九工位 = 9 条流 + 150ms 数据轮询全挤同一个
   // 后端 host → 流被饿死, 前端 1s 重连 + 后端"新连接上位"互踢, 画面永远加载不出来。
   // 修复一: 可见工位 > 4 时放弃 MJPEG 长连接, 改为 /snapshot 单帧轮询 (短请求, keep-alive
-  // 复用 socket, 与数据轮询共存); ≤4 工位(双/三/2x2页/放大单路)保持原 MJPEG 行为不变。
+  // 复用 socket, 与数据轮询共存)。多屏开启时普通主窗口（含总览放大）也始终走快照，
+  // 避免与扩展工位主窗争抢同一 channel 的唯一 MJPEG；station_view/kiosk 工位窗仍用 MJPEG。
   // 修复二 (Safari/WebKit): WebKit 的 fetch() 读不了 multipart/x-mixed-replace 流
   // (立刻 "Load failed"), canvas 永远黑屏。某工位的 MJPEG 流连续 2 次一帧未出就断
   // → 该工位自动降级为快照轮询兜底 (Playwright webkit 内核实测复现+验证)。
@@ -113,7 +114,11 @@ export function useMultiStreams(ctx) {
     if (!multiStreamRunning) return;
     const visible = visibleStreamChannels();
     const useSnapshotAll = visible.length > MAX_MJPEG_STREAMS
-      || (multiMonitorRuntime.value.enabled && !kioskMode.value && zoomedChannel.value === null);
+      || (
+        multiMonitorRuntime.value.enabled
+        && !kioskMode.value
+        && !stationViewMode.value
+      );
     const snapWant = visible.filter(
       (ch) => useSnapshotAll || (mjpegZeroFrameFails[ch] || 0) >= MJPEG_FALLBACK_FAILS
     );
