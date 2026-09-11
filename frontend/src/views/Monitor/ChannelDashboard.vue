@@ -97,7 +97,7 @@
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-800 text-gray-300">
-            <tr v-for="(row, idx) in tableRows" :key="row.label || idx" class="hover:bg-slate-800/50" :class="row.status === 'completed' ? 'bg-green-800/30' : ''">
+            <tr v-for="(row, idx) in tableRows" :key="`${idx}:${row.label || ''}`" class="hover:bg-slate-800/50" :class="row.resultFinalized && row.cycleResult === 'ng' ? 'bg-red-900/30' : (row.status === 'completed' ? 'bg-green-800/30' : '')">
               <td v-if="stepTableColumns.showNo !== false" class="px-2 py-1.5">{{ idx + 1 }}</td>
               <td v-if="stepTableColumns.showStep !== false" class="px-2 py-1.5">{{ row.step }}</td>
               <td v-if="stepTableColumns.showStatus !== false" class="px-2 py-1.5">
@@ -106,7 +106,7 @@
               <td v-if="stepTableColumns.showPt !== false" class="px-2 py-1.5 font-mono text-white">{{ row.status === 'completed' ? getStepPt(row.label) : '--' }}</td>
               <td v-if="stepTableColumns.showResult !== false" class="px-2 py-1.5">
                 <span v-if="row.status === 'completed' && row.cycleResult === 'ok'" class="text-green-400">OK</span>
-                <span v-else-if="row.status === 'completed' && row.cycleResult === 'ng'" class="text-red-500">NG</span>
+                <span v-else-if="(row.status === 'completed' || row.resultFinalized) && row.cycleResult === 'ng'" class="text-red-500">NG</span>
                 <span v-else class="text-gray-500">--</span>
               </td>
             </tr>

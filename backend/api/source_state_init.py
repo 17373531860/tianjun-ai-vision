@@ -112,6 +112,23 @@ def _init_fps_stats(h):
     h._frame_seq = 0
 
 
+def _init_streaming_state(h):
+    """MJPEG 多窗口订阅与 latest-only 共享编码缓存。
+
+    connection registry 与 JPEG encode 各用独立锁；两把锁都不会被采集、
+    推理或录像线程获取，查看窗口的连接生命周期不会进入检测链路。
+    """
+    h._mjpeg_registry_lock = threading.Lock()
+    h._mjpeg_encode_lock = threading.Lock()
+    h._mjpeg_next_conn_id = 0
+    h._mjpeg_active_conn_ids = {}
+    h._mjpeg_active_streams = 0
+    h._mjpeg_cached_seq = -1
+    h._mjpeg_cached_chunk = None
+    h._mjpeg_cached_at = 0.0
+    h._mjpeg_cache_version = 0
+
+
 def _init_step_state(h):
     """步骤检测状态 (截图 / 计数 / 时间窗 / 帧确认 / 静态步骤 / 替补 / 同时出现组)"""
     h.step_screenshots = {}
@@ -450,6 +467,7 @@ def init_state(h):
     _init_health_and_timeout(h)
     _init_components(h)
     _init_fps_stats(h)
+    _init_streaming_state(h)
     _init_step_state(h)
     _init_event_and_cycle_state(h)
     _init_tracking_state(h)

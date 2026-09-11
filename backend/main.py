@@ -63,6 +63,7 @@ import cv2
 import atexit
 import signal
 import threading
+from typing import Optional
 from sqlalchemy import text
 from backend.core import debug_center
 
@@ -1647,8 +1648,11 @@ def shutdown_complete():
 # ========== 视频流端点 ==========
 
 @app.get("/video_feed")
-def video_feed(channel: int = 0):
-    """视频流端点 - 支持多通道。?channel=0 (default), ?channel=1, etc.
+def video_feed(channel: int = 0, viewer: Optional[str] = None):
+    """视频流端点 - 支持多通道和固定窗口身份。
+
+    ``viewer=main`` 用于主窗口，``viewer=station`` 用于工位扩展窗；缺省或
+    非法值走 legacy 槽，保持旧客户端的同通道后来者上位语义。
 
     通道未启动任何视频源时,返回一张黑底白字的 "Ch{N} - No Source" 占位 MJPEG 流,
     避免前端 <img> 因为 EOF 反复闪烁/重连. cv2.putText 在 OpenCV 4.11 + 某些
@@ -1659,7 +1663,7 @@ def video_feed(channel: int = 0):
 
     if vm.is_running or vm.source_type:
         return StreamingResponse(
-            vm.generate_mjpeg(),
+            vm.generate_mjpeg(viewer=viewer),
             media_type="multipart/x-mixed-replace; boundary=frame"
         )
 

@@ -1458,7 +1458,7 @@ const layoutBodyActions = computed(() => ({
 // 给 layout.body 插件构造每通道 MJPEG 流 URL 的 helper.
 // 主程序内部用 startMultiStreams 拉 multipart MJPEG 到 canvas (双缓冲), 插件用简化版 <img :src=url> 直接吃就够了.
 // 端点是 main.py 的 `/video_feed?channel=N` (不在 /api/v1/source 前缀下, 是顶层端点).
-const buildMultiStreamUrl = (ch) => `${getBackendHost()}/video_feed?channel=${ch}&t=${Date.now()}`;
+const buildMultiStreamUrl = (ch) => `${getBackendHost()}/video_feed?channel=${ch}&viewer=${kioskMode.value || stationViewMode.value ? 'station' : 'main'}&t=${Date.now()}`;
 
 // v3.4.2 "禁用扫码"按工位开关 helper
 const isScanDisabledFor = (ch) => scannerDisableStore.isChannelDisabled(ch);
@@ -1938,8 +1938,8 @@ const zoomChannel = (ch) => {
 };
 const selectOverviewChannel = (ch) => {
   // 双/三工位与 4+ 网格保持同一交互：点击总览视频卡即进入该工位详情。
-  // 多屏开启时的取流隔离由 useMultiStreams 负责，普通主窗口放大仍走 snapshot，
-  // 不与扩展出去的工位主窗争抢同一 channel 的 MJPEG。
+  // 多屏开启时的取流隔离由 useMultiStreams 负责：主窗口放大走 main 槽 MJPEG，
+  // 扩展出去的工位主窗走 station 槽，两者不会互相抢断。
   zoomChannel(ch);
 };
 const exitZoom = () => {
@@ -4200,8 +4200,14 @@ const resetCountersForChannel = async (ch) => {
       ng: 0,
       yieldRate: 0,
       ngStepRanking: [],
-      steps: (chData.steps || []).map(s => ({ ...s, status: 'pending', screenshot: null })),
-      tableData: (chData.tableData || []).map(t => ({ ...t, count: 0, status: 'pending' })),
+      resultEventIgnoreBeforeMs: Date.now(),
+      counterSettledVerdict: null,
+      steps: (chData.steps || []).map(s => ({
+        ...s, status: 'pending', cycleResult: null, resultFinalized: false, screenshot: null,
+      })),
+      tableData: (chData.tableData || []).map(t => ({
+        ...t, count: 0, status: 'pending', cycleResult: null, resultFinalized: false,
+      })),
     };
   }
   ElMessage.success(`工位 ${ch + 1} 计数器已清零`);
@@ -4241,8 +4247,14 @@ const confirmResetCycle = async () => {
       const chData = multiChannelData.value[ch];
       multiChannelData.value[ch] = {
         ...chData,
-        steps: (chData.steps || []).map(s => ({ ...s, status: 'pending' })),
-        tableData: (chData.tableData || []).map(t => ({ ...t, status: 'pending' })),
+        resultEventIgnoreBeforeMs: Date.now(),
+        counterSettledVerdict: null,
+        steps: (chData.steps || []).map(s => ({
+          ...s, status: 'pending', cycleResult: null, resultFinalized: false,
+        })),
+        tableData: (chData.tableData || []).map(t => ({
+          ...t, status: 'pending', cycleResult: null, resultFinalized: false,
+        })),
       };
     }
     ElMessage.success(res?.data?.message || '本周期数据已清理');

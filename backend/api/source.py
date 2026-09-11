@@ -1978,7 +1978,72 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         black = np.zeros((480, 640, 3), dtype=np.uint8)
         return black
 
-    def generate_mjpeg(self):
+    @staticmethod
+    def _normalize_mjpeg_viewer(viewer):
+        """把外部订阅身份限制在固定槽位，避免任意值造成连接表无界增长。"""
+        return viewer if viewer in {'main', 'station'} else 'legacy'
+
+    @staticmethod
+    def _ensure_mjpeg_stream_state(host):
+        """兼容极少数未走完整 __init__ 的诊断桩；正式实例在 state_init 初始化。"""
+        if getattr(host, '_mjpeg_registry_lock', None) is None:
+            host._mjpeg_registry_lock = threading.Lock()
+            host._mjpeg_active_conn_ids = {}
+            host._mjpeg_next_conn_id = 0
+            host._mjpeg_active_streams = 0
+        if getattr(host, '_mjpeg_encode_lock', None) is None:
+            host._mjpeg_encode_lock = threading.Lock()
+            host._mjpeg_cached_seq = -1
+            host._mjpeg_cached_chunk = None
+            host._mjpeg_cached_at = 0.0
+            host._mjpeg_cache_version = 0
+
+    @staticmethod
+    def _shared_mjpeg_chunk(host, last_cache_version, stream_interval, refresh_same_frame=False):
+        """返回该工位最新的 immutable MJPEG chunk，同一输出节拍最多编码一次。
+
+        encode lock 只串行化本工位的 JPEG cache 发布；frame_lock 仅用于复制当前帧，
+        在 imencode 前即释放。慢客户端没有队列，只会跳过已经过时的 cache version。
+        """
+        with host._mjpeg_encode_lock:
+            cached_version = host._mjpeg_cache_version
+            cached_chunk = host._mjpeg_cached_chunk
+            if cached_chunk is not None and cached_version != last_cache_version:
+                return cached_version, host._mjpeg_cached_seq, cached_chunk, 0.0, False
+
+            now = time.monotonic()
+            if cached_chunk is not None and (now - host._mjpeg_cached_at) < stream_interval:
+                return last_cache_version, host._mjpeg_cached_seq, None, 0.0, False
+
+            frame = None
+            with host.frame_lock:
+                seq = host._frame_seq
+                if not refresh_same_frame and seq == host._mjpeg_cached_seq:
+                    return last_cache_version, seq, None, 0.0, False
+                if host.current_frame is not None:
+                    frame = host.current_frame.copy()
+
+            if frame is None and refresh_same_frame:
+                frame = host._get_placeholder_frame()
+            if frame is None:
+                return last_cache_version, seq, None, 0.0, False
+
+            encode_started = time.perf_counter()
+            chunk = host._encode_and_yield(frame)
+            encode_ms = (time.perf_counter() - encode_started) * 1000
+            del frame
+
+            # 失败帧也标记已尝试，避免同一个坏帧被高频重复编码。
+            host._mjpeg_cached_seq = seq
+            host._mjpeg_cached_at = time.monotonic()
+            if chunk is None:
+                return last_cache_version, seq, None, encode_ms, True
+
+            host._mjpeg_cache_version += 1
+            host._mjpeg_cached_chunk = chunk
+            return host._mjpeg_cache_version, seq, chunk, encode_ms, True
+
+    def generate_mjpeg(self, viewer=None):
         """Generate MJPEG stream.  Only encodes and sends when a genuinely new
         frame is available from the capture thread, so CPU is never wasted on
         duplicate JPEG encodes.
@@ -1990,48 +2055,69 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         Chrome keep-alive 不会立即关闭旧 MJPEG socket, 旧 generator 仍
         会 hold 住 frame_lock + thread-pool worker, 导致新连接拿不到锁
         几秒, 浏览器 <img> 收不到首帧 -> 黑屏。修复: 每条 generator 分配
-        connection_id, 记录该 channel 最新 id, 旧 generator 每次 yield
-        前检测自己是否过期, 是则主动 break 释放资源。同一 channel 同时
-        只保留 1 条 generator, 切换 Monitor / 路由刷新都不会累积。
+        connection_id, 旧 generator 每次 yield 前检测自己是否过期。
+
+        多屏修复: 每个 channel 按 main/station/legacy 分三个固定连接槽；同槽
+        重连仍由后来者上位，不同窗口可并存。JPEG chunk 按 channel 共享且
+        latest-only，同一输出节拍只编码一次，不建立客户端队列，也不进入推理锁。
         """
         from backend.api.channel_manager import channel_manager
+        VideoSourceManager._ensure_mjpeg_stream_state(self)
+        viewer_key = VideoSourceManager._normalize_mjpeg_viewer(viewer)
         target_interval = 1.0 / max(self.target_stream_fps, 1)
         num_ch = max(channel_manager.channel_count, 1)
         min_interval = max(0.02, 0.015 * num_ch)
+        stream_interval = max(min_interval, target_interval) if self.frame_limit_enabled else min_interval
         idle_count = 0
         max_idle = 600
         last_seq = -1
-        ch_label = getattr(self, 'channel_index', '?')
+        last_cache_version = -1
+        ch_label = getattr(self, 'channel_id', getattr(self, 'channel_index', '?'))
 
         # ── backend.stream 推流诊断埋点 (零开销: 计数恒做, 字符串拼接仅 is_on 时) ──
         _dbg_yields = 0                  # 本统计窗口内成功 yield 的帧数 → 推帧 FPS
         _dbg_enc_total = 0.0             # 编码累计耗时 (ms), 仅 is_on 时累计
+        _dbg_encodes = 0                 # 本连接实际承担的共享编码次数
         _dbg_win_start = time.time()     # 统计窗口起点
         _dbg_last_seq_change = time.time()
         _dbg_stall_logged = False        # 画面停滞只报一次, 恢复后复位
 
-        # v3.7.x 分配 connection id, 同 channel 后来者上位
-        self._mjpeg_next_conn_id = getattr(self, '_mjpeg_next_conn_id', 0) + 1
-        my_conn_id = self._mjpeg_next_conn_id
-        self._mjpeg_active_conn_id = my_conn_id
+        # v3.7.x 的后来者上位缩小到同一 viewer 槽；main 与 station 不再互踢。
+        with self._mjpeg_registry_lock:
+            self._mjpeg_next_conn_id += 1
+            my_conn_id = self._mjpeg_next_conn_id
+            replaced_conn_id = self._mjpeg_active_conn_ids.get(viewer_key)
+            self._mjpeg_active_conn_ids[viewer_key] = my_conn_id
+            self._mjpeg_active_streams += 1
+            active_count = self._mjpeg_active_streams
+
+        def _current_slot_conn():
+            with self._mjpeg_registry_lock:
+                return self._mjpeg_active_conn_ids.get(viewer_key)
 
         try:
-            self._mjpeg_active_streams = getattr(self, '_mjpeg_active_streams', 0) + 1
-            print(f"[MJPEG] new connection #{my_conn_id} ch={ch_label}, active={self._mjpeg_active_streams}", flush=True)
+            print(f"[MJPEG] new connection #{my_conn_id} ch={ch_label} viewer={viewer_key}, "
+                  f"active={active_count}", flush=True)
             if debug_center.is_on("backend.stream"):
+                _replace_note = f" 替换同槽#{replaced_conn_id}" if replaced_conn_id is not None else ""
                 debug_center.dbg("backend.stream", "推流新连接",
-                                 f"conn#{my_conn_id} ch={ch_label} 活跃连接={self._mjpeg_active_streams}")
+                                 f"conn#{my_conn_id} ch={ch_label} viewer={viewer_key} "
+                                 f"活跃连接={active_count}{_replace_note}")
         except Exception:
+            # stdout/debug sink 故障不能跳过下方 generator finally 的连接清理。
             pass
 
         try:
             while True:
-                # 旧连接让位: 同 channel 有更新的 id 进来 -> 主动退出
-                if getattr(self, '_mjpeg_active_conn_id', my_conn_id) != my_conn_id:
-                    print(f"[MJPEG] connection #{my_conn_id} ch={ch_label} yielding to #{self._mjpeg_active_conn_id}, exiting", flush=True)
+                # 旧连接让位: 仅同 viewer 有更新 id 时主动退出。
+                current_slot_conn = _current_slot_conn()
+                if current_slot_conn != my_conn_id:
+                    print(f"[MJPEG] connection #{my_conn_id} ch={ch_label} viewer={viewer_key} "
+                          f"yielding to #{current_slot_conn}, exiting", flush=True)
                     if debug_center.is_on("backend.stream"):
                         debug_center.dbg("backend.stream", "推流连接让位退出",
-                                         f"conn#{my_conn_id} ch={ch_label} 让位给 #{self._mjpeg_active_conn_id} "
+                                         f"conn#{my_conn_id} ch={ch_label} viewer={viewer_key} "
+                                         f"让位给 #{current_slot_conn} "
                                          f"(频繁让位=前端反复重连)")
                     break
 
@@ -2039,14 +2125,10 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
 
                 if self.is_running:
                     idle_count = 0
-                    frame = None
-                    with self.frame_lock:
-                        seq = self._frame_seq
-                        if seq != last_seq and self.current_frame is not None:
-                            frame = self.current_frame.copy()
-                            last_seq = seq
-
-                    if frame is None:
+                    cache_version, seq, chunk, encode_ms, encoded_here = VideoSourceManager._shared_mjpeg_chunk(
+                        self, last_cache_version, stream_interval
+                    )
+                    if chunk is None:
                         # seq 未变 = 采集线程没出新帧 (或人工确认定格). 画面停滞 >2s 报一次.
                         if _dbg_on and not _dbg_stall_logged and (time.time() - _dbg_last_seq_change) > 2.0:
                             _dbg_stall_logged = True
@@ -2058,67 +2140,69 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                         time.sleep(0.005)
                         continue
 
-                    # 拿到新帧: 复位停滞标记, 记录帧序号推进时刻
-                    _dbg_last_seq_change = time.time()
-                    _dbg_stall_logged = False
+                    # 编码期间同槽可能发生重连；yield 前再验一次，旧连接不多发尾帧。
+                    if _current_slot_conn() != my_conn_id:
+                        continue
 
-                    if _dbg_on:
-                        _t_enc = time.time()
-                        chunk = self._encode_and_yield(frame)
-                        _dbg_enc_total += (time.time() - _t_enc) * 1000
-                    else:
-                        chunk = self._encode_and_yield(frame)
-                    del frame
-                    if chunk:
-                        yield chunk
-                        _dbg_yields += 1
+                    last_cache_version = cache_version
+                    if seq != last_seq:
+                        last_seq = seq
+                        _dbg_last_seq_change = time.time()
+                        _dbg_stall_logged = False
+                    if _dbg_on and encoded_here:
+                        _dbg_enc_total += encode_ms
+                        _dbg_encodes += 1
+                    yield chunk
+                    _dbg_yields += 1
 
                     # 每 2s 汇总一次推帧 FPS + 平均编码耗时
                     if _dbg_on and (time.time() - _dbg_win_start) >= 2.0:
                         _elapsed = time.time() - _dbg_win_start
                         _push_fps = _dbg_yields / _elapsed if _elapsed > 0 else 0
-                        _enc_avg = _dbg_enc_total / _dbg_yields if _dbg_yields else 0
+                        _enc_avg = _dbg_enc_total / _dbg_encodes if _dbg_encodes else 0
                         debug_center.dbg("backend.stream", "推流吞吐",
-                                         f"conn#{my_conn_id} ch={ch_label} 推帧={_push_fps:.1f}fps "
+                                         f"conn#{my_conn_id} ch={ch_label} viewer={viewer_key} "
+                                         f"推帧={_push_fps:.1f}fps "
                                          f"编码均耗={_enc_avg:.1f}ms 采集fps={getattr(self, 'fps_actual', '?')} "
                                          f"推理fps={getattr(self, 'fps_inference', '?')}")
                         _dbg_yields = 0
                         _dbg_enc_total = 0.0
+                        _dbg_encodes = 0
                         _dbg_win_start = time.time()
-
-                    if self.frame_limit_enabled:
-                        time.sleep(max(min_interval, target_interval))
-                    else:
-                        time.sleep(min_interval)
                 else:
-                    frame = self.get_frame()
-                    if frame is None:
-                        frame = self._get_placeholder_frame()
-                    chunk = self._encode_and_yield(frame)
-                    del frame
-                    if chunk:
-                        yield chunk
-
+                    cache_version, seq, chunk, _, _ = VideoSourceManager._shared_mjpeg_chunk(
+                        self, last_cache_version, 1.0, refresh_same_frame=True
+                    )
+                    if chunk is None:
+                        time.sleep(0.05)
+                        continue
+                    if _current_slot_conn() != my_conn_id:
+                        continue
+                    last_cache_version = cache_version
+                    last_seq = seq
+                    yield chunk
                     idle_count += 1
                     if idle_count > max_idle:
                         break
-                    # 短间隔检查，以便 is_running 变 True 时快速恢复
-                    for _ in range(10):
-                        if self.is_running:
-                            break
-                        time.sleep(0.1)
         except (GeneratorExit, ConnectionResetError, BrokenPipeError):
             # 客户端断开, 正常退出
             pass
         except Exception as e:
-            print(f"[MJPEG] generator #{my_conn_id} abnormal exit ch={ch_label}: {e}", flush=True)
+            print(f"[MJPEG] generator #{my_conn_id} abnormal exit ch={ch_label} "
+                  f"viewer={viewer_key}: {e}", flush=True)
         finally:
             try:
-                self._mjpeg_active_streams = max(0, getattr(self, '_mjpeg_active_streams', 1) - 1)
-                print(f"[MJPEG] connection #{my_conn_id} closed ch={ch_label}, active={self._mjpeg_active_streams}", flush=True)
+                with self._mjpeg_registry_lock:
+                    if self._mjpeg_active_conn_ids.get(viewer_key) == my_conn_id:
+                        del self._mjpeg_active_conn_ids[viewer_key]
+                    self._mjpeg_active_streams = max(0, self._mjpeg_active_streams - 1)
+                    active_count = self._mjpeg_active_streams
+                print(f"[MJPEG] connection #{my_conn_id} closed ch={ch_label} "
+                      f"viewer={viewer_key}, active={active_count}", flush=True)
                 if debug_center.is_on("backend.stream"):
                     debug_center.dbg("backend.stream", "推流连接关闭",
-                                     f"conn#{my_conn_id} ch={ch_label} 剩余活跃连接={self._mjpeg_active_streams}")
+                                     f"conn#{my_conn_id} ch={ch_label} viewer={viewer_key} "
+                                     f"剩余活跃连接={active_count}")
             except Exception:
                 pass
     
@@ -2243,11 +2327,11 @@ _cameras_cache = {
 
 
 
-def get_video_feed(channel: int = 0):
+def get_video_feed(channel: int = 0, viewer=None):
     """获取视频流（供 main.py 使用）"""
     from backend.api.channel_manager import channel_manager
     mgr = channel_manager.get(channel)
-    return mgr.generate_mjpeg()
+    return mgr.generate_mjpeg(viewer=viewer)
 
 def get_video_manager(channel: int = 0):
     """获取视频管理器实例"""

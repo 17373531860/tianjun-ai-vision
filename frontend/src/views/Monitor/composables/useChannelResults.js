@@ -31,6 +31,50 @@ export function useChannelResults(ctx) {
 
   const processChannelResult = (ch, d) => {
     const chData = multiChannelData.value[ch] || {};
+    const nowMs = Date.now();
+    // 与单工位周期边界口径一致；优先用创建即有的 current_cycle_uuid，兼容
+    // current_cycle_id。结算后的 token -> null 保留上轮反馈；null/旧 token ->
+    // 新 token 或切换项目时，首步尚未入 cycle 也要
+    // 清掉旧 OK/NG，避免扩展屏把上一件结果挂到下一件。
+    const hasCycleId = Object.prototype.hasOwnProperty.call(d, 'current_cycle_id');
+    const hasCycleUuid = Object.prototype.hasOwnProperty.call(d, 'current_cycle_uuid');
+    const previousCycleId = chData.currentCycleId;
+    const incomingCycleId = hasCycleId
+      ? (d.current_cycle_id ?? null)
+      : (previousCycleId ?? null);
+    const previousCycleToken = chData.currentCycleToken;
+    const incomingCycleToken = (hasCycleId || hasCycleUuid)
+      ? (d.current_cycle_uuid ?? d.current_cycle_id ?? null)
+      : (previousCycleToken ?? null);
+    const newCycleStarted = (hasCycleId || hasCycleUuid)
+      && incomingCycleToken !== null
+      && previousCycleToken !== undefined
+      && incomingCycleToken !== previousCycleToken;
+    const firstObservedCycleIsActive = previousCycleToken === undefined
+      && incomingCycleToken !== null;
+    const cycleEnded = previousCycleToken !== undefined
+      && previousCycleToken !== null
+      && incomingCycleToken === null;
+    const projectConfig = d.project_config || {};
+    const hasProjectId = Object.prototype.hasOwnProperty.call(projectConfig, 'project_id');
+    const previousProjectId = chData.projectId;
+    const incomingProjectId = hasProjectId
+      ? (projectConfig.project_id ?? null)
+      : (previousProjectId ?? null);
+    const projectChanged = hasProjectId
+      && previousProjectId !== undefined
+      && incomingProjectId !== previousProjectId;
+    if (newCycleStarted || projectChanged || firstObservedCycleIsActive) {
+      // recent_events 最多保留 30 秒且没有 cycle UUID。记录浏览器观察到的新周期/
+      // 项目边界，后续即使空轮询仍带上一轮 1/2 事件，也不得重新盖回旧 OK/NG。
+      chData.resultEventIgnoreBeforeMs = nowMs;
+      // 上一周期由计数器确认的最终 verdict 只在周期间隙保留；新周期/新项目
+      // 必须同步失效，不能继续压住新一轮的逐步骤状态。
+      chData.counterSettledVerdict = null;
+    }
+    chData.currentCycleId = incomingCycleId;
+    chData.currentCycleToken = incomingCycleToken;
+    chData.projectId = incomingProjectId;
     // v3.51.5: 工位源"从停到跑"的瞬间强制重连该路视频流 — 开机恢复要 30s+ 的现场
     // (捷昌 B 站), 页面挂载时源还没起来, MJPEG 零帧断流两次就永久降级快照、或旧连接
     // 对着停掉的源干等; 源恢复后没人负责把流拉回来, 表现为"画面加载完还得切页
@@ -60,6 +104,19 @@ export function useChannelResults(ctx) {
     const prevNg = multiChannelData.value[ch]?.ng ?? -1;
     const newTotal = ctrs['总产量'] ?? 0;
     const newNg = ctrs['不良总数'] ?? 0;
+    // events_log 写在 end_cycle 外层，插件/工位组可能在 end_cycle 内翻转最终结果。
+    // active token -> null 且总产量增长时，以最终计数器增量为本拍结算 verdict。
+    const settledVerdict = cycleEnded && prevTotal >= 0 && newTotal > prevTotal
+      ? (prevNg >= 0 && newNg > prevNg ? 'ng' : 'ok')
+      : null;
+    if (settledVerdict) chData.counterSettledVerdict = settledVerdict;
+    // events_log 可能比 counters 早/晚一拍，也可能在插件最终翻转前写入。
+    // 一旦 active token -> null 的计数器增量确认最终结果，就在整个周期间隙
+    // 持续以它为准；否则迟到的旧 event_id 会在下一拍把最终 OK/NG 反转。
+    const effectiveSettledVerdict = incomingCycleToken === null
+      && ['ok', 'ng'].includes(chData.counterSettledVerdict)
+      ? chData.counterSettledVerdict
+      : null;
     if (channelCount.value > 1 && prevTotal >= 0 && newTotal > prevTotal) {
       const cycleIsNg = prevNg >= 0 && newNg > prevNg;
       const realWp = d.mes?.workpiece;
@@ -173,9 +230,19 @@ export function useChannelResults(ctx) {
       backupCoveredLabels: chData.backupCoveredLabels,
       stepInflightDurations: chData.stepInflightDurations,
       prevSteps: chData.steps,
+      prevTableData: chData.tableData,
+      resetPreviousResults: newCycleStarted || projectChanged,
+      cycleInProgress: incomingCycleToken !== null,
+      resultEventIgnoreBeforeMs: chData.resultEventIgnoreBeforeMs || 0,
+      lastHandledResultEventKey: chData.lastHandledResultEventKey || null,
+      settledVerdict: effectiveSettledVerdict,
+      nowMs,
     });
     if (stepViews.tableData !== null) chData.tableData = stepViews.tableData;
     if (stepViews.sopSteps !== null) chData.steps = stepViews.sopSteps;
+    if (stepViews.handledResultEventKey) {
+      chData.lastHandledResultEventKey = stepViews.handledResultEventKey;
+    }
     chData._hiddenLabels = stepViews.hiddenLabels;
 
     const events = d.recent_events || [];

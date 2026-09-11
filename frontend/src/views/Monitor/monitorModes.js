@@ -173,14 +173,103 @@ export const resolveModePanelKind = (pollProjectConfig, fallbackProject) => {
   return MODE_PANEL_KINDS.includes(mode) ? mode : null;
 };
 
+const RESULT_EVENT_HOLD_MS = 8000;
+
+const resultEventId = event => String(event?.event_id ?? event?.eventId ?? '');
+
+const resultEventKey = event => [
+  resultEventId(event),
+  event?.seq ?? '',
+  event?.timestamp ?? '',
+].join('|');
+
+// recent_events 保留 30 秒且不带 cycle UUID；新周期/切项目只能用浏览器观察到的
+// 时间边界隔离上一轮。这里只接受检测周期本身写入的 1/2 事件，排除借事件响应面的
+// external/periodic source 和“待补做、尚未结算”的 remediation 事件。
+const latestFreshResultEvent = (events, nowMs, ignoreBeforeMs = 0) => {
+  let latest = null;
+  let latestEventMs = -Infinity;
+  let latestSeq = -Infinity;
+  for (const event of (Array.isArray(events) ? events : [])) {
+    if (!['1', '2'].includes(resultEventId(event))) continue;
+    if (event?.source || event?.remediation === true) continue;
+    const eventMs = Number(event?.timestamp) * 1000;
+    const ageMs = nowMs - eventMs;
+    if (!Number.isFinite(eventMs) || eventMs <= 0) continue;
+    if (ageMs < -3000 || ageMs > RESULT_EVENT_HOLD_MS) continue;
+    if (Number.isFinite(ignoreBeforeMs) && ignoreBeforeMs > 0 && eventMs <= ignoreBeforeMs) continue;
+    const seq = Number(event?.seq);
+    const comparableSeq = Number.isFinite(seq) ? seq : -Infinity;
+    if (eventMs > latestEventMs || (eventMs === latestEventMs && comparableSeq > latestSeq)) {
+      latest = event;
+      latestEventMs = eventMs;
+      latestSeq = comparableSeq;
+    }
+  }
+  return latest;
+};
+
+const parseListedLabels = (value) => String(value || '')
+  .split(/[,，]/)
+  .map(item => item.trim().replace(/^['"]|['"]$/g, '').trim())
+  .filter(Boolean);
+
+// 只解析后端明确声明“哪个步骤出错”的文案；不再抓 reason 中所有引号，避免把
+// “自定义条件匹配: ['A']”里的正常命中条件误当成 NG 步骤。
+const resultEventIssueHints = (event) => {
+  const missingLabels = [];
+  let hasMissingDeclaration = false;
+  const addMissing = (item) => {
+    const value = typeof item === 'string'
+      ? item
+      : (item?.label || item?.name || item?.step || '');
+    if (value) missingLabels.push(String(value).trim());
+  };
+  [
+    event?.missing_steps,
+    event?.missingSteps,
+    event?.data?.missing_steps,
+    event?.details?.missing_steps,
+  ].forEach((value) => {
+    if (Array.isArray(value)) {
+      hasMissingDeclaration = true;
+      value.forEach(addMissing);
+    }
+  });
+
+  const reason = String(event?.reason || '');
+  const missing = reason.match(/缺少(?:步骤)?[：:]\s*\[([^\]]+)\]/);
+  if (missing) {
+    hasMissingDeclaration = true;
+    missingLabels.push(...parseListedLabels(missing[1]));
+  }
+  const duplicate = reason.match(/重复步骤[：:]\s*\[([^\]]+)\]/);
+  const duplicateLabels = duplicate ? parseListedLabels(duplicate[1]) : [];
+  const orderIndexMatch = reason.match(/第\s*(\d+)\s*步[^，,。]*顺序错误/);
+  const orderPair = reason.match(/期望\[([^\]]+)\].*实际\[([^\]]+)\]/);
+  const explicitLabel = reason.match(/(?:步骤回退|违反严格顺序)[：:]\s*\[([^\]]+)\]/)
+    || reason.match(/步骤\s*\[([^\]]+)\]\s*超时/);
+  return {
+    missingLabels,
+    hasMissingDeclaration,
+    duplicateLabels,
+    orderIndex: orderIndexMatch ? Number(orderIndexMatch[1]) - 1 : null,
+    orderActual: orderPair ? String(orderPair[2]).trim() : '',
+    explicitLabels: explicitLabel ? parseListedLabels(explicitLabel[1]) : [],
+  };
+};
+
 /**
  * 从单通道 results 载荷构建步骤视图。
  *
  * @param {object} d 后端 /source/detection/results 单通道载荷
  * @param {object|null} fallbackProject 兜底项目（全局 currentProject；载荷缺配置时用）
  * @param {object} chState 通道已累计状态：
- *   { currentCycleSteps, backupCoveredLabels, stepInflightDurations, prevSteps }
- * @returns {{ tableData: Array|null, sopSteps: Array|null, hiddenLabels: Set }}
+ *   { currentCycleSteps, backupCoveredLabels, stepInflightDurations,
+ *     prevSteps, prevTableData, resetPreviousResults, cycleInProgress,
+ *     resultEventIgnoreBeforeMs, lastHandledResultEventKey, settledVerdict, nowMs }
+ * @returns {{ tableData: Array|null, sopSteps: Array|null, hiddenLabels: Set,
+ *   handledResultEventKey: string|null }}
  *   tableData/sopSteps 为 null = 本轮不更新；hiddenLabels 每轮都产出。
  */
 export function buildChannelStepViews(d, fallbackProject, chState) {
@@ -189,6 +278,8 @@ export function buildChannelStepViews(d, fallbackProject, chState) {
   const backupCoveredLabels = chState.backupCoveredLabels || [];
   const stepInflightDurations = chState.stepInflightDurations || {};
   const prevSteps = chState.prevSteps || [];
+  const prevTableData = chState.prevTableData || [];
+  const resetPreviousResults = chState.resetPreviousResults === true;
 
   // 跟踪模式：后端不推 _currentCycleSteps，改用 tracking.item_checklist
   // 把 counted > 0 的步骤翻成 completed/OK（v3.1.3）
@@ -240,32 +331,279 @@ export function buildChannelStepViews(d, fallbackProject, chState) {
 
   const _logicMode = resolveLogicMode(d.project_config, fallback);
   const _isRegionEvents = _logicMode === 'region_events';
-  const _stepsConf = resolveStepsToShow(
-    projectLikeForChannelSteps(d.project_config, fallback)
-  );
-  const _stepIsActive = (label) =>
-    _isRegionEvents && (stepInflightDurations[label] || 0) > 0;
+  const _projectLike = projectLikeForChannelSteps(d.project_config, fallback);
+  const _stepsConf = resolveStepsToShow(_projectLike);
+  // detection 仅固定首/末步骤，中间步骤明确无序；只有 sequential 及其
+  // custom-based-on-sequential 变体允许按配置位置推断乱序/跳步 NG。
+  const _isSequenceLike = _logicMode === 'sequential'
+    || (_logicMode === 'custom' && _projectLike.custom_based_on === 'sequential');
+  const _visibleSteps = _stepsConf
+    .filter(s => s.enabled !== false && !s.is_backup && _trkAllow(s.label));
+  const _detectingLabels = new Set((d.detections || []).map(det => det?.label));
+  const _stepIsActive = (label) => _isRegionEvents
+    ? (stepInflightDurations[label] || 0) > 0
+    : _detectingLabels.has(label);
+
+  // 多屏完整工位窗走 multiChannelData，而主屏单工位走 index.vue 内的
+  // updateStepsFromBackend。原多通道建卡只写 status，普通步骤 cycleResult 永远
+  // 为 null，ChannelDashboard 的最右「结果」列因此一直显示 --。这里把主屏既有的
+  // 位置分配、PT 守门、重复/乱序/漏步和备用步骤判定移植到纯函数，保持各工位同口径。
+  const _expectedLabels = _visibleSteps.map(step => step.label);
+  const _expectedCounter = {};
+  _expectedLabels.forEach(label => {
+    _expectedCounter[label] = (_expectedCounter[label] || 0) + 1;
+  });
+  const _actualPosByLabel = {};
+  currentCycleSteps.forEach((label, index) => {
+    (_actualPosByLabel[label] = _actualPosByLabel[label] || []).push(index);
+  });
+  const _consumedExpectedSlots = {};
+  _expectedLabels.forEach(label => { _consumedExpectedSlots[label] = 0; });
+  const _completedByPos = new Array(_expectedLabels.length).fill(false);
+  const _assignedActualPos = new Array(_expectedLabels.length).fill(-1);
+  let _maxCompletedIdx = -1;
+  _expectedLabels.forEach((label, index) => {
+    const seen = (_actualPosByLabel[label] || []).length;
+    const expectedCount = _expectedCounter[label] || 0;
+    const slotsToAllocate = Math.min(seen, expectedCount);
+    if (_consumedExpectedSlots[label] < slotsToAllocate) {
+      const occurrence = _consumedExpectedSlots[label];
+      _completedByPos[index] = true;
+      _assignedActualPos[index] = _actualPosByLabel[label][occurrence];
+      _consumedExpectedSlots[label] += 1;
+      _maxCompletedIdx = index;
+    }
+  });
+
+  const _outOfOrderIdx = new Set();
+  if (_isSequenceLike) {
+    let _maxActualSoFar = -1;
+    _expectedLabels.forEach((_label, index) => {
+      if (!_completedByPos[index]) return;
+      const actualPos = _assignedActualPos[index];
+      if (actualPos < _maxActualSoFar) _outOfOrderIdx.add(index);
+      _maxActualSoFar = Math.max(_maxActualSoFar, actualPos);
+    });
+  }
+
+  const _cycleDurations = d.cycle_sum_step_durations || {};
+  let _maxAuthoritativeCompletedIdx = -1;
+  _expectedLabels.forEach((label, index) => {
+    if (_completedByPos[index] && Number(_cycleDurations[label] || 0) > 0) {
+      _maxAuthoritativeCompletedIdx = index;
+    }
+  });
+
+  const _feedback = _visibleSteps.map((step, index) => {
+    const label = step.label;
+    const trackHit = _trackHit(label);
+    const coveredByBackup = backupCoveredLabels.includes(label);
+    const isActive = _stepIsActive(label);
+
+    if (trackHit) return { status: 'completed', cycleResult: 'ok', resultFinalized: false };
+
+    // end_cycle 会立即清 current_cycle_steps。沿用主屏行为：周期间隙保留上一轮
+    // 已盖章结果，下一周期一旦有步骤进入就按新序列整表重算；活动中的新标签优先点亮。
+    if (currentCycleSteps.length === 0) {
+      if (isActive) return { status: 'active', cycleResult: null, resultFinalized: false };
+      if (coveredByBackup) return { status: 'completed', cycleResult: 'ok', resultFinalized: false };
+      const previous = resetPreviousResults ? null : prevTableData[index];
+      const previousHasFinalResult = previous?.resultFinalized === true
+        && (previous.cycleResult === 'ok' || previous.cycleResult === 'ng');
+      if (
+        previous?.label === label
+        && (previous.cycleResult === 'ok' || previous.cycleResult === 'ng')
+        && (previous.status === 'completed' || previousHasFinalResult)
+      ) {
+        return {
+          status: previousHasFinalResult
+            ? (previous.status || (previous.cycleResult === 'ok' ? 'completed' : 'pending'))
+            : 'completed',
+          cycleResult: previous.cycleResult,
+          resultFinalized: previous.resultFinalized === true,
+        };
+      }
+      return { status: 'pending', cycleResult: null, resultFinalized: false };
+    }
+
+    const thisPosCompleted = _completedByPos[index];
+    const cycleCount = (_actualPosByLabel[label] || []).length;
+    const expectedCount = _expectedCounter[label] || 0;
+    const authoritative = Number(_cycleDurations[label] || 0) > 0;
+    const hasTimedPt = authoritative || Number(stepInflightDurations[label] || 0) > 0;
+    const passedThisStep = _maxCompletedIdx > index && thisPosCompleted;
+    const leftFrame = !isActive;
+    const isLastStep = index === _expectedLabels.length - 1;
+    const positionDone = thisPosCompleted && (
+      isLastStep
+        ? (leftFrame || authoritative)
+        : (hasTimedPt && (leftFrame || passedThisStep))
+    );
+
+    let cycleResult = null;
+    if (_isRegionEvents) {
+      cycleResult = positionDone ? 'ok' : null;
+    } else if (cycleCount > expectedCount && positionDone) {
+      cycleResult = 'ng';
+    } else if (positionDone) {
+      cycleResult = _outOfOrderIdx.has(index) ? 'ng' : 'ok';
+    } else if (coveredByBackup) {
+      cycleResult = 'ok';
+    } else if (_isSequenceLike
+      && !thisPosCompleted && index < _maxAuthoritativeCompletedIdx) {
+      cycleResult = 'ng';
+    }
+
+    return {
+      status: (thisPosCompleted || coveredByBackup)
+        ? 'completed'
+        : (isActive ? 'active' : 'pending'),
+      cycleResult,
+      resultFinalized: false,
+    };
+  });
+
+  // 与主屏同一兜底：末步已经 OK 时，前面已完成且未判乱序的位置同步补 OK，
+  // 避免后端 PT 写入相差一拍造成中间步骤结果短暂缺失。
+  const _lastIdx = _feedback.length - 1;
+  if (_lastIdx >= 0 && _feedback[_lastIdx].cycleResult === 'ok') {
+    _feedback.forEach((item, index) => {
+      if (
+        index < _lastIdx
+        && _completedByPos[index]
+        && item.cycleResult == null
+        && !_outOfOrderIdx.has(index)
+      ) {
+        item.cycleResult = 'ok';
+      }
+    });
+  }
+
+  // last_step 结算会在后端同一拍清 current_cycle_steps，浏览器可能看不到
+  // “末步离场但尚未清周期”的中间态。8 秒内的结算提示只做展示兜底：
+  // - 周期计数器在 active token -> null 时给出的 settledVerdict 优先，避免插件在
+  //   end_cycle 内翻转最终 OK/NG 后 events_log 仍保留原 event_id；
+  // - external / periodic / remediation 事件不参与；活动周期、项目/周期边界不参与；
+  // - NG 只映射明确且位置可判定的步骤，重复 label 无位置证据时不猜。
+  // 事件只消费一次，后续靠 resultFinalized 的前态保留，避免 150ms 重复跑文本解析。
+  const _hasLiveProgress = currentCycleSteps.length > 0
+    || _detectingLabels.size > 0
+    || Object.values(stepInflightDurations).some(value => Number(value || 0) > 0);
+  const _supportsResultEvent = ['sequential', 'detection'].includes(_logicMode);
+  const _cycleInProgress = chState.cycleInProgress === true;
+  const _settledVerdict = _supportsResultEvent && ['ok', 'ng'].includes(chState.settledVerdict)
+    ? chState.settledVerdict
+    : null;
+  const _resultEvent = _supportsResultEvent && !resetPreviousResults
+    && !_cycleInProgress && !d.pending_remediation
+    ? latestFreshResultEvent(
+      d.recent_events,
+      Number(chState.nowMs),
+      Number(chState.resultEventIgnoreBeforeMs || 0),
+    )
+    : null;
+  const _resultEventKey = _resultEvent ? resultEventKey(_resultEvent) : null;
+  const _newResultEvent = _resultEventKey
+    && _resultEventKey !== chState.lastHandledResultEventKey
+    ? _resultEvent
+    : null;
+  const _eventVerdict = _newResultEvent
+    ? (resultEventId(_newResultEvent) === '1' ? 'ok' : 'ng')
+    : null;
+  const _resultVerdict = _settledVerdict
+    || (!_hasLiveProgress ? _eventVerdict : null);
+  let handledResultEventKey = null;
+
+  if (_resultVerdict === 'ok') {
+    _feedback.forEach((item) => {
+      item.status = 'completed';
+      item.cycleResult = 'ok';
+      item.resultFinalized = true;
+    });
+  } else if (_resultVerdict === 'ng') {
+    const targets = new Set();
+    _feedback.forEach((item, index) => {
+      if (item.cycleResult === 'ng') targets.add(index);
+    });
+
+    const hints = resultEventIssueHints(_newResultEvent || _resultEvent || {});
+    const declaredMissingLabels = new Set(hints.missingLabels);
+    if (Number.isInteger(hints.orderIndex)
+      && hints.orderIndex >= 0 && hints.orderIndex < _visibleSteps.length) {
+      targets.add(hints.orderIndex);
+    }
+
+    const matchingIndexes = (candidate) => {
+      const wanted = String(candidate || '').trim();
+      if (!wanted) return [];
+      const matches = [];
+      _visibleSteps.forEach((step, index) => {
+        const aliases = [step.label, step.displayLabel, step.name, step.step]
+          .filter(Boolean)
+          .map(value => String(value).trim());
+        if (aliases.includes(wanted)) matches.push(index);
+      });
+      return matches;
+    };
+    const addUnambiguousTarget = (candidate) => {
+      const matches = matchingIndexes(candidate);
+      if (matches.length === 1) {
+        targets.add(matches[0]);
+        return;
+      }
+      // 重复 label 本身没有 occurrence；只有前一拍恰好留下一个未完成/NG 位置时
+      // 才能安全定位，不能把 A-B-A 中两张 A 一起染红。
+      const evidenced = matches.filter(index => (
+        _feedback[index].cycleResult === 'ng'
+        || _feedback[index].cycleResult == null
+      ));
+      if (evidenced.length === 1) targets.add(evidenced[0]);
+    };
+    hints.missingLabels.forEach(addUnambiguousTarget);
+    hints.duplicateLabels.forEach(addUnambiguousTarget);
+    hints.explicitLabels.forEach(addUnambiguousTarget);
+    if (targets.size === 0 && hints.orderActual) addUnambiguousTarget(hints.orderActual);
+
+    // 只有已经找到 NG 落点，才把其它唯一 label 的正 PT 或既有 OK 盖章；如果是
+    // 周期总超时/组合判型等无法定位的 NG，宁可保留前态，也不伪造“全步 OK”。
+    _visibleSteps.forEach((step, index) => {
+      if (targets.has(index)) {
+        if (Number(_cycleDurations[step.label] || 0) > 0) {
+          _feedback[index].status = 'completed';
+        }
+        _feedback[index].cycleResult = 'ng';
+        _feedback[index].resultFinalized = true;
+      } else if (_feedback[index].cycleResult === 'ok') {
+        _feedback[index].resultFinalized = true;
+      } else if (
+        targets.size > 0
+        && (
+          (_expectedCounter[step.label] || 0) === 1
+          || (hints.hasMissingDeclaration && !declaredMissingLabels.has(step.label))
+        )
+        && Number(_cycleDurations[step.label] || 0) > 0
+      ) {
+        _feedback[index].status = 'completed';
+        _feedback[index].cycleResult = 'ok';
+        _feedback[index].resultFinalized = true;
+      }
+    });
+  }
+
+  if (_newResultEvent && _resultVerdict) {
+    handledResultEventKey = _resultEventKey;
+  }
 
   let tableData = null;
   if (d.detections || _isRegionEvents) {
     // v3.31.x 语义收窄: hide_in_view 只隐藏画面检测框, SOP/步骤详情照常显示
-    tableData = _stepsConf
-      .filter(s => s.enabled !== false && !s.is_backup && _trkAllow(s.label))
-      .map((s) => {
-        const inCycle = currentCycleSteps.includes(s.label);
-        const coveredByBackup = backupCoveredLabels.includes(s.label);
-        const trackHit = _trackHit(s.label);
-        // v3.8.x (二次修订): 多工位"已完成"判定与单工位对齐 —
-        // 步骤进过 cycle_steps 就算完成, 不再硬等权威 PT 写入。
-        return {
-          step: s.displayLabel || s.label,
-          label: s.label,
-          status: (inCycle || coveredByBackup || trackHit)
-            ? 'completed'
-            : (_stepIsActive(s.label) ? 'active' : 'pending'),
-          cycleResult: trackHit ? 'ok' : null,
-        };
-      });
+    tableData = _visibleSteps.map((step, index) => ({
+      step: step.displayLabel || step.label,
+      label: step.label,
+      status: _feedback[index].status,
+      cycleResult: _feedback[index].cycleResult,
+      resultFinalized: _feedback[index].resultFinalized,
+    }));
   }
 
   let sopSteps = null;
@@ -275,19 +613,15 @@ export function buildChannelStepViews(d, fallbackProject, chState) {
     const prevSopByLabel = Object.fromEntries(
       prevSteps.map(s => [s.label, s.screenshot])
     );
-    sopSteps = _stepsConf
-      .filter(s => s.enabled !== false && !s.is_backup && _trkAllow(s.label))
-      .map(s => {
-        const inCycle = currentCycleSteps.includes(s.label);
-        const coveredByBackup = backupCoveredLabels.includes(s.label);
-        const trackHit = _trackHit(s.label);
+    sopSteps = _visibleSteps
+      .map((s, index) => {
         const rawB64 = screenshots[s.label];
         return {
           name: s.displayLabel || s.label,
           label: s.label,
-          status: (inCycle || coveredByBackup || trackHit)
-            ? 'completed'
-            : (_stepIsActive(s.label) ? 'active' : 'pending'),
+          status: _feedback[index].status,
+          cycleResult: _feedback[index].cycleResult,
+          resultFinalized: _feedback[index].resultFinalized,
           screenshot: rawB64
             ? `data:image/jpeg;base64,${rawB64}`
             : (prevSopByLabel[s.label] || null),
@@ -302,5 +636,5 @@ export function buildChannelStepViews(d, fallbackProject, chState) {
     hiddenStepsConf.filter(s => s && s.hide_in_view && s.label).map(s => s.label)
   );
 
-  return { tableData, sopSteps, hiddenLabels };
+  return { tableData, sopSteps, hiddenLabels, handledResultEventKey };
 }

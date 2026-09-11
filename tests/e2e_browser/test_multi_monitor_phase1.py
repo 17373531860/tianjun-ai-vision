@@ -9,6 +9,7 @@ import base64
 import json
 import os
 import re
+import time
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -76,6 +77,11 @@ def _goto(page, base_url: str, hash_path: str) -> None:
 def _channel_from_url(url: str) -> int | None:
     values = parse_qs(urlparse(url).query).get("channel")
     return int(values[0]) if values else None
+
+
+def _viewer_from_url(url: str) -> str | None:
+    values = parse_qs(urlparse(url).query).get("viewer")
+    return values[0] if values else None
 
 
 def _wait_for_channel(page, channels: list[int], target: int, timeout: float = 5.0) -> None:
@@ -383,6 +389,267 @@ def test_kiosk_is_readonly_and_polls_only_requested_channel(page, base_url, work
 
 
 @pytest.mark.parametrize(
+    ("hash_path", "channel", "viewport"),
+    [
+        (
+            "/monitor?channel=1&kiosk=1&readonly=0&multi_monitor=1",
+            1,
+            {"width": 1280, "height": 720},
+        ),
+        (
+            "/monitor?channel=2&station_view=1&readonly=0&multi_monitor=1",
+            2,
+            {"width": 1366, "height": 768},
+        ),
+    ],
+)
+def test_extension_station_step_results_keep_ok_ng_visible(
+    page, base_url, workstation_display_guard, hash_path, channel, viewport
+):
+    """工位详情窗（扩展窗/主屏复用）应渲染 OK/NG，且结果列在首屏。"""
+    _set_channel_count(4)
+    page.set_viewport_size(viewport)
+    requested_channels: list[int] = []
+    duplicate_key_warnings: list[str] = []
+    page.on(
+        "console",
+        lambda message: duplicate_key_warnings.append(message.text)
+        if "Duplicate keys" in message.text
+        else None,
+    )
+
+    def fake_results(route):
+        requested_channel = _channel_from_url(route.request.url)
+        if requested_channel is not None:
+            requested_channels.append(requested_channel)
+        is_target = requested_channel == channel
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(
+                {
+                    "is_running": True,
+                    "is_detecting": True,
+                    "source_type": "camera",
+                    "fps": 25,
+                    "latency": 8,
+                    "counters": {"总产量": 6, "合格总数": 4, "不良总数": 2},
+                    "project_config": {
+                        "project_id": 7000 + channel if is_target else 7999,
+                        "project_name": (
+                            f"E2E-工位{channel + 1}" if is_target else "E2E-非目标工位"
+                        ),
+                        "logic_mode": "sequential",
+                        "pipeline_config": {
+                            "sequence_order": [
+                                {"step_id": 1}, {"step_id": 2}, {"step_id": 1}
+                            ]
+                        },
+                        "steps_config": [
+                            {
+                                "id": 1,
+                                "label": "step-a" if is_target else "other-a",
+                                "displayLabel": "步骤A" if is_target else "非目标步骤A",
+                                "enabled": True,
+                            },
+                            {
+                                "id": 2,
+                                "label": "step-b" if is_target else "other-b",
+                                "displayLabel": "步骤B" if is_target else "非目标步骤B",
+                                "enabled": True,
+                            },
+                        ],
+                    },
+                    # 模拟真实结算后一拍：后端已清 cycle_steps，以权威 NG 事件
+                    # 指明漏做 B；两个 A 是合法重复位置，均应保持独立 OK 行。
+                    "current_cycle_id": None,
+                    "current_cycle_steps": [],
+                    "step_counts": (
+                        {"step-a": 1, "step-b": 1} if is_target else {}
+                    ),
+                    "cycle_sum_step_durations": (
+                        {"step-a": 0.8} if is_target else {}
+                    ),
+                    "step_inflight_durations": {},
+                    "detections": [],
+                    "recent_events": ([{
+                        "event_id": "2",
+                        "seq": 11,
+                        "timestamp": time.time(),
+                        "reason": "周期不完整，缺少: ['step-b']",
+                    }] if is_target else []),
+                },
+                ensure_ascii=False,
+            ),
+        )
+
+    page.route("**/api/v1/source/detection/results?**", fake_results)
+    page.route("**/video_feed?**", lambda route: route.abort())
+    page.route(
+        "**/snapshot?**",
+        lambda route: route.fulfill(
+            status=200, content_type="image/jpeg", body=b"\xff\xd8\xff\xd9"
+        ),
+    )
+    _goto(page, base_url, hash_path)
+
+    monitor = page.get_by_test_id("single-channel-monitor")
+    expect(monitor).to_have_attribute("data-channel", str(channel), timeout=5_000)
+    step_table = page.get_by_test_id("single-channel-step-table")
+    expect(step_table).to_be_visible()
+    expect(step_table.locator("thead th").last).to_have_text("结果")
+
+    result_cells = step_table.locator("tbody tr td:last-child")
+    expect(result_cells).to_have_count(3)
+    expect(result_cells.nth(0)).to_have_text("OK")
+    expect(result_cells.nth(1)).to_have_text("NG")
+    expect(result_cells.nth(2)).to_have_text("OK")
+    expect(result_cells.nth(0)).to_be_visible()
+    expect(result_cells.nth(1)).to_be_visible()
+    assert channel in requested_channels
+    if "kiosk=1" in hash_path:
+        assert set(requested_channels) == {channel}
+
+    geometry = step_table.locator("table").evaluate(
+        """table => {
+          const scroller = table.parentElement;
+          const scrollerRect = scroller.getBoundingClientRect();
+          const cells = [...table.querySelectorAll('tbody tr td:last-child')]
+            .map(cell => {
+              const rect = cell.getBoundingClientRect();
+              return { left: rect.left, right: rect.right };
+            });
+          return {
+            scrollLeft: scroller.scrollLeft,
+            scrollerLeft: scrollerRect.left,
+            scrollerRight: scrollerRect.right,
+            viewportWidth: window.innerWidth,
+            cells,
+          };
+        }"""
+    )
+    assert geometry["scrollLeft"] == 0
+    assert len(geometry["cells"]) == 3
+    for cell in geometry["cells"]:
+        assert cell["left"] >= geometry["scrollerLeft"] - 1
+        assert cell["right"] <= geometry["scrollerRight"] + 1
+        assert cell["right"] <= geometry["viewportWidth"] + 1
+    assert duplicate_key_warnings == []
+
+
+def test_extension_station_result_boundary_blocks_stale_event_and_accepts_next_result(
+    page, base_url, workstation_display_guard
+):
+    """新周期空窗连续轮询不回灌旧结果；下一次真实结算仍正常显示。"""
+    channel = 3
+    _set_channel_count(4)
+    phase = {"name": "settled", "new_event_ts": None}
+    old_event_ts = time.time()
+    requested_channels: list[int] = []
+    detection_writes: list[str] = []
+
+    def fake_results(route):
+        requested_channel = _channel_from_url(route.request.url)
+        if requested_channel is not None:
+            requested_channels.append(requested_channel)
+        active = phase["name"] == "active"
+        final_ng = phase["name"] == "final_ng"
+        late_conflicting_ok = phase["name"] == "late_conflicting_ok"
+        cycle_settled = final_ng or late_conflicting_ok
+        event = {
+            "event_id": "2" if final_ng else "1",
+            "seq": 23 if late_conflicting_ok else (22 if final_ng else 21),
+            "timestamp": phase["new_event_ts"] if cycle_settled else old_event_ts,
+            "reason": (
+                "迟到的旧 OK 事件" if late_conflicting_ok
+                else ("第2步顺序错误" if final_ng else "上一周期顺序正确")
+            ),
+        }
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(
+                {
+                    "channel_id": requested_channel,
+                    "is_running": True,
+                    "is_detecting": True,
+                    "source_type": "camera",
+                    "fps": 25,
+                    "latency": 8,
+                    "counters": {
+                        "总产量": 2 if cycle_settled else 1,
+                        "合格总数": 1,
+                        "不良总数": 1 if cycle_settled else 0,
+                    },
+                    "project_config": {
+                        "project_id": 7303,
+                        "project_name": "E2E-工位4周期边界",
+                        "logic_mode": "sequential",
+                        "steps_config": [
+                            {"id": 1, "label": "step-a", "displayLabel": "步骤A", "enabled": True},
+                            {"id": 2, "label": "step-b", "displayLabel": "步骤B", "enabled": True},
+                        ],
+                    },
+                    "current_cycle_id": None,
+                    "current_cycle_uuid": "cycle-2" if active else None,
+                    "current_cycle_steps": [],
+                    "cycle_sum_step_durations": (
+                        {} if active else {"step-a": 0.8, "step-b": 0.7}
+                    ),
+                    "step_inflight_durations": {},
+                    "detections": [],
+                    "recent_events": [event],
+                },
+                ensure_ascii=False,
+            ),
+        )
+
+    page.route("**/api/v1/source/detection/results?**", fake_results)
+    page.route("**/video_feed?**", lambda route: route.abort())
+    page.route(
+        "**/snapshot?**",
+        lambda route: route.fulfill(
+            status=200, content_type="image/jpeg", body=b"\xff\xd8\xff\xd9"
+        ),
+    )
+    page.on(
+        "request",
+        lambda request: detection_writes.append(f"{request.method} {request.url}")
+        if request.method not in {"GET", "HEAD", "OPTIONS"}
+        and "/source/detection/" in request.url
+        else None,
+    )
+
+    _goto(page, base_url, "/monitor?channel=3&kiosk=1&readonly=0&multi_monitor=1")
+    result_cells = page.get_by_test_id("single-channel-step-table").locator(
+        "tbody tr td:last-child"
+    )
+    expect(result_cells).to_have_count(2)
+    expect(result_cells.nth(0)).to_have_text("OK")
+    expect(result_cells.nth(1)).to_have_text("OK")
+
+    phase["name"] = "active"
+    expect(result_cells.nth(0)).to_have_text("--", timeout=5_000)
+    expect(result_cells.nth(1)).to_have_text("--")
+    page.wait_for_timeout(750)  # 覆盖至少 5 个 150ms 轮询，旧事件仍不得回灌
+    assert [result_cells.nth(i).inner_text() for i in range(2)] == ["--", "--"]
+
+    phase["name"] = "final_ng"
+    phase["new_event_ts"] = time.time()
+    expect(result_cells.nth(0)).to_have_text("OK", timeout=5_000)
+    expect(result_cells.nth(1)).to_have_text("NG")
+
+    # counters 已确认最终 NG 后，即使下一拍来了一个新的冲突 OK 事件，结果也
+    # 不能被反转；events_log 可能比插件/工位组最终 verdict 早晚一拍。
+    phase["name"] = "late_conflicting_ok"
+    phase["new_event_ts"] = time.time()
+    page.wait_for_timeout(750)
+    assert [result_cells.nth(i).inner_text() for i in range(2)] == ["OK", "NG"]
+    assert set(requested_channels) == {channel}
+    assert detection_writes == []
+
+
+@pytest.mark.parametrize(
     ("mode_query", "expected_mode"),
     [("", "follow"), ("&aux_view_mode=fixed", "fixed")],
 )
@@ -523,21 +790,23 @@ def test_disabled_overview_card_click_zooms_and_returns(
     assert page.get_by_test_id("channel-card-1").is_visible()
 
 
-def test_enabled_overview_and_zoom_keep_using_snapshots(
+def test_enabled_overview_uses_snapshots_then_zoom_uses_main_mjpeg(
     page, base_url, workstation_display_guard
 ):
-    """多屏开启时普通主窗口总览与放大都不抢扩展工位的 MJPEG。"""
+    """多屏总览让出长连接；主屏放大保持全帧率且使用 main 独立槽。"""
     _set_channel_count(4)
     _set_multi_monitor({"enabled": True, "readonly": True, "mapping": {}})
     snapshot_channels: list[int] = []
-    stream_channels: list[int] = []
+    stream_requests: list[tuple[int | None, str | None]] = []
 
     def fulfill_snapshot(route):
         snapshot_channels.append(_channel_from_url(route.request.url))
         route.fulfill(status=200, content_type="image/jpeg", body=b"\xff\xd8\xff\xd9")
 
     def abort_stream(route):
-        stream_channels.append(_channel_from_url(route.request.url))
+        stream_requests.append(
+            (_channel_from_url(route.request.url), _viewer_from_url(route.request.url))
+        )
         route.abort()
 
     page.route("**/snapshot?**", fulfill_snapshot)
@@ -545,16 +814,82 @@ def test_enabled_overview_and_zoom_keep_using_snapshots(
     _goto(page, base_url, "/monitor")
     page.wait_for_timeout(600)
     assert set(snapshot_channels) == {0, 1, 2, 3}
-    assert stream_channels == []
+    assert stream_requests == []
 
     snapshot_channels.clear()
     page.get_by_test_id("channel-card-2").click()
     page.get_by_test_id("single-channel-monitor").wait_for(state="visible", timeout=5_000)
-    _wait_for_channel(page, snapshot_channels, 2)
-    page.wait_for_timeout(300)
-    assert stream_channels == []
-    assert snapshot_channels
-    assert set(snapshot_channels[-3:]) == {2}
+    remaining_ms = 5_000
+    while (2, "main") not in stream_requests and remaining_ms > 0:
+        page.wait_for_timeout(50)
+        remaining_ms -= 50
+    assert (2, "main") in stream_requests
+    page.wait_for_timeout(200)
+    assert all(viewer == "main" for _, viewer in stream_requests)
+
+
+def test_same_window_viewer_role_change_reconnects_mjpeg_slot(
+    page, base_url, workstation_display_guard
+):
+    """同一页面从主屏放大切到 station_view 时必须从 main 槽换到 station 槽。"""
+    _set_channel_count(4)
+    _set_multi_monitor({"enabled": True, "readonly": True, "mapping": {}})
+    page.add_init_script(
+        """
+        window.__mjpegViewerRequests = [];
+        const nativeFetch = window.fetch.bind(window);
+        window.fetch = (input, init = {}) => {
+          const raw = typeof input === 'string' ? input : input.url;
+          const url = new URL(raw, window.location.href);
+          if (!url.pathname.endsWith('/video_feed')) return nativeFetch(input, init);
+          window.__mjpegViewerRequests.push({
+            channel: Number(url.searchParams.get('channel')),
+            viewer: url.searchParams.get('viewer'),
+          });
+          const stream = new ReadableStream({
+            start(controller) {
+              if (init.signal) {
+                init.signal.addEventListener('abort', () => {
+                  controller.error(new DOMException('Aborted', 'AbortError'));
+                }, { once: true });
+              }
+            },
+          });
+          return Promise.resolve(new Response(stream, {
+            status: 200,
+            headers: { 'Content-Type': 'multipart/x-mixed-replace; boundary=frame' },
+          }));
+        };
+        """
+    )
+    page.route(
+        "**/snapshot?**",
+        lambda route: route.fulfill(
+            status=200, content_type="image/jpeg", body=b"\xff\xd8\xff\xd9"
+        ),
+    )
+
+    _goto(page, base_url, "/monitor")
+    page.get_by_test_id("channel-card-1").click()
+    page.wait_for_function(
+        "() => window.__mjpegViewerRequests.some(x => x.channel === 1 && x.viewer === 'main')",
+        timeout=5_000,
+    )
+
+    # Electron 热应用可能复用 OS 主屏上的现有页面；这里故意只改 hash/query，
+    # 不做 document reload，确保已有 main 长连接会被主动换成 station 槽。
+    page.goto(
+        f"{base_url}/#/monitor?channel=1&station_view=1&readonly=0&multi_monitor=1",
+        wait_until="domcontentloaded",
+        timeout=15_000,
+    )
+    page.wait_for_function(
+        "() => window.__mjpegViewerRequests.some(x => x.channel === 1 && x.viewer === 'station')",
+        timeout=5_000,
+    )
+    requests_seen = page.evaluate("window.__mjpegViewerRequests")
+    assert requests_seen[0] == {"channel": 1, "viewer": "main"}
+    assert requests_seen[-1] == {"channel": 1, "viewer": "station"}
 
 
 @pytest.mark.parametrize("channel_count", [2, 3])
@@ -562,7 +897,7 @@ def test_primary_station_view_is_operable_then_sidebar_monitor_returns_overview(
     page, base_url, channel_count
 ):
     """复用主窗口首次显示映射工位；停止态切页再回检测时恢复多工位总览。"""
-    stream_channels: list[int] = []
+    stream_requests: list[tuple[int | None, str | None]] = []
 
     def fake_workstations(route):
         route.fulfill(
@@ -605,7 +940,9 @@ def test_primary_station_view_is_operable_then_sidebar_monitor_returns_overview(
         )
 
     def abort_stream(route):
-        stream_channels.append(_channel_from_url(route.request.url))
+        stream_requests.append(
+            (_channel_from_url(route.request.url), _viewer_from_url(route.request.url))
+        )
         route.abort()
 
     page.route(re.compile(r".*/api/v1/workstations/?(?:\?.*)?$"), fake_workstations)
@@ -634,8 +971,12 @@ def test_primary_station_view_is_operable_then_sidebar_monitor_returns_overview(
     assert page.get_by_test_id("single-channel-back").count() == 0
     assert page.get_by_test_id("single-channel-previous").count() == 0
     assert page.get_by_test_id("single-channel-next").count() == 0
-    _wait_for_channel(page, stream_channels, 1)
-    assert set(stream_channels) == {1}
+    remaining_ms = 5_000
+    while (1, "station") not in stream_requests and remaining_ms > 0:
+        page.wait_for_timeout(50)
+        remaining_ms -= 50
+    assert (1, "station") in stream_requests
+    assert set(stream_requests) == {(1, "station")}
 
     # 停止态侧栏调试闭环：进入其它模块后，再点“检测”必须回到总览，
     # 不能被初始 station_view 查询参数永久锁在工位 1/指定工位。
@@ -643,7 +984,7 @@ def test_primary_station_view_is_operable_then_sidebar_monitor_returns_overview(
     page.locator("aside a[href$='/source']").click()
     expect(page).to_have_url(re.compile(r"#/source$"), timeout=5_000)
     page.locator("button[title='导航菜单']").click()
-    stream_channels.clear()
+    stream_requests.clear()
     page.locator("aside").get_by_role(
         "link", name="检测中心", exact=True
     ).click()
@@ -653,14 +994,18 @@ def test_primary_station_view_is_operable_then_sidebar_monitor_returns_overview(
         expect(page.get_by_test_id(f"channel-card-{channel}")).to_be_visible(
             timeout=5_000
         )
-    assert stream_channels == []
+    assert stream_requests == []
 
     # 返回总览后仍能继续放大、返回，不会再次丢失总览入口。
     page.get_by_test_id("channel-card-1").click()
     expect(page.get_by_test_id("single-channel-monitor")).to_have_attribute(
         "data-channel", "1"
     )
-    assert stream_channels == []
+    remaining_ms = 5_000
+    while (1, "main") not in stream_requests and remaining_ms > 0:
+        page.wait_for_timeout(50)
+        remaining_ms -= 50
+    assert (1, "main") in stream_requests
     page.get_by_test_id("single-channel-back").click()
     expect(page.get_by_test_id("single-channel-monitor")).to_have_count(0)
     expect(page.get_by_test_id("channel-card-1")).to_be_visible(timeout=5_000)

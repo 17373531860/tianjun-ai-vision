@@ -53,7 +53,7 @@ export function useSingleStream(ctx) {
   const STREAM_BACKEND_FPS_MISMATCH_THRESHOLD_MS = 4000;
   let streamBackendMismatchSince = 0;
 
-  const buildStreamUrl = () => `${getBackendHost()}/video_feed?t=${Date.now()}`;
+  const buildStreamUrl = () => `${getBackendHost()}/video_feed?viewer=main&t=${Date.now()}`;
 
   // 启动一个 watchdog timer。timeoutMs 内若没有被 onStreamReady 重新
   // armStreamWatchdog 重置, 触发强制重连: ++ streamKey 重建 <img> DOM,
