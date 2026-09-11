@@ -1,5 +1,5 @@
-// AI 能力试用 (2026-09 全量批次): OCR 读字 + 异常检测 + VLM 坐诊
-// 对应后端 /api/v1/ocr/* 与 /api/v1/anomaly/* 与 /api/v1/vlm/*
+// AI 能力试用 (2026-09 全量批次): OCR 读字 + 异常检测 + VLM 坐诊 + 朝向估计
+// 对应后端 /api/v1/ocr/* /anomaly/* /vlm/* /orientation/*
 import api from './index';
 
 // ---------- OCR ----------
@@ -75,4 +75,19 @@ export function vlmAskImage(file, question) {
 
 export function vlmAskFrame(channelId = 0, question) {
   return api.post('/vlm/ask-frame', { channel_id: channelId, question }, { timeout: 180000 }).then(r => r.data);
+}
+
+// ---------- 朝向估计 (facing_dwell 朝向驻留的推理侧试用/装机标定) ----------
+export function getOrientationStatus() {
+  return api.get('/orientation/status').then(r => r.data);
+}
+
+export function orientationEstimateImage(file) {
+  const fd = new FormData();
+  fd.append('file', file);
+  return api.post('/orientation/estimate', fd, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 60000 }).then(r => r.data);
+}
+
+export function orientationEstimateFrame(channelId = 0) {
+  return api.post('/orientation/estimate-frame', { channel_id: channelId }).then(r => r.data);
 }

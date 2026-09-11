@@ -113,8 +113,32 @@
 视线估计 Gaze360/L2CS-Net：数据集条款"研究专用、禁商用、禁再分发"，
 明文覆盖"models trained on dataset"及衍生物；且远距离脸小时 gaze 本不可用。
 
+## 三·九、客户素材落地与固定机位离线验证（2026-09-11）
+
+客户发来正式素材：《镀膜过程监控要求》定稿 + **Camera 01 固定机位视频**（960×544@20fps，
+13 分钟，正对 ULVAC ULFARAD-600，画面覆盖工艺参数控制屏/膜面区/卷绕区）+ 监控室实拍
+（NVR 多画面在手，取流无障碍）。文档内时间戳即该视频内的示范段。
+
+**离线验证结论（`tests/uat/duamo_cctv_facing_validation.py`，两段式生产同构管线）**：
+- 人检出 121/121 抽帧、朝向输出 268 人次——固定广角机位下管线可用；
+- 以控制屏为仪表点（归一化 (0.465, 0.36)，画面实测），文档示范段（0:50-0:59 工艺参数
+  确认）命中驻留 episode（40-51s 等三段），且"谁在面向屏"判得对人：控制屏前操作员
+  对准夹角 8°命中、旁边背对的外协人员 179°正确不命中；
+- 已知限制：单机位遮挡（两人重叠时后者漏检个别帧，episode 靠时间积分兜住）；
+  验证脚本 overlay 中文标注为 cv2.putText 乱码（纯脚本层示意，主程序前端无此问题）。
+
+**需求→系统配置映射**：
+| 文档要求 | 落法 |
+|---|---|
+| 每 5/6/7/10 分钟确认工艺参数/膜面/留边/铝舟 | region_events 项目，每项两条 facing_dwell：①确认台账（min_seconds 3~5，事件记录）②超时哨兵（alert_on_absent=true，min_seconds=300/360/420/600，一期已放宽上限 3600）。仪表点装机时用 AI 试用页 estimate-frame 实测标定（控制屏已量得 (0.465,0.36)，膜面/留边/铝舟观察位待工程师现场确认是否入画） |
+| 每班/每周开卷绕小车门点检 | region_enter（小车门区域）记台账；"每班/每周六"的日历核对走每日短信日报/自定义导出，不塞进秒级引擎 |
+| 开箱作业 4 项 SOP | 需识别开箱状态/清洁动作等目标，预置行人模型不够——走 YoloVision 采样回流训模型后再立项（本 RFC 三期弹药）；先用 region_enter(开箱区) 记"开箱发生"台账 |
+| 双面镀工艺参数设定（留边/油温等） | 非视觉监控项不处理；可选延伸：控制屏数值 OCR 读屏（/ocr/read-frame 现场可试） |
+
 ## 四、分期
 
 - **一期 ✅ 已完成（2026-09-08）**：前端 min_seconds 上限 30→3600（`LogicConfigTab.vue` 输入框 + `index.vue` 序列化钳制两处）；新增「巡检超时未检」监控模板（region_empty，人，默认 360 秒）；e2e 六模板用例守门 360 秒原样落库。
-- **二期（本 RFC 主体）**：`facing_dwell` 规则 + pose 朝向计算模块 + 仪表点标注 UI + 监控模板；用工程师 6 段真实视频做验证素材（路径见对话记录，已抽帧确认内容）。
-- **三期（按需）**：脸可见时 Face Mesh PnP 精化头部朝向；远机位平台侧自训 MEBOW 式朝向回归模型。
+- **二期 ✅ 已完成（2026-09，ai-modes 批次合入主干）**：`facing_dwell` 规则 + pose 朝向计算模块（`services/person_orientation`）+ 仪表点标注 UI + 监控模板；用工程师 6 段真实视频做验证素材（`tests/uat/facing_dwell_video_validation.py`）。
+- **二·五期 ✅ 已完成（2026-09-10，多后端统一批次）**：用户取得模型授权后"全部加进去"——`person_orientation` 收编为三层多后端（YOLO11-pose COCO-17 首选 / MediaPipe Pose 33 点兜底，`TIANJUN_ORIENTATION_BACKEND` 可显式指定；头姿 ONNX 精化槽位 `backend/data/models/headpose.onnx` 或 `TIANJUN_HEADPOSE_MODEL`，兼容 6DRepNet 旋转矩阵/6D 表示/欧拉角/WHENet-HopeNet 分箱四种导出形态，放权重文件即热生效）；`yolo11n-pose.pt` 权重随包落位；孤儿 `orientation_engine.py`（合并遗留零引用）吸收后删除；新增 `/api/v1/orientation/*` 试用端点（status/estimate/estimate-frame）+ AI 能力试用页「朝向估计」卡（装机标定实测角度入口）。
+- **二·六期 ✅ 已完成（2026-09-11，公开权重占位）**：用户决策"先把公开的用上，授权版到手再替换"——头姿槽位灌入公开 6DRepNet360 全角度版（PINTO model zoo 导出 `sixdrepnet360_1x3x224x224_full.onnx`，300W-LP+Panoptic，90MB，输出 `yaw_pitch_roll` 度）。符号/映射已实证（zidane 扭头朝画面左 → 模型 yaw −57.7 → 图像平面 147.7° ✓）。⚠️ 许可现状：该权重训练数据含 CMU Panoptic（非商用），当前为**占位试用**，用户正在谈授权，出厂发版前必须替换为授权版（同名文件热替换，解码器四形态兼容，`TIANJUN_HEADPOSE_UNITS` 可调单位）。
+- **三期（按需）**：脸可见时 Face Mesh PnP 精化头部朝向（headpose 槽位已被 ONNX 模型覆盖，此项仅在授权版权重不可得时再启动）；远机位平台侧自训 MEBOW 式朝向回归模型（训出后同样灌 headpose 槽位）。

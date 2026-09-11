@@ -539,6 +539,21 @@
     "title": "Body_ocr_read_api_v1_ocr_read_post",
     "type": "object"
    },
+   "Body_orientation_estimate_api_v1_orientation_estimate_post": {
+    "properties": {
+     "file": {
+      "contentMediaType": "application/octet-stream",
+      "description": "图片文件 (jpg/png/bmp), 整幅当人框",
+      "title": "File",
+      "type": "string"
+     }
+    },
+    "required": [
+     "file"
+    ],
+    "title": "Body_orientation_estimate_api_v1_orientation_estimate_post",
+    "type": "object"
+   },
    "Body_preview_pack_api_v1_site_pack_preview_post": {
     "properties": {
      "file": {
@@ -3428,6 +3443,17 @@
      "admin_password"
     ],
     "title": "EnableAuthRequest",
+    "type": "object"
+   },
+   "EstimateFrameRequest": {
+    "properties": {
+     "channel_id": {
+      "default": 0,
+      "title": "Channel Id",
+      "type": "integer"
+     }
+    },
+    "title": "EstimateFrameRequest",
     "type": "object"
    },
    "EvidencePackRequest": {
@@ -26155,6 +26181,103 @@
     "tags": [
      "Operators",
      "Operators (Deprecated)"
+    ]
+   }
+  },
+  "/api/v1/orientation/estimate": {
+   "post": {
+    "operationId": "orientation_estimate_api_v1_orientation_estimate_post",
+    "requestBody": {
+     "content": {
+      "multipart/form-data": {
+       "schema": {
+        "$ref": "#/components/schemas/Body_orientation_estimate_api_v1_orientation_estimate_post"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "上传图片估计人体朝向",
+    "tags": [
+     "orientation"
+    ]
+   }
+  },
+  "/api/v1/orientation/estimate-frame": {
+   "post": {
+    "operationId": "orientation_estimate_frame_api_v1_orientation_estimate_frame_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/EstimateFrameRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "估计通道当前画面的人体朝向",
+    "tags": [
+     "orientation"
+    ]
+   }
+  },
+  "/api/v1/orientation/status": {
+   "get": {
+    "operationId": "orientation_status_api_v1_orientation_status_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "朝向估计引擎状态",
+    "tags": [
+     "orientation"
     ]
    }
   },

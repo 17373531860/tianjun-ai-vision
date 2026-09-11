@@ -4,7 +4,7 @@
       <div>
         <h1 class="text-xl font-bold text-white">AI 能力试用</h1>
         <p class="text-gray-400 text-sm mt-1">
-          OCR 读字（序列号/铭牌/工单）、异常检测（只学合格品的免缺陷样本质检）与 VLM 坐诊（看图问答）——上传图片或直接对通道当前画面试用，谈单当场演示
+          OCR 读字（序列号/铭牌/工单）、朝向估计（人面向哪里）、异常检测（只学合格品的免缺陷样本质检）与 VLM 坐诊（看图问答）——上传图片或直接对通道当前画面试用，谈单当场演示
         </p>
       </div>
     </div>
@@ -37,6 +37,57 @@
           </div>
         </div>
         <div v-else class="text-gray-500 text-sm">未识别到文字</div>
+      </div>
+    </div>
+
+    <!-- ==================== 朝向估计 ==================== -->
+    <div class="bg-ind-panel rounded-lg border border-gray-800 p-5 space-y-4">
+      <div class="flex items-center gap-3 flex-wrap">
+        <h2 class="text-lg font-semibold text-white">朝向估计（人面向哪里）</h2>
+        <el-tag v-if="oriStatus" :type="oriStatus.available ? 'success' : 'danger'" size="small" effect="dark" data-test="orientation-status-tag">
+          {{ oriStatus.available ? `引擎可用 · ${oriBackendLabel}` : '引擎不可用' }}
+        </el-tag>
+        <el-tag v-if="oriStatus?.backends?.headpose_onnx?.present" size="small" type="warning" effect="dark">头姿精化已启用</el-tag>
+        <span class="text-xs text-gray-500">
+          朝向驻留（facing_dwell 巡检点检）的推理侧试用：装机标定时工程师站到点位分别面向各仪表，实测角度直接抄进规则配置
+        </span>
+      </div>
+
+      <div class="flex items-center gap-3 flex-wrap">
+        <el-upload :show-file-list="false" :auto-upload="false" accept="image/*" :on-change="onOriFile">
+          <el-button type="primary" plain :loading="oriLoading" data-test="orientation-upload-btn">上传图片估朝向</el-button>
+        </el-upload>
+        <span class="text-gray-500 text-xs">或</span>
+        <el-input-number v-model="oriChannel" size="small" :min="0" :max="15" class="!w-24" />
+        <el-button plain :loading="oriLoading" @click="doOriFrame" data-test="orientation-frame-btn">估通道当前画面</el-button>
+      </div>
+
+      <div v-if="oriResult" class="bg-slate-900 rounded p-4 flex items-center gap-6" data-test="orientation-result">
+        <template v-if="oriResult.found">
+          <!-- 朝向罗盘: 图像平面角 0°=右 90°=下, 与 CSS rotate 同向 -->
+          <svg width="72" height="72" viewBox="-36 -36 72 72" class="shrink-0">
+            <circle r="33" fill="none" stroke="#334155" stroke-width="2" />
+            <g :transform="`rotate(${oriResult.yaw_deg})`">
+              <line x1="-18" y1="0" x2="20" y2="0" stroke="#34d399" stroke-width="4" stroke-linecap="round" />
+              <path d="M20 0 L10 -7 L10 7 Z" fill="#34d399" />
+            </g>
+            <g v-if="oriResult.head_yaw_deg != null" :transform="`rotate(${oriResult.head_yaw_deg})`">
+              <line x1="0" y1="0" x2="26" y2="0" stroke="#fbbf24" stroke-width="2" stroke-dasharray="3 2" />
+            </g>
+          </svg>
+          <div class="space-y-1 text-sm">
+            <div class="text-gray-300">身体朝向：<span class="text-emerald-400 font-mono">{{ oriResult.yaw_deg }}°</span>
+              <span class="text-gray-500 text-xs ml-2">(0°=画面右 90°=画面下/朝相机 ±180°=画面左)</span>
+            </div>
+            <div class="text-gray-300">头部朝向：<span class="text-amber-400 font-mono">{{ oriResult.head_yaw_deg != null ? oriResult.head_yaw_deg + '°' : '不可判' }}</span></div>
+            <div class="text-gray-400 text-xs">
+              置信度 {{ (oriResult.conf * 100).toFixed(1) }}% ·
+              {{ oriResult.facing_camera ? '面向相机' : '背对相机' }} ·
+              后端 {{ oriResult.backend }}
+            </div>
+          </div>
+        </template>
+        <div v-else class="text-gray-400 text-sm">画面中未检出可判定朝向的人（关键点不足或人太小）</div>
       </div>
     </div>
 
@@ -152,12 +203,14 @@
 </template>
 
 <script setup>
-import { nextTick, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
-  createAnomalyBank, deleteAnomalyBank, getOcrStatus, getVlmConfig, getVlmStatus,
-  listAnomalyBanks, ocrReadFrame, ocrReadImage, saveVlmConfig, scoreAnomalyFrame,
-  scoreAnomalyImage, updateAnomalyThreshold, vlmAskFrame, vlmAskImage,
+  createAnomalyBank, deleteAnomalyBank, getOcrStatus, getOrientationStatus,
+  getVlmConfig, getVlmStatus, listAnomalyBanks, ocrReadFrame, ocrReadImage,
+  orientationEstimateFrame, orientationEstimateImage, saveVlmConfig,
+  scoreAnomalyFrame, scoreAnomalyImage, updateAnomalyThreshold,
+  vlmAskFrame, vlmAskImage,
 } from '@/api/aitools';
 
 // ---------- OCR ----------
@@ -186,6 +239,40 @@ const doOcrFrame = async () => {
     ElMessage.error(e?.response?.data?.detail || '读取通道画面失败（视频源未运行？）');
   } finally {
     ocrLoading.value = false;
+  }
+};
+
+// ---------- 朝向估计 ----------
+const oriStatus = ref(null);
+const oriLoading = ref(false);
+const oriResult = ref(null);
+const oriChannel = ref(0);
+
+const oriBackendLabel = computed(() => {
+  const b = oriStatus.value?.backend;
+  return b === 'yolo11_pose' ? 'YOLO11-pose' : (b === 'mediapipe_pose' ? 'MediaPipe' : (b || ''));
+});
+
+const onOriFile = async (uploadFile) => {
+  if (!uploadFile?.raw) return;
+  oriLoading.value = true;
+  try {
+    oriResult.value = await orientationEstimateImage(uploadFile.raw);
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || '朝向估计失败');
+  } finally {
+    oriLoading.value = false;
+  }
+};
+
+const doOriFrame = async () => {
+  oriLoading.value = true;
+  try {
+    oriResult.value = await orientationEstimateFrame(oriChannel.value);
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || '读取通道画面失败（视频源未运行？）');
+  } finally {
+    oriLoading.value = false;
   }
 };
 
@@ -350,6 +437,9 @@ const doVlmFrame = async () => {
 onMounted(async () => {
   try {
     ocrStatus.value = await getOcrStatus();
+  } catch { /* 探针失败不阻塞页面 */ }
+  try {
+    oriStatus.value = await getOrientationStatus();
   } catch { /* 探针失败不阻塞页面 */ }
   await refreshBanks();
   await refreshVlm();

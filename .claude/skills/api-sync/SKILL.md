@@ -72,6 +72,10 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `/plc/*` | `plc.py` | `plc.js` | ★ v3.48 RFC 13 通用 PLC 连接器：连接 CRUD/启停/测试 + 驱动清单 + 方案模板 + 点位实时值/手动写/IO 日志 + mock-set 联调 + 配置导入导出（MES 页「PLC 对接」tab） |
 | `/triggers/*` | `triggers.py` | `triggers.js` | ★ v3.48 RFC 14 统一触发中心：触发源实例 CRUD/启停 + 类型/动作/模板清单 + 实时状态/触发历史/日志 + 试触发/mock 注入 + 像素标定 + `fire/{key}` HTTP 触发入口 + 导入导出（MES 管理页「触发中心」tab，信息架构重构自系统设置迁入） |
 | `/scan-collect/*` | `scan_collect.py` | `scanCollect.js` | ★ v3.56 周期多码采集：按项目配置 GET/PUT config + state 实况轮询（参数名是 `channel` 不是 `channel_id`）+ remove-code/clear 纠错 + resolve-ng NG 挂起放行 + records 追溯（默认排除 status=deleted，`include_deleted=true` 才带）；Monitor 面板主数据走检测 results 载荷 `scan_collect` 段，此 API 是配置/纠错/追溯通路 |
+| `/ocr/*` | `ocr.py` | `aitools.js` | ★ 2026-09 OCR 读字：status 探针 + read 上传识别 + read-frame 通道画面识别（AI 能力试用页；引擎 rapidocr 懒加载） |
+| `/anomaly/*` | `anomaly.py` | `aitools.js` | ★ 2026-09 异常检测：合格品记忆库 banks CRUD/阈值 + score 上传评分 + score-frame 通道评分（AI 能力试用页 + anomaly 逻辑模式共用引擎） |
+| `/vlm/*` | `vlm.py` | `aitools.js` | ★ 2026-09 VLM 坐诊：config/status + ask 传图问答 + ask-frame 通道问答（默认关，OpenAI 兼容本地端点） |
+| `/orientation/*` | `orientation.py` | `aitools.js` | ★ 2026-09 朝向估计试用：status 三层后端探针（yolo11_pose/mediapipe_pose/headpose_onnx）+ estimate 上传估计 + estimate-frame 通道估计（facing_dwell 朝向驻留的推理侧试用/装机标定入口；生产路径走 person_orientation 单例不经此 API） |
 | `/debug/*` | `debug.py` | 无封装（手测用） | 通道诊断 + 调试日志中心 |
 | `/test/synthetic/*` | `test_runtime_routes.py` | —（测试专用） | 仅 `RUNTIME_MODE=test` 挂载：虚拟剧本源 |
 

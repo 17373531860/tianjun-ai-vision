@@ -62,7 +62,7 @@ class RegionEventsMixin:
                 traceback.print_exc()
 
     # ---------- facing_dwell 朝向注入 ----------
-    _FACING_POSE_INTERVAL = 0.5   # 秒: MediaPipe Pose 节流 (重操作, 绝不逐帧)
+    _FACING_POSE_INTERVAL = 0.5   # 秒: 姿态关键点节流 (重操作, 绝不逐帧)
     _FACING_TRACK_TTL = 3.0       # 秒: 朝向轨迹缓存过期 (人离场清理)
     _FACING_MATCH_IOU = 0.25      # 帧间关联 IoU 下限
 
@@ -70,11 +70,12 @@ class RegionEventsMixin:
         """facing_dwell 前置: 给主体检测框注入 'facing' (图像平面 yaw 度)。
 
         流程: 主体框与朝向轨迹缓存 IoU 关联 → 节流间隔到时对每个主体裁剪跑
-        MediaPipe Pose 估朝向 → YawSmoother (单位向量 EMA + 行进方向先验)
-        平滑 → 平滑值写进 det['facing'] 供引擎判定。间隔内的帧直接沿用缓存
-        平滑值 (人转身是秒级动作, 0.5s 节流足够)。
+        关键点后端估朝向 (person_orientation 多后端: YOLO11-pose 首选 /
+        MediaPipe 兜底 / 头姿 ONNX 精化, 2026-09-10 统一) → YawSmoother
+        (单位向量 EMA + 行进方向先验) 平滑 → 平滑值写进 det['facing'] 供
+        引擎判定。间隔内的帧直接沿用缓存平滑值 (人转身是秒级动作, 0.5s 节流足够)。
 
-        无 facing 规则 → 一次集合判定早退, 零开销; mediapipe 缺失 →
+        无 facing 规则 → 一次集合判定早退, 零开销; 全部后端缺失 →
         estimate_yaw 恒 None, 只有轨迹先验托底 (行进方向)。
         """
         if getattr(self, '_facing_token', None) is not id(engine):

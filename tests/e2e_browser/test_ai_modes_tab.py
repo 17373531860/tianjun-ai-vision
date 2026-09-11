@@ -209,3 +209,71 @@ def test_无仪表点的facing规则保存被剔除(page, base_url, api_url):
     rules = re_cfg.get("rules") or []
     assert not any(r.get("type") == "facing_dwell" for r in rules), \
         f"未标定仪表点的 facing_dwell 规则应被保存守门剔除: {rules}"
+
+
+# ==================== AI 能力试用页: 朝向估计卡 ====================
+
+def _open_ai_tools(page, base_url):
+    page.goto(f"{base_url}/#/ai-tools", wait_until="domcontentloaded",
+              timeout=15000)
+    page.wait_for_selector("text=朝向估计（人面向哪里）", timeout=10000)
+    page.wait_for_load_state("networkidle", timeout=10000)
+
+
+def test_朝向估计卡渲染与引擎状态(page, base_url, api_url):
+    """卡片渲染 + status 探针一致性 (UI 标签 vs GET /orientation/status)。"""
+    st = requests.get(f"{api_url}/api/v1/orientation/status", timeout=5).json()
+    _open_ai_tools(page, base_url)
+    tag = page.locator("[data-test='orientation-status-tag']")
+    assert tag.count() == 1, "朝向估计卡应渲染引擎状态标签"
+    text = tag.inner_text()
+    if st["available"]:
+        assert "引擎可用" in text
+        if st["backend"] == "yolo11_pose":
+            assert "YOLO11-pose" in text, "后端名应透出到状态标签"
+    else:
+        assert "不可用" in text
+    assert page.locator("[data-test='orientation-upload-btn']").count() == 1
+    assert page.locator("[data-test='orientation-frame-btn']").count() == 1
+
+
+def test_朝向估计上传无人图_未检出提示(page, base_url, tmp_path):
+    """上传灰底无人图 → 后端 found=false → UI 渲染未检出提示 (确定性回路)。"""
+    import cv2
+    import numpy as np
+    img_path = str(tmp_path / "gray.jpg")
+    cv2.imwrite(img_path, np.full((480, 640, 3), 128, dtype=np.uint8))
+
+    _open_ai_tools(page, base_url)
+    card = page.locator("div:has(> div > h2:has-text('朝向估计'))").first
+    card.locator("input[type='file']").first.set_input_files(img_path)
+    page.wait_for_selector("[data-test='orientation-result']", timeout=20000)
+    body = page.locator("[data-test='orientation-result']").inner_text()
+    assert "未检出" in body, f"无人图应显示未检出提示: {body}"
+
+
+def test_朝向估计上传人像_罗盘与角度渲染(page, base_url, api_url):
+    """真人像 (ultralytics 自带 zidane.jpg) → found=true → 罗盘 svg + 角度。
+
+    依赖仓库内置 yolo11n-pose.pt 或 mediapipe; 引擎不可用时跳过。
+    """
+    import pytest
+    st = requests.get(f"{api_url}/api/v1/orientation/status", timeout=5).json()
+    if not st["available"]:
+        pytest.skip("朝向引擎不可用 (缺权重与 mediapipe)")
+    ultralytics = pytest.importorskip("ultralytics")
+    import os
+    img_path = os.path.join(
+        os.path.dirname(ultralytics.__file__), "assets", "zidane.jpg")
+    if not os.path.isfile(img_path):
+        pytest.skip("ultralytics 资产图不存在")
+
+    _open_ai_tools(page, base_url)
+    card = page.locator("div:has(> div > h2:has-text('朝向估计'))").first
+    card.locator("input[type='file']").first.set_input_files(img_path)
+    page.wait_for_selector("[data-test='orientation-result']", timeout=30000)
+    result = page.locator("[data-test='orientation-result']")
+    body = result.inner_text()
+    assert "身体朝向" in body and "°" in body, f"应显示朝向角度: {body}"
+    assert "置信度" in body
+    assert result.locator("svg").count() == 1, "应渲染朝向罗盘"
