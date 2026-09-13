@@ -1,5 +1,7 @@
-// AI 能力试用 (2026-09 全量批次): OCR 读字 + 异常检测 + VLM 坐诊 + 朝向估计
+// AI 能力 API (2026-09): OCR 读字 + 异常检测 + VLM 坐诊 + 朝向估计
 // 对应后端 /api/v1/ocr/* /anomaly/* /vlm/* /orientation/*
+// 消费方: 模型仓库「试一试」抽屉 (CapabilityTryDrawer) + 项目页记忆库选择
+// (原「AI 能力试用」独立页已于 2026-09 下线, 功能全量迁入模型仓库)
 import api from './index';
 
 // ---------- OCR ----------

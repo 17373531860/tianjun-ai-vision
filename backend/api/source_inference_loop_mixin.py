@@ -455,6 +455,11 @@ class InferenceLoopMixin:
                     self._update_region_events(detections, original_frame)
                 else:
                     self._update_step_stats(detections, original_frame)
+                # 2026-09 能力挂件 (pose/ocr/anomaly): 无挂件一个属性判断早退
+                try:
+                    self._update_capability_attachments(detections, original_frame)
+                except Exception as _cap_e:
+                    debug_log(f"!!! 能力挂件异常 (已隔离): {_cap_e}", "INFERENCE")
                 update_time = (time.time() - t5) * 1000
                 if update_time > 100:
                     debug_log(f"!!! 步骤统计耗时: {update_time:.1f}ms", "INFERENCE")

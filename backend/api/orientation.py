@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """朝向估计 API (2026-09 朝向驻留批次) — /api/v1/orientation/*。
 
-三个端点 (AI 能力试用页消费, 与 /ocr /anomaly 同范式):
+三个端点 (模型仓库「试一试」抽屉消费, 与 /ocr /anomaly 同范式):
   GET  /status          — 引擎与三层后端可用性探针 (yolo11/mediapipe/headpose)
   POST /estimate        — 上传图片估计朝向 (整幅当人框; 谈单演示/装机标定)
   POST /estimate-frame  — 对指定通道当前画面估计 (现场零上传试用)

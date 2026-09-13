@@ -272,6 +272,75 @@
         </div>
       </el-card>
 
+      <!-- 2026-09 内置能力模型入仓: 能力挂件 (pose/ocr/anomaly, 与 YOLO 副模型解耦) -->
+      <el-card shadow="never" class="bg-slate-800 border-slate-700 text-gray-300" data-test="cap-attach-card">
+        <template #header>
+          <div class="flex justify-between items-center">
+            <span class="font-bold text-white">能力挂件</span>
+            <el-dropdown trigger="click" @command="addCapAttachment">
+              <el-button type="primary" size="small" plain data-test="cap-attach-add">
+                <el-icon class="mr-1"><Plus /></el-icon>添加挂件
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="pose" :disabled="hasCapAttachment('pose')">人体朝向 (装机标定/朝向观察)</el-dropdown-item>
+                  <el-dropdown-item command="ocr" :disabled="hasCapAttachment('ocr')">OCR 区域读字</el-dropdown-item>
+                  <el-dropdown-item command="anomaly" :disabled="hasCapAttachment('anomaly')">异常检测 (记忆库比对)</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </div>
+        </template>
+        <div class="text-xs text-gray-400 mb-3 leading-relaxed">
+          在主检测之外挂载模型仓库的内置能力：朝向估计（输出画面最大人员的实时朝向角）、OCR
+          定时读区域文字、异常检测定时比对记忆库。挂件按间隔在后台线程运行，不占推理主链路；
+          结果实时透出到检测结果流（capability_outputs）。权重在「模型仓库 → 内置能力」可试用与更换。
+        </div>
+        <div v-if="!project?.capability_attachments?.length" class="text-center text-gray-500 py-6 text-sm">
+          暂无能力挂件，点击右上角"添加挂件"
+        </div>
+        <div v-else class="space-y-3">
+          <div v-for="(att, idx) in project.capability_attachments" :key="att.capability"
+            class="bg-slate-900/60 border border-slate-700 rounded-lg p-3 space-y-2"
+            :data-test="`cap-attach-${att.capability}`">
+            <div class="flex items-center gap-3 flex-wrap">
+              <el-tag type="success" size="small">{{ capAttachLabel(att.capability) }}</el-tag>
+              <div class="flex items-center gap-2">
+                <span class="text-xs text-gray-400">运行间隔 (秒)</span>
+                <el-input-number v-model="att.interval_s" size="small" :min="0.5" :max="3600" :step="0.5" style="width:7rem" />
+              </div>
+              <div class="flex-1"></div>
+              <el-button size="small" type="danger" plain @click="removeCapAttachment(idx)">
+                <el-icon><Delete /></el-icon>
+              </el-button>
+            </div>
+            <div v-if="att.capability !== 'pose'" class="flex items-center gap-2 flex-wrap">
+              <span class="text-xs text-gray-400">检测区域 (归一化 x / y / 宽 / 高, 全 0 = 整幅画面)</span>
+              <el-input-number v-for="(k, ri) in ['x','y','w','h']" :key="k"
+                v-model="att.roi[ri]" size="small" :min="0" :max="1" :step="0.05" :precision="2" style="width:6rem" />
+            </div>
+            <div v-if="att.capability === 'anomaly'" class="flex items-center gap-3 flex-wrap">
+              <div class="flex items-center gap-2">
+                <span class="text-xs text-gray-400">记忆库</span>
+                <el-select v-model="att.bank_id" size="small" style="width:11rem" placeholder="选择合格品记忆库">
+                  <el-option v-for="b in anomalyBanks" :key="b.id" :label="b.name" :value="b.id" />
+                </el-select>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="text-xs text-gray-400">越限触发事件</span>
+                <el-select v-model="att.event_id" size="small" style="width:10rem" clearable placeholder="不触发">
+                  <el-option v-for="ev in (project.events_config || [])" :key="ev.id" :label="ev.name" :value="ev.id" />
+                </el-select>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="text-xs text-gray-400">触发冷却 (秒)</span>
+                <el-input-number v-model="att.cooldown_s" size="small" :min="1" :max="3600" style="width:7rem" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </el-card>
+
       <!-- Shift Split Config -->
       <el-card shadow="never" class="bg-slate-800 border-slate-700 text-gray-300">
         <template #header><span class="font-bold text-white">班次拆分</span></template>
@@ -308,13 +377,47 @@
 </template>
 
 <script setup>
+import { ref, onMounted } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Plus, Cpu, Delete, QuestionFilled } from '@element-plus/icons-vue';
 import { getFormatDisplayName } from './modelFormats';
+import { listAnomalyBanks } from '@/api/aitools';
 
 const props = defineProps({
   project: { type: Object, required: true },
 });
+
+// ==================== 2026-09 能力挂件 ====================
+const anomalyBanks = ref([]);
+onMounted(async () => {
+  try {
+    const r = await listAnomalyBanks();
+    anomalyBanks.value = r.items || r.banks || [];
+  } catch { /* 异常检测未装依赖时静默, 挂件卡仍可编辑其他能力 */ }
+});
+
+const CAP_ATTACH_LABELS = { pose: '人体朝向', ocr: 'OCR 读字', anomaly: '异常检测' };
+const capAttachLabel = (c) => CAP_ATTACH_LABELS[c] || c;
+const hasCapAttachment = (cap) =>
+  (props.project?.capability_attachments || []).some(a => a.capability === cap);
+
+const addCapAttachment = (cap) => {
+  if (!props.project) return;
+  if (!props.project.capability_attachments) props.project.capability_attachments = [];
+  if (hasCapAttachment(cap)) return;
+  props.project.capability_attachments.push({
+    capability: cap,
+    interval_s: cap === 'pose' ? 1.0 : 5.0,
+    roi: [0, 0, 0, 0],
+    bank_id: null,
+    event_id: null,
+    cooldown_s: 30,
+  });
+};
+
+const removeCapAttachment = (idx) => {
+  props.project?.capability_attachments?.splice(idx, 1);
+};
 
 defineEmits([
   'open-format-select',

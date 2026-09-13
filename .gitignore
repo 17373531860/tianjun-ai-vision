@@ -87,6 +87,7 @@ temp/
 # 例外: 出厂内置能力模型 (朝向估计 YOLO11-pose, 与 *.task 同为随包资源,
 # 不加白会被上面的 *.pt 挡在版本库外 → 打包丢件, v3.51.4 交付审计教训)
 !backend/data/models/yolo11n-pose.pt
+!backend/data/models/yolo11n.pt
 # 头姿精化 ONNX (90MB, 商用授权权重到位后客户侧放文件即热生效, 不入库)
 backend/data/models/headpose.onnx
 *.avi

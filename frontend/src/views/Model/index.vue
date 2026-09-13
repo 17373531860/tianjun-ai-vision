@@ -7,51 +7,104 @@
         <el-icon class="mr-1"><Upload /></el-icon> 上传新模型
       </el-button>
     </div>
-    <div class="text-xs text-gray-500 -mt-3">模型仓库为全局资源，跨项目共享；上传的模型可被任意项目引用，不随当前项目切换。</div>
+    <div class="text-xs text-gray-500 -mt-3">模型仓库为全局资源，跨项目共享；上传的模型可被任意项目引用，不随当前项目切换。出厂内置能力模型也在此统一管理与试用。</div>
 
-    <div v-loading="loading" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-      <div v-if="modelList.length === 0 && !loading" class="col-span-4 text-center text-gray-500 py-16">
-        <el-icon :size="64" class="mb-4"><Cpu /></el-icon>
-        <p>暂无模型，点击上方按钮上传</p>
-      </div>
-      
-      <div v-for="model in modelList" :key="model.id" 
-           class="bg-ind-panel border border-gray-800 rounded-xl p-5 hover:border-tech-blue transition-all group">
-        <div class="flex justify-between items-start mb-4">
-          <div class="p-3 bg-tech-blue/10 rounded-lg text-tech-blue">
-            <el-icon :size="24"><Cpu /></el-icon>
-          </div>
-          <div class="flex gap-1 items-center">
-            <el-tag v-if="model.source === 'yolovision'" type="warning" effect="dark" size="small">训练平台</el-tag>
-            <el-tag v-if="model.source === 'preset'" type="info" effect="dark" size="small">预置</el-tag>
-            <el-tooltip v-if="model.meta && model.meta.trial" content="试用模型：精度不代表交付效果，转正需用现场数据重训" placement="top">
-              <el-tag type="danger" effect="plain" size="small">试用</el-tag>
-            </el-tooltip>
-            <el-tooltip v-if="model.meta && model.meta.runtime_supported === false" :content="`任务类型 ${model.meta.task_type || '未知'}：当前检测运行时暂不支持推理，模型已入库存档`" placement="top">
-              <el-tag type="warning" effect="plain" size="small">存档</el-tag>
-            </el-tooltip>
-            <el-tag :type="model.status === 'active' ? 'success' : 'info'" effect="dark" size="small">
-              {{ model.status === 'active' ? '使用中' : '闲置' }}
-            </el-tag>
-          </div>
+    <div v-loading="loading" class="space-y-8">
+      <section v-for="sec in sections" :key="sec.key" :data-test="`model-section-${sec.key}`">
+        <div class="flex items-center gap-2 mb-3">
+          <h3 class="text-base font-bold text-gray-200">{{ sec.title }}</h3>
+          <span class="text-xs text-gray-500">{{ sec.hint }}</span>
         </div>
-        
-        <h3 class="text-lg font-bold truncate" :title="model.name">{{ model.name }}</h3>
-        <div class="mt-3 space-y-1 text-xs text-gray-400 font-mono">
-          <p>版本: {{ model.version || 'N/A' }}</p>
-          <p>大小: {{ formatFileSize(model.file_size) }}</p>
-          <p>框架: {{ model.framework }}</p>
-          <p>类别: {{ getLabelsCount(model.labels) }} 个</p>
-          <p>上传: {{ formatDate(model.upload_time) }}</p>
+        <div v-if="sec.models.length === 0" class="text-center text-gray-500 py-10 border border-dashed border-gray-800 rounded-xl">
+          <el-icon :size="40" class="mb-2"><Cpu /></el-icon>
+          <p class="text-sm">{{ sec.key === 'local' ? '暂无模型，点击上方按钮上传' : '暂无' }}</p>
         </div>
+        <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <div v-for="model in sec.models" :key="model.id"
+               class="bg-ind-panel border border-gray-800 rounded-xl p-5 hover:border-tech-blue transition-all group"
+               :data-test="`model-card-${model.id}`">
+            <div class="flex justify-between items-start mb-4">
+              <div class="p-3 bg-tech-blue/10 rounded-lg text-tech-blue">
+                <el-icon :size="24"><Cpu /></el-icon>
+              </div>
+              <div class="flex gap-1 items-center flex-wrap justify-end">
+                <el-tooltip :content="capMetaOf(model).value || ''" placement="top" :disabled="!capMetaOf(model).value">
+                  <el-tag effect="plain" size="small" :type="capTagType(model)">{{ capLabel(model) }}</el-tag>
+                </el-tooltip>
+                <el-tag v-if="model.builtin" type="info" effect="dark" size="small">出厂内置</el-tag>
+                <el-tag v-if="model.source === 'yolovision'" type="warning" effect="dark" size="small">训练平台</el-tag>
+                <el-tooltip v-if="model.meta && model.meta.trial" content="试用模型：精度不代表交付效果，转正需用现场数据重训" placement="top">
+                  <el-tag type="danger" effect="plain" size="small">试用</el-tag>
+                </el-tooltip>
+                <el-tooltip v-if="model.meta && model.meta.license_note === 'public-placeholder'" content="当前为公开占位权重，授权版到位后上传绑定即可热替换" placement="top">
+                  <el-tag type="danger" effect="plain" size="small">占位</el-tag>
+                </el-tooltip>
+                <el-tooltip v-if="model.meta && model.meta.runtime_supported === false" :content="`任务类型 ${model.meta.task_type || '未知'}：当前检测运行时暂不支持推理，模型已入库存档`" placement="top">
+                  <el-tag type="warning" effect="plain" size="small">存档</el-tag>
+                </el-tooltip>
+                <el-tag v-if="model.status === 'missing'" type="danger" effect="dark" size="small">文件缺失</el-tag>
+                <el-tag v-else :type="model.status === 'active' ? 'success' : 'info'" effect="dark" size="small">
+                  {{ model.status === 'active' ? '使用中' : '闲置' }}
+                </el-tag>
+                <!-- 内置能力行: 引擎可用性探针 (原 AI 试用页状态标迁入; 现场判断依赖缺失用) -->
+                <el-tooltip v-if="model.builtin && capMetaOf(model).engine"
+                            :content="String(capMetaOf(model).engine.detail || '')"
+                            :disabled="!capMetaOf(model).engine.detail" placement="top">
+                  <el-tag :type="capMetaOf(model).engine.available ? 'success' : 'danger'"
+                          effect="plain" size="small" data-test="cap-engine-tag">
+                    {{ capMetaOf(model).engine.available ? '引擎可用' : '引擎不可用' }}
+                  </el-tag>
+                </el-tooltip>
+              </div>
+            </div>
 
-        <div class="mt-6 flex gap-2">
-          <el-button size="small" class="flex-1" @click="handleEdit(model)">详情</el-button>
-          <el-button v-if="model.meta && model.meta.analysis" size="small" type="primary" plain @click="showAnalysis(model)">训练分析</el-button>
-          <el-button size="small" type="danger" plain @click="confirmDelete(model)">删除</el-button>
+            <h3 class="text-lg font-bold truncate" :title="model.name">{{ model.name }}</h3>
+            <div class="mt-3 space-y-1 text-xs text-gray-400 font-mono">
+              <p v-if="!isNoFile(model)">版本: {{ model.version || 'N/A' }} · 大小: {{ formatFileSize(model.file_size) }}</p>
+              <p>框架: {{ model.framework }}</p>
+              <p v-if="!isNoFile(model)">类别: {{ getLabelsCount(model.labels) }} 个</p>
+              <p v-if="model.builtin" class="text-gray-500 font-sans leading-snug line-clamp-2" :title="model.description">{{ model.description }}</p>
+              <p v-else>上传: {{ formatDate(model.upload_time) }}</p>
+              <p v-if="boundNameOf(model)" class="text-tech-blue font-sans">当前权重: {{ boundNameOf(model) }}</p>
+            </div>
+
+            <div class="mt-6 flex gap-2 flex-wrap">
+              <el-button v-if="canTry(model)" size="small" type="primary" plain
+                         :data-test="`model-try-${model.id}`" @click="openTry(model)">试一试</el-button>
+              <el-button v-if="model.builtin && capMetaOf(model).bindable" size="small" plain
+                         @click="openBind(model)">更换权重</el-button>
+              <el-button size="small" @click="handleEdit(model)">详情</el-button>
+              <el-button v-if="model.meta && model.meta.analysis" size="small" type="primary" plain @click="showAnalysis(model)">训练分析</el-button>
+              <el-button v-if="!model.builtin" size="small" type="danger" plain @click="confirmDelete(model)">删除</el-button>
+            </div>
+          </div>
         </div>
-      </div>
+      </section>
     </div>
+
+    <!-- 能力试用抽屉 (原 AI 能力试用 tab 迁入) -->
+    <CapabilityTryDrawer v-model="tryDrawerVisible" :model="tryModel" :cap-meta="tryModel ? capMetaOf(tryModel) : {}" />
+
+    <!-- 更换权重: 绑定用户上传模型为该能力当前权重 -->
+    <el-dialog v-model="bindDialogVisible" title="更换能力权重" width="460px" destroy-on-close>
+      <div v-if="bindModel" class="space-y-4">
+        <div class="text-sm text-gray-400">
+          能力「{{ capLabel(bindModel) }}」当前权重解析顺序: 用户绑定 &gt; 出厂默认。
+          绑定后引擎热重载, 下次推理即生效; 选「恢复出厂默认」解除绑定。
+        </div>
+        <el-select v-model="bindTargetId" class="w-full" placeholder="选择同能力的已上传模型" data-test="bind-target-select">
+          <el-option :value="-1" label="恢复出厂默认" />
+          <el-option v-for="m in bindCandidates" :key="m.id" :label="`${m.name} (${m.version || '无版本'})`" :value="m.id" />
+        </el-select>
+        <div v-if="!bindCandidates.length" class="text-xs text-gray-500">
+          还没有同能力的用户模型 — 先在右上角「上传新模型」里选能力类型「{{ capLabel(bindModel) }}」上传权重。
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="bindDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="isBinding" :disabled="bindTargetId === null" @click="doBind">绑定</el-button>
+      </template>
+    </el-dialog>
 
     <!-- Upload Dialog -->
     <el-dialog v-model="uploadDialogVisible" title="模型上传向导" width="500px" destroy-on-close>
@@ -68,6 +121,14 @@
               <el-option label="PyTorch (.pt)" value="PyTorch" />
               <el-option label="ONNX (.onnx)" value="ONNX" />
               <el-option label="TensorRT (.engine)" value="TensorRT" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="能力类型">
+            <el-select v-model="uploadForm.capability" class="w-full" data-test="upload-capability">
+              <el-option label="目标检测 (常规主模型)" value="detect" />
+              <el-option label="图像分割" value="segment" />
+              <el-option label="人体姿态 (朝向/骨架, 可绑定为朝向引擎权重)" value="pose" />
+              <el-option label="头部朝向 (头姿精化, 可绑定为头姿引擎权重)" value="headpose" />
             </el-select>
           </el-form-item>
           <el-form-item label="描述">
@@ -224,7 +285,8 @@ import { ref, computed, nextTick, onMounted } from 'vue';
 import { ElMessageBox, ElMessage } from 'element-plus';
 import { UploadFilled, Cpu, Upload } from '@element-plus/icons-vue';
 import * as echarts from 'echarts';
-import { getModels, uploadModel, updateModel, deleteModel } from '@/api/model';
+import { getModels, uploadModel, updateModel, deleteModel, getCapabilityCatalog, bindCapability } from '@/api/model';
+import CapabilityTryDrawer from './CapabilityTryDrawer.vue';
 import { dbg, dbgErr } from '@/utils/debug';
 
 const modelList = ref([]);
@@ -243,8 +305,98 @@ const uploadForm = ref({
   name: '',
   version: '',
   framework: 'PyTorch',
-  description: ''
+  description: '',
+  capability: 'detect'
 });
+
+// ==================== 2026-09 内置能力模型入仓 ====================
+const capCatalog = ref([]);          // /models/capabilities 能力目录
+const tryDrawerVisible = ref(false);
+const tryModel = ref(null);
+const bindDialogVisible = ref(false);
+const bindModel = ref(null);
+const bindTargetId = ref(null);
+const isBinding = ref(false);
+
+const CAP_LABELS = {
+  detect: '检测', segment: '分割', pose: '姿态', headpose: '头姿',
+  ocr: 'OCR', anomaly: '异常检测', vlm: 'VLM',
+};
+const capOf = (m) => m.capability || 'detect';
+const capLabel = (m) => CAP_LABELS[capOf(m)] || capOf(m);
+const capTagType = (m) => (capOf(m) === 'detect' ? 'info' : capOf(m) === 'segment' ? 'warning' : 'success');
+const capMetaOf = (m) => capCatalog.value.find(c => c.capability === capOf(m)) || {};
+const isNoFile = (m) => !!(m.meta && m.meta.no_file);
+// 有试用面板的能力 (detect/segment 主模型在项目/标定页试效果)
+const canTry = (m) => ['pose', 'headpose', 'ocr', 'anomaly', 'vlm'].includes(capOf(m));
+const boundNameOf = (m) => {
+  if (!m.builtin) return null;
+  const meta = capMetaOf(m);
+  return meta.bound_model_id ? (meta.bound_model_name || `模型#${meta.bound_model_id}`) : null;
+};
+
+// 三分区: 我的模型 / 训练平台下发 / 出厂内置能力
+const sections = computed(() => {
+  const local = [], platform = [], builtin = [];
+  for (const m of modelList.value) {
+    if (m.builtin) builtin.push(m);
+    else if (m.source === 'yolovision') platform.push(m);
+    else local.push(m);
+  }
+  const out = [
+    { key: 'local', title: '我的模型', hint: '本地上传, 可作项目主/副模型', models: local },
+  ];
+  if (platform.length) out.push({ key: 'platform', title: '训练平台下发', hint: 'YoloVision 互连推送', models: platform });
+  out.push({ key: 'builtin', title: '内置能力模型', hint: '出厂随包, 即拿即用; 可上传新权重绑定替换', models: builtin });
+  return out;
+});
+
+const loadCapCatalog = async () => {
+  try {
+    const res = await getCapabilityCatalog();
+    capCatalog.value = res.data.items || [];
+  } catch (err) {
+    dbgErr('model.manage', '拉取能力目录', err);
+  }
+};
+
+const openTry = (model) => {
+  dbg('model.try', '打开试用抽屉', `id=${model.id} cap=${capOf(model)}`);
+  tryModel.value = model;
+  tryDrawerVisible.value = true;
+};
+
+const bindCandidates = computed(() => {
+  if (!bindModel.value) return [];
+  const cap = capOf(bindModel.value);
+  return modelList.value.filter(m => !m.builtin && capOf(m) === cap);
+});
+
+const openBind = (model) => {
+  bindModel.value = model;
+  const meta = capMetaOf(model);
+  bindTargetId.value = meta.bound_model_id || -1;
+  bindDialogVisible.value = true;
+};
+
+const doBind = async () => {
+  if (!bindModel.value) return;
+  const cap = capOf(bindModel.value);
+  const target = bindTargetId.value === -1 ? null : bindTargetId.value;
+  dbg('model.manage', '绑定能力权重', `cap=${cap} model_id=${target}`);
+  isBinding.value = true;
+  try {
+    await bindCapability(cap, target);
+    ElMessage.success(target ? '已绑定, 引擎将热重载新权重' : '已恢复出厂默认权重');
+    bindDialogVisible.value = false;
+    loadCapCatalog();
+  } catch (err) {
+    dbgErr('model.manage', '绑定能力权重', err);
+    ElMessage.error('绑定失败: ' + (err.response?.data?.detail || err.message));
+  } finally {
+    isBinding.value = false;
+  }
+};
 
 // 加载模型列表
 const loadModels = async () => {
@@ -264,6 +416,7 @@ const loadModels = async () => {
 
 onMounted(() => {
   loadModels();
+  loadCapCatalog();
 });
 
 const formatFileSize = (bytes) => {
@@ -343,6 +496,7 @@ const startUpload = async () => {
   formData.append('version', uploadForm.value.version || '');
   formData.append('framework', uploadForm.value.framework);
   formData.append('description', uploadForm.value.description || '');
+  formData.append('capability', uploadForm.value.capability || 'detect');
   
   dbg('model.upload', '点击「开始上传」', `name=${uploadForm.value?.name} framework=${uploadForm.value?.framework} file=${selectedFile.value?.name}`);
   isUploading.value = true;
@@ -357,7 +511,7 @@ const startUpload = async () => {
     uploadDialogVisible.value = false;
     
     // 重置表单
-    uploadForm.value = { name: '', version: '', framework: 'PyTorch', description: '' };
+    uploadForm.value = { name: '', version: '', framework: 'PyTorch', description: '', capability: 'detect' };
     selectedFile.value = null;
     if (uploadRef.value) {
       uploadRef.value.clearFiles();

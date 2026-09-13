@@ -29,6 +29,9 @@ class ModelResponse(ModelBase):
     # v3.47 训练平台互连: 来源 (local / yolovision, 老库 NULL 视同 local) + 扩展元数据
     source: Optional[str] = "local"
     meta: Optional[Dict[str, Any]] = None
+    # 2026-09 内置能力模型入仓: 能力类型 (NULL 视同 detect) + 出厂内置行 (禁删)
+    capability: Optional[str] = "detect"
+    builtin: Optional[bool] = False
     upload_time: datetime
 
     class Config:

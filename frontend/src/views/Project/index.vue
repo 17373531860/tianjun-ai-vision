@@ -1716,6 +1716,26 @@ const initProjectDefaults = (project) => {
       }));
   }
 
+  // 2026-09 能力挂件: pipeline_config.capability_attachments → UI 数组
+  if (project.capability_attachments === undefined) {
+    const rawAtts = Array.isArray(pipelineConfig.capability_attachments)
+      ? pipelineConfig.capability_attachments : [];
+    project.capability_attachments = rawAtts
+      .filter(a => a && ['pose', 'ocr', 'anomaly'].includes(a.capability))
+      .map(a => {
+        const p = a.params || {};
+        return {
+          capability: a.capability,
+          interval_s: Number(p.interval_s) || (a.capability === 'pose' ? 1.0 : 5.0),
+          roi: (Array.isArray(p.roi) && p.roi.length === 4)
+            ? p.roi.map(Number) : [0, 0, 0, 0],
+          bank_id: p.bank_id ?? null,
+          event_id: p.event_id ?? null,
+          cooldown_s: Number(p.cooldown_s) || 30,
+        };
+      });
+  }
+
   // 误判过滤（通用两层后处理，v2.7.8 起走 pipeline_config；默认全关，老项目兼容）
   if (project.rod_companion_filter === undefined) {
     const cf = pipelineConfig.rod_companion_filter || {};
@@ -2457,6 +2477,20 @@ const handleSaveProject = async () => {
           }
           return out;
         })(),
+        // 2026-09 能力挂件序列化 (pose/ocr/anomaly; roi 全 0 视为整幅画面不下发)
+        capability_attachments: (activeProject.value.capability_attachments || [])
+          .filter(a => a && a.capability)
+          .map(a => {
+            const params = { interval_s: Number(a.interval_s) || 5.0 };
+            const roi = (a.roi || []).map(Number);
+            if (roi.length === 4 && roi.some(v => v > 0)) params.roi = roi;
+            if (a.capability === 'anomaly') {
+              params.bank_id = a.bank_id || null;
+              params.event_id = a.event_id ?? null;
+              params.cooldown_s = Number(a.cooldown_s) || 30;
+            }
+            return { capability: a.capability, params };
+          }),
       }
     };
     data.data_config = {

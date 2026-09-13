@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import os
@@ -488,12 +489,19 @@ def get_models(
     skip: int = 0,
     limit: int = 100,
     project_id: Optional[int] = None,
+    capability: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
-    """获取模型列表"""
+    """获取模型列表 (capability 过滤: NULL 存量行视同 detect)"""
     query = db.query(Model)
     if project_id:
         query = query.filter(Model.project_id == project_id)
+    if capability:
+        if capability == "detect":
+            query = query.filter((Model.capability == "detect")
+                                 | (Model.capability.is_(None)))
+        else:
+            query = query.filter(Model.capability == capability)
     
     total = query.count()
     models = query.offset(skip).limit(limit).all()
@@ -557,6 +565,115 @@ def get_format_diagnosis():
     return _get_trt_diagnosis()
 
 
+# ---------------- 2026-09 内置能力模型入仓 (能力目录 + 权重绑定) ----------------
+
+def _capability_engine_probe(capability: str) -> dict:
+    """各能力引擎的轻量可用性探针 (不触发模型加载, 异常安全)。"""
+    try:
+        if capability in ("pose", "headpose"):
+            from backend.services import person_orientation
+            st = person_orientation.engine_status()
+            if capability == "pose":
+                return {"available": bool(st.get("available")),
+                        "detail": st.get("backend")}
+            hp = (st.get("backends") or {}).get("headpose_onnx") or {}
+            return {"available": bool(hp.get("present")),
+                    "detail": hp.get("model")}
+        if capability == "ocr":
+            from backend.services import ocr_engine
+            return {"available": ocr_engine.is_available(), "detail": "rapidocr"}
+        if capability == "anomaly":
+            from backend.services import anomaly_engine
+            st = anomaly_engine.engine_status()
+            return {"available": bool(st.get("available", True)),
+                    "detail": st.get("backbone") or st.get("preferred_backbone")}
+        if capability == "vlm":
+            from backend.services import vlm_service
+            cfg = vlm_service.get_config()
+            return {"available": bool(cfg.get("api_base") or cfg.get("endpoint")),
+                    "detail": cfg.get("model") or None}
+        # detect / segment: 引擎即主推理管线, 恒可用
+        return {"available": True, "detail": None}
+    except Exception as e:
+        return {"available": False, "detail": str(e)[:120]}
+
+
+@router.get("/capabilities")
+def get_capability_catalog(db: Session = Depends(get_db)):
+    """能力目录: 类型元信息 + 内置行 + 当前绑定 + 引擎可用性。
+
+    模型仓库页 (分区/徽标/试用抽屉) 与项目页能力挂件选择器共用此端点。
+    """
+    from backend.services.builtin_models import (
+        CAPABILITIES, BINDABLE_CAPABILITIES, get_capability_binding)
+    binding = get_capability_binding(db)
+    builtin_rows = db.query(Model).filter(Model.builtin.is_(True)).all()
+    by_cap = {}
+    for r in builtin_rows:
+        by_cap.setdefault(r.capability or "detect", r)
+    out = []
+    for cap, meta in CAPABILITIES.items():
+        row = by_cap.get(cap)
+        bound_id = binding.get(cap)
+        bound_name = None
+        if bound_id:
+            m = db.query(Model).filter(Model.id == bound_id).first()
+            bound_name = m.name if m else None
+        out.append({
+            "capability": cap,
+            "label": meta["label"],
+            "value": meta["value"],
+            "no_file": meta["no_file"],
+            "bindable": cap in BINDABLE_CAPABILITIES,
+            "builtin_model_id": row.id if row else None,
+            "builtin_model_name": row.name if row else None,
+            "builtin_status": row.status if row else None,
+            "bound_model_id": bound_id,
+            "bound_model_name": bound_name,
+            "engine": _capability_engine_probe(cap),
+        })
+    return {"items": out}
+
+
+class CapabilityBindRequest(BaseModel):
+    model_id: Optional[int] = None  # None = 恢复出厂默认
+
+
+@router.post("/capabilities/{capability}/bind",
+             dependencies=[Depends(require_perm("model.upload"))])
+def bind_capability_weight(capability: str, req: CapabilityBindRequest,
+                           db: Session = Depends(get_db)):
+    """绑定用户上传的模型为某能力的当前权重 (model_id=null 恢复出厂默认)。
+
+    生效方式: 引擎解析顺序 env > 绑定 > 出厂默认; 绑定后释放引擎实例,
+    下次推理按新路径热重载。
+    """
+    from backend.services.builtin_models import (
+        BINDABLE_CAPABILITIES, set_capability_binding)
+    if capability not in BINDABLE_CAPABILITIES:
+        raise HTTPException(status_code=400,
+                            detail=f"能力 '{capability}' 不支持权重绑定")
+    if req.model_id is not None:
+        m = db.query(Model).filter(Model.id == req.model_id).first()
+        if not m:
+            raise HTTPException(status_code=404, detail="Model not found")
+        if (m.capability or "detect") != capability:
+            raise HTTPException(
+                status_code=400,
+                detail=f"模型能力类型是 '{m.capability or 'detect'}', "
+                       f"不能绑定到 '{capability}'")
+        if not m.file_path or not os.path.isfile(m.file_path):
+            raise HTTPException(status_code=400, detail="模型文件不存在")
+    binding = set_capability_binding(capability, req.model_id, db)
+    # 热重载: 释放朝向引擎实例, 下次调用按新绑定重建
+    try:
+        from backend.services import person_orientation
+        person_orientation.release()
+    except Exception:
+        pass
+    return {"capability": capability, "binding": binding}
+
+
 @router.get("/conversions/{conv_id}/status", response_model=ConversionStatusResponse)
 def get_conversion_status(conv_id: int, db: Session = Depends(get_db)):
     """查询单个转换任务的状态"""
@@ -601,9 +718,16 @@ async def upload_model(
     version: Optional[str] = Form(None),
     project_id: Optional[int] = Form(None),
     framework: str = Form("PyTorch"),
+    capability: str = Form("detect"),
     db: Session = Depends(get_db)
 ):
-    """上传模型文件"""
+    """上传模型文件 (capability: detect/segment/pose/headpose, 无文件能力不可上传)"""
+    from backend.services.builtin_models import CAPABILITIES
+    if capability not in CAPABILITIES or CAPABILITIES[capability]["no_file"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"能力类型 '{capability}' 不接受权重上传 "
+                   f"(可选: detect/segment/pose/headpose)")
     existing = db.query(Model).filter(
         Model.name == name,
         Model.version == (version or None)
@@ -654,6 +778,7 @@ async def upload_model(
         description=description,
         version=version,
         project_id=project_id,
+        capability=capability,
         labels=labels  # 直接存储 list，SQLAlchemy JSON 会自动处理
     )
     
@@ -716,10 +841,14 @@ def update_model(model_id: int, model: ModelUpdate, db: Session = Depends(get_db
 @router.delete("/{model_id}", status_code=status.HTTP_204_NO_CONTENT,
                 dependencies=[Depends(require_perm("model.delete"))])
 def delete_model(model_id: int, db: Session = Depends(get_db)):
-    """删除模型"""
+    """删除模型 (出厂内置行禁删, 只能停用/更换绑定)"""
     db_model = db.query(Model).filter(Model.id == model_id).first()
     if not db_model:
         raise HTTPException(status_code=404, detail="Model not found")
+    if db_model.builtin:
+        raise HTTPException(
+            status_code=403,
+            detail="出厂内置模型不可删除; 如需更换权重请上传新模型后绑定为该能力当前权重")
     
     # 删除文件
     if os.path.exists(db_model.file_path):

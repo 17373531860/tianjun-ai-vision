@@ -244,8 +244,8 @@
 | `/plc/*` | `plc.py` | RFC 13 通用 PLC 连接器（8 种驱动 + 点位/规则全可配 + 方案模板，默认无连接零开销） |
 | `/triggers/*` | `triggers.py` | RFC 14 统一触发中心（虚拟按钮/脚踏板/HTTP/串口/定时 6 种触发源 × 全局动作注册表，默认无实例零开销） |
 | `/scan-collect/*` | `scan_collect.py` | v3.56 周期多码采集（一工件多码分类/去重/数量门/收尾结算 + NG 挂起 + 视觉双验，默认关） |
-| `/ocr/*` | `ocr.py` | 2026-09 OCR 读字（AI 能力试用 + ocr 逻辑模式） |
-| `/anomaly/*` | `anomaly.py` | 2026-09 异常检测合格品记忆库（AI 能力试用 + anomaly 逻辑模式） |
+| `/ocr/*` | `ocr.py` | 2026-09 OCR 读字（模型仓库试一试抽屉 + ocr 逻辑模式） |
+| `/anomaly/*` | `anomaly.py` | 2026-09 异常检测合格品记忆库（模型仓库试一试抽屉管理 + anomaly 逻辑模式） |
 | `/vlm/*` | `vlm.py` | 2026-09 VLM 坐诊看图问答（默认关） |
 | `/orientation/*` | `orientation.py` | 2026-09 朝向估计试用/装机标定（facing_dwell 推理侧探针，三层后端） |
 | `/debug/*` | `debug.py` | 通道诊断 + 调试日志中心 |

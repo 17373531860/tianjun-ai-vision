@@ -77,14 +77,26 @@ _MODELS_DIR = os.path.join(
 _TASK_MODEL = os.path.join(_MODELS_DIR, "pose_landmarker_full.task")
 
 
+def _repo_binding(capability: str):
+    """模型仓库能力绑定路径 (2026-09 内置能力模型入仓); 任何异常回 None。"""
+    try:
+        from backend.services.builtin_models import resolve_capability_weight
+        return resolve_capability_weight(capability)
+    except Exception:
+        return None
+
+
 def _yolo_weights_path() -> str:
-    return os.environ.get("TIANJUN_POSE_MODEL") or os.path.join(
-        _MODELS_DIR, "yolo11n-pose.pt")
+    # 解析顺序: env 显式 (开发调试) > 模型仓库绑定 (用户可换) > 出厂默认
+    return (os.environ.get("TIANJUN_POSE_MODEL")
+            or _repo_binding("pose")
+            or os.path.join(_MODELS_DIR, "yolo11n-pose.pt"))
 
 
 def _headpose_path() -> str:
-    return os.environ.get("TIANJUN_HEADPOSE_MODEL") or os.path.join(
-        _MODELS_DIR, "headpose.onnx")
+    return (os.environ.get("TIANJUN_HEADPOSE_MODEL")
+            or _repo_binding("headpose")
+            or os.path.join(_MODELS_DIR, "headpose.onnx"))
 
 
 def _mediapipe_importable() -> bool:
@@ -286,7 +298,7 @@ def release():
 
 
 def engine_status() -> dict:
-    """状态探针 (前端 AI 能力试用页/运维消费)。"""
+    """状态探针 (模型仓库能力目录/试一试抽屉/运维消费)。"""
     yolo_path = _yolo_weights_path()
     hp_path = _headpose_path()
     active = None

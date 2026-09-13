@@ -110,7 +110,22 @@ jobs:
       
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
+      # 2026-09 内置能力模型入仓: headpose.onnx (90MB) 不进 git, 从模型资产
+      # release 下载进包并按 sha256 校验 (v3.51.4 交付审计: 缺文件必须红灯,
+      # 不允许静默出残缺安装包)。yolo11n.pt / yolo11n-pose.pt 已随 git 带出。
+      - name: Fetch builtin model assets (headpose.onnx)
+        shell: pwsh
+        run: |
+          $dst = "backend/data/models/headpose.onnx"
+          gh release download model-assets-headpose-v1 --pattern headpose.onnx --output $dst --clobber
+          $hash = (Get-FileHash $dst -Algorithm SHA256).Hash.ToLower()
+          $want = "422b69d17bf02e164bd1062f5e970f67f1688cadf7d700800fad5fa12a16fc82"
+          if ($hash -ne $want) { Write-Host "::error::headpose.onnx sha256 不匹配: $hash"; exit 1 }
+          Write-Host "OK headpose.onnx ($hash)"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -360,7 +375,12 @@ jobs:
             "$base\backend\main.py",
             # v3.51.4: PG 组件的配套迁移工具 (v3.49~v3.51.3 从没进过包,
             # 客户勾了 PG 也没法搬旧数据 — 解剖成品安装包才发现)
-            "$base\scripts\db\sqlite_to_pg.py"
+            "$base\scripts\db\sqlite_to_pg.py",
+            # 2026-09 内置能力模型入仓: 出厂权重三件套 (缺任一 = 内置模型行
+            # seed 跳过 = 客户拿到"没有内置模型"的安装包, 红灯阻断)
+            "$base\backend\data\models\yolo11n.pt",
+            "$base\backend\data\models\yolo11n-pose.pt",
+            "$base\backend\data\models\headpose.onnx"
           )
           foreach ($f in $extraMust) {
             if (Test-Path $f) { Write-Host "OK  extraResource: $f" }

@@ -887,6 +887,8 @@ def apply_project_config(h, config: dict):
     _apply_models_config(h, pipeline_config)
     _apply_label_splits(h, pipeline_config)
     _apply_region_events(h, config, pipeline_config)
+    # 2026-09 能力挂件 (pose/ocr/anomaly): 全逻辑模式可挂, 无配置零开销
+    h._apply_capability_attachments(pipeline_config)
 
     _apply_counters(h, config)
     _reset_cycle_state(h)

@@ -695,6 +695,11 @@
    },
    "Body_upload_model_api_v1_models_upload_post": {
     "properties": {
+     "capability": {
+      "default": "detect",
+      "title": "Capability",
+      "type": "string"
+     },
      "description": {
       "anyOf": [
        {
@@ -1025,6 +1030,23 @@
      }
     },
     "title": "CameraUpdate",
+    "type": "object"
+   },
+   "CapabilityBindRequest": {
+    "properties": {
+     "model_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Model Id"
+     }
+    },
+    "title": "CapabilityBindRequest",
     "type": "object"
    },
    "ChangePasswordRequest": {
@@ -4807,6 +4829,30 @@
    },
    "ModelResponse": {
     "properties": {
+     "builtin": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": false,
+      "title": "Builtin"
+     },
+     "capability": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": "detect",
+      "title": "Capability"
+     },
      "description": {
       "anyOf": [
        {
@@ -5133,7 +5179,7 @@
      },
      "readonly": {
       "default": true,
-      "description": "工位副屏是否只读；一期默认只读",
+      "description": "工位副屏是否只读；不约束可操作的工位主屏",
       "title": "Readonly",
       "type": "boolean"
      }
@@ -5142,8 +5188,59 @@
     "type": "object"
    },
    "MultiMonitorMappingItem": {
-    "description": "单个工位绑定的显示器标识和离线降级坐标。",
+    "description": "单个工位主/副屏的显示器标识和离线降级坐标。",
     "properties": {
+     "aux_bounds": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/DisplayBounds"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "副屏 ID 变化或枚举失败时使用的持久化坐标"
+     },
+     "aux_display_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "工位副屏 Electron Display.id；不配置时不创建副屏窗口",
+      "title": "Aux Display Id"
+     },
+     "aux_hands_enabled": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "是否为该工位启用手部裁切副屏；缺失时按关闭处理",
+      "title": "Aux Hands Enabled"
+     },
+     "aux_view_mode": {
+      "anyOf": [
+       {
+        "enum": [
+         "fixed",
+         "follow"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "副屏取景模式：fixed 固定中心，follow 固定尺寸平滑跟随手部",
+      "title": "Aux View Mode"
+     },
      "bounds": {
       "anyOf": [
        {
@@ -25311,7 +25408,7 @@
   },
   "/api/v1/models": {
    "get": {
-    "description": "获取模型列表",
+    "description": "获取模型列表 (capability 过滤: NULL 存量行视同 detect)",
     "operationId": "get_models_api_v1_models_get",
     "parameters": [
      {
@@ -25349,6 +25446,22 @@
        ],
        "title": "Project Id"
       }
+     },
+     {
+      "in": "query",
+      "name": "capability",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Capability"
+      }
      }
     ],
     "responses": {
@@ -25374,6 +25487,77 @@
      }
     },
     "summary": "Get Models",
+    "tags": [
+     "models"
+    ]
+   }
+  },
+  "/api/v1/models/capabilities": {
+   "get": {
+    "description": "能力目录: 类型元信息 + 内置行 + 当前绑定 + 引擎可用性。\n\n模型仓库页 (分区/徽标/试用抽屉) 与项目页能力挂件选择器共用此端点。",
+    "operationId": "get_capability_catalog_api_v1_models_capabilities_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Get Capability Catalog",
+    "tags": [
+     "models"
+    ]
+   }
+  },
+  "/api/v1/models/capabilities/{capability}/bind": {
+   "post": {
+    "description": "绑定用户上传的模型为某能力的当前权重 (model_id=null 恢复出厂默认)。\n\n生效方式: 引擎解析顺序 env > 绑定 > 出厂默认; 绑定后释放引擎实例,\n下次推理按新路径热重载。",
+    "operationId": "bind_capability_weight_api_v1_models_capabilities__capability__bind_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "capability",
+      "required": true,
+      "schema": {
+       "title": "Capability",
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/CapabilityBindRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Bind Capability Weight",
     "tags": [
      "models"
     ]
@@ -25502,7 +25686,7 @@
   },
   "/api/v1/models/upload": {
    "post": {
-    "description": "上传模型文件",
+    "description": "上传模型文件 (capability: detect/segment/pose/headpose, 无文件能力不可上传)",
     "operationId": "upload_model_api_v1_models_upload_post",
     "requestBody": {
      "content": {
@@ -25544,7 +25728,7 @@
   },
   "/api/v1/models/{model_id}": {
    "delete": {
-    "description": "删除模型",
+    "description": "删除模型 (出厂内置行禁删, 只能停用/更换绑定)",
     "operationId": "delete_model_api_v1_models__model_id__delete",
     "parameters": [
      {

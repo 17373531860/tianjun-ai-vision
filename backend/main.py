@@ -395,6 +395,19 @@ def _seed_export_builtin_templates():
         traceback.print_exc()
 
 
+def _seed_builtin_models():
+    """2026-09 内置能力模型入仓: 幂等登记出厂内置模型行到 models 表.
+
+    detect/pose/headpose 有出厂权重文件 (文件缺失不建假行);
+    ocr/anomaly/vlm 为无文件能力行. 失败不阻塞启动.
+    """
+    try:
+        from backend.services.builtin_models import seed_builtin_models
+        seed_builtin_models()
+    except Exception as e:
+        print(f"[启动] 内置模型 seed 失败 (跳过): {e}")
+
+
 def _seed_auth_builtin_roles():
     """v3.10.0 用户系统: 启动种子三个内置角色 (admin / engineer / operator).
 
@@ -498,6 +511,8 @@ def _run_startup_init():
     _seed_export_builtin_templates()
     # v3.10.0 用户系统: 种子三个内置角色 + 从落盘恢复内存 token 缓存
     _seed_auth_builtin_roles()
+    # 2026-09 内置能力模型入仓: 幂等登记出厂模型行 (失败不阻塞启动)
+    _seed_builtin_models()
     _restore_session_tokens()
     # 注意: active 插件加载不能放在这里 — 这里 FastAPI app 尚未创建,
     # 插件 register_plugin 需要 app 引用挂 router。移到 main.py 末尾 app

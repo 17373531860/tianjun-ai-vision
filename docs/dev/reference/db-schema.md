@@ -1,7 +1,7 @@
 # 数据库表参考
 
 > **类型**：reference（生成物勿手改）
-> **生成命令**：`python scripts/docgen/gen_db_schema.py`（生成日 2026-09-01）
+> **生成命令**：`python scripts/docgen/gen_db_schema.py`（生成日 2026-09-13）
 > **单一事实源**：SQLAlchemy ORM（Base.metadata）。字段含义看模型源文件行内注释；
 > 迁移历史看 backend/db/migrations/ 与 backend/main.py 的 migrate_database。
 
@@ -610,6 +610,8 @@ ORM 类 `Model`，定义于 `backend/models/models.py`。
 | `status` | VARCHAR(20) |  | 'idle' |
 | `source` | VARCHAR(50) |  | 'local' |
 | `meta` | JSON |  |  |
+| `capability` | VARCHAR(50) |  | 'detect' |
+| `builtin` | BOOLEAN |  | False |
 | `upload_time` | DATETIME |  | server |
 
 ## packaging_flow_configs

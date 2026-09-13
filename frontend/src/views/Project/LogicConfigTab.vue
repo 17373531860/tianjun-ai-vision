@@ -2069,14 +2069,14 @@
         </template>
         <div class="space-y-4 text-sm text-gray-300">
           <p class="text-xs text-gray-400">
-            无需检测模型与缺陷样本：先在「AI 能力试用」页用 5~50 张<b>好样本</b>照片建记忆库，运行时按间隔给画面打「异常分」，
+            无需检测模型与缺陷样本：先在「模型仓库→异常检测→试一试」用 5~50 张<b>好样本</b>照片建记忆库，运行时按间隔给画面打「异常分」，
             连续 N 次超阈值→触发不良事件报警（带冷却防刷屏）。适合缺陷形态未知/样本稀缺的表面质检、状态监控。
           </p>
 
           <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs bg-slate-900 p-3 rounded border border-slate-700">
             <div class="col-span-2">
               <label class="block text-gray-400 mb-1">好样本记忆库（必选）</label>
-              <el-select v-model="anomalyCfg.bank_id" size="small" filterable class="w-full" placeholder="选择记忆库（在 AI 能力试用页创建）">
+              <el-select v-model="anomalyCfg.bank_id" size="small" filterable class="w-full" placeholder="选择记忆库（在模型仓库-异常检测-试一试中创建）">
                 <el-option v-for="b in anomalyBanks" :key="b.id" :label="`${b.name}（阈值 ${b.threshold}，${b.num_images} 张样本）`" :value="b.id" />
               </el-select>
             </div>
@@ -2123,7 +2123,7 @@
             <el-button v-if="Array.isArray(anomalyCfg.roi) && anomalyCfg.roi.length" size="small" link type="danger" @click="anomalyCfg.roi = null">清除</el-button>
             <span class="text-gray-500">框定后只评估该区域（建库样本也应是同区域截图）</span>
           </div>
-          <p v-if="!anomalyCfg.bank_id" class="text-xs text-amber-400">尚未选择记忆库——先到「AI 能力试用」页上传好样本创建，再回来选择</p>
+          <p v-if="!anomalyCfg.bank_id" class="text-xs text-amber-400">尚未选择记忆库——先到「模型仓库→异常检测→试一试」上传好样本创建，再回来选择</p>
         </div>
       </el-card>
 
@@ -2427,7 +2427,7 @@ const addOcrRule = () => {
   });
 };
 
-// 异常检测记忆库列表 (AI 能力试用页创建, 这里只读选择)
+// 异常检测记忆库列表 (模型仓库试一试抽屉创建, 这里只读选择)
 const anomalyBanks = ref([]);
 const loadAnomalyBanks = async () => {
   try {

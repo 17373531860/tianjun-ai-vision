@@ -72,12 +72,8 @@ const routes = [
         name: 'Interconnect',
         component: () => import('@/views/Interconnect/index.vue'),
       },
-      {
-        // 2026-09 AI 能力试用: OCR 读字 + 异常检测 (谈单演示/现场试用)
-        path: 'ai-tools',
-        name: 'AiTools',
-        component: () => import('@/views/AiTools/index.vue'),
-      },
+      // 2026-09 「AI 能力试用」页已下线: 能力试用/记忆库管理/VLM 配置
+      // 全量迁入模型仓库 (/model) 内置能力模型分区的「试一试」抽屉
     ]
   }
 ];

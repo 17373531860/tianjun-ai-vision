@@ -47,6 +47,11 @@ class Model(Base):
     # v3.47 训练平台互连: 扩展元数据 JSON (训练分析 x-analysis / 包 provenance /
     # 项目对齐信息等), 本地上传的模型为 NULL
     meta = Column(JSON, nullable=True)
+    # 2026-09 内置能力模型入仓 (RFC 内置能力模型入仓与能力选用体系, 迁移 m0011):
+    # capability: 能力类型 detect/segment/pose/headpose/ocr/anomaly/vlm
+    #             (老库 NULL 视同 detect); builtin: 出厂内置行 (禁删, 启动 seed 幂等)
+    capability = Column(String(50), default="detect")
+    builtin = Column(Boolean, default=False)
     upload_time = Column(DateTime(timezone=True), server_default=func.now())
 
     project = relationship("Project", back_populates="project_models", foreign_keys=[project_id])
