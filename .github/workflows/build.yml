@@ -1026,6 +1026,7 @@ jobs:
           du -sh pg-portable
 
       - name: Smoke test embedded PG (真跑 setup_embedded_pg.sh)
+        timeout-minutes: 10
         run: |
           sh scripts/db/setup_embedded_pg.sh --pg-root pg-portable --data-root "$RUNNER_TEMP/pg-smoke"
           test -f "$RUNNER_TEMP/pg-smoke/db_config.json"
@@ -1300,6 +1301,7 @@ jobs:
           du -sh pg-portable
 
       - name: Smoke test embedded PG (真跑 setup_embedded_pg.sh)
+        timeout-minutes: 10
         run: |
           sh scripts/db/setup_embedded_pg.sh --pg-root pg-portable --data-root "$RUNNER_TEMP/pg-smoke"
           test -f "$RUNNER_TEMP/pg-smoke/db_config.json"

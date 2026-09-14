@@ -57,7 +57,10 @@ mkdir -p "$DATA_ROOT"
 
 # 每机唯一密码: 随机字母 + 时间戳 (同 Windows 侧策略)。
 # PG 只监听 127.0.0.1, 密码仅防本机误连, 不承担网络面安全。
-PWD_RAND="$(LC_ALL=C tr -dc 'a-z' < /dev/urandom | dd bs=1 count=8 2>/dev/null)$(date +%H%M%S)"
+# ⚠️ 不要写成 `tr -dc ... < /dev/urandom | dd/head`: GitHub Actions runner 把子进程
+# SIGPIPE 置 ignore, tr 收不到管道关闭会死循环 (2026-09-14 mac CI 实锤挂死 9min+)。
+# head 先读定长再喂 tr, 输入自然 EOF, 不依赖 SIGPIPE。
+PWD_RAND="$(head -c 1024 /dev/urandom | LC_ALL=C tr -dc 'a-z' | cut -c1-8)$(date +%H%M%S)"
 PWFILE=$(mktemp)
 printf '%s' "$PWD_RAND" > "$PWFILE"
 
