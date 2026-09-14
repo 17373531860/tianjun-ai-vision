@@ -976,36 +976,26 @@ jobs:
       - name: Stage HCNetSDK (Linux 64-bit, 海康正式客户随包分发)
         run: |
           # 2026-09: 用户确认为海康正式客户 (设备采购上千台), SDK 随包分发。
-          # 官方 legacy 站直链; 双镜像回退 + zip magic 校验 (国内网络访问该 CDN 会
-          # 收到 HTML 拦截页, 曾在本地实测中毒 — 不校验会把 HTML 当 SDK 打进包)。
+          # 官方 legacy/ca 站直链 2026-09-14 实测全部返回 HTML 拦截页 (CI+本机双确认),
+          # 改从 GitHub 镜像仓库取 V6.1.9.4_build20220413 linux64 库集 (比官方直链的
+          # 6.1.6.3 更新)。钉死 commit SHA 防上游供应链变动; 落地后校验 ELF magic。
           set -e
-          OK=0
-          for url in \
-            "https://us-legacy.hikvision.com/sites/default/files/software/en-hcnetsdkv6.1.6.3_build20200925_linux64.zip" \
-            "https://ca.hikvision.com/sites/default/files/software/en_hcnetsdkv6.1.6.3_build20200925_linux64.zip"; do
-            echo "Trying $url"
-            if curl -sL --http1.1 --retry 3 --max-time 900 -o hcnetsdk_linux64.zip "$url"; then
-              # zip magic: 前 2 字节必须 PK (拦截页是 HTML)
-              if [ "$(head -c 2 hcnetsdk_linux64.zip)" = "PK" ]; then OK=1; break; fi
-              echo "  -> 内容不是 zip (可能是拦截页), 换镜像"
-            fi
-          done
-          if [ "$OK" -ne 1 ]; then
-            echo "::error::海康 Linux SDK 下载失败 — 阻断发版 (不允许静默发出无 NVR/工业相机支持的 Linux 包)"
-            exit 1
-          fi
-          unzip -q hcnetsdk_linux64.zip -d hcnetsdk-tmp
-          # 定位真正的 lib 目录: 优先含 HCNetSDKCom 组件目录的那份 (demo 里常有重复拷贝)
-          SDK_LIB=$(find hcnetsdk-tmp -type d -name "HCNetSDKCom" -exec dirname {} \; | head -1)
-          [ -n "$SDK_LIB" ] || SDK_LIB=$(find hcnetsdk-tmp -type f -name "libhcnetsdk.so" -exec dirname {} \; | head -1)
-          if [ -z "$SDK_LIB" ]; then echo "::error::SDK zip 里找不到 libhcnetsdk.so"; exit 1; fi
-          echo "SDK lib dir: $SDK_LIB"
+          SDK_REPO="Mr-LuXiaoHua/hikivision-sdk"
+          SDK_SHA="96b86ad73d0e41f4f45432d3890ded6528574703"  # 2022-08-18 main
+          curl -sL --http1.1 --retry 5 --max-time 900 -o hcnetsdk-mirror.tar.gz \
+            "https://codeload.github.com/$SDK_REPO/tar.gz/$SDK_SHA"
+          mkdir -p hcnetsdk-tmp && tar -xzf hcnetsdk-mirror.tar.gz -C hcnetsdk-tmp --strip-components=1
+          SDK_LIB="hcnetsdk-tmp/lib/linux"
+          [ -f "$SDK_LIB/libhcnetsdk.so" ] || { echo "::error::镜像仓库里找不到 lib/linux/libhcnetsdk.so — 阻断发版 (不允许静默发出无 NVR/工业相机支持的 Linux 包)"; exit 1; }
+          # ELF magic 校验: 防拦截页/LFS 指针文件混进包
+          MAGIC=$(head -c 4 "$SDK_LIB/libhcnetsdk.so" | od -An -tx1 | tr -d ' \n')
+          [ "$MAGIC" = "7f454c46" ] || { echo "::error::libhcnetsdk.so 不是 ELF (magic=$MAGIC) — 阻断发版"; exit 1; }
           cp -a "$SDK_LIB"/. backend/hcnetsdk/lib/
-          rm -rf hcnetsdk-tmp hcnetsdk_linux64.zip
-          for f in libhcnetsdk.so libPlayCtrl.so; do
-            [ -f "backend/hcnetsdk/lib/$f" ] || { echo "::error::铺设后缺 $f"; exit 1; }
+          rm -rf hcnetsdk-tmp hcnetsdk-mirror.tar.gz
+          for f in libhcnetsdk.so libPlayCtrl.so libHCCore.so HCNetSDKCom/libHCPreview.so; do
+            [ -e "backend/hcnetsdk/lib/$f" ] || { echo "::error::铺设后缺 $f"; exit 1; }
           done
-          echo "Staged .so files:"; ls backend/hcnetsdk/lib/*.so* | head -20
+          echo "Staged SDK (V6.1.9.4):"; ls backend/hcnetsdk/lib/ | head -25
 
       - name: Stage PostgreSQL portable (zonky 16.15, 与 Windows PG 同版本)
         run: |

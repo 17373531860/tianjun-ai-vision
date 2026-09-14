@@ -157,7 +157,7 @@
       "artifactName": "TianJun-AI-Vision-${version}-linux-${arch}.${ext}"
     },
     "deb": {
-      "compression": "gzip"
+      "compression": "gz"
     },
     "mac": {
       "target": [
