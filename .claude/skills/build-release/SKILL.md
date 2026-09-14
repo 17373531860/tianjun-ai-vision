@@ -76,6 +76,22 @@ if ($refName -like "v*" -and $refName.TrimStart("v") -ne $version) {
 - 完整一轮约 45-60 min。Python 依赖装 10-15 min 是大头，Nuitka 编译每文件几十秒。
 - 磁盘清理是必要步骤，windows-latest 默认空间不够装 PyTorch+TensorRT+conda-pack。
 
+### 多平台 job（2026-09 起，与 build-windows 并行）
+
+| job | runner | 产物 | 能力面 |
+|---|---|---|---|
+| `build-linux` | ubuntu-latest | `TianJun-AI-Vision-X.Y.Z-linux-x64.deb`（electron-builder deb，gzip 压缩） | ≈ Windows 全功能：CUDA cu128 + TensorRT + onnxruntime-gpu。**只出 deb 不出 AppImage**（5-6GB squashfs 挂载太慢） |
+| `build-macos` | macos-26 (arm64) + macos-26-intel (x64) matrix | `TianJun-AI-Vision-X.Y.Z-mac-{arm64,x64}.dmg` | **能力子集**：无 CUDA/TensorRT/海康 SDK/嵌入式 PG；arm64 走 MPS，x64 是 CPU（PyTorch 2.3 起无 Intel mac wheel，解析到 2.2.2 属预期）。**未签名**（identity=null ad-hoc），客户首启右键打开或 `xattr -cr` |
+| `release-upload-nonwin` | ubuntu-latest，仅 tag | 追加 deb/dmg 到 Release | **Release 创建/删除权在 build-windows**；本 job needs 全部构建 job 后追加上传，消除 create 竞态。>1.9GB 切 `*.partNN.part` + `checksums-nonwin.txt` + `merge_installer.sh`（**sh 用 LF**，bat 的 CRLF 军规不适用） |
+
+多平台踩坑速记：
+- **Nuitka 白名单 CORE_FILES 现在有三份拷贝**（win/linux/mac job 各一），改名/增删核心文件要同步三处；linux/mac 产物是 `.so` 不是 `.pyd`
+- **海康 Linux SDK 不入 git**：wrapper 已有 `libhcnetsdk.so` 加载分支，需要 NVR/海康工业相机的 Linux 交付，发版前把海康 Linux SDK 的 .so 铺进 `backend/hcnetsdk/lib/`（extraResources 的 `**/*.so` 规则自动带出）；linux job 自检对此只提示不阻断
+- **mac ffmpeg 源是 ffmpeg.martin-riedl.de**（含 x264 的 GPL 静态构建，二进制已签名）；redirect 端点不支持 HEAD 必须 GET；linux 与 Windows 同源 BtbN
+- **machineId**：darwin 走 `probeMacos()`（ioreg，v2026-09 加），此前 mac 会误走 probeLinux 读 /sys 全空 → License 体系不可用
+- 两平台包都带「打包资源自检 + 打包布局上真 import backend.main」双门禁；deb/dmg 装后冒烟仍要人工做
+- Gitee 同步 (`gitee-upload.yml`) 目前**只搬 Windows exe**，Linux/macOS 包国内分发待扩
+
 ---
 
 ## 三、Nuitka 编译范围与已知 IP 泄露 BUG

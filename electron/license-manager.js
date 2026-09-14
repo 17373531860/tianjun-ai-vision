@@ -112,6 +112,42 @@ function probeWindowsWmicFallback() {
   };
 }
 
+// 2026-09 多平台打包: macOS 硬件指纹 (之前 darwin 会误走 probeLinux 读 /sys 全空
+// → strongCount=0 → 弱 ID 永不缓存, License 体系在 Mac 上等于坏的).
+// ioreg 是内核注册表, 无需 sudo, 冷启动也快 (与 system_profiler 不同).
+function probeMacos() {
+  const probe = {
+    bbSerial: '',
+    bbProduct: execSafe('sysctl -n hw.model'),          // 如 Mac14,9 — 只作弱标识
+    uuid: '',
+    biosSerial: '',
+    diskSerial: '',
+    mac: '',
+  };
+  // IOPlatformExpertDevice 一把取回主板序列号 + 硬件 UUID
+  const ioreg = execSafe('ioreg -rd1 -c IOPlatformExpertDevice');
+  const serial = ioreg.match(/"IOPlatformSerialNumber"\s*=\s*"([^"]+)"/);
+  const uuid = ioreg.match(/"IOPlatformUUID"\s*=\s*"([^"]+)"/);
+  if (serial) probe.biosSerial = serial[1].trim();
+  if (uuid) probe.uuid = uuid[1].trim();
+  // 系统盘物理盘序列号 (Apple SSD 走 NVMe SMART; 取不到不致命, 上面两项已是强标识)
+  const disk = execSafe(
+    "diskutil info $(diskutil info / | awk -F': *' '/Part of Whole/{print $2}') 2>/dev/null | awk -F': *' '/Disk \\/ Partition UUID/{print $2}'"
+  );
+  if (isUsable(disk)) probe.diskSerial = disk;
+  // 第一块非虚拟物理网卡 MAC (en0 通常是内置网卡/无线)
+  const mac = execSafe(
+    "networksetup -listallhardwareports 2>/dev/null | awk '/Ethernet Address/{print $3; exit}'"
+  );
+  if (isUsable(mac) && mac !== 'N/A') probe.mac = mac;
+  return probe;
+}
+
+// 非 Windows 平台按 darwin/linux 分道 (两者都是同步快命令, 异步版直接复用)
+function probeUnix() {
+  return process.platform === 'darwin' ? probeMacos() : probeLinux();
+}
+
 function probeLinux() {
   const probe = {
     bbSerial: readFileSafe('/sys/class/dmi/id/board_serial'),
@@ -167,7 +203,7 @@ function buildFingerprintFromProbe(probe) {
 // v3.10.2: 完整 fingerprint pipeline.
 // 返回 { fingerprint, parts, strongCount, debug } —— 调用方可判 strongCount 决定是否报警.
 function getStableFingerprint() {
-  const probe = process.platform === 'win32' ? probeWindows() : probeLinux();
+  const probe = process.platform === 'win32' ? probeWindows() : probeUnix();
   // Windows: PowerShell 一把没拿到 → 兜底走老 wmic
   if (process.platform === 'win32') {
     const winCount = ['bbSerial', 'uuid', 'biosSerial', 'diskSerial', 'mac']
@@ -307,7 +343,7 @@ class LicenseManager {
   // - 核对通过 → 静默
   // - 核对不匹配 (硬件真变了 / userData 被拷到别的机器) → 删缓存, 下次启动强制重算
   async _verifyCacheInBackground(cacheFile, verifyFile) {
-    const probe = process.platform === 'win32' ? await probeWindowsAsync() : probeLinux();
+    const probe = process.platform === 'win32' ? await probeWindowsAsync() : probeUnix();
     const fp = buildFingerprintFromProbe(probe);
     if (!this._lastFingerprintReport) this._lastFingerprintReport = fp;
     if (fp.strongCount === 0) {

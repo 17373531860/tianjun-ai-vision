@@ -81,7 +81,15 @@
         "from": "../scripts/db",
         "to": "scripts/db",
         "filter": [
-          "sqlite_to_pg.py"
+          "sqlite_to_pg.py",
+          "setup_embedded_pg.sh"
+        ]
+      },
+      {
+        "from": "../pg-portable",
+        "to": "pg-portable",
+        "filter": [
+          "**/*"
         ]
       },
       {
@@ -96,7 +104,9 @@
         "to": "ffmpeg",
         "filter": [
           "ffmpeg.exe",
-          "ffprobe.exe"
+          "ffprobe.exe",
+          "ffmpeg",
+          "ffprobe"
         ]
       },
       {
@@ -127,6 +137,7 @@
       "icon": "build/icon.ico"
     },
     "linux": {
+      "executableName": "tianjun-ai-vision",
       "target": [
         {
           "target": "AppImage",
@@ -143,7 +154,28 @@
       ],
       "icon": "build/icons",
       "category": "Utility",
-      "artifactName": "${productName}-${version}.${ext}"
+      "artifactName": "TianJun-AI-Vision-${version}-linux-${arch}.${ext}"
+    },
+    "deb": {
+      "compression": "gzip"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icons/512x512.png",
+      "category": "public.app-category.utilities",
+      "identity": null,
+      "artifactName": "TianJun-AI-Vision-${version}-mac-${arch}.${ext}"
+    },
+    "dmg": {
+      "writeUpdateInfo": false
     }
   }
 }
