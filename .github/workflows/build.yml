@@ -1024,6 +1024,19 @@ jobs:
           echo "setup 脚本冒烟通过:"; cat "$RUNNER_TEMP/pg-smoke/db_config.json" | sed 's/:[^:]*@/:***@/'
           rm -rf "$RUNNER_TEMP/pg-smoke"
 
+      # 内置能力模型: headpose.onnx 不进 git, 从模型资产 release 下载 (同 Windows job)
+      - name: Fetch builtin model assets (headpose.onnx)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          gh release download model-assets-headpose-v1 --pattern headpose.onnx \
+            --output backend/data/models/headpose.onnx --clobber
+          HASH=$(openssl dgst -sha256 backend/data/models/headpose.onnx | awk '{print $NF}')
+          WANT="422b69d17bf02e164bd1062f5e970f67f1688cadf7d700800fad5fa12a16fc82"
+          [ "$HASH" = "$WANT" ] || { echo "::error::headpose.onnx sha256 不匹配: $HASH"; exit 1; }
+          echo "OK headpose.onnx ($HASH)"
+
       - name: Build Frontend
         run: |
           cd frontend
@@ -1075,6 +1088,10 @@ jobs:
           # 嵌入式 PG (2026-09 起必带组件, 血泪教训 v3.49~v3.51.2: 组件写了没进包三个版本没人发现)
           for f in "$BASE/pg-portable/bin/pg_ctl" "$BASE/pg-portable/bin/initdb" "$BASE/pg-portable/bin/postgres" "$BASE/scripts/db/setup_embedded_pg.sh"; do
             if [ -e "$f" ]; then echo "OK  $f"; else echo "::error::缺失嵌入式 PG 组件: $f"; FAIL=1; fi
+          done
+          # 内置能力模型 (2026-09 headpose/orientation; 打包过滤器曾漏 *.pt/*.onnx/*.task)
+          for f in "$BASE/backend/data/models/yolo11n.pt" "$BASE/backend/data/models/yolo11n-pose.pt" "$BASE/backend/data/models/headpose.onnx" "$BASE/backend/data/models/hand_landmarker.task"; do
+            if [ -f "$f" ]; then echo "OK  $f"; else echo "::error::缺失内置模型: $f"; FAIL=1; fi
           done
           # app.asar 关键文件
           ASAR_LIST=$(npx --yes asar list "$BASE/app.asar")
@@ -1299,6 +1316,19 @@ jobs:
           echo "setup 脚本冒烟通过:"; cat "$RUNNER_TEMP/pg-smoke/db_config.json" | sed 's/:[^:]*@/:***@/'
           rm -rf "$RUNNER_TEMP/pg-smoke"
 
+      # 内置能力模型: headpose.onnx 不进 git, 从模型资产 release 下载 (同 Windows job)
+      - name: Fetch builtin model assets (headpose.onnx)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          gh release download model-assets-headpose-v1 --pattern headpose.onnx \
+            --output backend/data/models/headpose.onnx --clobber
+          HASH=$(openssl dgst -sha256 backend/data/models/headpose.onnx | awk '{print $NF}')
+          WANT="422b69d17bf02e164bd1062f5e970f67f1688cadf7d700800fad5fa12a16fc82"
+          [ "$HASH" = "$WANT" ] || { echo "::error::headpose.onnx sha256 不匹配: $HASH"; exit 1; }
+          echo "OK headpose.onnx ($HASH)"
+
       - name: Build Frontend
         run: |
           cd frontend
@@ -1338,6 +1368,10 @@ jobs:
             "$APP_RES/pg-portable/bin/pg_ctl" \
             "$APP_RES/pg-portable/bin/initdb" \
             "$APP_RES/pg-portable/bin/postgres" \
+            "$APP_RES/backend/data/models/yolo11n.pt" \
+            "$APP_RES/backend/data/models/yolo11n-pose.pt" \
+            "$APP_RES/backend/data/models/headpose.onnx" \
+            "$APP_RES/backend/data/models/hand_landmarker.task" \
             "$APP_RES/python/bin/python" \
             "$APP_RES/ffmpeg/ffmpeg" \
             "$APP_RES/app/dist/index.html"; do
