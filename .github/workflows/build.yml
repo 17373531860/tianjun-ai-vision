@@ -1099,7 +1099,9 @@ jobs:
           export BACKEND_SKIP_INIT=1
           export TIANJUN_TEST_MODE=1
           mkdir -p "$TIANJUN_DATA_DIR"
-          ./python/bin/python -c "import backend.main; print('packed backend import OK (Nuitka .so 加载通过)')"
+          # os._exit(0) 硬退出: torch/mediapipe 组合在解释器 finalize 阶段可能挂死
+          # (本机 2026-09-14 实锤: import 成功后卡 Py_FinalizeEx 250s+), 验证点只是 import 成功
+          ./python/bin/python -c "import backend.main; print('packed backend import OK (Nuitka .so 加载通过)', flush=True); import os; os._exit(0)"
 
       - name: Upload deb as Action Artifact
         uses: actions/upload-artifact@v4
@@ -1368,7 +1370,9 @@ jobs:
           export BACKEND_SKIP_INIT=1
           export TIANJUN_TEST_MODE=1
           mkdir -p "$TIANJUN_DATA_DIR"
-          ./python/bin/python -c "import backend.main; print('packed backend import OK (Nuitka .so 加载通过)')"
+          # os._exit(0) 硬退出: torch/mediapipe 组合在解释器 finalize 阶段可能挂死
+          # (本机 2026-09-14 实锤: import 成功后卡 Py_FinalizeEx 250s+), 验证点只是 import 成功
+          ./python/bin/python -c "import backend.main; print('packed backend import OK (Nuitka .so 加载通过)', flush=True); import os; os._exit(0)"
 
       - name: Upload dmg as Action Artifact
         uses: actions/upload-artifact@v4
