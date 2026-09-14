@@ -1,6 +1,6 @@
 """双/三工位主窗口总览点击放大可见浏览器 UAT。
 
-覆盖普通主窗口的双工位、三工位放大/返回、多屏开启后的快照隔离，
+覆盖普通主窗口的双工位、三工位放大/返回、多屏开启后的 viewer 槽隔离，
 以及 station_view 停止态切侧栏后恢复总览；同时守住工位首屏单路 MJPEG。
 """
 from __future__ import annotations
@@ -73,6 +73,7 @@ def main() -> int:
             )
             video = page.video
             stream_channels: list[int | None] = []
+            stream_viewers: list[str | None] = []
             snapshot_channels: list[int | None] = []
             browser_config_writes: list[str] = []
 
@@ -103,10 +104,6 @@ def main() -> int:
                     ),
                 )
 
-            def abort_stream(route):
-                stream_channels.append(_channel(route.request.url))
-                route.abort()
-
             def fulfill_snapshot(route):
                 snapshot_channels.append(_channel(route.request.url))
                 route.fulfill(
@@ -116,6 +113,10 @@ def main() -> int:
                 )
 
             def observe_request(request):
+                if "/video_feed?" in request.url:
+                    query = parse_qs(urlparse(request.url).query)
+                    stream_channels.append(_channel(request.url))
+                    stream_viewers.append((query.get("viewer") or [None])[0])
                 if (
                     "/api/v1/workstations/multi-monitor" in request.url
                     and request.method != "GET"
@@ -124,7 +125,6 @@ def main() -> int:
 
             page.on("request", observe_request)
             page.route("**/api/v1/source/detection/results?**", fake_results)
-            page.route("**/video_feed?**", abort_stream)
             page.route("**/snapshot?**", fulfill_snapshot)
 
             disabled_config = {"enabled": False, "readonly": True, "mapping": {}}
@@ -171,26 +171,27 @@ def main() -> int:
             run.shot(page, "06_triple_returned")
             run.step("三工位详情可返回原总览", page.get_by_test_id("triple-grid").is_visible())
 
-            # 多屏开启：普通主窗口放大继续短轮询 snapshot，不抢已扩展工位的 MJPEG。
+            # 多屏开启：总览用 snapshot 让路；点击放大恢复全帧率 main 槽 MJPEG，
+            # 与扩展工位的 station 槽并存，不再以降帧换隔离。
             enabled_config = {"enabled": True, "readonly": True, "mapping": {}}
             _set_multi_monitor(enabled_config)
             page.reload(wait_until="domcontentloaded", timeout=20_000)
             page.get_by_test_id("triple-grid").wait_for(state="visible", timeout=10_000)
             page.wait_for_timeout(500)
             stream_channels.clear()
+            stream_viewers.clear()
             snapshot_channels.clear()
             page.get_by_test_id("channel-card-1").click()
             monitor.wait_for(state="visible", timeout=8_000)
-            saw_snapshot = _wait_for_channel(page, snapshot_channels, 1)
+            saw_stream = _wait_for_channel(page, stream_channels, 1)
             page.wait_for_timeout(350)
-            run.shot(page, "07_enabled_zoom_snapshot_only")
+            run.shot(page, "07_enabled_zoom_main_mjpeg")
             run.step(
-                "多屏开启后普通主窗口放大只取目标快照",
-                saw_snapshot
-                and stream_channels == []
-                and snapshot_channels
-                and set(snapshot_channels[-3:]) == {1},
-                f"snapshot={snapshot_channels[-6:]} mjpeg={stream_channels}",
+                "多屏开启后普通主窗口放大取目标 main 槽 MJPEG",
+                saw_stream
+                and set(stream_channels) == {1}
+                and "main" in stream_viewers,
+                f"snapshot={snapshot_channels[-6:]} mjpeg={stream_channels} viewers={stream_viewers}",
             )
             run.step(
                 "总览点击不写多屏配置",
@@ -201,6 +202,7 @@ def main() -> int:
 
             # 真实工位主窗 station_view 仍保留侧栏、操作按钮和单路 MJPEG。
             stream_channels.clear()
+            stream_viewers.clear()
             snapshot_channels.clear()
             page.goto(
                 f"{FRONT}/#/monitor?channel=1&station_view=1&readonly=0&multi_monitor=1",
@@ -215,10 +217,11 @@ def main() -> int:
                 "station_view 工位主窗仍保留侧栏、控制与单路 MJPEG",
                 saw_stream
                 and set(stream_channels) == {1}
+                and "station" in stream_viewers
                 and page.locator("button[title='导航菜单']").count() == 1
                 and page.get_by_test_id("single-channel-controls").count() == 1
                 and page.get_by_test_id("single-channel-back").count() == 0,
-                f"mjpeg={stream_channels} snapshot={snapshot_channels}",
+                f"mjpeg={stream_channels} viewers={stream_viewers} snapshot={snapshot_channels}",
             )
 
             # 停止态从侧栏进入其它模块，再点“检测中心”应回到普通总览。
@@ -227,6 +230,7 @@ def main() -> int:
             page.wait_for_url(re.compile(r"#/source$"), timeout=8_000)
             page.locator("button[title='导航菜单']").click()
             stream_channels.clear()
+            stream_viewers.clear()
             snapshot_channels.clear()
             page.locator("aside").get_by_role(
                 "link", name="检测中心", exact=True
@@ -247,9 +251,12 @@ def main() -> int:
                 f"url={page.url} snapshot={snapshot_channels[-6:]} mjpeg={stream_channels}",
             )
 
+            stream_channels.clear()
+            stream_viewers.clear()
             page.get_by_test_id("channel-card-1").click()
             monitor.wait_for(state="visible", timeout=8_000)
             zoomed_again = monitor.get_attribute("data-channel") == "1"
+            saw_zoom_stream = _wait_for_channel(page, stream_channels, 1)
             page.get_by_test_id("single-channel-back").click()
             monitor.wait_for(state="detached", timeout=8_000)
             page.wait_for_timeout(350)
@@ -257,8 +264,9 @@ def main() -> int:
             run.step(
                 "侧栏返回后的总览仍可放大并返回",
                 zoomed_again
+                and saw_zoom_stream
+                and "main" in stream_viewers
                 and page.get_by_test_id("triple-grid").is_visible()
-                and stream_channels == [],
             )
             run.step(
                 "侧栏返回总览不写多屏配置",

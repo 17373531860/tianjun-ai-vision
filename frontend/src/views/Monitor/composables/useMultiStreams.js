@@ -26,9 +26,14 @@ export function useMultiStreams(ctx) {
   const multiVideoCanvasRefs = {};
   let multiStreamRunning = false;
   const multiStreamAborts = {};
+  const multiStreamViewerKeys = {};  // ch -> main/station；路由身份切换时强制换槽
+  const multiStreamReconnectTimers = {};
 
   // 与单工位 buildStreamUrl 同源: 走 getBackendHost() (开发 .env → 8004 等; 桌面壳默认主机; 浏览器空 host 走 Vite 代理)
   const streamHost = () => getBackendHost();
+  const desiredMjpegViewer = () => (
+    kioskMode.value || stationViewMode.value ? 'station' : 'main'
+  );
   const BOUNDARY = '--frame';
   const HEADER_END = '\r\n\r\n';
 
@@ -51,8 +56,8 @@ export function useMultiStreams(ctx) {
   // 每路 MJPEG 是一条永久占用的连接, 3x3 九工位 = 9 条流 + 150ms 数据轮询全挤同一个
   // 后端 host → 流被饿死, 前端 1s 重连 + 后端"新连接上位"互踢, 画面永远加载不出来。
   // 修复一: 可见工位 > 4 时放弃 MJPEG 长连接, 改为 /snapshot 单帧轮询 (短请求, keep-alive
-  // 复用 socket, 与数据轮询共存)。多屏开启时普通主窗口（含总览放大）也始终走快照，
-  // 避免与扩展工位主窗争抢同一 channel 的唯一 MJPEG；station_view/kiosk 工位窗仍用 MJPEG。
+  // 复用 socket, 与数据轮询共存)。多屏开启时普通主窗口仅总览走快照；放大详情仍保持
+  // 全帧率 MJPEG，并通过 viewer 槽与 station_view/kiosk 工位窗隔离。
   // 修复二 (Safari/WebKit): WebKit 的 fetch() 读不了 multipart/x-mixed-replace 流
   // (立刻 "Load failed"), canvas 永远黑屏。某工位的 MJPEG 流连续 2 次一帧未出就断
   // → 该工位自动降级为快照轮询兜底 (Playwright webkit 内核实测复现+验证)。
@@ -110,6 +115,23 @@ export function useMultiStreams(ctx) {
     Object.keys(snapshotLastStart).forEach((k) => delete snapshotLastStart[k]);
   };
 
+  const clearMjpegReconnectTimer = (ch) => {
+    if (multiStreamReconnectTimers[ch]) {
+      clearTimeout(multiStreamReconnectTimers[ch]);
+      delete multiStreamReconnectTimers[ch];
+    }
+  };
+
+  const scheduleMjpegReconnect = (ch, delayMs) => {
+    clearMjpegReconnectTimer(ch);
+    multiStreamReconnectTimers[ch] = setTimeout(() => {
+      delete multiStreamReconnectTimers[ch];
+      if (!multiStreamRunning || snapshotChannels.has(ch)) return;
+      if (!visibleStreamChannels().includes(ch) || multiStreamAborts[ch]) return;
+      connectMjpegStream(ch);
+    }, delayMs);
+  };
+
   const syncMultiStreams = () => {
     if (!multiStreamRunning) return;
     const visible = visibleStreamChannels();
@@ -118,20 +140,26 @@ export function useMultiStreams(ctx) {
         multiMonitorRuntime.value.enabled
         && !kioskMode.value
         && !stationViewMode.value
+        && zoomedChannel.value === null
       );
     const snapWant = visible.filter(
       (ch) => useSnapshotAll || (mjpegZeroFrameFails[ch] || 0) >= MJPEG_FALLBACK_FAILS
     );
     const mjpegWant = new Set(visible.filter((ch) => !snapWant.includes(ch)));
+    const desiredViewer = desiredMjpegViewer();
 
     Object.keys(multiStreamAborts).forEach((k) => {
-      if (!mjpegWant.has(Number(k))) {
+      if (!mjpegWant.has(Number(k)) || multiStreamViewerKeys[k] !== desiredViewer) {
         try { multiStreamAborts[k].abort(); } catch {}
         delete multiStreamAborts[k];
+        delete multiStreamViewerKeys[k];
       }
     });
+    Object.keys(multiStreamReconnectTimers).forEach((k) => {
+      if (!mjpegWant.has(Number(k))) clearMjpegReconnectTimer(k);
+    });
     mjpegWant.forEach((ch) => {
-      if (!(ch in multiStreamAborts)) connectMjpegStream(ch);
+      if (!(ch in multiStreamAborts) && !(ch in multiStreamReconnectTimers)) connectMjpegStream(ch);
     });
     startSnapshotPolling(snapWant);
   };
@@ -144,6 +172,7 @@ export function useMultiStreams(ctx) {
     if (mjpegZeroFrameFails[ch] >= MJPEG_FALLBACK_FAILS) {
       console.warn(`[MJPEGStream] ch${ch} 连续 ${mjpegZeroFrameFails[ch]} 次零帧断流, 降级为快照轮询`);
       delete multiStreamAborts[ch];
+      delete multiStreamViewerKeys[ch];
       syncMultiStreams();
       return true;
     }
@@ -163,12 +192,18 @@ export function useMultiStreams(ctx) {
 
   const connectMjpegStream = async (ch) => {
     if (!multiStreamRunning) return;
+    if (multiStreamAborts[ch]) return;
+    clearMjpegReconnectTimer(ch);
     const abort = new AbortController();
     multiStreamAborts[ch] = abort;
+    const viewer = desiredMjpegViewer();
+    multiStreamViewerKeys[ch] = viewer;
     let gotFrame = false;   // 本条连接是否出过至少一帧 (零帧断流 → WebKit 兜底计数)
+    let reconnectDelay = 0;
+    let reader = null;
     try {
-      const res = await fetch(`${streamHost()}/video_feed?channel=${ch}`, { signal: abort.signal });
-      const reader = res.body.getReader();
+      const res = await fetch(`${streamHost()}/video_feed?channel=${ch}&viewer=${viewer}`, { signal: abort.signal });
+      reader = res.body.getReader();
       const INIT_BUF_SIZE = 512 * 1024;
       let buf = new Uint8Array(INIT_BUF_SIZE);
       let bufLen = 0;
@@ -220,20 +255,25 @@ export function useMultiStreams(ctx) {
       // v3.47: 服务端正常关流 (done, 非异常) 也要重连 —— 例如后端重启/换源关旧流,
       // 否则该工位画面从此定格; 与 catch 分支同样按"仍可见"守门
       // (该工位已转快照轮询时 snapshotChannels 含 ch, 禁止 MJPEG 复活抢连接)
-      if (multiStreamRunning) {
+      if (multiStreamRunning && multiStreamAborts[ch] === abort) {
         if (_registerMjpegDeath(ch, gotFrame)) return;
-        setTimeout(() => {
-          if (multiStreamRunning && !snapshotChannels.has(ch) && visibleStreamChannels().includes(ch)) connectMjpegStream(ch);
-        }, 1000);
+        reconnectDelay = 1000;
       }
     } catch (e) {
-      if (e.name !== 'AbortError' && multiStreamRunning) {
+      if (e.name !== 'AbortError' && multiStreamRunning && multiStreamAborts[ch] === abort) {
         if (_registerMjpegDeath(ch, gotFrame)) return;
         console.warn(`[MJPEGStream] ch${ch} disconnected, reconnecting...`);
         // v3.47: 重连前确认该工位仍可见 (翻页/退出放大后不再为隐藏通道续命)
-        setTimeout(() => {
-          if (multiStreamRunning && !snapshotChannels.has(ch) && visibleStreamChannels().includes(ch)) connectMjpegStream(ch);
-        }, 2000);
+        reconnectDelay = 2000;
+      }
+    } finally {
+      // 解析/绘制异常也主动释放 response body，不能等 GC 留下一条幽灵 socket。
+      try { if (reader) await reader.cancel(); } catch {}
+      // 只有当前 AbortController 才拥有该槽的清理/重连权；旧请求晚结束不能删新连接。
+      if (multiStreamAborts[ch] === abort) {
+        delete multiStreamAborts[ch];
+        delete multiStreamViewerKeys[ch];
+        if (reconnectDelay > 0) scheduleMjpegReconnect(ch, reconnectDelay);
       }
     }
   };
@@ -314,8 +354,10 @@ export function useMultiStreams(ctx) {
     multiStreamRunning = false;
     stopSnapshotPolling();
     Object.keys(mjpegZeroFrameFails).forEach(k => delete mjpegZeroFrameFails[k]);
+    Object.keys(multiStreamReconnectTimers).forEach(k => clearMjpegReconnectTimer(k));
     Object.values(multiStreamAborts).forEach(a => { try { a.abort(); } catch {} });
     Object.keys(multiStreamAborts).forEach(k => delete multiStreamAborts[k]);
+    Object.keys(multiStreamViewerKeys).forEach(k => delete multiStreamViewerKeys[k]);
     multiFramePump.reset();
   };
 
@@ -323,9 +365,11 @@ export function useMultiStreams(ctx) {
   // 语义与内联版逐行一致: 清零帧计数 → 掐掉旧连接 → 按可见性重排。
   const reconnectChannelStream = (ch) => {
     mjpegZeroFrameFails[ch] = 0;
+    clearMjpegReconnectTimer(ch);
     if (multiStreamAborts[ch]) {
       try { multiStreamAborts[ch].abort(); } catch {}
       delete multiStreamAborts[ch];
+      delete multiStreamViewerKeys[ch];
     }
     syncMultiStreams();
   };
