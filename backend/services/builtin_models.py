@@ -84,8 +84,8 @@ BUILTIN_MODELS = [
         "capability": "headpose",
         "file": "headpose.onnx",
         "framework": "ONNX",
-        "description": "头部三轴角估计, 叠加在姿态之上精化朝向。当前为公开占位权重, 出厂发版前须换授权版 (同名热替换或上传后绑定)。",
-        "meta_extra": {"license_note": "public-placeholder"},
+        "description": "头部三轴角估计, 叠加在姿态之上精化朝向。授权已谈定；现场用「更换权重」绑定授权版, 引擎热重载。",
+        "meta_extra": {"license_note": "licensed"},
     },
     {
         "key": "builtin_ocr",

@@ -315,6 +315,20 @@ class TestFacingDwell:
         ok, _ = eng._facing_condition(cfg.rules[0], {'人': [det]}, time.time())
         assert not ok
 
+    def test_require_operator_filters_non_ops(self):
+        """黄背心外协即使朝向命中也不确认; 蓝工装 is_operator=True 才算。"""
+        cfg = _facing_cfg(require_operator=True, min_frames=1)
+        assert cfg.rules[0].require_operator is True
+        eng = RegionEventEngine(cfg)
+        eng.frame_aspect = 0.5625
+        vest = {'label': '人', 'x': 0.45, 'y': 0.4, 'w': 0.1, 'h': 0.2,
+                'confidence': 0.9, 'facing': -20.0, 'is_operator': False}
+        evs = eng.process_frame([vest], 1.0)
+        assert evs == []
+        op = dict(vest, is_operator=True)
+        evs = eng.process_frame([op], 2.0)
+        assert any(e.get('action') == 'confirmed' for e in evs)
+
     def test_episode_confirm_via_process_frame(self):
         """facing 连续满足 min_frames 帧 → confirmed 事件产出。"""
         cfg = _facing_cfg(min_frames=3, event_id=5)

@@ -1807,6 +1807,12 @@
                   无人面向才告警
                 </label>
               </div>
+              <div class="flex items-end pb-1">
+                <label class="flex items-center gap-1 text-gray-400" title="只把蓝工装操作员计入本规则。黄背心外协/参观即使走进站位区、面向仪表也不打卡。默认关=认画面里所有人">
+                  <el-switch v-model="rule.require_operator" size="small" />
+                  只认操作员（蓝工装）
+                </label>
+              </div>
               <div v-if="rule.type !== 'region_exit' && rule.type !== 'cross_count'">
                 <label class="block text-gray-400 mb-1" title="动作条件消失超过该秒数才算结束。真动作中途被手/身体遮挡零点几秒不会被切成两段、重复计数。0=不启用，沿用全局漏检容忍帧数">
                   消失确认（秒，0=用全局容忍）
@@ -2605,6 +2611,7 @@ const _newRegionRule = (cfg) => {
     target_point: null,
     tolerance_deg: 35,
     alert_on_absent: false,
+    require_operator: false,
     settle: false,
     event_id: null,
   };

@@ -41,6 +41,13 @@ class RegionEventsMixin:
             self._region_inject_facing(engine, detections, original_frame)
         except Exception as e:
             print(f"[RegionEvents] 朝向注入失败 (已隔离): {e}")
+        # 只认操作员: 蓝工装打标 (require_operator 规则消费 is_operator)
+        try:
+            if any(getattr(r, 'require_operator', False) for r in engine.cfg.rules):
+                from backend.api.source_region_events import tag_operator_uniforms
+                tag_operator_uniforms(detections, original_frame)
+        except Exception as e:
+            print(f"[RegionEvents] 操作员工装打标失败 (已隔离): {e}")
         # 频闪诊断 (与 custom_mix 同一套环形缓冲 + 自动转储): 监视规则涉及的
         # 全部类别, 某类别 2s 内在场翻转过频 → 现场转储到 diag_flicker/ 供定位真因
         try:

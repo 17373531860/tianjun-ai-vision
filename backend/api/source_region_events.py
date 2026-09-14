@@ -117,6 +117,42 @@ def _bbox_center(d: dict):
     return d['x'] + d['w'] / 2.0, d['y'] + d['h'] / 2.0
 
 
+def tag_operator_uniforms(detections: list, frame) -> None:
+    """给检测框打 is_operator (蓝工装启发式)。现场「只认操作员」用。
+
+    黄背心外协 / 深色便服 → False。frame 缺失时不打标 (规则侧视为非操作员)。
+    任何异常隔离, 不改主链路。
+    """
+    if frame is None or not detections:
+        return
+    try:
+        import cv2
+        h, w = frame.shape[:2]
+        if h < 8 or w < 8:
+            return
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        for d in detections:
+            try:
+                x1 = int(max(0, float(d['x']) * w))
+                y1 = int(max(0, float(d['y']) * h))
+                x2 = int(min(w, (float(d['x']) + float(d['w'])) * w))
+                y2 = int(min(h, (float(d['y']) + float(d['h'])) * h))
+            except (KeyError, TypeError, ValueError):
+                d['is_operator'] = False
+                continue
+            if x2 - x1 < 6 or y2 - y1 < 6:
+                d['is_operator'] = False
+                continue
+            crop = hsv[y1:y2, x1:x2]
+            blue = cv2.inRange(crop, (90, 40, 40), (130, 255, 255))
+            yellow = cv2.inRange(crop, (18, 80, 80), (40, 255, 255))
+            br = float(blue.mean()) / 255.0
+            yr = float(yellow.mean()) / 255.0
+            d['is_operator'] = bool(br >= 0.08 and yr < 0.12)
+    except Exception:
+        pass
+
+
 def _pair_overlaps(a: dict, b: dict, min_iou: float) -> bool:
     """两框是否"重叠": min_iou<=0 时任意相交即算, 否则要求 IoU 达标。"""
     if min_iou > 0:
@@ -140,7 +176,8 @@ class RegionEventRule:
                  'anchor_label', 'anchor_ref', 'anchor_hold',
                  'gone_seconds', 'min_overlap_ratio', 'min_move', 'min_seconds',
                  'object_margin', 'min_count', 'max_distance',
-                 'target_point', 'tolerance_deg', 'alert_on_absent')
+                 'target_point', 'tolerance_deg', 'alert_on_absent',
+                 'require_operator')
 
     def __init__(self, rule_id, name, rule_type, subject_label, object_label,
                  region, region_mode, min_frames, min_iou, require_label,
@@ -149,7 +186,7 @@ class RegionEventRule:
                  gone_seconds=None, min_overlap_ratio=0.0, min_move=0.0,
                  min_seconds=0.0, object_margin=0.0, min_count=3,
                  max_distance=0.15, target_point=None, tolerance_deg=35.0,
-                 alert_on_absent=False):
+                 alert_on_absent=False, require_operator=False):
         self.rule_id = rule_id
         self.name = name                    # 事件名 = 步骤落库/流水显示名, 全局唯一
         self.rule_type = rule_type          # 'overlap' | 'region_enter' | 'region_exit'
@@ -183,6 +220,9 @@ class RegionEventRule:
         self.tolerance_deg = tolerance_deg  # facing_dwell: 朝向夹角容差 (度)
         self.alert_on_absent = alert_on_absent  # facing_dwell: True=条件取反
         #                                     ("持续无人面向仪表"超时告警)
+        self.require_operator = bool(require_operator)  # 只认蓝工装操作员
+        #                                     (黄背心外协/参观不计入; 由 VSM
+        #                                      在帧上打 is_operator 标记)
         self.object_margin = object_margin  # overlap: 目标框虚拟扩边 (归一化,
         #                                     0=不扩)。真动作发生在目标框边缘
         #                                     外侧几个百分点时 (如扫工件下沿
@@ -411,6 +451,7 @@ def _parse_rule(i: int, raw: dict) -> RegionEventRule:
         target_point=target_point,
         tolerance_deg=tolerance_deg,
         alert_on_absent=bool(raw.get('alert_on_absent', False)),
+        require_operator=bool(raw.get('require_operator', False)),
     )
 
 
@@ -629,14 +670,22 @@ class RegionEventEngine:
         if self._anchor_labels:
             self._update_anchor_cache(by_label, ts)
 
+        by_label_op = None
+        if any(r.require_operator for r in self.cfg.rules):
+            by_label_op = {
+                k: [d for d in v if d.get('is_operator')]
+                for k, v in by_label.items()
+            }
+
         events = []
         for rule in self.cfg.rules:
+            src = by_label_op if rule.require_operator else by_label
             if rule.rule_type == 'region_exit':
-                self._step_exit(rule, by_label, ts, events)
+                self._step_exit(rule, src, ts, events)
             elif rule.rule_type == 'cross_count':
-                self._step_cross(rule, by_label, ts, events)
+                self._step_cross(rule, src, ts, events)
             else:
-                self._step_overlap(rule, by_label, ts, events)
+                self._step_overlap(rule, src, ts, events)
         return events
 
     # ---------- 锚点跟随 ----------

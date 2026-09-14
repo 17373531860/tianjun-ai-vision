@@ -738,6 +738,7 @@ const _sanitizeRegionEvents = (re) => {
         out.tolerance_deg = Math.max(5, Math.min(180, Number(r.tolerance_deg) || 35));
         out.alert_on_absent = !!r.alert_on_absent;
       }
+      if (r.require_operator) out.require_operator = true;
       // 消失确认秒数 / 位移门槛 / 确认时长秒基 (overlap/enter 可选): >0 才落库
       if (type !== 'region_exit' && type !== 'cross_count') {
         const gs = Number(r.gone_seconds);
