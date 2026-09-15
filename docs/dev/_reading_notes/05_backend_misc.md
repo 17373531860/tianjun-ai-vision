@@ -7,6 +7,16 @@
 >
 > **短信补账（2026-08-03）**：新增短信服务族（见下方「短信通知」节）；路由 API 条目在 `01_backend_core.md` 的 `sms.py`。
 >
+> **v3.57 补账（2026-09-15，AI 能力/光引导/朝向 API 与引擎家族）**：
+> - **新 `api/lightguide.py`（566 行）**：投影光引导端点组 `/api/v1/lightguide/*`——ArUco 标定求解 solve（投影图案↔相机画面单应矩阵）/status/clear + 交互亮度采样 sample（悬停确认数据源）+ 引导参数全局 KV `/lightguide/params`（11 项越界钳制）。标定结果按工位持久化 SystemConfig KV。回归 `tests/test_lightguide_p1~p3.py`。
+> - **新 `api/ocr.py`/`api/anomaly.py`/`api/vlm.py`**：OCR 读字（试识别 + `_parse_roi` 多块矩形）/ 异常检测记忆库管理（建库/加样/试打分/热力图）/ VLM 看图问答（连接配置 KV + 传图/读通道画面提问，默认关零开销）。
+> - **新 `api/orientation.py`**：朝向估计试用端点（status/estimate/estimate-frame，三层后端状态透出）。
+> - **新 `services/ocr_engine.py`（RapidOCR，Apache 2.0）/ `services/anomaly_engine.py`（442 行，PatchCore 风格：DINOv2 ViT-S 优先 ResNet18 兜底、多层记忆库、老库格式兼容）/ `services/vlm_service.py`（OpenAI 兼容 HTTP，推荐本地 Ollama）**。
+> - `services/person_orientation.py`（564→整合后 ~800 行）：**三层后端统一收敛**（收编并删除 `orientation_engine.py`）——关键点层 yolo11_pose/mediapipe_pose 二选一（兼容 mediapipe<1.0 solutions 与 >=1.0 Tasks API 双通路）+ headpose_onnx 头姿精化层（90MB 商用授权外置件，可选热生效）+ YawSmoother 平滑层，按授权/文件在场自动降级。回归 `tests/test_orientation_backends.py`。
+> - `core/permissions.py`：新增 `system.site_pack.export/import`（admin 通配独占，site-pack 本体见 03 册，WIP 已摘除挂载）。
+> - `requirements.txt`：新增 onnxruntime/rapidocr_onnxruntime（离线包可携带）；dmPython 加 darwin 排除标记（无 macOS wheel，达梦直写惰性 import 零影响）。
+> - **新 `scripts/db/setup_embedded_pg.sh`（102 行）**：Linux/macOS 嵌入式 PG——initdb scram + 单用户建库 + 起停验证 + 写 db_config.json，失败不写配置回落 SQLite，已初始化跳过（升级安全）；随机密码生成改 head -c 定长喂 tr（修 GitHub runner SIGPIPE ignore 致 tr 死循环挂死）。
+>
 > **v3.49 补账（2026-08-12，捷昌整改批次）**：
 > - `core/debug_center.py`：新增 **`backend.timing`** 调试类目（WS4）——扫码处理/窗口结算/MES 外推的分段耗时埋点走此类目进调试日志中心，与既有调试开关联动、默认无常驻开销。回归 `tests/test_timing_probe_ws4.py`。
 > - `db/sql_compat.py`（27→47 行）：新增三个方言助手——`hour_minute(col)`（PG `to_char(HH24:MI)` / SQLite `strftime('%H:%M')`）、`date_str(col)`（PG `to_char(YYYY-MM-DD)` / SQLite `date()`）、`sum_bool(expr)`（`sum(case when ...)` 双方言通用）。存量 SQLite 特有 SQL 的收编出口，消费方：export_context / reports 域。双方言回归 `tests/test_sql_compat_ws5.py`。

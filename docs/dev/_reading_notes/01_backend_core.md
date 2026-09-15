@@ -2,6 +2,23 @@
 
 > 阅读范围：2026-07-05 分段通读 `backend/main.py`、`backend/core/config.py`、`backend/api/source*.py` 全族（含 23 个 mixin + 14 个 has-a 组件）、`router_manifest.py`、`channel_manager.py`、`alarm.py`、`debug.py`、`system_display.py`、`services/weighing_engine.py`。**共 47 个文件**。
 >
+> **v3.57 补账（2026-09-15，六批次汇合发版：AI 能力/内置模型/光引导/多平台包/多屏二期/ROI 多块化）**：
+> - `source_geometry.py`：新增**多块 ROI 中央契约**——`normalize_polygons(raw)`（单块 `[[x,y],...]` / 多块 `[[[x,y],...],...]` 双格式统一归一成多边形列表，逐点 clamp 0~1）、`point_in_any_polygon(px,py,raw)`（任一块命中）、`normalize_rects(raw)`（`[x,y,w,h]` 单/多块同理）。**存储契约：单块存旧格式、多块存嵌套格式（前端 `utils/polygons.js` 同源镜像），存量配置零迁移**。全部 ROI 消费点自此只经这三个入口。回归 `tests/test_multi_polygon_roi.py`。
+> - `source_roi.py`：`_validate_roi` 走 normalize_polygons；`ensure_roi_mask` 多块一次 `cv2.fillPoly`（多块并集单 mask）；`_roi_polygon_pixels` 由单 ndarray 改 ndarray 列表；`is_bbox_center_in_roi`/`is_normalized_bbox_center_in_polygon` 遍历全部块。
+> - `source.py`：①多块化——`_is_in_roi`（tracking ROI）与 `_det_passes_roi_for_label`（步骤 ROI）改任一块命中；②多屏二期——**同工位独立观看槽**：主屏放大不再踢掉 station MJPEG 连接（观看槽按 viewer 独立、JPEG 按工位共享编码一次）；扩展步骤 OK/NG 恢复（步骤结果覆盖重复步骤/周期切换/旧事件回灌，`monitorModes` 前端对偶见 04 册）。
+> - `source_label_split.py`：`_parse_polygon` 返回 canonical 多块；新增 `_point_in_regions`（任一块）/`_transform_regions`（锚点跟随对逐块做同一仿射）。
+> - `source_project_config_apply.py`：`_apply_steps_config` 步骤 ROI 经 normalize_polygons 存**多边形列表**（`step_roi_polygons[label]` 语义由单多边形变列表）；接入 ai_modes / 能力挂件配置解析。
+> - **新 `source_ai_modes_mixin.py`**：OCR/异常正式逻辑模式宿主——独立节流采样线程（不依赖 YOLO 模型即可起检测），OCR 稳定读数 N 次一致→正则规则判定→文本变化去重，异常连续超阈值→NG（冷却期）→回落恢复 OK 收口；判定统一走 `_trigger_event` 结算链；`_norm_rect` 返回 canonical 多块矩形（None=整帧）。回归 `tests/test_ai_modes.py`。
+> - **新 `source_capability_attachments.py`**：`parse_capability_attachments` + `CapabilityAttachmentsMixin`——能力挂件副通道（pose/ocr/anomaly），独立后台线程按 interval_s 节流执行，结果透出 `results.capability_outputs`；无挂件项目零开销；`_cap_crops` 多块矩形裁剪逐块跑。回归 `tests/test_builtin_models.py`。
+> - **新 `source_e2e_onnx.py`**：无 NMS 端到端 ONNX 直推 runner（YOLO26/RF-DETR 形态，互连契约 1.1 `postprocess.mode=end_to_end`），加载层自动切换，其余模型零行为变化；track() 显式拒绝提示用 class_nms 形态。
+> - `source_region_events.py`/`_mixin.py`：①**监控型规则四种** region_count/region_empty/proximity/cross_count（与动作型正交：不参与打断/去重/序列），min_seconds 上限 30→3600s；②**facing_dwell 朝向驻留**——主体朝向与人→仪表点连线夹角判定（tolerance_deg 容差 + alert_on_absent 取反超时告警），VSM 层节流注入 facing 字段 + YawSmoother；③`tag_operator_uniforms` HSV 蓝/黄工装启发式打 `is_operator`（异常隔离不进主链路）+ 规则级 `require_operator` 守门（默认关）。
+> - `source_mediapipe.py`（+923 行）：手部裁切渲染——副屏 `/snapshot?view=hands` 数据源，裁切框 fixed|follow 两模式，无手不冻帧；`_render_hands_crop` 复用 mediapipe 绘制 specs。回归 `tests/test_hands_crop_snapshot.py`。
+> - `source_container_grouping_mixin.py`：ScanD zone_polygon 多块化（normalize_polygons + 任一块命中）。`source_custom_mix.py`/`source_step_stats_mixin.py`/`source_inference_router.py`：多边形消费点同批统一走中央 helper。
+> - `services/weighing_engine.py`：`point_in_polygon` 兼容双格式、任一块命中。
+> - `channel_manager.py`：multi_monitor 段扩容——工位主屏（station_view 复用主窗/kiosk 可操作）+ 手部副屏（aux_display_id/aux_hands_enabled/aux_view_mode）+ 窗口角色 `role(main|aux)` × 内容角色 `contentRole(monitor|projection)` 双轨字段归一化（老配置零差异）。
+> - `main.py`：启动幂等 seed 内置能力模型（builtin_models）与预置 `.yvmodel`（preset_models）；multi-monitor hands 快照路由接线。
+> - `router_manifest.py`：登记 `/ocr` `/anomaly` `/vlm` `/orientation` `/lightguide`；`site_pack` **摘除挂载**（WIP：前端/测试未做，代码保留，补齐后恢复）。
+>
 > **v3.56 补账（2026-09-01，多码采集发版随行的后端核心簇）**：
 > - `source_per_item_mixin.py`：逐件五件套——①步骤级 `action_label`/`item_label` 对称支持**数组 OR**（`_collect_item_boxes` 多标签框合并，旧单串兼容）；②`absorb_new_items_sec>0` 时 auto 步骤在周期开始后 N 秒内 `unbounded` 吸收新位置个体（治稳定窗口锁死后放件）；③`warn_uncovered_after_sec`+`warn_event_id` 个体 `first_seen_time` 超时未覆盖借事件响应面报一次（`warn_fired` 防重，不结周期）；④OK 结算按首步 `covered_count` 累加 `item_count_counter_name` 计数器（读取处 `getattr(self,'_per_item_config',None) or {}` 防御，v3.56 BUG-006）；⑤`remediation_event_notify` 待补态走 `fire_external_event_response(remind_only=True)`。回归 `tests/test_per_item_v356_features.py`。
 > - `source_custom_mix.py`：稳定值取值重设计——去固定 4s 回看，改 `stable_anchor_s`（锚点=动作成立−N 秒）+ `stable_pick`（max/latest）+ `slot_verified_drop`（看全帧众数下修才允许向下修正，须配槽位门）；锚点前无稳定记录峰值兜底；内存只留 `MODES_KEEP_S=300`。回归 `tests/test_custom_mix_unit.py`。

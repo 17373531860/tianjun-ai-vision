@@ -797,3 +797,13 @@ pipeline_config 内, 不拍平到顶层**, 因此不动 ORM / Pydantic schema / 
 **改这块的全链路**：前端 `LogicConfigTab.vue`「NG 判定与处置」卡（一行一场景）→ `index.vue` 加载合成/保存序列化（last_first 强制 violation=none）→ 后端 `resolve_ng_handling` 归一 → 展开到既有运行时属性（状态机零改动）。事件页 `EventsConfigTab.vue` 有反向联动明示（NG 事件的定格弹窗按钮来源）。迁移矩阵回归：`tests/test_ng_handling_resolver.py`。
 
 ⚠️ 加新处置场景时**别再起新顶层键**——往 `ng_handling` 里加行，前后端合成/序列化/e2e 三处同步。
+
+## v3.57 多块 ROI 双格式契约（2026-09-15 起，全部画区域字段适用）
+
+所有多边形/矩形 ROI 字段（`tracking_roi.polygon` / `steps_config[].roi` / 标签拆分 region / 区域事件 region / 称重秤台区 / ScanD zone / OCR·异常·能力挂件 `roi`）自 v3.57.0 支持**多块**：
+
+- **存储双格式**：单块存旧格式（多边形 `[[x,y],...]`，矩形 `[x,y,w,h]`）；多块存嵌套格式（`[[[x,y],...],...]` / `[[x,y,w,h],...]`）。**存量配置零迁移**，保存单块时必须继续写旧格式（别把老客户配置全升格成嵌套）。
+- **读取唯一入口**：后端 `backend/api/source_geometry.py` 的 `normalize_polygons` / `normalize_rects` / `point_in_any_polygon`；前端 `frontend/src/utils/polygons.js` 同源镜像（normalizePolygons/serializePolygons/hasPolygons/…）。**新增任何 ROI 消费点禁止手写格式解析**，一律走这两处。
+- **判定语义**：多块之间"任一块命中"。
+- 绘制统一走 `RoiEditorDialog.vue`（完成本块/撤销点/删除上一块）；`_apply_steps_config` 后 `step_roi_polygons[label]` 的值是**多边形列表**（单块也包一层）。
+- 回归：`tests/test_multi_polygon_roi.py`。

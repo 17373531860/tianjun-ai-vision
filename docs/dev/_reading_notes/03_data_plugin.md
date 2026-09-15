@@ -4,6 +4,15 @@
 > 行号锚定当前 `tianjun-main` 工作区源码，后续改动以代码为准。
 > 2026-07-17 v3.41 复核：补账 v3.33~v3.41 变更（数据/导出/项目域），受影响小节的行数与行号已刷新；插件系统（`backend/plugin_system/`）自基线零变更，第六、七节原样有效。
 >
+> **v3.57 补账（2026-09-15，内置能力模型入仓 + 端到端模型消费）**：
+> - `models/models.py`：`Model` 表新增 `capability`（detect/pose/orientation/headpose/ocr/anomaly/vlm 等）与 `builtin`（出厂内置行）两列——迁移 **`db/migrations/m0011_model_capability.py`**（老库 ALTER 补列）。
+> - `api/models.py`：新增 `GET /models/capabilities` 能力目录（含引擎可用性探针）+ `POST /models/capabilities/{cap}/bind` 换权重（热重载，如 person_orientation.release）+ 内置行禁删 403 + 上传带能力类型 + 列表 capability 过滤。
+> - **新 `services/builtin_models.py`（272 行）**：开机幂等 seed 六个出厂行（检人 yolo11n / 朝向 yolo11n-pose / 头姿 headpose.onnx / OCR / 异常 / VLM），缺文件行标 `missing` 不炸启动；权重解析优先级 **env > 仓内绑定 > 出厂默认**。回归 `tests/test_builtin_models.py`。
+> - **新 `services/preset_models.py`**：安装包 `resources/preset_models/*.yvmodel` 启动幂等入库（训练平台预置模型随包分发），坏包隔离不阻启动。
+> - `services/interconnect/package_ingest.py`：`postprocess.mode=end_to_end` 的 `.yvmodel` 写 sidecar 元数据（加载层据此切 e2e 直推 runner，见 01 册 `source_e2e_onnx.py`）。
+> - `services/export_seed.py`：多码采集「填入示例」预置模板改预置**不计数**（v3.56.0a BUG-004 配套）。
+> - **新 `services/site_pack/`（collect/apply/crypto/sanitize 四文件）+ `api/site_pack.py`**：现场配方包 `.tjvsite` 导出/预览/导入 + 导入前自动回滚包（site_pack_backups/ 留 5 份）+ Fernet 加密 + admin 独占权限（`system.site_pack.export/import`）。**WIP 已摘除挂载**（router_manifest 注释，前端/测试补齐后恢复）。
+>
 > **v3.56 补账（2026-09-01，多码采集数据/导出面）**：
 > - **新文件 `models/scan_collect_models.py`（2 表，库表总数 54→56）**：`ScanCollectConfig`（scan_collect_configs：project_id 唯一 + enabled + config JSON——slots 数组每槽 {key,label,count,regex,role,dedup_cross_group,on_overflow} + 全局策略 sequence_fallback/dedup_in_group/dedup_cross_group/settle_on/on_overflow/on_unmatched/timeout_sec/event_ok_id/event_ng_id/ng_pending/vision_gate/vision_window_sec/vision_missing）；`ScanCollectRecord`（scan_collect_records：group_id/channel_id/project_id/slot_key/slot_label/code/seq/status[scanned|deleted|void]/group_result[ok|ng_missing|ng_timeout|ng_vision|void]/workpiece_id/scanned_at/settled_at，索引 group_id/code/workpiece_id）。新表走 create_all 自动建，无迁移。
 > - `services/export_realtime.py`：新增 `dispatch_scan_group_export`——查 `trigger_event == "scan_group_end"` 规则，上下文挂 `scan_collect` 段（结算摘要 + 按槽位分组视图 slots[].codes，模板可按扫码顺序或类别遍历），channel/project 过滤与 skip 台账同既有触发器。

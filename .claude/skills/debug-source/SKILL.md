@@ -1140,3 +1140,10 @@ if (self.project_config or {}).get('logic_mode') == 'per_item':
   v3.51.1 起改认 `_tracking_cycle_active`。确认版本或 grep `[ForceSettle]` 日志
 - 单测：`pytest tests/test_settle_on_complete.py`（21 用例 + v3.51.1 追加 4 条：豁免同标签×2 / 挂账强制收账×2）；BDD：`tests/features/settle_scan_lifecycle.feature`
 - 全虚拟复现（无摄像头/无扫码枪跑真实 tracking 管线 + E 模式协议）：`tests/uat/virtual_dual_station/`（见其 README，60 断言覆盖扫码门/统一播报/残留/亮灯闭环）
+
+## v3.57 多块 ROI 排查要点（2026-09-15）
+
+- 所有 ROI 判定自 v3.57 走 `source_geometry.normalize_polygons/normalize_rects/point_in_any_polygon`（单块旧格式/多块嵌套双格式，任一块命中）。"目标在区域里却不计/区域外却计了"先打印 `normalize_polygons(raw)` 看归一结果块数与顶点。
+- `step_roi_polygons[label]` 值语义 v3.57 起是**多边形列表**（单块也包一层）——直接下标取点的旧代码会拿到整块多边形而不是点，遍历层级错一层是典型症状。
+- 推理 ROI mask：`ensure_roi_mask` 多块一次 fillPoly 取并集；`_roi_polygon_pixels` 是 ndarray **列表**。
+- 回归：`pytest tests/test_multi_polygon_roi.py`。
