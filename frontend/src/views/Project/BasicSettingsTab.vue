@@ -224,28 +224,29 @@
                 <div class="flex items-center gap-2">
                   <el-button size="small" type="primary" plain
                     @click="$emit('open-extra-model-roi-editor', idx)">
-                    {{ slot.roi && slot.roi.length >= 3 ? '重新绘制' : '设置区域' }}
+                    {{ hasPolygons(slot.roi) ? '重新绘制' : '设置区域' }}
                   </el-button>
-                  <el-button v-if="slot.roi && slot.roi.length >= 3"
+                  <el-button v-if="hasPolygons(slot.roi)"
                     size="small" type="danger" plain @click="clearExtraModelRoi(idx)">
                     清除
                   </el-button>
-                  <span v-if="slot.roi && slot.roi.length >= 3"
+                  <span v-if="hasPolygons(slot.roi)"
                     class="text-xs text-green-400">
-                    已设置 {{ slot.roi.length }} 个顶点
+                    已设置 {{ polygonCount(slot.roi) > 1 ? `${polygonCount(slot.roi)} 块区域 (共 ${polygonPointCount(slot.roi)} 个顶点)` : `${polygonPointCount(slot.roi)} 个顶点` }}
                   </span>
                   <span v-else class="text-xs text-gray-500">
                     未设置 (空 = 全画面)
                   </span>
                 </div>
                 <!-- b2: ROI mini preview (16:9 SVG, 192x108).
-                     用 viewBox="0 0 1 1" 让归一化坐标直接当 path. -->
-                <svg v-if="slot.roi && slot.roi.length >= 3"
+                     用 viewBox="0 0 1 1" 让归一化坐标直接当 path.
+                     2026-09 多块化: 单块/多块双格式统一归一后逐块画. -->
+                <svg v-if="hasPolygons(slot.roi)"
                   width="192" height="108" viewBox="0 0 1 1"
                   preserveAspectRatio="none"
                   class="border border-slate-700 bg-slate-950 rounded">
-                  <polygon
-                    :points="(slot.roi || []).map(p => `${p[0]},${p[1]}`).join(' ')"
+                  <polygon v-for="(poly, pi) in normalizePolygons(slot.roi)" :key="pi"
+                    :points="poly.map(p => `${p[0]},${p[1]}`).join(' ')"
                     :fill="slot.display_color || '#f59e0b'"
                     fill-opacity="0.25"
                     :stroke="slot.display_color || '#f59e0b'"
@@ -382,6 +383,7 @@ import { ElMessage } from 'element-plus';
 import { Plus, Cpu, Delete, QuestionFilled } from '@element-plus/icons-vue';
 import { getFormatDisplayName } from './modelFormats';
 import { listAnomalyBanks } from '@/api/aitools';
+import { hasPolygons, normalizePolygons, polygonCount, polygonPointCount } from '@/utils/polygons';
 
 const props = defineProps({
   project: { type: Object, required: true },

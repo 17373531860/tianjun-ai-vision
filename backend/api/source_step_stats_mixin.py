@@ -151,10 +151,10 @@ class StepStatsMixin:
                     self._dbg_step_rejected(label, f"置信度{confidence:.2f} < 步骤阈值{threshold}")
                     continue
 
-            # 逐步骤 ROI: 仅框中心在配置多边形内才计入该步骤 (顺序/检测/自定义/共用路径)
+            # 逐步骤 ROI: 仅框中心在配置多边形(单块/多块任一块)内才计入该步骤 (顺序/检测/自定义/共用路径)
             _poly_map = getattr(self, 'step_roi_polygons', None) or {}
             _poly = _poly_map.get(label)
-            if _poly and len(_poly) >= 3:
+            if _poly:
                 if not is_normalized_bbox_center_in_polygon(det, _poly):
                     self._dbg_step_rejected(label, "检测框中心在该步骤 ROI 区域外")
                     continue

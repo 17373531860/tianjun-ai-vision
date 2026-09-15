@@ -8,6 +8,9 @@
      - 前置: 把 frame ROI 外区域置黑, 喂给模型
      - 后置: 检测框中心点不在 ROI 多边形内的也丢掉 (黑色边缘可能伪检测)
 4. mi.roi=None / 顶点不足 3 点时, 跳过裁剪 (返回原 frame, 不过滤)
+5. 多块 ROI (2026-09): mi.roi 支持单块 [[x,y],...] 与多块 [[[x,y],...],...]
+   双格式 (source_geometry.normalize_polygons 归一)。mask = 所有块并集,
+   中心点过滤 = 任一块命中即通过。
 
 公开 API
 ========
@@ -29,22 +32,15 @@ from typing import TYPE_CHECKING, Tuple
 import cv2
 import numpy as np
 
+from backend.api.source_geometry import normalize_polygons
+
 if TYPE_CHECKING:
     from backend.api.source_inference_router import ModelInstance
 
 
 def _validate_roi(roi) -> bool:
-    """ROI 多边形是否合法: 非空 list 且至少 3 点"""
-    if roi is None:
-        return False
-    if not isinstance(roi, (list, tuple)):
-        return False
-    if len(roi) < 3:
-        return False
-    for p in roi:
-        if not isinstance(p, (list, tuple)) or len(p) < 2:
-            return False
-    return True
+    """ROI 是否合法: 单块/多块双格式, 至少含一个 ≥3 点的多边形。"""
+    return bool(normalize_polygons(roi))
 
 
 def _transform_sig(transform) -> Tuple:
@@ -71,7 +67,8 @@ def ensure_roi_mask(mi: "ModelInstance", frame_shape: Tuple[int, int],
         而遮罩套在未变换的原图推理帧上——通道配了旋转/镜像时, 顶点必须先
         反变换回原图坐标, 否则遮罩位置整体错位 (2026-07 ROI 偏差修复缺陷 B).
     """
-    if not _validate_roi(mi.roi):
+    polys = normalize_polygons(mi.roi)
+    if not polys:
         # 清缓存防泄漏
         mi._roi_mask_cache = None
         mi._roi_mask_shape = None
@@ -88,22 +85,25 @@ def ensure_roi_mask(mi: "ModelInstance", frame_shape: Tuple[int, int],
             and mi._roi_polygon_pixels is not None):
         return True
 
-    # 显示坐标 → 原图坐标 (无变换时为恒等, 零开销)
+    # 显示坐标 → 原图坐标 (无变换时为恒等, 零开销), 逐块处理
     if sig != (0, False, False) and transform is not None:
-        roi_raw = [transform.map_point_display_to_original(float(x), float(y))
-                   for x, y in mi.roi]
+        polys_raw = [[transform.map_point_display_to_original(float(x), float(y))
+                      for x, y in poly] for poly in polys]
     else:
-        roi_raw = mi.roi
+        polys_raw = polys
 
-    # 重新生成: 归一化顶点 → 像素顶点 → fillPoly
-    pts = np.array([(int(round(x * w)), int(round(y * h))) for x, y in roi_raw],
-                   dtype=np.int32)
+    # 重新生成: 归一化顶点 → 像素顶点 → fillPoly (多块并集)
+    pts_list = [
+        np.array([(int(round(x * w)), int(round(y * h))) for x, y in poly],
+                 dtype=np.int32)
+        for poly in polys_raw
+    ]
     mask = np.zeros((h, w), dtype=np.uint8)
-    cv2.fillPoly(mask, [pts], 255)
+    cv2.fillPoly(mask, pts_list, 255)
 
     mi._roi_mask_cache = mask
     mi._roi_mask_shape = (h, w)
-    mi._roi_polygon_pixels = pts
+    mi._roi_polygon_pixels = pts_list   # list[np.ndarray], 每块一个顶点数组
     mi._roi_mask_transform_sig = sig
     return True
 
@@ -125,38 +125,43 @@ def apply_roi_mask(frame: np.ndarray, mi: "ModelInstance",
 def is_normalized_bbox_center_in_polygon(
     bbox_normalized: dict, roi_normalized,
 ) -> bool:
-    """检测框中心点 (归一化 0~1) 是否在归一化多边形内.
+    """检测框中心点 (归一化 0~1) 是否在归一化多边形（单块/多块）内.
 
-    roi_normalized: [[nx, ny], ...]，至少 3 点；不合法时视为「不限制」返回 True。
+    roi_normalized: 单块 [[nx,ny],...] 或多块 [[[nx,ny],...],...]；
+    不合法/无有效块时视为「不限制」返回 True。任一块命中即 True。
     """
-    if not roi_normalized or len(roi_normalized) < 3:
+    polys = normalize_polygons(roi_normalized)
+    if not polys:
         return True
-    for p in roi_normalized:
-        if not isinstance(p, (list, tuple)) or len(p) < 2:
-            return True
     cx = float(bbox_normalized.get("x", 0)) + float(bbox_normalized.get("w", 0)) / 2
     cy = float(bbox_normalized.get("y", 0)) + float(bbox_normalized.get("h", 0)) / 2
-    pts = np.array(
-        [(float(p[0]), float(p[1])) for p in roi_normalized],
-        dtype=np.float32,
-    )
-    return cv2.pointPolygonTest(pts, (cx, cy), False) >= 0
+    for poly in polys:
+        pts = np.array([(float(p[0]), float(p[1])) for p in poly], dtype=np.float32)
+        if cv2.pointPolygonTest(pts, (cx, cy), False) >= 0:
+            return True
+    return False
 
 
 def is_bbox_center_in_roi(bbox_normalized: dict, mi: "ModelInstance") -> bool:
-    """检测框中心点是否在 ROI 多边形内. mi 上没缓存或无 ROI 时永远 True (不过滤).
+    """检测框中心点是否在 ROI (可多块) 内. mi 上没缓存或无 ROI 时永远 True (不过滤).
 
     bbox_normalized: 归一化坐标 dict{x, y, w, h}, 来自 _detect_only 等 runner.
     """
-    pts = mi._roi_polygon_pixels
-    if pts is None or mi._roi_mask_shape is None:
+    pts_list = mi._roi_polygon_pixels
+    if pts_list is None or mi._roi_mask_shape is None:
         return True
     h, w = mi._roi_mask_shape
     cx_norm = bbox_normalized.get('x', 0) + bbox_normalized.get('w', 0) / 2
     cy_norm = bbox_normalized.get('y', 0) + bbox_normalized.get('h', 0) / 2
     cx, cy = int(round(cx_norm * w)), int(round(cy_norm * h))
-    # 边界容忍: cv2.pointPolygonTest >= 0 表示在内或边上
-    return cv2.pointPolygonTest(pts, (cx, cy), False) >= 0
+    # 兼容: 老缓存是单个 ndarray, 新缓存是 list[ndarray]
+    if isinstance(pts_list, np.ndarray):
+        pts_list = [pts_list]
+    # 边界容忍: cv2.pointPolygonTest >= 0 表示在内或边上; 任一块命中即通过
+    for pts in pts_list:
+        if cv2.pointPolygonTest(pts, (cx, cy), False) >= 0:
+            return True
+    return False
 
 
 __all__ = [

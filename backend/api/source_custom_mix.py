@@ -1389,7 +1389,7 @@ class _TrackingMixEngine:
 
         def _in_roi(det, label):
             poly = poly_map.get(label)
-            if poly and len(poly) >= 3:
+            if poly:
                 return is_normalized_bbox_center_in_polygon(det, poly)
             return True
 
@@ -1737,7 +1737,7 @@ class _PerItemMixEngine:
             if threshold is not None and det.get('confidence', 0) < threshold:
                 continue
             poly = poly_map.get(label)
-            if poly and len(poly) >= 3 and not is_normalized_bbox_center_in_polygon(det, poly):
+            if poly and not is_normalized_bbox_center_in_polygon(det, poly):
                 continue
             bbox = (
                 float(det.get('x', 0)), float(det.get('y', 0)),

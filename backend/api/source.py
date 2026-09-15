@@ -975,18 +975,23 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             self._container_entry_pending.clear()
     
     def _is_in_roi(self, det: dict) -> bool:
-        """Check if detection center falls within the configured ROI polygon (ray-casting)."""
+        """Check if detection center falls within the configured ROI polygon(s).
+
+        tracking_roi.polygon 支持单块 [[x,y],...] / 多块 [[[x,y],...],...] 双格式
+        (2026-09 多块 ROI 改造), 任一块命中即在区内。
+        """
         if not self.project_config:
             return True
         roi = self.project_config.get('pipeline_config', {}).get('tracking_roi')
         if not roi or not roi.get('enabled'):
             return True
-        polygon = roi.get('polygon', [])
-        if len(polygon) < 3:
+        from backend.api.source_geometry import normalize_polygons
+        polygons = normalize_polygons(roi.get('polygon', []))
+        if not polygons:
             return True
         cx = det['x'] + det['w'] / 2
         cy = det['y'] + det['h'] / 2
-        return self._point_in_polygon(cx, cy, polygon)
+        return any(self._point_in_polygon(cx, cy, poly) for poly in polygons)
     
     @staticmethod
     def _point_in_polygon(px: float, py: float, polygon: list) -> bool:
@@ -1003,13 +1008,13 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         return inside
 
     def _det_passes_roi_for_label(self, det: dict, label: str) -> bool:
-        """逐步骤 ROI (steps_config[].roi): 有配置则框中心须在多边形内.
+        """逐步骤 ROI (steps_config[].roi): 有配置则框中心须在多边形（单块/多块任一块）内.
 
         无逐步骤 ROI 时: tracking 模式沿用全局 tracking_roi；其它模式不限区域。
         """
         poly_map = getattr(self, "step_roi_polygons", None) or {}
         poly = poly_map.get(label)
-        if poly and len(poly) >= 3:
+        if poly:
             from backend.api.source_roi import is_normalized_bbox_center_in_polygon
 
             return is_normalized_bbox_center_in_polygon(det, poly)

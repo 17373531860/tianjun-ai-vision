@@ -14,6 +14,7 @@ import {
 } from '@/api/detection';
 import { getModelDetail, resolveModelPath as apiResolveModelPath } from '@/api/model';
 import { dbg, dbgErr } from '@/utils/debug';
+import { hasPolygons } from '@/utils/polygons';
 
 export function useDetectionControl(ctx) {
   const {
@@ -88,7 +89,7 @@ export function useDetectionControl(ctx) {
               model_path: r.path,
               conf: typeof e.conf === 'number' ? e.conf : 0.25,
               iou: typeof e.iou === 'number' ? e.iou : 0.45,
-              roi: Array.isArray(e.roi) && e.roi.length >= 3 ? e.roi : null,
+              roi: hasPolygons(e.roi) ? e.roi : null,
               schedule: e.schedule || { type: 'every_frame', n: 1, events: [] },
               class_filter: Array.isArray(e.class_filter) && e.class_filter.length
                 ? e.class_filter : null,

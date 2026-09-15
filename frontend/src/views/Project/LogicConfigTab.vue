@@ -1047,15 +1047,15 @@
                 <div class="bg-slate-900 rounded p-2.5 space-y-2">
                   <div class="flex items-center gap-2">
                     <el-button type="primary" size="small" @click="$emit('open-roi-editor')">
-                      {{ project.tracking_roi_polygon?.length > 2 ? '重新绘制' : '设置区域' }}
+                      {{ hasPolygons(project.tracking_roi_polygon) ? '重新绘制' : '设置区域' }}
                     </el-button>
-                    <el-button v-if="project.tracking_roi_polygon?.length > 2" type="danger" size="small" plain @click="project.tracking_roi_polygon = []">清除</el-button>
-                    <span v-if="project.tracking_roi_polygon?.length > 2" class="text-xs text-green-400">
-                      已设置 {{ project.tracking_roi_polygon.length }} 个顶点
+                    <el-button v-if="hasPolygons(project.tracking_roi_polygon)" type="danger" size="small" plain @click="project.tracking_roi_polygon = []">清除</el-button>
+                    <span v-if="hasPolygons(project.tracking_roi_polygon)" class="text-xs text-green-400">
+                      已设置 {{ polygonCount(project.tracking_roi_polygon) > 1 ? `${polygonCount(project.tracking_roi_polygon)} 块区域 (共 ${polygonPointCount(project.tracking_roi_polygon)} 个顶点)` : `${polygonPointCount(project.tracking_roi_polygon)} 个顶点` }}
                     </span>
                     <span v-else class="text-xs text-gray-500">未设置（全画面）</span>
                   </div>
-                  <div v-if="project.tracking_roi_polygon?.length > 2" class="relative w-full h-28 bg-slate-800 rounded border border-slate-700 overflow-hidden">
+                  <div v-if="hasPolygons(project.tracking_roi_polygon)" class="relative w-full h-28 bg-slate-800 rounded border border-slate-700 overflow-hidden">
                     <canvas ref="roiPreviewCanvas" class="w-full h-full"></canvas>
                   </div>
                 </div>
@@ -1832,8 +1832,8 @@
             <div class="flex items-center gap-3 pt-2 border-t border-slate-800 text-xs">
               <span class="text-gray-400">判定区域：</span>
               <template v-if="rule.type !== 'proximity'">
-                <span :class="(rule.region || []).length >= 3 ? 'text-emerald-400' : 'text-gray-500'">
-                  {{ (rule.region || []).length >= 3 ? `已标定 (${rule.region.length} 个顶点)` : (rule.type === 'overlap' ? '未标定（不限区域）' : '未标定（该类型规则必须标定）') }}
+                <span :class="hasPolygons(rule.region) ? 'text-emerald-400' : 'text-gray-500'">
+                  {{ hasPolygons(rule.region) ? (polygonCount(rule.region) > 1 ? `已标定 ${polygonCount(rule.region)} 块区域 (共 ${polygonPointCount(rule.region)} 个顶点)` : `已标定 (${polygonPointCount(rule.region)} 个顶点)`) : (rule.type === 'overlap' ? '未标定（不限区域）' : '未标定（该类型规则必须标定）') }}
                 </span>
                 <el-button type="primary" size="small" plain @click="$emit('open-region-roi-editor', rIdx)">绘制区域</el-button>
                 <el-button v-if="(rule.region || []).length" size="small" link type="danger" @click="rule.region = null">清除</el-button>
@@ -2054,8 +2054,8 @@
             </div>
             <div class="flex items-center gap-3 pt-2 border-t border-slate-800 text-xs">
               <span class="text-gray-400">读字区域：</span>
-              <span :class="(Array.isArray(rule.roi) && rule.roi.length >= 4) ? 'text-emerald-400' : 'text-gray-500'">
-                {{ (Array.isArray(rule.roi) && rule.roi.length >= 4) ? '已框定' : '未框定（读整幅画面，慢且易串字，建议框定）' }}
+              <span :class="hasRects(rule.roi) ? 'text-emerald-400' : 'text-gray-500'">
+                {{ hasRects(rule.roi) ? (rectCount(rule.roi) > 1 ? `已框定 ${rectCount(rule.roi)} 块` : '已框定') : '未框定（读整幅画面，慢且易串字，建议框定）' }}
               </span>
               <el-button type="primary" size="small" plain @click="$emit('open-ai-roi-editor', { kind: 'ocr', rIdx })">框定读字区域</el-button>
               <el-button v-if="Array.isArray(rule.roi) && rule.roi.length" size="small" link type="danger" @click="rule.roi = null">清除</el-button>
@@ -2122,8 +2122,8 @@
 
           <div class="flex items-center gap-3 text-xs bg-slate-900 p-3 rounded border border-slate-700">
             <span class="text-gray-400">监测区域：</span>
-            <span :class="(Array.isArray(anomalyCfg.roi) && anomalyCfg.roi.length >= 4) ? 'text-emerald-400' : 'text-gray-500'">
-              {{ (Array.isArray(anomalyCfg.roi) && anomalyCfg.roi.length >= 4) ? '已框定' : '未框定（评估整幅画面）' }}
+            <span :class="hasRects(anomalyCfg.roi) ? 'text-emerald-400' : 'text-gray-500'">
+              {{ hasRects(anomalyCfg.roi) ? (rectCount(anomalyCfg.roi) > 1 ? `已框定 ${rectCount(anomalyCfg.roi)} 块` : '已框定') : '未框定（评估整幅画面）' }}
             </span>
             <el-button type="primary" size="small" plain @click="$emit('open-ai-roi-editor', { kind: 'anomaly' })">框定监测区域</el-button>
             <el-button v-if="Array.isArray(anomalyCfg.roi) && anomalyCfg.roi.length" size="small" link type="danger" @click="anomalyCfg.roi = null">清除</el-button>
@@ -2357,6 +2357,7 @@ import { computed, nextTick, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Delete } from '@element-plus/icons-vue';
 import { dbg } from '@/utils/debug';
+import { normalizePolygons, hasPolygons, polygonCount, polygonPointCount, hasRects, rectCount } from '@/utils/polygons';
 import { getDetectionResults, inferOnce } from '@/api/detection';
 import { getPlcConnections } from '@/api/plc';
 import { _pi_itemLabelToArray, _pi_itemLabelFromArray } from './perItemLabel';
@@ -2780,7 +2781,10 @@ const roiPreviewCanvas = ref(null);
 
 const drawRoiPreview = () => {
   const canvas = roiPreviewCanvas.value;
-  if (!canvas || !props.project?.tracking_roi_polygon?.length) return;
+  if (!canvas) return;
+  // 2026-09 多块化: 单块/多块双格式统一归一后逐块绘制
+  const polys = normalizePolygons(props.project?.tracking_roi_polygon);
+  if (!polys.length) return;
   const parent = canvas.parentElement;
   if (parent) { canvas.width = parent.offsetWidth; canvas.height = parent.offsetHeight; }
   const ctx = canvas.getContext('2d');
@@ -2788,26 +2792,25 @@ const drawRoiPreview = () => {
   ctx.fillStyle = '#1e293b';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  const poly = props.project.tracking_roi_polygon;
-  if (poly.length < 3) return;
-
-  ctx.fillStyle = 'rgba(0, 200, 255, 0.2)';
-  ctx.strokeStyle = '#00c8ff';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(poly[0][0] * canvas.width, poly[0][1] * canvas.height);
-  for (let i = 1; i < poly.length; i++) {
-    ctx.lineTo(poly[i][0] * canvas.width, poly[i][1] * canvas.height);
-  }
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
-  poly.forEach((pt, i) => {
-    ctx.fillStyle = i === 0 ? '#f59e0b' : '#00c8ff';
+  polys.forEach((poly) => {
+    ctx.fillStyle = 'rgba(0, 200, 255, 0.2)';
+    ctx.strokeStyle = '#00c8ff';
+    ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(pt[0] * canvas.width, pt[1] * canvas.height, 3, 0, Math.PI * 2);
+    ctx.moveTo(poly[0][0] * canvas.width, poly[0][1] * canvas.height);
+    for (let i = 1; i < poly.length; i++) {
+      ctx.lineTo(poly[i][0] * canvas.width, poly[i][1] * canvas.height);
+    }
+    ctx.closePath();
     ctx.fill();
+    ctx.stroke();
+
+    poly.forEach((pt, i) => {
+      ctx.fillStyle = i === 0 ? '#f59e0b' : '#00c8ff';
+      ctx.beginPath();
+      ctx.arc(pt[0] * canvas.width, pt[1] * canvas.height, 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
   });
 };
 

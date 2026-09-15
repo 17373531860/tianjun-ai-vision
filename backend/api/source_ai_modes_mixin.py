@@ -119,8 +119,11 @@ class AiModesMixin:
                 'last_text': '', 'stable': 0, 'last_trigger_text': None,
             })
             try:
-                items = ocr_engine.read_text(frame, roi=rule.get('roi'),
-                                             min_score=min_score)
+                # 2026-09 多块化: roi 为矩形列表 (None=整帧), 逐块读字结果拼接
+                items = []
+                for _rect in (rule.get('roi') or [None]):
+                    items.extend(ocr_engine.read_text(frame, roi=_rect,
+                                                      min_score=min_score))
             except Exception as e:
                 print(f"[AiMode/OCR] 规则 {rule.get('name')} 识别失败 (已隔离): {e}")
                 items = []
@@ -195,21 +198,29 @@ class AiModesMixin:
             'in_alarm': False,
         })
 
-        img = frame
-        roi = cfg.get('roi')
-        if roi:
+        def _crop(rect):
+            if not rect:
+                return frame
             h0, w0 = frame.shape[:2]
-            x, y, w, h = [float(v) for v in roi[:4]]
+            x, y, w, h = [float(v) for v in rect[:4]]
             x1 = max(0, min(w0 - 1, int(round(x * w0))))
             y1 = max(0, min(h0 - 1, int(round(y * h0))))
             x2 = max(x1 + 1, min(w0, int(round((x + w) * w0))))
             y2 = max(y1 + 1, min(h0, int(round((y + h) * h0))))
-            img = frame[y1:y2, x1:x2]
+            return frame[y1:y2, x1:x2]
 
         try:
-            res = anomaly_engine.score_image(
-                bank_id, img,
-                threshold=cfg.get('threshold'))
+            # 2026-09 多块化: roi 为矩形列表 (None=整帧), 逐块评分,
+            # 结果取最坏块 (最高分); 任一块异常即整体异常。
+            res = None
+            for _rect in (cfg.get('roi') or [None]):
+                r = anomaly_engine.score_image(
+                    bank_id, _crop(_rect),
+                    threshold=cfg.get('threshold'))
+                if res is None or float(r.get('score') or 0) > float(res.get('score') or 0):
+                    res = dict(r)
+                if r.get('is_anomaly'):
+                    res['is_anomaly'] = True
         except Exception as e:
             self._ai_mode_snapshot = {
                 'mode': 'anomaly', 'available': False, 'bank_id': bank_id,
@@ -265,17 +276,20 @@ class AiModesMixin:
 # ---------- 配置解析 (apply_project_config 调用) ----------
 
 def _norm_rect(v) -> list | None:
-    """归一化矩形 [x,y,w,h] 校验; 非法返回 None (= 整帧)。"""
-    if not isinstance(v, (list, tuple)) or len(v) < 4:
+    """归一化矩形区校验 (2026-09 多块化: 单块 [x,y,w,h] / 多块 [[x,y,w,h],...])。
+
+    返回 canonical 多块形态 [[x,y,w,h], ...] (逐块 clamp 到 0~1);
+    无有效块返回 None (= 整帧)。
+    """
+    from backend.api.source_geometry import normalize_rects
+    rects = normalize_rects(v)
+    if not rects:
         return None
-    try:
-        x, y, w, h = [float(x) for x in v[:4]]
-    except (TypeError, ValueError):
-        return None
-    if w <= 0 or h <= 0:
-        return None
-    return [max(0.0, min(1.0, x)), max(0.0, min(1.0, y)),
-            max(0.001, min(1.0, w)), max(0.001, min(1.0, h))]
+    return [
+        [max(0.0, min(1.0, x)), max(0.0, min(1.0, y)),
+         max(0.001, min(1.0, w)), max(0.001, min(1.0, h))]
+        for x, y, w, h in rects
+    ]
 
 
 def parse_ocr_config(raw: dict) -> dict:

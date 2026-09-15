@@ -45,10 +45,12 @@ def parse_capability_attachments(pipeline_config: dict) -> list:
         att = {"capability": cap,
                "interval_s": max(0.5, float(p.get("interval_s") or
                                             (1.0 if cap == "pose" else 5.0)))}
-        roi = p.get("roi")
-        if (isinstance(roi, (list, tuple)) and len(roi) == 4
-                and all(isinstance(v, (int, float)) for v in roi)):
-            att["roi"] = [float(v) for v in roi]
+        # 2026-09 多块化: roi 支持单块 [x,y,w,h] / 多块 [[x,y,w,h],...],
+        # 统一存 canonical 多块形态 [[x,y,w,h], ...]
+        from backend.api.source_geometry import normalize_rects
+        rects = normalize_rects(p.get("roi"))
+        if rects:
+            att["roi"] = rects
         if cap == "anomaly":
             att["bank_id"] = p.get("bank_id") or None
             att["event_id"] = p.get("event_id")
@@ -165,15 +167,23 @@ class CapabilityAttachmentsMixin:
 
         self._cap_spawn("pose", work)
 
+    def _cap_crops(self, frame, rects):
+        """多块矩形逐块裁剪 (rects=None 时整帧一块)。返回 [(crop, roi_used), ...]。"""
+        return [self._cap_crop(frame, r) for r in (rects or [None])]
+
     def _cap_run_ocr(self, att, frame, now):
-        crop, roi = self._cap_crop(frame, att.get("roi"))
+        crops = self._cap_crops(frame, att.get("roi"))
 
         def work():
             from backend.services import ocr_engine
-            texts = ocr_engine.read_text(crop)
-            return {"ts": now, "roi": list(roi),
+            texts = []
+            for crop, _ in crops:
+                texts.extend(ocr_engine.read_text(crop) or [])
+            # roi 透出: 单块保持 [x,y,w,h] (历史形态), 多块为 [[x,y,w,h],...]
+            rois = [list(r) for _, r in crops]
+            return {"ts": now, "roi": rois[0] if len(rois) == 1 else rois,
                     "texts": [{"text": t.get("text"), "score": t.get("score")}
-                              for t in (texts or [])][:20]}
+                              for t in texts][:20]}
 
         self._cap_spawn("ocr", work)
 
@@ -181,16 +191,24 @@ class CapabilityAttachmentsMixin:
         bank_id = att.get("bank_id")
         if not bank_id:
             return
-        crop, roi = self._cap_crop(frame, att.get("roi"))
+        crops = self._cap_crops(frame, att.get("roi"))
         event_id = att.get("event_id")
         cooldown = att.get("cooldown_s", 30.0)
 
         def work():
             from backend.services import anomaly_engine
-            r = anomaly_engine.score_image(bank_id, crop)
-            out = {"ts": now, "roi": list(roi),
-                   "score": r.get("score"), "threshold": r.get("threshold"),
-                   "is_anomaly": bool(r.get("is_anomaly"))}
+            # 逐块评分取最坏块 (最高分); 任一块异常即整体异常
+            best = None
+            any_anomaly = False
+            for crop, _ in crops:
+                r = anomaly_engine.score_image(bank_id, crop)
+                if best is None or float(r.get("score") or 0) > float(best.get("score") or 0):
+                    best = r
+                any_anomaly = any_anomaly or bool(r.get("is_anomaly"))
+            rois = [list(r) for _, r in crops]
+            out = {"ts": now, "roi": rois[0] if len(rois) == 1 else rois,
+                   "score": best.get("score"), "threshold": best.get("threshold"),
+                   "is_anomaly": any_anomaly}
             if out["is_anomaly"] and event_id is not None:
                 last = self._cap_last_event_ts.get("anomaly", 0.0)
                 if now - last >= cooldown:

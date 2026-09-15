@@ -206,24 +206,13 @@ def _apply_steps_config(h, steps_config):
             }
             h.step_static_triggered[label] = False
 
-        # 逐步骤 ROI (顺序 / 检测 / 自定义 / tracking 共用): 归一化多边形 ≥3 点
-        roi_raw = step.get('roi')
-        if roi_raw and isinstance(roi_raw, list) and len(roi_raw) >= 3:
-            ok = True
-            parsed = []
-            for p in roi_raw:
-                if not isinstance(p, (list, tuple)) or len(p) < 2:
-                    ok = False
-                    break
-                try:
-                    parsed.append([float(p[0]), float(p[1])])
-                except (TypeError, ValueError):
-                    ok = False
-                    break
-            if ok:
-                h.step_roi_polygons[label] = parsed
-            else:
-                h.step_roi_polygons.pop(label, None)
+        # 逐步骤 ROI (顺序 / 检测 / 自定义 / tracking 共用): 归一化多边形
+        # 2026-09 多块化: 单块 [[x,y],...] / 多块 [[[x,y],...],...] 双格式,
+        # 统一归一成多边形列表存下 (下游 is_normalized_bbox_center_in_polygon 任一块命中)
+        from backend.api.source_geometry import normalize_polygons
+        parsed_polys = normalize_polygons(step.get('roi'))
+        if parsed_polys:
+            h.step_roi_polygons[label] = parsed_polys
         else:
             h.step_roi_polygons.pop(label, None)
 

@@ -12,6 +12,7 @@
 import { ref } from 'vue';
 import { getTriggers } from '@/api/triggers';
 import { dbg } from '@/utils/debug';
+import { normalizePolygons, pointInAnyPolygon } from '@/utils/polygons';
 
 export function useOverlayDrawing(ctx) {
   const {
@@ -29,27 +30,12 @@ export function useOverlayDrawing(ctx) {
     return { x, y, w, h };
   };
 
-  /** 归一化坐标下的射线法点在多边形内（含边界） */
-  const pointInPolygonNorm = (px, py, poly) => {
-    if (!poly || poly.length < 3) return true;
-    let inside = false;
-    const n = poly.length;
-    for (let i = 0, j = n - 1; i < n; j = i++) {
-      const xi = Number(poly[i][0]);
-      const yi = Number(poly[i][1]);
-      const xj = Number(poly[j][0]);
-      const yj = Number(poly[j][1]);
-      const denom = (yj - yi) || 1e-18;
-      if (((yi > py) !== (yj > py)) && (px < ((xj - xi) * (py - yi)) / denom + xi)) {
-        inside = !inside;
-      }
-    }
-    return inside;
-  };
+  // (2026-09 多块化) 点在多边形判定改用 @/utils/polygons 的 pointInAnyPolygon,
+  // 原本地 pointInPolygonNorm 射线法已收编到该工具模块 (算法一致)。
 
   /**
    * pipeline_config.hide_boxes_outside_step_roi：对已配置步骤 ROI 的标签，
-   * 框中心不在多边形内则不绘制（仅监视 UI）。
+   * 框中心不在多边形（单块/多块任一块，2026-09 多块化）内则不绘制（仅监视 UI）。
    */
   const shouldDrawDetWithStepRoi = (det, stepsConfig, pipelineConfig) => {
     const pc = pipelineConfig || {};
@@ -57,11 +43,11 @@ export function useOverlayDrawing(ctx) {
     const label = det.label;
     if (!label) return true;
     const step = (stepsConfig || []).find(s => s && s.label === label && s.enabled !== false);
-    if (!step || !Array.isArray(step.roi) || step.roi.length < 3) return true;
+    if (!step || !normalizePolygons(step.roi).length) return true;
     const cb = clipNormalizedBox(det);
     const cx = cb.x + cb.w / 2;
     const cy = cb.y + cb.h / 2;
-    return pointInPolygonNorm(cx, cy, step.roi);
+    return pointInAnyPolygon(cx, cy, step.roi);
   };
 
   // ==================== v3.48 判型表 positional 锁定框叠加 ====================
@@ -243,16 +229,20 @@ export function useOverlayDrawing(ctx) {
       }
       let badgeAnchor = null;
       regionsToDraw.forEach((region, i) => {
-        if (!region || !Array.isArray(region.polygon) || region.polygon.length < 3) return;
-        const poly = transform ? region.polygon.map(transform) : region.polygon;
-        drawPolygon(poly, region.color || SPLIT_REGION_FALLBACK_COLORS[i % SPLIT_REGION_FALLBACK_COLORS.length],
-          `${roundPrefix}${region.name || ''}`);
-        if (!badgeAnchor) {
-          for (const p of poly) {
-            const px = Number(p[0]) || 0, py = Number(p[1]) || 0;
-            if (!badgeAnchor || py < badgeAnchor[1]) badgeAnchor = [px, py];
+        // 2026-09 多块化: region.polygon 单块/多块双格式, 归一后逐块画 (每块都标区域名)
+        const blocks = region ? normalizePolygons(region.polygon) : [];
+        if (!blocks.length) return;
+        const color = region.color || SPLIT_REGION_FALLBACK_COLORS[i % SPLIT_REGION_FALLBACK_COLORS.length];
+        blocks.forEach((block) => {
+          const poly = transform ? block.map(transform) : block;
+          drawPolygon(poly, color, `${roundPrefix}${region.name || ''}`);
+          if (!badgeAnchor) {
+            for (const p of poly) {
+              const px = Number(p[0]) || 0, py = Number(p[1]) || 0;
+              if (!badgeAnchor || py < badgeAnchor[1]) badgeAnchor = [px, py];
+            }
           }
-        }
+        });
       });
       if (roundBadge && badgeAnchor) {
         const fs = 13 * (window.__uiScale || 1);
@@ -270,19 +260,23 @@ export function useOverlayDrawing(ctx) {
     }
 
     // 就位引导框 (独立功能): 后端 /detection/results 的 placement_guide 运行态驱动颜色
+    // 2026-09 多块化: polygon 单块/多块双格式, 归一后逐块画
     const pg = pc.placement_guide;
-    if (pg && pg.enabled && Array.isArray(pg.polygon) && pg.polygon.length >= 3) {
+    const pgBlocks = (pg && pg.enabled) ? normalizePolygons(pg.polygon) : [];
+    if (pgBlocks.length) {
       const inPos = !!(guideState && guideState.in_position);
       // 就位后显示策略 (未就位时永远完整显示): always=常驻 | fade_on_ready=淡化细框 | hide_on_ready=隐藏
       const display = pg.display || 'always';
       if (inPos && display === 'hide_on_ready') return;
       const faded = inPos && display === 'fade_on_ready';
       const color = inPos ? (faded ? 'rgba(34,197,94,0.35)' : '#22c55e') : '#facc15';
-      drawPolygon(pg.polygon, color, '', !inPos, faded ? 0 : (inPos ? 0.06 : 0.10));
+      pgBlocks.forEach((block) => {
+        drawPolygon(block, color, '', !inPos, faded ? 0 : (inPos ? 0.06 : 0.10));
+      });
       if (faded) return;  // 淡化档: 只留半透明细框, 不挂文字
-      // 提示文字挂在引导框最高点上方
+      // 提示文字挂在引导框(全部块)最高点上方
       let topX = 0.5, topY = 1;
-      for (const p of pg.polygon) {
+      for (const p of pgBlocks.flat()) {
         if ((Number(p[1]) || 0) < topY) { topY = Number(p[1]) || 0; topX = Number(p[0]) || 0; }
       }
       const msg = inPos ? '工件已就位'
@@ -658,72 +652,55 @@ export function useOverlayDrawing(ctx) {
       ctx.fillText(label, x + 4, y - 4);
     });
 
-    // Draw ROI polygon overlay if configured (tracking mode)
-    const roiPoly = currentProject.value?.pipeline_config?.tracking_roi?.polygon;
-    if (roiPoly && roiPoly.length >= 3) {
-      ctx.save();
-      ctx.strokeStyle = 'rgba(0, 200, 255, 0.6)';
-      ctx.lineWidth = 2;
-      ctx.setLineDash([8, 4]);
-      ctx.beginPath();
-      ctx.moveTo(offsetX + roiPoly[0][0] * renderW, offsetY + roiPoly[0][1] * renderH);
-      for (let i = 1; i < roiPoly.length; i++) {
-        ctx.lineTo(offsetX + roiPoly[i][0] * renderW, offsetY + roiPoly[i][1] * renderH);
+    // ROI 叠加公共小刷子 (2026-09 多块化): raw 单块/多块双格式, 归一后逐块描边+微填充
+    const strokeRoiBlocks = (raw, { stroke, dash, fill, fillAlpha, lineWidth = 2 }) => {
+      const blocks = normalizePolygons(raw);
+      for (const poly of blocks) {
+        ctx.save();
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = lineWidth;
+        ctx.setLineDash(dash);
+        ctx.beginPath();
+        ctx.moveTo(offsetX + poly[0][0] * renderW, offsetY + poly[0][1] * renderH);
+        for (let i = 1; i < poly.length; i++) {
+          ctx.lineTo(offsetX + poly[i][0] * renderW, offsetY + poly[i][1] * renderH);
+        }
+        ctx.closePath();
+        ctx.stroke();
+        ctx.fillStyle = fill;
+        if (fillAlpha != null) ctx.globalAlpha = fillAlpha;
+        ctx.fill();
+        ctx.setLineDash([]);
+        ctx.restore();
       }
-      ctx.closePath();
-      ctx.stroke();
-      ctx.fillStyle = 'rgba(0, 200, 255, 0.05)';
-      ctx.fill();
-      ctx.setLineDash([]);
-      ctx.restore();
-    }
+    };
+
+    // Draw ROI polygon overlay if configured (tracking mode)
+    strokeRoiBlocks(currentProject.value?.pipeline_config?.tracking_roi?.polygon, {
+      stroke: 'rgba(0, 200, 255, 0.6)', dash: [8, 4], fill: 'rgba(0, 200, 255, 0.05)',
+    });
 
     // Step 8 (feat/multi-model-roi-link): 副模型 ROI 多边形叠加 (各自 display_color 虚线描边).
     // 主模型 tracking_roi 已上面画完, 副模型 ROI 单独画一圈让用户清楚每个副 slot 的工作区.
     const extraRois = (currentProject.value?.pipeline_config?.models || [])
-      .filter(m => m && m.name && m.name !== 'main' && Array.isArray(m.roi) && m.roi.length >= 3);
+      .filter(m => m && m.name && m.name !== 'main' && normalizePolygons(m.roi).length);
     for (const slot of extraRois) {
-      ctx.save();
-      ctx.strokeStyle = slot.display_color || '#f59e0b';
-      ctx.lineWidth = 2;
-      ctx.setLineDash([4, 6]);
-      ctx.beginPath();
-      ctx.moveTo(offsetX + slot.roi[0][0] * renderW, offsetY + slot.roi[0][1] * renderH);
-      for (let i = 1; i < slot.roi.length; i++) {
-        ctx.lineTo(offsetX + slot.roi[i][0] * renderW, offsetY + slot.roi[i][1] * renderH);
-      }
-      ctx.closePath();
-      ctx.stroke();
-      ctx.fillStyle = slot.display_color || '#f59e0b';
-      ctx.globalAlpha = 0.05;
-      ctx.fill();
-      ctx.setLineDash([]);
-      ctx.restore();
+      strokeRoiBlocks(slot.roi, {
+        stroke: slot.display_color || '#f59e0b', dash: [4, 6],
+        fill: slot.display_color || '#f59e0b', fillAlpha: 0.05,
+      });
     }
 
     // 逐步骤 ROI (steps_config[].roi): 浅色虚线 + 微弱填充，与 tracking_roi / 副模型 ROI 区分
     const stepRois = (currentProject.value?.steps_config || []).filter(
-      s => s && s.enabled !== false && Array.isArray(s.roi) && s.roi.length >= 3
+      s => s && s.enabled !== false && normalizePolygons(s.roi).length
     );
     const STEP_ROI_PALETTE = ['#c4b5fd', '#6ee7b7', '#fcd34d', '#f9a8d4', '#7dd3fc'];
     stepRois.forEach((s, idx) => {
       const col = STEP_ROI_PALETTE[idx % STEP_ROI_PALETTE.length];
-      ctx.save();
-      ctx.strokeStyle = col;
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([3, 5]);
-      ctx.beginPath();
-      ctx.moveTo(offsetX + s.roi[0][0] * renderW, offsetY + s.roi[0][1] * renderH);
-      for (let i = 1; i < s.roi.length; i++) {
-        ctx.lineTo(offsetX + s.roi[i][0] * renderW, offsetY + s.roi[i][1] * renderH);
-      }
-      ctx.closePath();
-      ctx.stroke();
-      ctx.fillStyle = col;
-      ctx.globalAlpha = 0.04;
-      ctx.fill();
-      ctx.setLineDash([]);
-      ctx.restore();
+      strokeRoiBlocks(s.roi, {
+        stroke: col, dash: [3, 5], fill: col, fillAlpha: 0.04, lineWidth: 1.5,
+      });
     });
   };
   return { loadTriggerZones, drawMultiDetections, resizeCanvas, drawDetections, pickDetColor };

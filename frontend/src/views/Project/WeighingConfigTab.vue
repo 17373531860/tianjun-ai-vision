@@ -70,9 +70,9 @@
         </div>
         <div class="col-span-2">
           <label class="block text-gray-400 text-xs mb-1">秤台区（标签①只在此区域内有效，防别处拿件误报；不画=不过滤）</label>
-          <el-button size="small" plain :type="pipe.onscale_polygon && pipe.onscale_polygon.length >= 3 ? 'success' : 'primary'"
+          <el-button size="small" plain :type="hasPolygons(pipe.onscale_polygon) ? 'success' : 'primary'"
             @click="$emit('open-pipeline-roi-editor')">
-            {{ pipe.onscale_polygon && pipe.onscale_polygon.length >= 3 ? `已画秤台区(${pipe.onscale_polygon.length}点), 点击重画` : '画秤台区' }}
+            {{ hasPolygons(pipe.onscale_polygon) ? `已画秤台区(${polygonCount(pipe.onscale_polygon) > 1 ? polygonCount(pipe.onscale_polygon) + '块' : polygonPointCount(pipe.onscale_polygon) + '点'}), 点击重画` : '画秤台区' }}
           </el-button>
           <el-button v-if="pipe.onscale_polygon" size="small" type="danger" plain @click="pipe.onscale_polygon = null">清除</el-button>
         </div>
@@ -308,9 +308,9 @@
                 </td>
                 <td class="py-1 px-1"><el-input-number v-model="r.min_frames" :min="1" :step="1" size="small" controls-position="right" style="width: 80px" /></td>
                 <td class="py-1 px-1">
-                  <el-button size="small" plain :type="r.polygon && r.polygon.length >= 3 ? 'success' : 'primary'"
+                  <el-button size="small" plain :type="hasPolygons(r.polygon) ? 'success' : 'primary'"
                     @click="$emit('open-guard-roi-editor', i)">
-                    {{ r.polygon && r.polygon.length >= 3 ? `已画(${r.polygon.length}点)` : '画区域' }}
+                    {{ hasPolygons(r.polygon) ? `已画(${polygonCount(r.polygon) > 1 ? polygonCount(r.polygon) + '块' : polygonPointCount(r.polygon) + '点'})` : '画区域' }}
                   </el-button>
                 </td>
                 <td class="py-1 px-1"><el-button size="small" type="danger" plain @click="visualGuard.rules.splice(i, 1)">删</el-button></td>
@@ -499,6 +499,7 @@
 // 不自行发请求、不另起轮询。默认值注入 ensureWeighingDefaults 留在父级加载链路。
 import { ref, computed } from 'vue';
 import { ElMessage } from 'element-plus';
+import { hasPolygons, polygonCount, polygonPointCount } from '@/utils/polygons';
 
 const props = defineProps({
   project: { type: Object, required: true },
