@@ -95,7 +95,7 @@ const REMEMBERABLE_NAMES = new Set([
 
 // 工位子窗与主窗口共用 /monitor；子窗 query 不得读写主窗口的路由记忆。
 const isMultiMonitorRoute = (route) =>
-  route?.query?.kiosk === '1' || route?.query?.multi_monitor === '1';
+  route?.query?.kiosk === '1' || route?.query?.station_view === '1' || route?.query?.multi_monitor === '1';
 
 const isHandsCropRoute = (route) =>
   route?.query?.kiosk === '1'
@@ -123,6 +123,21 @@ async function ensureAuthInitialized() {
 
 router.beforeEach(async (to, from) => {
   console.log(`[⬛ Router] 导航: ${from.fullPath} → ${to.fullPath} (name: ${to.name})`);
+
+  // 普通导航不能丢掉工位身份；只读窗不能通过菜单/插件路由切换绕过操作限制。
+  // Login / Activation 仍由原有鉴权守卫处理，桌面重载可应用新的只读配置。
+  if (isMultiMonitorRoute(from) && !isHandsCropRoute(from) && from.path !== '/projection'
+      && to.name !== 'Login' && to.name !== 'Activation') {
+    if (from.query.readonly !== '0' && to.fullPath !== from.fullPath) return false;
+    // 独立工位窗保留绑定；总控复用的 station_view 仍能通过侧栏返回总览管理。
+    if (from.query.kiosk === '1') {
+      const context = Object.fromEntries(['kiosk', 'channel', 'readonly', 'multi_monitor']
+        .filter(key => from.query[key] !== undefined).map(key => [key, from.query[key]]));
+      if (Object.entries(context).some(([key, value]) => to.query[key] !== value)) {
+        return { path: to.path, query: { ...to.query, ...context }, hash: to.hash, replace: true };
+      }
+    }
+  }
 
   // 副屏窗口由 Electron 的 License 守门后创建；这里只保留一次本地 IPC 复核，
   // 不初始化 AuthStore/插件，确保页面网络只剩 hands snapshot 短轮询。

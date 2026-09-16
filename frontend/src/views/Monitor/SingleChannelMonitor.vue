@@ -2,8 +2,7 @@
   <!-- v3.54 自定义布局: 放大态与 kiosk 共用形态键 zoom, 根容器 = 画布 -->
   <div
     data-layout-canvas="zoom"
-    class="flex min-h-0 flex-col gap-2 bg-[#0f172a] text-white"
-    :class="kiosk ? 'h-screen p-2' : 'h-[calc(100vh-7.25rem)] p-2'"
+    class="flex min-h-0 flex-col gap-2 bg-[#0f172a] text-white h-[calc(100vh-7.25rem)] p-2"
     data-testid="single-channel-monitor"
     :data-channel="channelId"
     :data-readonly="readonly ? 'true' : 'false'"

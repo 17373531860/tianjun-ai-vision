@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import json
+import mimetypes
 import os
 import re
 import time
@@ -24,6 +25,46 @@ _BLACK_PIXEL_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
     "AAAAASUVORK5CYII="
 )
+
+
+def _display_screenshot(page, name):
+    if os.environ.get("UAT_ARTIFACT_DIR"):
+        destination = Path(os.environ["UAT_ARTIFACT_DIR"])
+        destination.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(destination / f"{name}.png"), full_page=True)
+
+
+def _install_layout_plugin(page, source):
+    """通过真实插件注册 API 在当前窗加载测试组件或树内插件。"""
+    encoded = base64.b64encode(source.encode("utf-8")).decode("ascii")
+    page.evaluate("""async (encoded) => {
+      const vue = await import('/node_modules/.vite/deps/vue.js');
+      const echarts = await import('/node_modules/.vite/deps/echarts.js');
+      const {usePluginThemeStore} = await import('/src/store/usePluginThemeStore.js');
+      const {default: api} = await import('/src/api/index.js');
+      const app = document.querySelector('#app').__vue_app__;
+      const store = usePluginThemeStore(app.config.globalProperties.$pinia);
+      const plugin = await import('data:text/javascript;base64,' + encoded);
+      await (plugin.register || plugin.default.register)({
+        host: {vue, echarts, api, router: app.config.globalProperties.$router},
+        registry: {slots: {register: (name, component) => store.addPluginSlot(name, component)}},
+      });
+      await vue.nextTick();
+    }""", encoded)
+
+
+def _serve_plugin_assets(page, plugin_root):
+    def serve(route):
+        relative = urlparse(route.request.url).path.split('/assets/', 1)[1]
+        asset = (plugin_root / relative).resolve()
+        if not asset.is_relative_to(plugin_root.resolve()) or not asset.is_file():
+            route.fulfill(status=404, body='Missing test asset')
+            return
+        route.fulfill(status=200, body=asset.read_bytes(),
+                      content_type=mimetypes.guess_type(asset.name)[0] or 'application/octet-stream')
+    page.route('**/plugins/active/assets/**', serve)
+    # The showcase's optional weather lookup is unrelated to the local display contract.
+    page.route('https://wttr.in/**', lambda route: route.abort())
 
 
 def _get_channel_count() -> int:
@@ -128,6 +169,8 @@ def test_settings_roundtrip_and_electron_apply(page, base_url, workstation_displ
     page.get_by_role("tab", name="多屏工位显示").click()
     card = page.get_by_test_id("multi-monitor-card")
     card.scroll_into_view_if_needed()
+    expect(page.get_by_test_id("multi-monitor-visitor-row")).to_have_count(0)
+    expect(card.get_by_text("参观屏")).to_have_count(0)
     enabled_switch = page.get_by_test_id("multi-monitor-enabled-switch")
     assert not enabled_switch.locator("input").is_checked()
     enabled_switch.click()
@@ -173,6 +216,7 @@ def test_settings_roundtrip_and_electron_apply(page, base_url, workstation_displ
     page.wait_for_function("() => window.__multiMonitorApplyCount === 2", timeout=10_000)
 
     applied = page.evaluate("window.__multiMonitorApplied")
+    assert set(applied) == {"enabled", "readonly", "mapping"}
     assert applied["enabled"] is True
     assert applied["readonly"] is True
     assert applied["mapping"]["0"] == {
@@ -188,6 +232,14 @@ def test_settings_roundtrip_and_electron_apply(page, base_url, workstation_displ
     assert "2 个工位窗口" in page.get_by_test_id("multi-monitor-apply-result").inner_text()
     assert page.evaluate("window.__multiMonitorApplyCount") == 2
 
+    # 同一个设置覆盖只读/可操作，保存结果同时进入后端和 Electron 应用参数。
+    for expected_readonly, apply_count in [(False, 3), (True, 4)]:
+        page.get_by_test_id("multi-monitor-readonly-switch").click()
+        page.get_by_test_id("multi-monitor-save").click()
+        page.wait_for_function("n => window.__multiMonitorApplyCount === n", arg=apply_count)
+        assert page.evaluate("window.__multiMonitorApplied.readonly") is expected_readonly
+        assert _get_multi_monitor()["readonly"] is expected_readonly
+
     artifact_dir = os.environ.get("UAT_ARTIFACT_DIR")
     if artifact_dir:
         output_dir = Path(artifact_dir)
@@ -201,7 +253,7 @@ def test_settings_roundtrip_and_electron_apply(page, base_url, workstation_displ
     aux_enabled.click()
     assert page.get_by_test_id("multi-monitor-aux-display-0").count() == 0
     page.get_by_test_id("multi-monitor-save").click()
-    page.wait_for_function("() => window.__multiMonitorApplyCount === 3", timeout=10_000)
+    page.wait_for_function("() => window.__multiMonitorApplyCount === 5", timeout=10_000)
     applied_disabled = page.evaluate("window.__multiMonitorApplied")
     assert applied_disabled["mapping"]["0"] == {
         **applied["mapping"]["0"],
@@ -224,7 +276,7 @@ def test_settings_roundtrip_and_electron_apply(page, base_url, workstation_displ
     expect(page.get_by_test_id("multi-monitor-apply-result")).to_contain_text(
         "工位 1 的副屏必须先配置主屏显示器"
     )
-    assert page.evaluate("window.__multiMonitorApplyCount") == 3
+    assert page.evaluate("window.__multiMonitorApplyCount") == 5
     assert _get_multi_monitor() == applied_disabled
 
 
@@ -246,6 +298,8 @@ def test_settings_projection_role_roundtrip(page, base_url, workstation_display_
     page.get_by_role("tab", name="多屏工位显示").click()
     card = page.get_by_test_id("multi-monitor-card")
     card.scroll_into_view_if_needed()
+    expect(page.get_by_test_id("multi-monitor-visitor-row")).to_have_count(0)
+    expect(card.get_by_text("参观屏")).to_have_count(0)
     role_select = page.get_by_test_id("multi-monitor-role-0")
     role_select.click()
     page.get_by_role("option", name="投影光引导").click()
@@ -316,7 +370,7 @@ def test_monitor_does_not_render_emergency_exit_button(
 
 
 def test_kiosk_is_readonly_and_polls_only_requested_channel(page, base_url, workstation_display_guard):
-    """kiosk 隐藏导航，控制按钮保留但禁用，只轮询 query 指定工位；readonly 缺省即 true。"""
+    """kiosk 保留导航和控制按钮但禁用，只轮询 query 指定工位；readonly 缺省即 true。"""
     _set_channel_count(3)
     result_channels: list[int] = []
     video_info_channels: list[int] = []
@@ -399,7 +453,8 @@ def test_kiosk_is_readonly_and_polls_only_requested_channel(page, base_url, work
     summary_widths = [card.bounding_box()["width"] for card in summary_cards]
     assert max(summary_widths) - min(summary_widths) <= 2
     assert page.get_by_test_id("single-channel-back").count() == 0
-    assert page.locator("button[title='导航菜单']").count() == 0
+    expect(page.get_by_title('导航菜单')).to_be_visible()
+    expect(page.get_by_title('导航菜单')).to_be_disabled()
     sop_panel = page.get_by_test_id("sop-step-panel")
     step_table = page.get_by_test_id("single-channel-step-table")
     sop_panel.wait_for(state="visible", timeout=5_000)
@@ -416,6 +471,8 @@ def test_kiosk_is_readonly_and_polls_only_requested_channel(page, base_url, work
     assert set(stream_channels) <= {1}
 
     # 越界 query 钳制到最后工位；只有显式 readonly=0 才显示复用的既有控制入口。
+    # 权限变更模拟 Electron 重建窗口，不能靠当前只读窗内的 hash 导航解除限制。
+    page.goto('about:blank')
     _goto(page, base_url, "/monitor?channel=99&kiosk=1&readonly=0&multi_monitor=1")
     monitor = page.get_by_test_id("single-channel-monitor")
     # 整页加载后工位数是异步拉取的, 元素先以默认 channelCount=1 (钳制=0) 可见,
@@ -438,7 +495,8 @@ def test_kiosk_is_readonly_and_polls_only_requested_channel(page, base_url, work
     assert controls.get_attribute("data-readonly") == "false"
     expect(page.get_by_test_id("single-channel-start")).to_be_enabled(timeout=5_000)
     expect(page.get_by_test_id("single-channel-reset")).to_be_enabled(timeout=5_000)
-    assert page.locator("button[title='导航菜单']").count() == 0
+    expect(page.get_by_title('导航菜单')).to_be_visible()
+    expect(page.get_by_title('导航菜单')).to_be_enabled()
     assert page.get_by_test_id("single-channel-back").count() == 0
     assert set(result_channels) == {2}
     assert set(video_info_channels) <= {2}

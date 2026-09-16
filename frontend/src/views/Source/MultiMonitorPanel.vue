@@ -9,7 +9,7 @@
       </div>
     </template>
     <div class="mb-3 text-xs leading-5 text-gray-500">
-      每个工位可绑定一块可操作的检测主屏，并按需增加一块手部裁切副屏。默认关闭，关闭时保持现有单窗口行为。<br>
+      每个工位可绑定一块检测屏，选择只读或可操作，并按需增加一块手部裁切副屏。默认关闭，关闭时保持现有单窗口行为。<br>
       显示器 ID 可能因异显坞重插而变化；已保存的 ID 失联时仍保留，并由桌面版优先按记忆坐标降级定位。
     </div>
     <div class="space-y-2" v-loading="multiMonitorLoading">
@@ -22,10 +22,10 @@
       </div>
       <div class="flex items-center justify-between rounded border border-slate-800 bg-slate-900 p-3">
         <div class="flex flex-col">
-          <span class="text-gray-300">副屏只读</span>
-          <span class="text-[10px] text-gray-500">仅约束手部裁切副屏；工位主屏始终保留开始、停止等操作</span>
+          <span class="text-gray-300">工位副屏操作</span>
+          <span class="text-[10px] text-gray-500">副显示器检测窗布局保持一致；只读时保留并禁用按钮。总控保留操作入口，手部屏始终只读，投影不受影响。</span>
         </div>
-        <el-switch v-model="multiMonitorForm.readonly" data-testid="multi-monitor-readonly-switch" />
+        <el-switch v-model="multiMonitorForm.readonly" active-text="只读" inactive-text="可操作" data-testid="multi-monitor-readonly-switch" />
       </div>
 
       <div class="rounded border border-slate-800 bg-slate-900 p-3">
@@ -187,7 +187,9 @@ const multiMonitorDisplayLoading = ref(false);
 const multiMonitorDisplayError = ref('');
 const multiMonitorApplySummary = ref('');
 const multiMonitorDisplays = ref([]);
-const multiMonitorForm = reactive({ enabled: false, readonly: true, mapping: {} });
+const multiMonitorForm = reactive({
+  enabled: false, readonly: true, mapping: {},
+});
 const multiMonitorChannelIds = computed(() =>
   Array.from({ length: Math.max(1, totalChannels.value || 1) }, (_, channelId) => channelId)
 );

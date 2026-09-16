@@ -18,6 +18,7 @@ const {
   partitionResolvedStationAssignments,
   resolveDisplayTarget,
   toDisplayDto,
+  stationStreamRedirect,
 } = require('./multi-monitor');
 
 // v3.15.2: Windows 控制台默认 GBK(936) → 主进程 console.log 的中文 + 转发的后端日志
@@ -455,7 +456,7 @@ function getStationWindowDescriptors() {
   }
   return descriptors
     .sort((left, right) => (
-      left.channel_id - right.channel_id
+      (left.channel_id ?? Infinity) - (right.channel_id ?? Infinity)
       || (left.role === 'main' ? -1 : 1)
     ));
 }
@@ -671,8 +672,8 @@ function updateMainWindowAvoidanceTargets(occupiedTargets) {
   return false;
 }
 
-function loadStationRoute(window, channelId, role, auxViewMode = 'follow', contentRole = 'monitor') {
-  const routeHash = buildKioskHash(channelId, role, auxViewMode, contentRole);
+function loadStationRoute(window, channelId, role, auxViewMode = 'follow', contentRole = 'monitor', readonly = false) {
+  const routeHash = buildKioskHash(channelId, role, auxViewMode, contentRole, readonly);
   if (CONFIG.isDev) {
     const base = getFrontendDevURL().replace(/\/$/, '');
     return window.loadURL(`${base}/#${routeHash}`);
@@ -681,11 +682,25 @@ function loadStationRoute(window, channelId, role, auxViewMode = 'follow', conte
   return window.loadFile(indexPath, { hash: routeHash });
 }
 
-function createStationWindow(channelId, role, target, signature, auxViewMode = 'follow', contentRole = 'monitor') {
+const monitorStreamSessions = new WeakSet();
+function installMonitorStreamRouting(session) {
+  if (monitorStreamSessions.has(session)) return;
+  monitorStreamSessions.add(session);
+  // 旧插件自行拼流、iframe 与 fetch 同样按窗口身份隔离，不依赖插件认新 props。
+  session.webRequest.onBeforeRequest({ urls: ['*://*/video_feed*'] }, (details, callback) => {
+    // Electron 同一 session 只保留最后一个监听器，所有工位检测窗共用分派。
+    const owner = [...stationWindows.values()].find((entry) => !entry.window.isDestroyed()
+      && entry.window.webContents.id === details.webContentsId);
+    const redirectURL = owner?.role === 'main' && owner.contentRole !== 'projection'
+      ? stationStreamRedirect(details.url) : null;
+    callback(redirectURL ? { redirectURL } : {});
+  });
+}
+
+function createStationWindow(channelId, role, target, signature, auxViewMode = 'follow', contentRole = 'monitor', readonly = false) {
   const bounds = target.bounds;
-  const roleLabel = role === 'aux'
-    ? '副屏'
-    : (contentRole === 'projection' ? '投影引导' : '主屏');
+  const roleLabel = role === 'aux' ? '手部副屏' : (contentRole === 'projection' ? '投影引导' : '检测主屏');
+  const windowLabel = `工位 ${channelId + 1} ${roleLabel}`;
   const windowKey = `${channelId}:${role}`;
   const stationWindow = new BrowserWindow({
     x: bounds.x,
@@ -699,7 +714,7 @@ function createStationWindow(channelId, role, target, signature, auxViewMode = '
     minimizable: false,
     maximizable: false,
     resizable: false,
-    title: `${CONFIG.appName} - 工位 ${channelId + 1} ${roleLabel}`,
+    title: `${CONFIG.appName} - ${windowLabel}`,
     icon: path.join(__dirname, 'build', 'icon.png'),
     backgroundColor: '#02060c',
     webPreferences: {
@@ -715,11 +730,15 @@ function createStationWindow(channelId, role, target, signature, auxViewMode = '
     window: stationWindow,
     channelId,
     role,
+    contentRole,
     signature,
     reloadAttempts: 0,
     lastCrashAt: 0,
   };
   stationWindows.set(windowKey, entry);
+  if (role === 'main' && contentRole !== 'projection') {
+    installMonitorStreamRouting(stationWindow.webContents.session);
+  }
 
   stationWindow.once('ready-to-show', () => {
     if (stationWindow.isDestroyed() || isQuitting) return;
@@ -727,9 +746,9 @@ function createStationWindow(channelId, role, target, signature, auxViewMode = '
       stationWindow.setBounds(bounds, false);
       stationWindow.setFullScreen(true);
       stationWindow.show();
-      console.log(`[MultiMonitor] 工位 ${channelId} ${roleLabel}已显示 (${target.source})`);
+      console.log(`[MultiMonitor] ${windowLabel}已显示 (${target.source})`);
     } catch (e) {
-      console.error(`[MultiMonitor] 工位 ${channelId} ${roleLabel}钉屏失败: ${e.message}`);
+      console.error(`[MultiMonitor] ${windowLabel}钉屏失败: ${e.message}`);
     }
   });
 
@@ -739,17 +758,17 @@ function createStationWindow(channelId, role, target, signature, auxViewMode = '
     entry.reloadAttempts = crashState.reloadAttempts;
     entry.lastCrashAt = crashState.lastCrashAt;
     console.error(
-      `[MultiMonitor] 工位 ${channelId} ${roleLabel} renderer 退出: ${details.reason}, `
+      `[MultiMonitor] ${windowLabel} renderer 退出: ${details.reason}, `
       + `60 秒窗口内第 ${entry.reloadAttempts} 次`,
     );
     if (entry.reloadAttempts > 2) {
-      console.error(`[MultiMonitor] 工位 ${channelId} ${roleLabel} renderer 60 秒内第 3 次失败，停止自动重载`);
+      console.error(`[MultiMonitor] ${windowLabel} renderer 60 秒内第 3 次失败，停止自动重载`);
       return;
     }
     setManagedTimeout(() => {
       if (!isQuitting && !stationWindow.isDestroyed()) {
         try { stationWindow.webContents.reload(); } catch (e) {
-          console.error(`[MultiMonitor] 工位 ${channelId} renderer 重载失败: ${e.message}`);
+          console.error(`[MultiMonitor] ${windowLabel} renderer 重载失败: ${e.message}`);
         }
       }
     }, 1000);
@@ -758,8 +777,8 @@ function createStationWindow(channelId, role, target, signature, auxViewMode = '
     if (stationWindows.get(windowKey) === entry) stationWindows.delete(windowKey);
   });
 
-  loadStationRoute(stationWindow, channelId, role, auxViewMode, contentRole).catch((e) => {
-    console.error(`[MultiMonitor] 工位 ${channelId} ${roleLabel}页面加载失败: ${e.message}`);
+  loadStationRoute(stationWindow, channelId, role, auxViewMode, contentRole, readonly).catch((e) => {
+    console.error(`[MultiMonitor] ${windowLabel}页面加载失败: ${e.message}`);
   });
   return entry;
 }
@@ -802,7 +821,7 @@ function applyMultiMonitorConfig(rawConfig) {
   const occupiedTargets = [];
   const workstationConfig = readWorkstationConfig();
   const activeAssignmentResult = filterStationAssignmentsByChannelCount(
-    buildStationAssignments(config.mapping),
+    buildStationAssignments(config.mapping, config.readonly),
     workstationConfig.channel_count,
   );
   for (const skippedChannelId of activeAssignmentResult.skippedChannelIds) {
@@ -812,7 +831,7 @@ function applyMultiMonitorConfig(rawConfig) {
   }
   for (const stationAssignment of activeAssignmentResult.assignments) {
     const {
-      key, channelId, role, contentRole, assignment, auxViewMode,
+      key, channelId, role, contentRole, assignment, auxViewMode, readonly,
     } = stationAssignment;
     const roleLabel = role === 'aux' ? '副屏' : '主屏';
     const target = resolveDisplayTarget(assignment, displays);
@@ -836,17 +855,20 @@ function applyMultiMonitorConfig(rawConfig) {
     const signature = JSON.stringify({
       bounds: target.bounds,
       role,
+      readonly,
       ...(role === 'main' ? { contentRole } : {}),
       ...(role === 'aux' ? { auxViewMode } : {}),
     });
     const resolvedEntry = {
-      key, channelId, role, contentRole, target, signature, auxViewMode,
+      key, channelId, role, contentRole, target, signature, auxViewMode, readonly,
     };
     occupiedTargets.push(resolvedEntry);
   }
 
   const partition = partitionResolvedStationAssignments(occupiedTargets, primaryDisplay);
-  const reusedAssignment = partition.reusedMainAssignments[0] || null;
+  // 总控必须保留配置入口，否则“全部只读”后没有窗口能再切回可操作。
+  const reusedAssignment = partition.reusedMainAssignments[0]
+    ? { ...partition.reusedMainAssignments[0], readonly: false } : null;
   const stationWindowDesired = new Map(
     partition.stationWindowAssignments.map((item) => [item.key, item]),
   );
@@ -879,6 +901,7 @@ function applyMultiMonitorConfig(rawConfig) {
           desiredEntry.signature,
           desiredEntry.auxViewMode,
           desiredEntry.contentRole,
+          desiredEntry.readonly,
         );
       } catch (e) {
         warnings.push(`工位 ${desiredEntry.channelId} ${desiredEntry.role}窗口创建失败: ${e.message}`);

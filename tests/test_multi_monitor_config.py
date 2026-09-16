@@ -230,6 +230,7 @@ def test_multi_monitor_api_roundtrip(isolated_multi_monitor_config, client):
     assert get_response.json() == payload
 
 
+
 def test_multi_monitor_api_roundtrip_with_aux(isolated_multi_monitor_config, client):
     _module, _manager, _config_path = isolated_multi_monitor_config
     payload = {
@@ -318,3 +319,37 @@ def test_multi_monitor_routes_have_openapi_contract(isolated_multi_monitor_confi
     assert {next(iter(route.methods)) for route in routes} == {"GET", "PUT"}
     assert {route.summary for route in routes} == {"读取多屏配置", "保存多屏配置"}
     assert all(route.response_model is module.MultiMonitorConfig for route in routes)
+
+
+
+@pytest.mark.parametrize("legacy_fields", [
+    {"visitor_display_id": "3001", "visitor_bounds": {"x": -1920, "y": 0, "width": 1920, "height": 1080}},
+    {"visitor_display_id": {"invalid": True}, "visitor_bounds": "invalid old bounds"},
+])
+def test_removed_visitor_fields_are_ignored_on_read_and_write(
+    isolated_multi_monitor_config, client, legacy_fields,
+):
+    module, manager, config_path = isolated_multi_monitor_config
+    other_sections = {
+        "channels": {"0": {"project_id": 7}}, "splash": {"enabled": True},
+        "auto_resume": {"enabled": True}, "unowned": {"future_config": "untouched"},
+    }
+    expected = {
+        "enabled": True, "readonly": False,
+        "mapping": {"0": {"display_id": "1001", "role": "monitor"}},
+    }
+    original = {**other_sections, "multi_monitor": {**expected, **legacy_fields}}
+    config_path.write_text(json.dumps(original), encoding="utf-8")
+
+    response = client.get("/api/v1/workstations/multi-monitor")
+    assert response.status_code == 200
+    assert response.json() == expected
+    assert manager.get_multi_monitor_config() == expected
+    assert json.loads(config_path.read_text(encoding="utf-8")) == original
+    assert not set(legacy_fields) & module.MultiMonitorConfig.model_json_schema()["properties"].keys()
+
+    response = client.put("/api/v1/workstations/multi-monitor", json={**expected, **legacy_fields})
+    assert response.status_code == 200, response.text
+    assert response.json() == expected
+    assert client.get("/api/v1/workstations/multi-monitor").json() == expected
+    assert json.loads(config_path.read_text(encoding="utf-8")) == {**other_sections, "multi_monitor": expected}
