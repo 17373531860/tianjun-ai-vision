@@ -141,6 +141,7 @@ def _init_step_state(h):
     h.project_config = None
     h.settlement_mode = 'first_step'  # 'first_step' / 'last_step' / 'last_first'(v3.8.x)
     h.idle_timeout_seconds = 0
+    h.idle_timeout_event_id = None
     h.cycle_max_duration = 0
     # v3.23 NG 补做策略 (默认全关 = 零差异); 由 _apply_pipeline_config 按项目配置覆盖
     h._ng_remediation = {'enabled': False, 'allow_step': True, 'allow_count': True}
@@ -236,6 +237,12 @@ def _init_event_and_cycle_state(h):
     h._last_ng_time = 0
     h._last_event_time = 0.0  # v3.10.x 防重复结算时间窗口锚
     h._cycle_regression = False  # A-B-A 步骤回退标记
+
+    # 纯 custom 条件结算后，仍在画面的标签要等真实离场才可重新入周期。
+    # dict 值为最后一次原始帧看见时间，用于复用步骤 disappear_delay 语义。
+    h._pure_custom_settle_latched_labels = {}
+    # static + join_cycle=False 在累计 trigger_frames 期间仍需锁住所选条件分支。
+    h._pure_custom_pending_static_label = None
 
     # v3.8.x 跨周期同时出现组 (类二):
     # 被屏蔽标签集合: 这些标签当前不参与状态机 (不更新 step_last_seen / 不加入 cycle_steps /

@@ -1375,6 +1375,9 @@ const initProjectDefaults = (project) => {
   if (project.idle_timeout_seconds === undefined) {
     project.idle_timeout_seconds = pipelineConfig.idle_timeout_seconds || 0;
   }
+  if (project.idle_timeout_event_id === undefined) {
+    project.idle_timeout_event_id = pipelineConfig.idle_timeout_event_id ?? null;
+  }
   if (project.cycle_max_duration === undefined) {
     project.cycle_max_duration = pipelineConfig.cycle_max_duration || 0;
   }
@@ -1825,6 +1828,11 @@ const initProjectDefaults = (project) => {
   project.pipeline_config.simultaneous_groups = project.simultaneous_groups;
   project.pipeline_config.settlement_mode = project.settlement_mode || 'first_step';
   project.pipeline_config.idle_timeout_seconds = project.idle_timeout_seconds || 0;
+  project.pipeline_config.idle_timeout_event_id = (
+    project.logic_mode === 'custom'
+    && !['sequential', 'detection'].includes(project.custom_based_on)
+    && Number(project.idle_timeout_seconds) > 0
+  ) ? (project.idle_timeout_event_id ?? null) : null;
   project.pipeline_config.cycle_max_duration = project.cycle_max_duration || 0;
   project.pipeline_config.periodic_actions = project.periodic_actions;
   
@@ -2107,6 +2115,11 @@ const handleSaveProject = async () => {
         })(),
         settlement_mode: activeProject.value.settlement_mode || 'first_step',
         idle_timeout_seconds: activeProject.value.idle_timeout_seconds || 0,
+        idle_timeout_event_id: (
+          activeProject.value.logic_mode === 'custom'
+          && !['sequential', 'detection'].includes(activeProject.value.custom_based_on)
+          && Number(activeProject.value.idle_timeout_seconds) > 0
+        ) ? (activeProject.value.idle_timeout_event_id ?? null) : null,
         cycle_max_duration: activeProject.value.cycle_max_duration || 0,
         // v3.44 NG 判定与处置统一块 (取代 v3.23/v3.32/v3.43/v3.44 四组散装键;
         // 后端读兼容旧键, 前端保存只落新块; last_first 严格顺序被强制清空 →

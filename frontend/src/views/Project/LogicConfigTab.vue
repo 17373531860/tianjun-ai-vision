@@ -31,12 +31,11 @@
         </div>
       </el-card>
 
-      <!-- 超时结算 (项目级参数, 顺序/自定义-顺序/检测模式通用)。
+      <!-- 超时结算 (项目级参数, 顺序/检测/任意 custom 模式通用)。
            2026-08-21 现场: 检测模式(缸体判型)要"到时不等工位, 直接结算判定",
            后端空闲超时分支本就支持 detection, 此前入口误挂在仅顺序模式渲染的
            「结算方式」卡里, 检测模式无从配置 —— 拆出独立卡对齐后端能力面 -->
-      <el-card v-if="['sequential', 'detection'].includes(project.logic_mode)
-                     || (project.logic_mode === 'custom' && project.custom_based_on === 'sequential')"
+      <el-card v-if="['sequential', 'detection', 'custom'].includes(project.logic_mode)"
                shadow="never" class="bg-slate-800 border-slate-700">
         <template #header>
           <div class="flex items-center justify-between">
@@ -47,8 +46,31 @@
         <div class="space-y-4 text-sm text-gray-300">
           <div class="flex items-center gap-3">
             <span class="text-gray-400 text-xs whitespace-nowrap">空闲超时(秒)</span>
-            <el-input-number v-model="project.idle_timeout_seconds" size="small" :min="0" :step="5" :precision="2" />
+            <el-input-number data-testid="idle-timeout-seconds" v-model="project.idle_timeout_seconds" size="small" :min="0" :step="5" :precision="2" />
             <span class="text-xs text-gray-500">超过此时间无新步骤/新计数加入 → 按已做内容立即结算判定（检测模式按判定表判 OK/NG）</span>
+          </div>
+          <div v-if="project.logic_mode === 'custom'
+                     && !['sequential', 'detection'].includes(project.custom_based_on)"
+               class="flex items-center gap-3">
+            <span class="text-gray-400 text-xs whitespace-nowrap">超时中断事件</span>
+            <el-select
+              data-testid="idle-timeout-event-select"
+              v-model="project.idle_timeout_event_id"
+              class="w-64"
+              size="small"
+              clearable
+              placeholder="未选择时默认事件 2"
+              :disabled="Number(project.idle_timeout_seconds) <= 0"
+              @clear="project.idle_timeout_event_id = null"
+            >
+              <el-option
+                v-for="event in (project.events_config || [])"
+                :key="event.id"
+                :label="event.name || `事件 ${event.id}`"
+                :value="event.id"
+              />
+            </el-select>
+            <span class="text-xs text-gray-500">不完整条件到时触发；完整条件仍按条件事件结算</span>
           </div>
           <div class="flex items-center gap-3">
             <span class="text-gray-400 text-xs whitespace-nowrap">周期超时(秒)</span>

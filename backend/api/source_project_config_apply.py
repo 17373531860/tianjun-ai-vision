@@ -137,6 +137,8 @@ def _reset_step_state_dicts(h):
     h._last_step_added_time = None
     h._step_raw_start = {}
     h._cycle_regression = False
+    h._pure_custom_settle_latched_labels = {}
+    h._pure_custom_pending_static_label = None
 
 
 def _apply_steps_config(h, steps_config):
@@ -542,6 +544,26 @@ def _apply_pipeline_config(h, config, pipeline_config):
 
     h.settlement_mode = pipeline_config.get('settlement_mode', 'first_step')
     h.idle_timeout_seconds = pipeline_config.get('idle_timeout_seconds', 0)
+    h.idle_timeout_event_id = None
+    requested_idle_event_id = pipeline_config.get('idle_timeout_event_id')
+    custom_based_on = pipeline_config.get('custom_based_on')
+    is_pure_custom = (
+        config.get('logic_mode') == 'custom'
+        and custom_based_on not in ('sequential', 'detection')
+    )
+    try:
+        idle_timeout_enabled = float(h.idle_timeout_seconds or 0) > 0
+    except (TypeError, ValueError):
+        idle_timeout_enabled = False
+    if is_pure_custom and idle_timeout_enabled and requested_idle_event_id is not None:
+        for event in config.get('events_config', []) or []:
+            if str(event.get('id')) == str(requested_idle_event_id):
+                h.idle_timeout_event_id = event.get('id')
+                break
+        if h.idle_timeout_event_id is None:
+            print(
+                f"空闲超时中断事件不存在: {requested_idle_event_id}，回退到事件 2"
+            )
     h.cycle_max_duration = pipeline_config.get('cycle_max_duration', 0)
 
     # ============ v3.48 计数组合判定表 (RFC 14 配套项, 纯视觉判型) ============

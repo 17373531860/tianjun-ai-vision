@@ -199,7 +199,8 @@ class SequenceLabels:
 
         for cond in custom_conditions:
             cond_seq = cond.get('sequence', [])
-            if not cond_seq:
+            # 与 _settle_custom_cycle 同口径：未绑定事件的配置不是可执行条件。
+            if not cond_seq or not cond.get('event_id'):
                 continue
             cond_labels = [
                 id_to_label.get(sid)
