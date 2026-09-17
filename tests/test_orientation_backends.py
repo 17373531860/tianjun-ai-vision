@@ -170,6 +170,52 @@ def test_mediapipe_geometry_front_facing():
 
 
 # ============================================================
+# 头姿精化守门: 只在面向相机半球覆盖 (六和蒸镀 2026-09-16 现场修复)
+# ============================================================
+
+def test_headpose_refine_skipped_when_back_facing(monkeypatch):
+    """背对相机时正脸头姿模型输出无意义, 不得覆盖关键点几何的朝向。
+
+    现场事故: 操作员背对相机看仪表 (点检常态), 6DRepNet 对后脑勺恒输出
+    ≈"朝向相机", 覆盖后 facing_dwell 夹角恒 >100° 永不打卡。
+    """
+    calls = []
+
+    def _fake_refine(crop, head_box):
+        calls.append(1)
+        return 100.0  # 模拟对后脑勺输出的垃圾角度
+
+    monkeypatch.setattr(po, "_headpose_refine", _fake_refine)
+    po.set_backend_for_tests(_FakeYoloBackend(_coco_kpts_back()))
+    img = _blank_image()
+    r = po.estimate_yaw(img, (0, 0, img.shape[1], img.shape[0]))
+    assert r is not None and r["facing_camera"] is False
+    assert not calls                     # 背面连推理都不应发起
+    assert r["head_yaw_deg"] is None     # 保留关键点几何结果 (背面无脸=None)
+    assert abs(r["yaw_deg"] - (-90.0)) < 1e-6
+
+
+def test_headpose_refine_applies_when_front_facing(monkeypatch):
+    monkeypatch.setattr(po, "_headpose_refine", lambda crop, hb: 42.0)
+    po.set_backend_for_tests(_FakeYoloBackend(_coco_kpts_front()))
+    img = _blank_image()
+    r = po.estimate_yaw(img, (0, 0, img.shape[1], img.shape[0]))
+    assert r is not None and r["facing_camera"] is True
+    assert abs(r["head_yaw_deg"] - 42.0) < 1e-6  # 正面才允许精化覆盖
+
+
+def test_headpose_full_range_enables_backface_refine(monkeypatch):
+    """现场绑全角度头姿模型 (6DRepNet360/WHENet) 时开开关恢复背面精化。"""
+    monkeypatch.setattr(po, "headpose_full_range", lambda: True)
+    monkeypatch.setattr(po, "_headpose_refine", lambda crop, hb: -100.0)
+    po.set_backend_for_tests(_FakeYoloBackend(_coco_kpts_back()))
+    img = _blank_image()
+    r = po.estimate_yaw(img, (0, 0, img.shape[1], img.shape[0]))
+    assert r is not None and r["facing_camera"] is False
+    assert abs(r["head_yaw_deg"] - (-100.0)) < 1e-6  # 全角度模型: 背面也覆盖
+
+
+# ============================================================
 # 头姿 ONNX 输出解码 (纯函数, 四种导出形态)
 # ============================================================
 
@@ -261,6 +307,28 @@ def test_orientation_estimate_frame_channel_missing(client):
     r = client.post("/api/v1/orientation/estimate-frame",
                     json={"channel_id": 999})
     assert r.status_code in (404, 409)
+
+
+def test_orientation_config_roundtrip(client):
+    """headpose_full_range 配置: 默认 false → PUT true 落库 → 过期后重读仍 true。"""
+    r = client.get("/api/v1/orientation/config")
+    assert r.status_code == 200
+    assert r.json()["headpose_full_range"] is False  # 出厂默认: 正脸模型
+
+    r = client.put("/api/v1/orientation/config",
+                   json={"headpose_full_range": True})
+    assert r.status_code == 200, r.text
+    # PUT 直写缓存, 推理侧立即生效
+    assert po.headpose_full_range() is True
+    # 缓存失效后走 DB 重读 → 验证真落库而非只写了缓存
+    po.set_headpose_full_range_cache(None)
+    r = client.get("/api/v1/orientation/config")
+    assert r.json()["headpose_full_range"] is True
+
+    r = client.put("/api/v1/orientation/config",
+                   json={"headpose_full_range": False})
+    assert r.status_code == 200
+    assert po.headpose_full_range() is False
 
 
 # ============================================================

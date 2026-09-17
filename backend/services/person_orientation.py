@@ -99,6 +99,51 @@ def _headpose_path() -> str:
             or os.path.join(_MODELS_DIR, "headpose.onnx"))
 
 
+# ---- 头姿全角度开关 (SystemConfig KV, 现场按绑定权重的种类配置) ----
+# 正脸模型 (6DRepNet/HopeNet 常规导出, 出厂默认假定): 对背对相机的人只有
+# 后脑勺, 输出无意义 → 背面跳过精化 (六和蒸镀 2026-09-16 现场修复)。
+# 全角度模型 (6DRepNet360/WHENet full-range): 背面输出有效 → 现场把本开关
+# 置 true 恢复背面精化。粒度=全局: 头姿权重经模型仓库能力绑定全局一颗。
+HEADPOSE_FULL_RANGE_KEY = "orientation.headpose_full_range"
+_FULL_RANGE_TTL = 10.0
+_full_range_cache: Optional[bool] = None
+_full_range_at: float = 0.0
+
+
+def headpose_full_range() -> bool:
+    """当前是否信任头姿模型的背面输出 (KV 带 TTL 缓存, 异常回 False)。"""
+    global _full_range_cache, _full_range_at
+    import time
+    now = time.time()
+    if _full_range_cache is not None and now - _full_range_at < _FULL_RANGE_TTL:
+        return _full_range_cache
+    val = False
+    try:
+        from backend.db.database import SessionLocal
+        from backend.models.models import SystemConfig
+        db = SessionLocal()
+        try:
+            row = db.query(SystemConfig).filter(
+                SystemConfig.key == HEADPOSE_FULL_RANGE_KEY).first()
+            val = (row is not None
+                   and (row.value or "").strip().lower() in ("1", "true", "yes"))
+        finally:
+            db.close()
+    except Exception:
+        val = bool(_full_range_cache)  # DB 不可用时沿用上次值 (默认 False)
+    _full_range_cache = val
+    _full_range_at = now
+    return val
+
+
+def set_headpose_full_range_cache(value: Optional[bool]) -> None:
+    """PUT 配置后即时刷新缓存 (None=失效待重读; 推理线程下一帧生效)。"""
+    global _full_range_cache, _full_range_at
+    import time
+    _full_range_cache = value
+    _full_range_at = time.time() if value is not None else 0.0
+
+
 def _mediapipe_importable() -> bool:
     try:
         import mediapipe  # noqa: F401
@@ -295,6 +340,7 @@ def release():
         _kp_error = None
         _headpose = None
         _headpose_error = None
+    set_headpose_full_range_cache(None)
 
 
 def engine_status() -> dict:
@@ -319,7 +365,8 @@ def engine_status() -> dict:
             "headpose_onnx": {"model": hp_path,
                               "present": os.path.isfile(hp_path),
                               "loaded": _headpose is not None,
-                              "error": _headpose_error},
+                              "error": _headpose_error,
+                              "full_range": headpose_full_range()},
         },
     }
 
@@ -618,10 +665,17 @@ def estimate_yaw(frame_bgr: np.ndarray, box_xyxy) -> Optional[dict]:
     if res is None:
         return None
 
-    # 头姿精化 (可选 ONNX): 成功则覆盖关键点几何的 head_yaw
-    refined = _headpose_refine(crop, head_box_px)
-    if refined is not None:
-        res["head_yaw_deg"] = refined
+    # 头姿精化 (可选 ONNX): 成功则覆盖关键点几何的 head_yaw。
+    # 默认只在面向相机半球精化: 背对相机时头部裁剪只有后脑勺, 正脸数据训练
+    # 的头姿模型输出无意义角度 (实测恒 ≈"朝向相机"), 覆盖会把正确的身体朝向
+    # 盖掉, 下游 facing_dwell 夹角恒 >100° 永不确认 (六和蒸镀 2026-09-16
+    # 现场: 操作员背对相机看仪表是点检常态姿势)。背面跳过顺带省一次推理。
+    # 现场绑定全角度头姿模型 (6DRepNet360/WHENet) 时开 headpose_full_range
+    # 开关恢复背面精化 (KV 配置, 模型仓库朝向抽屉可改)。
+    if res.get("facing_camera") or headpose_full_range():
+        refined = _headpose_refine(crop, head_box_px)
+        if refined is not None:
+            res["head_yaw_deg"] = refined
 
     res["backend"] = getattr(backend, "kind", "unknown")
     return res
