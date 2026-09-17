@@ -254,6 +254,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { getBackendHost } from '@/api/index'
 import { usePollingStore } from '@/store/usePollingStore'
 import {
   calibrateTrigger, createTrigger, deleteTrigger, enableTrigger,
@@ -630,11 +631,9 @@ const calRegion = ref(null)      // 原始帧坐标 [x1,y1,x2,y2]
 const calDrag = ref(null)        // {x, y} 显示坐标起点
 const calRectDisp = ref(null)    // 显示坐标 [x1,y1,x2,y2]
 
-const apiBase = () => {
-  // /snapshot 挂在根路径 (不在 /api/v1 下)
-  const base = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8001/api/v1'
-  return base.replace(/\/api\/v1\/?$/, '')
-}
+// /snapshot 挂在根路径 (不在 /api/v1 下), 与视频流同一个 host 判据:
+// 浏览器里是空串走同源 —— 局域网打开工作站页面时不能回落到 localhost
+const apiBase = () => getBackendHost()
 
 const openCalibrator = (trg) => {
   calTrg.value = trg

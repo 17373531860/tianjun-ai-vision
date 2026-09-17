@@ -31,7 +31,9 @@ from fastapi import Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from backend.core.auth_deps import require_perm, get_current_user, CurrentUser
+from backend.core.auth_deps import (
+    require_perm, require_channel_scope, get_current_user, CurrentUser,
+)
 from backend.core.config import settings
 from backend.db.database import get_db
 
@@ -663,6 +665,30 @@ def set_device(req: DeviceConfigRequest):
 # ============================================================
 # /stream/* + /transform/* + /kalman/*
 # ============================================================
+@router.get("/stream/viewers", summary="各工位当前的直播订阅槽")
+def get_stream_viewers():
+    """逐工位列出正在真看 MJPEG 直播的 viewer 槽（main / station / legacy）。
+
+    一拖多用途：一体机工位屏走 ``viewer=station``，工作站总览走 ``viewer=main``。
+    总览拿到本结果后，把已有一体机在看的工位降成 snapshot 轮询，同一路画面就
+    不会被编码/发送两遍（8~16 工位时这是实打实的带宽与 CPU）。
+
+    判活靠推帧心跳而不是连接表，Chrome keep-alive 留下的僵尸 generator 不会
+    被误判成"一体机还在看"。
+    """
+    from backend.api.channel_manager import channel_manager
+    channels = {}
+    for ch_id, mgr in channel_manager.channels.items():
+        try:
+            channels[str(ch_id)] = mgr.get_stream_viewers()
+        except Exception as e:  # noqa: BLE001 — 单通道异常不能拖垮整张表
+            channels[str(ch_id)] = {
+                "viewers": [], "station": False, "main": False,
+                "legacy": False, "error": str(e),
+            }
+    return {"channels": channels}
+
+
 @router.get("/stream/config")
 def get_stream_config():
     return {
@@ -1220,7 +1246,8 @@ def set_image(req: ImageSetRequest, channel: int = Query(0)):
 # /detection/*
 # ============================================================
 @router.post("/detection/start",
-              dependencies=[Depends(require_perm("monitor.detection.control"))])
+              dependencies=[Depends(require_perm("monitor.detection.control")),
+                            Depends(require_channel_scope)])
 def start_detection(req: DetectionStartRequest, channel: int = Query(0)):
     """开始检测.
 
@@ -1306,7 +1333,8 @@ def start_detection(req: DetectionStartRequest, channel: int = Query(0)):
 
 
 @router.post("/detection/stop",
-              dependencies=[Depends(require_perm("monitor.detection.control"))])
+              dependencies=[Depends(require_perm("monitor.detection.control")),
+                            Depends(require_channel_scope)])
 def stop_detection(channel: int = Query(0)):
     """停止检测（只停止推理）并结束会话"""
     mgr = _get_mgr(channel)
@@ -1316,7 +1344,8 @@ def stop_detection(channel: int = Query(0)):
 
 
 @router.post("/detection/pause",
-              dependencies=[Depends(require_perm("monitor.detection.control"))])
+              dependencies=[Depends(require_perm("monitor.detection.control")),
+                            Depends(require_channel_scope)])
 def pause_detection(channel: int = Query(0)):
     """暂停：停止画面更新和检测，画面停在当前帧"""
     _get_mgr(channel).pause()
@@ -1324,7 +1353,8 @@ def pause_detection(channel: int = Query(0)):
 
 
 @router.post("/detection/resume",
-              dependencies=[Depends(require_perm("monitor.detection.control"))])
+              dependencies=[Depends(require_perm("monitor.detection.control")),
+                            Depends(require_channel_scope)])
 def resume_detection(channel: int = Query(0)):
     """恢复：从暂停状态恢复，重新启动视频流和检测"""
     if _get_mgr(channel).resume():
@@ -1334,7 +1364,8 @@ def resume_detection(channel: int = Query(0)):
 
 
 @router.post("/detection/standby",
-              dependencies=[Depends(require_perm("monitor.detection.control"))])
+              dependencies=[Depends(require_perm("monitor.detection.control")),
+                            Depends(require_channel_scope)])
 def standby_detection(channel: int = Query(0)):
     """待机：只停止检测推理，画面继续播放"""
     _get_mgr(channel).standby()
@@ -1342,7 +1373,8 @@ def standby_detection(channel: int = Query(0)):
 
 
 @router.post("/detection/resume-inference",
-              dependencies=[Depends(require_perm("monitor.detection.control"))])
+              dependencies=[Depends(require_perm("monitor.detection.control")),
+                            Depends(require_channel_scope)])
 def resume_inference(channel: int = Query(0)):
     """从待机恢复推理（画面已在播放）"""
     result = _get_mgr(channel).resume_inference()
@@ -1354,7 +1386,8 @@ def resume_inference(channel: int = Query(0)):
 # 清零 / 重置周期性动作 — 需更高的 monitor.detection.advanced 权限
 # (operator 只能开始/停止/待机, 不能清零计数; engineer/admin 可以)
 @router.post("/detection/reset-stats",
-              dependencies=[Depends(require_perm("monitor.detection.advanced"))])
+              dependencies=[Depends(require_perm("monitor.detection.advanced")),
+                            Depends(require_channel_scope)])
 def reset_detection_stats(channel: int = Query(0), scope: str = Query("all")):
     """重置统计数据.
 
@@ -1597,7 +1630,8 @@ def _resolve_pkg_hold_on_ack(channel: int, action: Optional[str],
 # 提权窗 (走下方 ack-event-elevated)。要让某条产线的操作员也能直接确认, 管理员到
 # 角色设置给 operator 勾上 monitor.detection.ack 即可。engineer/admin 默认就有 (monitor.*)。
 @router.post("/detection/ack-event",
-             dependencies=[Depends(require_perm("monitor.detection.ack"))])
+             dependencies=[Depends(require_perm("monitor.detection.ack")),
+                           Depends(require_channel_scope)])
 def ack_pending_event(channel: int = Query(0),
                       action: Optional[str] = Query(
                           None,
@@ -1625,7 +1659,8 @@ class _ElevatedAckInput(BaseModel):
 # 只验证这一次账密 + 权限, 不创建登录会话、不改当前登录身份 (确认完仍是该操作员)。
 # 发起本接口只需 monitor.detection.control —— 操作员就能发起提权请求。
 @router.post("/detection/ack-event-elevated",
-             dependencies=[Depends(require_perm("monitor.detection.control"))])
+             dependencies=[Depends(require_perm("monitor.detection.control")),
+                           Depends(require_channel_scope)])
 def ack_pending_event_elevated(body: _ElevatedAckInput, channel: int = Query(0),
                                db: Session = Depends(get_db)):
     from backend.core.auth import verify_password
@@ -1659,7 +1694,8 @@ def ack_pending_event_elevated(body: _ElevatedAckInput, channel: int = Query(0),
 
 
 @router.post("/detection/reset-periodic",
-              dependencies=[Depends(require_perm("monitor.detection.advanced"))])
+              dependencies=[Depends(require_perm("monitor.detection.advanced")),
+                            Depends(require_channel_scope)])
 def reset_periodic_action(
     channel: int = Query(0),
     rule_id: Optional[str] = Query(None, description="规则 id；不传则重置所有"),
@@ -2276,7 +2312,8 @@ def get_detection_results(
 # 不修改/激活项目本身。故权限与启停检测一致(monitor.detection.control), 而非 project.activate
 # —— 否则只有启停权限的操作员一点"开始检测"就在这步 403, 检测根本起不来。
 @router.post("/detection/set-project",
-              dependencies=[Depends(require_perm("monitor.detection.control"))])
+              dependencies=[Depends(require_perm("monitor.detection.control")),
+                            Depends(require_channel_scope)])
 def set_project_config(req: ProjectConfigRequest, channel: int = Query(0)):
     """设置项目配置"""
     try:

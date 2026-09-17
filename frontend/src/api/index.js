@@ -1,54 +1,35 @@
 import axios from 'axios';
 import { dbg, dbgOn } from '@/utils/debug';
+import { resolveApiBaseURL, resolveBackendHost } from './backendTarget';
 
-// 后端默认地址（当环境变量未配置时使用）
-const DEFAULT_BACKEND_HOST = 'http://localhost:8001';
 const ENV_API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
+const IS_DEV_SERVER = Boolean(import.meta.env?.DEV);
 
-// 检测是否在桌面应用环境中运行（每次调用时检测）
-function isDesktopApp() {
-  if (typeof window === 'undefined') return false;
-  
-  // 最可靠的方式：检查 URL 协议
-  const href = window.location.href;
-  if (href.startsWith('file://') || href.startsWith('file:///')) {
-    return true;
+// 把 window/location 的读取集中在这里，判据本身是 backendTarget 的纯函数。
+function browserContext() {
+  if (typeof window === 'undefined') {
+    return { envBase: ENV_API_BASE_URL, isDev: IS_DEV_SERVER };
   }
-  
-  // 备用检测：userAgent
-  if (navigator.userAgent.toLowerCase().includes('electron')) {
-    return true;
-  }
-  
-  return false;
-}
-
-function trimSlash(s) {
-  return (s || '').replace(/\/+$/, '');
+  const loc = window.location || {};
+  return {
+    envBase: ENV_API_BASE_URL,
+    href: loc.href || '',
+    protocol: loc.protocol || 'http:',
+    hostname: loc.hostname || 'localhost',
+    userAgent: (typeof navigator !== 'undefined' && navigator.userAgent) || '',
+    isDev: IS_DEV_SERVER,
+  };
 }
 
 function getBaseURL() {
-  // 优先使用环境变量（支持部署时配置）
-  if (ENV_API_BASE_URL) return trimSlash(ENV_API_BASE_URL);
-  // 未配置时回退默认本机后端
-  return `${DEFAULT_BACKEND_HOST}/api/v1`;
+  return resolveApiBaseURL(browserContext());
 }
 
-// MJPEG video stream uses Vite proxy in dev mode (same-origin, reliable
-// browser rendering) and direct backend connection in Electron/desktop.
-// This is safe because API calls already bypass the proxy, so the MJPEG
-// long-lived stream no longer blocks API requests.
+// 视频流 / 快照的 host 前缀。浏览器里返回空串 = 同源：
+//   开发态走 Vite 代理（MJPEG 与 API 各占一个 origin 的连接池，互不饿死）；
+//   一体机场景就是工作站本机，换 IP/换端口/走 nginx 都不用改前端。
 export function getBackendHost() {
-  // 若配置了绝对 API 地址，尝试从中提取 host（用于视频流等非 /api/v1 地址）
-  if (ENV_API_BASE_URL && /^https?:\/\//i.test(ENV_API_BASE_URL)) {
-    try {
-      const url = new URL(ENV_API_BASE_URL);
-      return `${url.protocol}//${url.host}`;
-    } catch (_) {
-      // ignore, fallback below
-    }
-  }
-  return isDesktopApp() ? DEFAULT_BACKEND_HOST : '';
+  return resolveBackendHost(browserContext());
 }
 
 const baseURL = getBaseURL();

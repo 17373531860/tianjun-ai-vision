@@ -349,6 +349,11 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         self.mediapipe_pose = True
         self.mediapipe_hands = True
         self.mediapipe_confidence = 0.7
+        # 一拖多「手部裁切副屏」按工位独立开关 (默认关)。与上面的全局 MediaPipe
+        # 开关取"或": 只给真要副屏的那一路工位算手部几何, 其它工位一帧不算;
+        # 且不会把骨架画到工位主画面上。持久化在 workstation_config.json 的
+        # channels.<id>.hands_aux_enabled, 开机由 channel_manager 回灌。
+        self.hands_aux_enabled = False
         # v3.8.0 mp.solutions.hands 调优 (朋友程序同款参数 = complexity=1 + det_conf=0.5)
         # 默认 complexity=0 (跟 v2.7.16 行为一致, 不主动改变老客户性能特征)
         self.mediapipe_model_complexity = 0     # 0=lite (快, 准度低) / 1=full (慢, 准度高)
@@ -1992,11 +1997,38 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         black = np.zeros((480, 640, 3), dtype=np.uint8)
         return black
 
+    # 槽位判活窗口：一体机正常推帧 10~25fps，3s 没推帧就当它走了。
+    # 取值要比前端 stream-viewers 轮询周期长，否则会在"刚好错过一拍"时抖动。
+    MJPEG_SLOT_ALIVE_S = 3.0
+
     @staticmethod
     def _normalize_mjpeg_viewer(viewer):
         """把外部订阅身份限制在固定槽位，避免任意值造成连接表无界增长。"""
         # 预留 viewer 名 'lan'：后续局域网一体机工位页使用，本期不加入白名单。
         return viewer if viewer in {'main', 'station'} else 'legacy'
+
+    @staticmethod
+    def active_viewer_slots(slot_seen, now, ttl=MJPEG_SLOT_ALIVE_S):
+        """从推帧心跳表里挑出仍然活着的 viewer 槽（纯函数，便于单测）。"""
+        if not slot_seen:
+            return []
+        return sorted(k for k, ts in slot_seen.items() if (now - ts) <= ttl)
+
+    def get_stream_viewers(self):
+        """本工位当前有哪些 viewer 槽在真的看直播。
+
+        给"工作站总览不跟一体机抢同一路 MJPEG"当判据：一体机占着 station 槽时，
+        工作站总览把该工位降成 snapshot 轮询，省掉一份重复的全图推流。
+        """
+        VideoSourceManager._ensure_mjpeg_stream_state(self)
+        slots = VideoSourceManager.active_viewer_slots(
+            dict(self._mjpeg_slot_seen), time.monotonic())
+        return {
+            'viewers': slots,
+            'station': 'station' in slots,
+            'main': 'main' in slots,
+            'legacy': 'legacy' in slots,
+        }
 
     @staticmethod
     def _ensure_mjpeg_stream_state(host):
@@ -2006,6 +2038,8 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             host._mjpeg_active_conn_ids = {}
             host._mjpeg_next_conn_id = 0
             host._mjpeg_active_streams = 0
+        if getattr(host, '_mjpeg_slot_seen', None) is None:
+            host._mjpeg_slot_seen = {}
         if getattr(host, '_mjpeg_encode_lock', None) is None:
             host._mjpeg_encode_lock = threading.Lock()
             host._mjpeg_cached_seq = -1
@@ -2167,6 +2201,8 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                     if _dbg_on and encoded_here:
                         _dbg_enc_total += encode_ms
                         _dbg_encodes += 1
+                    # 槽位判活心跳 (dict 单键赋值, GIL 下原子, 热循环里不加锁)
+                    self._mjpeg_slot_seen[viewer_key] = time.monotonic()
                     yield chunk
                     _dbg_yields += 1
 
@@ -2195,6 +2231,7 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                         continue
                     last_cache_version = cache_version
                     last_seq = seq
+                    self._mjpeg_slot_seen[viewer_key] = time.monotonic()
                     yield chunk
                     idle_count += 1
                     if idle_count > max_idle:
@@ -2210,6 +2247,9 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                 with self._mjpeg_registry_lock:
                     if self._mjpeg_active_conn_ids.get(viewer_key) == my_conn_id:
                         del self._mjpeg_active_conn_ids[viewer_key]
+                        # 同槽换人时不能清心跳 (新连接已经在推了), 只有确实是自己
+                        # 退场才清, 否则总览会误判"一体机走了"抢回 MJPEG。
+                        self._mjpeg_slot_seen.pop(viewer_key, None)
                     self._mjpeg_active_streams = max(0, self._mjpeg_active_streams - 1)
                     active_count = self._mjpeg_active_streams
                 print(f"[MJPEG] connection #{my_conn_id} closed ch={ch_label} "

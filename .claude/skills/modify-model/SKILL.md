@@ -78,7 +78,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 
 | ORM 类 | 表名 | 一句话 |
 |---|---|---|
-| `User` | `users` | 多角色账号（替代已废弃 operators）|
+| `User` | `users` | 多角色账号（替代已废弃 operators）；一拖多加 `allowed_channels` JSON 白名单（NULL/`[]`=不限工位，迁移 m0012）|
 | `Role` | `roles` | 角色 + 权限 JSON |
 | `UserRole` | `user_roles` | 用户 ↔ 角色多对多 |
 | `SessionToken` | `session_tokens` | 登录 token（Bearer 鉴权）|

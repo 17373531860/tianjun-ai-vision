@@ -748,6 +748,48 @@ class MediaPipeOverlay:
         self._hand_crop_jpeg: Optional[bytes] = None
         self._no_hands_jpeg: Optional[bytes] = None
 
+    # ---------------- 启用判据 ----------------
+    #
+    # 一拖多的「手部裁切副屏」是按工位的独立开关 (hands_aux_enabled, 默认关):
+    # 只有真要副屏的那一路工位才付 MediaPipe 的算力, 其它工位一帧都不算。
+    # 全局 MediaPipe 开关 (mediapipe_enabled / mediapipe_hands) 语义完全不动 ——
+    # 两者取"或", 所以开关全关时与以前逐字节一致。
+
+    def _hands_aux_active(self) -> bool:
+        """本工位是否开了手部裁切副屏。"""
+        return bool(getattr(self._host, "hands_aux_enabled", False))
+
+    def _mediapipe_active(self) -> bool:
+        """本工位到底要不要跑 MediaPipe（全局开关 或 本工位副屏开关）。"""
+        return bool(getattr(self._host, "mediapipe_enabled", False)
+                    or self._hands_aux_active())
+
+    def _aux_only(self) -> bool:
+        """MediaPipe 跑起来的唯一理由就是手部副屏（工位主画面不该被改）。"""
+        return bool(self._hands_aux_active()
+                    and not getattr(self._host, "mediapipe_enabled", False))
+
+    def _hands_compute_wanted(self) -> bool:
+        """已在跑 MediaPipe 的前提下，是否要算手部几何。"""
+        return bool(getattr(self._host, "mediapipe_hands", False)
+                    or self._hands_aux_active())
+
+    def _pose_compute_wanted(self) -> bool:
+        """已在跑 MediaPipe 的前提下，是否要算 pose。
+
+        只为手部副屏拉起 MediaPipe 时不算 pose —— 副屏只要手，不为它白烧算力。
+        """
+        return bool(getattr(self._host, "mediapipe_pose", False)
+                    and not self._aux_only())
+
+    def _hands_geometry_available(self) -> bool:
+        """对外入口（HTTP 取 hands 快照）用：本工位是否可能有手部几何。
+
+        与内部的 ``_hands_compute_wanted`` 分开：内部调用点已经被
+        "MediaPipe 在跑" 守过门，而 HTTP 端点没有，必须自己判全套。
+        """
+        return self._mediapipe_active() and self._hands_compute_wanted()
+
     # ---------------- 公共 API ----------------
 
     def init(self):
@@ -761,7 +803,7 @@ class MediaPipeOverlay:
                 conf = max(0.05, min(1.0, getattr(host, "mediapipe_confidence", 0.7)))
 
                 # ---------- pose 部分: 维持老逻辑 (不受二段影响) ----------
-                if host.mediapipe_pose and self._mp_pose is None:
+                if self._pose_compute_wanted() and self._mp_pose is None:
                     self._mp_pose = mp.solutions.pose.Pose(
                         static_image_mode=False,
                         model_complexity=0,
@@ -771,7 +813,7 @@ class MediaPipeOverlay:
                     print(f"[MediaPipe] Pose 模型已加载 (confidence={conf})")
 
                 # ---------- hands 部分: 二选一 ----------
-                if host.mediapipe_hands:
+                if self._hands_compute_wanted():
                     self._init_hands_pipeline(conf)
                 else:
                     self._two_stage_active = False
@@ -914,7 +956,9 @@ class MediaPipeOverlay:
             if str(view_mode).strip().lower() == "fixed"
             else "follow"
         )
-        if not getattr(host, "mediapipe_enabled", False) or not getattr(host, "mediapipe_hands", False):
+        # 本工位既没开全局手部、也没开手部副屏 → 回占位图, 不因为一个 HTTP
+        # 请求就把 MediaPipe 拉起来 (那是每帧的算力, 不能被 GET 顺手打开)。
+        if not self._hands_geometry_available():
             self._clear_hand_crop_state()
             with self._hand_crop_lock:
                 return self._no_hands_snapshot_locked()
@@ -1032,7 +1076,10 @@ class MediaPipeOverlay:
         模型 lazy 加载 / 热重载 / 推理全在后台线程, 不阻塞采集.
         """
         host = self._host
-        if not host.mediapipe_enabled:
+        # 画到工位主画面上只认全局开关: 一体机开了手部副屏, 不该顺手把骨架
+        # 糊到工位自己的检测画面上 (吉田要的是"副屏只看手", 主屏照旧)。
+        draw_on_main = bool(getattr(host, "mediapipe_enabled", False))
+        if not self._mediapipe_active():
             return frame
 
         self._ensure_worker()
@@ -1048,8 +1095,8 @@ class MediaPipeOverlay:
                 self._pending_frame = frame.copy()
                 self._pending_cond.notify()
 
-        # ---------- 渲染缓存结果 (init 未完成时先原样返回) ----------
-        if self._mp_draw is None:
+        # ---------- 渲染缓存结果 (init 未完成 / 仅为副屏算几何时原样返回) ----------
+        if self._mp_draw is None or not draw_on_main:
             return frame
 
         # 取本地引用, 后台线程整体替换结果对象, 不原地修改 → 无需加锁
@@ -1111,7 +1158,7 @@ class MediaPipeOverlay:
             try:
                 if self._mp_draw is None:
                     self.init()
-                    if self._mp_draw is None or not self._host.mediapipe_enabled:
+                    if self._mp_draw is None or not self._mediapipe_active():
                         continue  # init 失败 (未安装等), enabled 已被置 False
                 self._check_hot_reload()
                 self._run_inference(frame)
@@ -1302,7 +1349,7 @@ class MediaPipeOverlay:
         crop_epoch = self._hand_crop_epoch
 
         # pose 部分
-        if self._mp_pose is not None and self._host.mediapipe_pose:
+        if self._mp_pose is not None and self._pose_compute_wanted():
             try:
                 self._mp_last_pose_results = self._mp_pose.process(rgb)
             except Exception:
@@ -1311,7 +1358,7 @@ class MediaPipeOverlay:
             self._mp_last_pose_results = None
 
         # hands 部分: 分支
-        if not self._host.mediapipe_hands:
+        if not self._hands_compute_wanted():
             self._mp_last_hands_results = None
             self._last_two_stage_results = []
             if crop_requested:

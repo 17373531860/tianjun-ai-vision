@@ -48,6 +48,9 @@ _MIGRATION_MODULES = [
     "m0009_pkg_tail_paper_only_after_awaiting",
     "m0010_scanner_lifecycle",
     "m0011_model_capability",
+    # feat/lan-station-kiosk 原编号 m0011 与主干能力模型迁移撞号, 合入时重编号 m0012
+    # (apply 幂等补列, 该分支未合入过客户机, 无旧 ID 记账)
+    "m0012_user_allowed_channels",
 ]
 
 # m0000 不看记账、每次启动都幂等跑（老库任意版本起跳的安全网）

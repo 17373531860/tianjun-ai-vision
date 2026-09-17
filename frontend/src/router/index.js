@@ -97,10 +97,17 @@ const REMEMBERABLE_NAMES = new Set([
 const isMultiMonitorRoute = (route) =>
   route?.query?.kiosk === '1' || route?.query?.station_view === '1' || route?.query?.multi_monitor === '1';
 
+// kiosk = 工位屏形态（Electron 副屏子窗，或一拖多里一体机浏览器全屏开的工位页）。
+const isKioskRoute = (route) => route?.query?.kiosk === '1';
+
 const isHandsCropRoute = (route) =>
   route?.query?.kiosk === '1'
   && route?.query?.video_only === '1'
   && route?.query?.hands_crop === '1';
+
+// 登录/激活是 kiosk 也必须能到的页（否则鉴权一开，工位屏没法登录就彻底打不开）
+const isEscapeHatchRoute = (route) =>
+  route?.name === 'Login' || route?.name === 'Activation';
 
 /**
  * v3.10.0 用户系统: 在路由守卫中确保 useAuthStore 已 init.
@@ -119,6 +126,40 @@ async function ensureAuthInitialized() {
   } catch (e) {
     console.warn('[⬛ Router] AuthStore 初始化失败 (不阻断导航):', e?.message || e);
   }
+}
+
+/**
+ * 业务页放行前的账号侧守卫：强制登录 + 按权限拦深链。
+ *
+ * 返回 undefined = 放行；返回路由对象 = 改道。
+ *
+ * 权限拦截是"和菜单同一套判据"（useAuthStore.canAccessRoute → ROUTE_PERM_MAP），
+ * 不是按浏览器/kiosk 硬编码封路。所以：
+ *   - 鉴权未启用（出厂默认）→ canAccessRoute 恒 true，存量客户零差异；
+ *   - 工位账号没有 project.view → 手输 #/project 被弹回监控页；
+ *   - 日后想放开一体机进项目页，只要给那个账号加权限即可，不用改代码。
+ */
+async function resolveAuthRedirect(to) {
+  if (isEscapeHatchRoute(to)) return undefined;
+  await ensureAuthInitialized();
+  try {
+    const { useAuthStore } = await import('@/store/useAuthStore');
+    const authStore = useAuthStore();
+    if (authStore.requiresLogin()) {
+      console.log('[⬛ Router] 匿名兜底已关, 强制跳登录页');
+      dbg('auth.ops', '匿名访问被拦截 → 跳登录页', `target=${to.fullPath}`);
+      return { name: 'Login', query: { redirect: to.fullPath } };
+    }
+    // /monitor 自己不拦, 否则没有 monitor.view 的账号会被弹成死循环
+    if (to.path !== '/monitor' && !authStore.canAccessRoute(to.path)) {
+      console.log(`[⬛ Router] 权限不足, 拦下 ${to.fullPath} → /monitor`);
+      dbg('auth.ops', '无权限页面被拦截 → 回监控页', `target=${to.fullPath}`);
+      return { path: '/monitor' };
+    }
+  } catch (e) {
+    console.warn('[⬛ Router] 账号守卫失败 (不阻断导航):', e?.message || e);
+  }
+  return undefined;
 }
 
 router.beforeEach(async (to, from) => {
@@ -155,6 +196,14 @@ router.beforeEach(async (to, from) => {
     return;
   }
 
+  // 工位屏钉死本工位：kiosk 页面一旦打开，任何跳转（误触、插件菜单、深链）都拒绝。
+  // 一体机现场没有键盘鼠标退路，漂到别的页面等于这台工位屏当场报废。
+  // 只留登录/激活两个出口，其余一律留在原地。
+  if (isKioskRoute(from) && !isKioskRoute(to) && !isEscapeHatchRoute(to)) {
+    console.log(`[⬛ Router] kiosk 工位屏钉死当前页, 拒绝跳转 → ${to.fullPath}`);
+    return false;
+  }
+
   // 冷启动恢复: 第一次进入且目标是默认 /monitor 时, 尝试取上次路由
   if (!lastRouteRestored && from.name === undefined && to.path === '/monitor' && !isMultiMonitorRoute(to)) {
     lastRouteRestored = true;
@@ -189,29 +238,13 @@ router.beforeEach(async (to, from) => {
   if (licenseChecked || to.name === 'Activation' || to.name === 'Login') {
     console.log(`[⬛ Router] 跳过 License (licenseChecked=${licenseChecked}, target=${to.name})`);
     // 业务页放行前先同步用户系统状态 (登录/激活页内部自己 init, 这里不重复)
-    if (to.name !== 'Activation' && to.name !== 'Login') {
-      await ensureAuthInitialized();
-      // v3.10+ 强制登录守卫: 鉴权启用 + 匿名兜底关 + 当前匿名 → 跳登录页
-      try {
-        const { useAuthStore } = await import('@/store/useAuthStore');
-        const authStore = useAuthStore();
-        if (authStore.requiresLogin()) {
-          console.log('[⬛ Router] 匿名兜底已关, 强制跳登录页');
-          dbg('auth.ops', '匿名访问被拦截 → 跳登录页', `target=${to.fullPath}`);
-          return { name: 'Login', query: { redirect: to.fullPath } };
-        }
-      } catch (e) {
-        console.warn('[⬛ Router] 强制登录守卫失败:', e?.message || e);
-      }
-    }
-    return;
+    return await resolveAuthRedirect(to);
   }
 
   if (!window.electronAPI?.isElectron) {
     console.log('[⬛ Router] 非Electron环境，跳过授权检查');
     licenseChecked = true;
-    await ensureAuthInitialized();
-    return;
+    return await resolveAuthRedirect(to);
   }
 
   try {
@@ -221,8 +254,8 @@ router.beforeEach(async (to, from) => {
     console.log(`[⬛ Router] 授权检查完成 (${Date.now() - t0}ms): valid=${status.valid}`);
     licenseChecked = true;
     if (!status.valid) return { name: 'Activation' };
-    // License 通过 → 顺便初始化用户系统状态
-    await ensureAuthInitialized();
+    // License 通过 → 顺便初始化用户系统状态 + 账号侧守卫
+    return await resolveAuthRedirect(to);
   } catch (e) {
     console.error('[⬛ Router] 授权检查异常:', e);
     // 授权状态未知时不放行业务页，防止"异常即放行"

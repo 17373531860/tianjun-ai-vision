@@ -49,7 +49,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `/alarm/*` | `alarm.py` | 无封装（Alarm 视图直调） | 灯塔 / 蜂鸣器 / 共享灯柱 |
 | `/sms/*` | `sms.py` | `sms.js` | 系统级统一短信通道 + NG 汇总通知（config/ports/test；通道五选一 at_modem/generic_http/wxpusher/aliyun/tencent，日报共用此配置，默认关） |
 | `/sms-report/*` | `sms_report.py` | `smsReport.js` | v3.46 每日短信日报（规则 CRUD/试发/预览/日志 + `/providers` 只读通道信息；通道配置走 `/sms/config`） |
-| `/workstations/*` | `channel_manager.py` | `detection.js`（混在其中） | 多工位 + GPU 分配；v3.52 新增 GET/PUT `/multi-monitor`（多屏工位显示配置段，PUT 挂 `settings.edit`，前端 `getMultiMonitorConfig`/`setMultiMonitorConfig`） |
+| `/workstations/*` | `channel_manager.py` | `detection.js`（混在其中） | 多工位 + GPU 分配；v3.52 GET/PUT `/multi-monitor`；一拖多 GET/PUT `/hands-aux`（按工位手部副屏开关，PUT 挂 `settings.edit`，前端 `getHandsAuxConfig`/`setHandsAuxEnabled`） |
 | `/scanner/*` | `scanner.py` | `scanner.js` | 扫码器 CRUD + scan_pair + disable-toggle + resume（v3.50 人工恢复） |
 | `/scanner/wmax/*` | `wmax.py` | `wmax.js` | WMax 三端口协议（35+ 端点） |
 | `/external-devices/*` | `external_device.py` | `external_device.js` | 称重器/串口外设（list/create **要尾斜杠**） |
@@ -162,27 +162,18 @@ export const getSessionsByDate = (date, projectId = null, startHour = null, endH
 | `cluster.py` | `/boxes/{box_serial}` 必须在 `/boxes`（list） 后 | ✅ |
 | `scanner.py` | 不少静态路径（`/discover`、`/simulate`、`/check-container-mode`、`/scan-pair/*`、`/disable-*`），都在 `/devices/{id}` 之前注册 | ✅ |
 
-### 3.4 Vite 代理 vs Electron 直连
+### 3.4 Vite 代理 vs Electron 直连 vs 一体机同源
 
-```29:51:frontend/src/api/index.js
-function getBaseURL() {
-  if (ENV_API_BASE_URL) return trimSlash(ENV_API_BASE_URL);
-  return `${DEFAULT_BACKEND_HOST}/api/v1`;
-}
-export function getBackendHost() {
-  if (ENV_API_BASE_URL && /^https?:\/\//i.test(ENV_API_BASE_URL)) {
-    try {
-      const url = new URL(ENV_API_BASE_URL);
-      return `${url.protocol}//${url.host}`;
-    } catch (_) {}
-  }
-  return isDesktopApp() ? DEFAULT_BACKEND_HOST : '';
-}
-```
+判据在 `frontend/src/api/backendTarget.js`（`index.js` 只读 window 后转调）：
 
-- **API 永远直连**：`getBaseURL()` 强制 `http://localhost:8001/api/v1`，不走 Vite 代理。
-- **MJPEG/视频文件**走 `getBackendHost()`：Electron 下 `'http://localhost:8001'`，浏览器下 `''`（同源 + Vite 代理把长连接给后端）。
-- 如果客户机上后端不在 `localhost:8001`，必须设 `VITE_API_BASE_URL`（`AGENTS.md` §10）。
+| 形态 | `resolveApiBaseURL` | `resolveBackendHost` |
+|---|---|---|
+| Electron `file://` | `http://localhost:8001/api/v1` | `http://localhost:8001` |
+| Vite 开发服务器 | `http://<页面hostname>:8001/api/v1`（API 直连，不走代理） | `''`（MJPEG 走 Vite 代理，避免与 API 抢同一 origin 的 6 条连接） |
+| 一体机浏览器打开工作站 `:8001` | `/api/v1` 同源相对路径 | `''` 同源 |
+
+- **禁止**在 `.env.production` / `.env.development` 写死 `VITE_API_BASE_URL=http://localhost:8001/...`：vite build 会把它字面打进 dist，一体机就会把请求打给自己。
+- 覆盖口仍是 `VITE_API_BASE_URL`：副本 worktree 后端非 8001 时写 `frontend/.env.development.local`（见 `start-dev-servers`）。
 
 ### 3.5 已删 / 已停用（看到引用立即清理）
 
@@ -220,6 +211,7 @@ export function getBackendHost() {
 | GET | `/source/detection/results` | `channel` | — （返回 `mes` 子树含 `scan_event`/`rebind_prompt`/`warn_no_barcode`/`recording_failures`） |
 | GET/POST | `/source/transform/config` | `channel` | `rotation` `flip_h` `flip_v` |
 | GET/POST | `/source/stream/config` `/kalman/config` `/gpu/*` | `channel` | — |
+| GET | `/source/stream/viewers` | — | 各工位当前直播订阅槽（`main`/`station`/`legacy`），总览据此给被一体机占用的工位降快照 |
 
 ### 4.2 data（`/api/v1/data/*`，前端 `data.js`）
 
@@ -305,11 +297,11 @@ rg -n "channel_id=|channel=" frontend/src/api/*.js backend/api/*.py
 ## 6. 修复原则
 
 1. **前端适配后端**：后端路由稳定后，前端改路径；不要轻易改后端路由（Electron 关机 / 客户脚本可能直连）。
-2. **新增字段可以，不删旧字段**：保持向后兼容；老安装包升级时 `backend/main.py: migrate_database()` 会跑 60+ ALTER TABLE。
+2. **新增字段可以，不删旧字段**：保持向后兼容；老安装包启动时通过 `backend/db/migrations/` 的 `apply_pending(engine)` 应用待执行迁移，旧 `migrate_database()` 已退役。
 3. **路由顺序**：静态路径放参数路径之前（§3.3）。
 4. **删端点先打废弃日志**：连续 1–2 个版本返回 410 + `Deprecation` 头，再彻底移除。
 5. **新增端点必读 `add-api-endpoint`**：含路由注册、Schema、router 挂载、前端 `api/*.js` 封装、视图集成的全链路 checklist。
-6. **碰 ORM 字段必读 `modify-model`**：改完字段必须在 `migrate_database()` 加 ALTER TABLE，前端 axios 调用点同步改。
+6. **碰 ORM 字段必读 `modify-model`**：已有表补列、索引或数据回填时，在 `backend/db/migrations/` 新建 `mXXXX_*.py` 并登记到 `_MIGRATION_MODULES`；接口契约受影响时同步对应前端调用点。
 
 ---
 
@@ -342,7 +334,7 @@ rg -n "channel_id=|channel=" frontend/src/api/*.js backend/api/*.py
 | 多通道乱串 | `channel` 参数 | 前端拿固定 `channel=0` 调，后端按 `ChannelManager` 分发；多工位下要循环每个 ch |
 | MJPEG 渲染不出 | 用 `api.get` 取 stream | 用 `getBackendHost()` 拼裸地址，img.src 直接挂 |
 | Electron 桌面壳里 API 全挂 | URL 协议 `file://` 检测 | `index.js::isDesktopApp()` 误判，看 `VITE_API_BASE_URL` 是否在打包时被注入 |
-| 新加字段读不到 | ORM + Schema + 前端三处 | `models.py` 加列 + `migrate_database()` ALTER + Pydantic Response 加字段 + 前端解构同步 |
+| 新加字段读不到 | ORM + Schema + 前端三处 | 检查 ORM 列、版本化迁移注册与执行记录，以及实际受影响的 Pydantic Response 和前端解构 |
 
 ---
 

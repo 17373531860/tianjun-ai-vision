@@ -1,12 +1,13 @@
 ---
 name: start-dev-servers
-description: "本地启动前后端开发服务器的标准流程。覆盖：(1) 启动前必扫端口占用 (2) 副本/main/se9 多 worktree 并行时的端口约定 (3) `.env.development.local`（⚠️ 不是 .env.local）把前端 axios baseURL 钉到本副本后端避免污染主 DB (4) **后端必须用 tianjun conda env 启动**（直接 `python` 走 base 缺 onnx/tensorrt） (5) 后端 8002 + 前端 6002 标准对位 (6) 进程清理 / setsid 后台 fork 模板 (7) /docs + /api/v1/projects 健康检查 + 浏览器 console 看 [API] Final baseURL 埋点 + readlink /proc/PID/exe 看 python 解释器。当用户说『启动前端』『起一下后端』『跑一下开发环境』『先启服务测试』『端口被占了』『前端连不上后端』『副本环境怎么搭』『baseURL 错了』『8001 被占了用什么端口』『前端调到 main 的后端去了』『DB 污染』『多个 worktree 怎么同时跑』『进程没退干净』『加载项目列表失败』『Network Error』『.env.local 没生效』『ONNX/TensorRT 未安装』『推理格式选不到』『main 能用副本不能用』时触发。**任何启动前后端的任务，必须先走第二节『启动前必做清单』再发命令。** 违反任一条会撞端口冲突、DB 写错库、前端 axios 调到另一个 worktree 的后端、后端跑错 conda env 缺依赖。"
+description: "启动或排查本地前后端开发服务：核对 worktree、端口、Python 环境、前端 baseURL 与数据目录隔离，复用健康实例并按状态验证就绪。"
 allowed-tools: "Read, Grep, Glob, Shell, Write, StrReplace"
 ---
 
 # start-dev-servers: 本地启动前后端的标准流程
 
-> 用户提到「启动 / 起 / 跑开发环境」类任务时，**先读第二节『启动前必做清单』里 5 条强制检查**，确认每一条都过了再发启动命令。
+> 启动前核对第二节中适用于目标服务的检查；会话内已核实且未变化的环境信息可以复用，只启动前端时不重复导入后端依赖。
+> 本机命令以 AGENTS.md 的 Windows/PowerShell 环境说明为准；下方 Linux 路径和 shell 示例只适用于相应主机，不在 Windows 照抄。实际 worktree 路径用 `Get-Location` 与 `git worktree list` 核实。
 
 ---
 
@@ -22,7 +23,7 @@ allowed-tools: "Read, Grep, Glob, Shell, Write, StrReplace"
 
 > ⚠️ **上表是默认约定，不是铁板一块。端口归属会被用户当场翻转——必须以用户本次的指令为准。**
 > 真实事故（2026-06-21）：用户的**副本**临时占了 **6001/8001**，要求**主程序（main）跑 6002/8002**——和上表正好对调。我没确认、按表想当然，结果端口/操作全错位。
-> **正解**：用户给了端口就**照用户说的对位**，别拿默认表硬套；不确定就用一句业务语义的二选一确认（"main 跑 6002/8002 对吧？"）。
+> **正解**：用户给了端口就**照用户说的对位**，别拿默认表硬套；先核对会话、worktree 和进程证据，仅目标仍无法确定时再问，不重复确认已明确的对位。
 
 **铁律**：
 
@@ -35,9 +36,9 @@ allowed-tools: "Read, Grep, Glob, Shell, Write, StrReplace"
 
 ---
 
-## 二、启动前必做清单（5 条强制检查）
+## 二、启动前环境检查（按目标服务选用）
 
-按顺序逐项检查，**任何一条没过都不要发启动命令**。
+核对目标服务涉及的检查，可合并独立查询；存在端口归属、解释器或数据隔离疑点时，先解决再启动。
 
 ### 检查 1：所在 worktree 与目标端口对得上
 
@@ -71,7 +72,7 @@ done
 - **HTTP 200/3xx/4xx** → 端口已被某进程占用 — **必须先识别是谁**：
   - 如果是「同 worktree 的同名服务还活着」→ 复用，不重启
   - 如果是「另一个 worktree」→ 切到本 worktree 的目标端口（6002 → 6003）
-  - 如果是「无关进程」→ 停下来问用户怎么处置，**不要擅自 kill**
+  - 如果是「无关进程」→ **不要擅自 kill**；用户未固定端口时选空闲端口并保持前后端对位，固定端口确实需要处理占用时再问。
 
 ### 检查 3：识别占用进程的所属 worktree（防止误杀 main）
 
@@ -86,7 +87,7 @@ readlink /proc/<PID>/cwd
 
 ### 检查 4：副本/se9 worktree 必须有 `.env.development.local` 把 axios baseURL 钉对
 
-**这是最容易踩的坑** —— 前端 `frontend/.env.development` 写死 `VITE_API_BASE_URL=http://localhost:8001/api/v1`（指向 main 后端）。副本启动若不覆盖，会导致：
+**这是最容易踩的坑** —— 前端默认**不设** `VITE_API_BASE_URL`，由 `backendTarget.js` 把开发态 API 打到页面 hostname 的 **8001**。副本后端若跑 8002/8003，必须用 `.env.development.local` 覆盖，否则：
 
 ```
 副本前端 6002 → axios 仍打 8001 → 写到 main 的 sql_app.db → 污染主 DB
@@ -167,16 +168,11 @@ console.log('[API] Final baseURL:', baseURL);
 # 1. 确认 tianjun env 存在
 conda env list | grep tianjun
 
-# 2. 确认 tianjun env 有完整依赖（应全部 ✓）
-/home/qianqian/anaconda3/envs/tianjun/bin/python -c "
-for lib in ['onnx','onnxruntime','tensorrt','torch','fastapi','uvicorn']:
-    try: __import__(lib); print(f'  ✓ {lib}')
-    except ImportError: print(f'  ✗ {lib} 缺')
-"
-
-# 3. 确认 Python 是 3.10（与 AGENTS.md §二一致）
+# 2. 确认 Python 是 3.10（与 AGENTS.md §二一致）
 /home/qianqian/anaconda3/envs/tianjun/bin/python --version
 ```
+
+依赖导入交给实际启动验证；仅在缺依赖报错或本次需要测试推理格式时，检查对应模块，不为普通启动预先导入所有 GPU 依赖。
 
 启动后**立刻验证**实际跑的解释器是 tianjun（不是 base）：
 
@@ -226,16 +222,15 @@ setsid -f npm run dev \
   > /tmp/tianjun_<worktree>_frontend.log 2>&1 < /dev/null
 ```
 
-vite 自动选端口，启动后看 log 拿到真实 URL：
-
-```bash
-sleep 8 && tail -10 /tmp/tianjun_<worktree>_frontend.log
-# 输出会有: ➜ Local: http://localhost:<port>/
-```
+vite 自动选端口，启动后读取日志中的真实 URL，并立即探测该地址；未就绪时按第四节有期限地复查，不固定等待 8 秒。
 
 ---
 
 ## 四、启动后健康检查（4 条）
+
+立即检查所需服务；未就绪时每 0.5–1 秒复查，默认总期限 60 秒，就绪立即继续。
+进程退出或出现明确启动错误时提前停止；到期仍未就绪则读取日志诊断，不无限重启或重置计时。
+只启动一个服务时验证该服务与必要连接，不为无关服务补跑检查。
 
 ```bash
 # 1. 后端进程在
@@ -359,7 +354,7 @@ readlink /proc/$new_pid/exe
 ```bash
 # 1. 杀掉错 env 的后端
 kill <pid>
-sleep 2
+# 立即检查该 PID 已退出且端口释放；未释放时短间隔复查，最长 30 秒，超时读日志
 
 # 2. 用 tianjun env 重启（见第三节标准模板）
 setsid -f /home/qianqian/anaconda3/envs/tianjun/bin/python -u \
@@ -430,7 +425,7 @@ pkill -f 'uvicorn.*port 8002'   # 单独一条；agent 的这条命令行不含 
 # 优雅停 + 端口验证
 pkill -f 'uvicorn.*<port>'          # 杀本 worktree 后端
 pkill -f 'vite.*<worktree-path>'    # 杀本 worktree 前端
-sleep 2
+# 立即检查目标 PID/端口；未释放时每 0.5–1 秒复查，最长 30 秒，超时诊断
 # 验证端口已释放
 curl -s -o /dev/null -w '%{http_code}\n' --max-time 1 http://localhost:<port>/  # 应返回 000
 ```
@@ -462,7 +457,7 @@ curl -s -o /dev/null -w '%{http_code}\n' --max-time 1 http://localhost:<port>/  
    │                          → 前端端口变了不影响 baseURL（baseURL 钉的是后端端口）
    │                          → 只有**后端**端口变了才需要改 `.env.development.local`
    │
-   └─ 端口被无关进程占 → 停下问用户，不擅自 kill
+   └─ 端口被无关进程占 → 不擅自 kill；未固定端口则选空闲端口，必须占用指定端口时再问
 ```
 
 ---
@@ -471,12 +466,12 @@ curl -s -o /dev/null -w '%{http_code}\n' --max-time 1 http://localhost:<port>/  
 
 | 文件 | 作用 |
 |---|---|
-| `frontend/.env.development` | git tracked，写死 `VITE_API_BASE_URL=http://localhost:8001/api/v1`（默认值，给 main worktree 用）|
+| `frontend/.env.development` | git tracked，**故意不设** `VITE_API_BASE_URL`（交给 `backendTarget.js`：开发态按 hostname:8001，一体机生产同源）|
 | `frontend/.env.development.local` | **每个非 main worktree 必备**，gitignored，覆盖 baseURL 指向本 worktree 的后端。⚠️ **不能用 `.env.local`** — 那个优先级低于 `.env.development`，写了等于没写 |
 | `frontend/.gitignore` | 已默认 `*.local` 忽略所有 `.local` 后缀文件，不会误入 commit |
 | `frontend/vite.config.js` | vite 默认端口配在这（一般 6001）|
 | `backend/core/config.py` | `DATA_DIR = TIANJUN_DATA_DIR or BASE_DIR` — 默认每个 worktree 用自己 cwd 的 `backend/sql_app.db` |
-| `backend/main.py: migrate_database()` | 空库启动时自动建 35 张表 + 60+ ALTER |
+| `backend/main.py` / `backend/db/migrations/` | create_all 创建缺失表，apply_pending 执行版本化升级；migrate_database 是退役断言桩 |
 | `/home/qianqian/anaconda3/envs/tianjun/bin/python` | **唯一正确的后端 Python 解释器** (3.10 + onnx + tensorrt + torch+cu126 等齐全)。绝对不要用裸 `python` 命令 |
 | `/tmp/tianjun_<worktree>_<service>.log` | 推荐的后台进程 log 路径约定 |
 
