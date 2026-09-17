@@ -20,7 +20,8 @@
             placeholder="选择项目" 
             size="small" 
             class="w-40"
-            :disabled="store.isDetecting"
+            :disabled="store.isDetecting || displayReadonly || station"
+            :title="station ? '当前工位绑定项目；请在工位与输入源中配置' : ''"
             @change="handleProjectChange"
           >
             <el-option 
@@ -32,7 +33,7 @@
           </el-select>
           <button 
             @click="handleNavToProject"
-            :disabled="store.isDetecting"
+            :disabled="store.isDetecting || displayReadonly"
             class="text-xs bg-cyan-700 hover:bg-cyan-600 disabled:bg-gray-600 disabled:cursor-not-allowed px-2 py-0.5 rounded ml-2 cursor-pointer"
           >
             {{ $t('navbar.select') }}
@@ -95,13 +96,14 @@
         <div v-if="authStore.authEnabled" class="flex items-center">
           <button v-if="authStore.isLoggedIn"
                   class="text-xs bg-slate-700 hover:bg-rose-700 text-gray-300 hover:text-white px-2 py-1 rounded cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  :disabled="store.isDetecting"
+                  :disabled="store.isDetecting || displayReadonly"
                   @click="handleAccountLogout"
                   data-testid="navbar-logout-btn"
                   :title="store.isDetecting ? '检测运行中, 不可登出' : '登出账号'">
             {{ $t('navbar.logout') }}
           </button>
           <button v-else
+                  :disabled="displayReadonly"
                   class="text-xs bg-cyan-700 hover:bg-cyan-600 text-white px-2 py-1 rounded cursor-pointer transition-colors"
                   @click="handleAccountLogin"
                   data-testid="navbar-login-btn">
@@ -122,10 +124,10 @@
       <!-- Icon Actions -->
       <div class="flex items-center gap-3">
         <!-- Settings Dropdown -->
-        <el-dropdown trigger="click" @command="handleCommand" :disabled="store.isDetecting">
+        <el-dropdown trigger="click" @command="handleCommand" :disabled="store.isDetecting || displayReadonly">
           <el-icon 
             class="transition-colors text-[1.75rem]" 
-            :class="store.isDetecting ? 'cursor-not-allowed text-gray-600' : 'cursor-pointer text-gray-300 hover:text-cyan-400'" 
+            :class="store.isDetecting || displayReadonly ? 'cursor-not-allowed text-gray-600' : 'cursor-pointer text-gray-300 hover:text-cyan-400'"
           ><Setting /></el-icon>
           <template #dropdown>
             <el-dropdown-menu class="bg-slate-800 border-slate-700">
@@ -175,6 +177,8 @@ import { Setting, UserFilled, Check, Minus } from '@element-plus/icons-vue';
 import { useI18n } from 'vue-i18n';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { getProjects, getProjectDetail, activateProject, getActiveProject } from '@/api/project';
+import { getWorkstations } from '@/api/detection';
+import { useDisplayWindow } from '@/composables/useDisplayWindow';
 
 // v3.37.0: 回退 logo 不能写死 '/app-icon.png' 字符串——打包后页面走 file:// + 相对 base,
 // 运行时字符串 Vite 改写不到, 会解析到系统盘根目录导致图标空白 (v3.36.0 回归)。
@@ -187,6 +191,7 @@ const pluginTheme = usePluginThemeStore();
 const authStore = useAuthStore();
 const router = useRouter();
 const { locale, t } = useI18n();
+const { station, readonly: displayReadonly, channel: windowChannel } = useDisplayWindow();
 
 // 项目列表和选择
 const projectList = ref([]);
@@ -213,6 +218,7 @@ const loadAutoSaveSettings = () => {
 
 // 保存当前选择
 const saveCurrentSelection = () => {
+  if (station.value) return;
   if (autoSaveEnabled.value) {
     // 优先使用已保存的值，避免被空值覆盖
     const existingSaved = localStorage.getItem(AUTO_SAVE_KEY);
@@ -242,6 +248,7 @@ const toggleAutoSave = () => {
 
 // 恢复上次选择
 const restoreLastSelection = async (settings) => {
+  if (station.value) return;
   console.log('[AutoRestore] 开始恢复设置:', settings);
   
   if (settings.projectId && projectList.value.length > 0) {
@@ -311,6 +318,10 @@ const loadProjects = async () => {
   try {
     const res = await getProjects();
     projectList.value = res.data.items || [];
+    if (station.value) {
+      await syncStationProject();
+      return;
+    }
     
     // 优先使用后端 is_active 状态来同步当前项目
     const activeInBackend = projectList.value.find(p => p.is_active);
@@ -336,6 +347,7 @@ const loadProjects = async () => {
 
 // 导航到项目管理页面
 const handleNavToProject = () => {
+  if (displayReadonly.value) return;
   if (store.isDetecting) {
     ElMessage.warning('检测运行中，请先停止检测再切换页面');
     return;
@@ -345,6 +357,7 @@ const handleNavToProject = () => {
 
 // 处理项目切换
 const handleProjectChange = async (projectId) => {
+  if (displayReadonly.value || station.value) return;
   if (!projectId) {
     projectStore.setCurrentProject(null);
     store.setCurrentProjectId(null);
@@ -397,8 +410,10 @@ const applyProjectToStores = async (projectId) => {
       project.custom_conditions = pipelineConfig.custom_conditions || [];
     }
     if (project.custom_based_on === undefined) {
-      project.custom_based_on = pipelineConfig.custom_based_on || 'sequential';
+      project.custom_based_on = pipelineConfig.custom_based_on ?? null;
     }
+    project.idle_timeout_seconds = pipelineConfig.idle_timeout_seconds ?? 0;
+    project.idle_timeout_event_id = pipelineConfig.idle_timeout_event_id ?? null;
     
     projectStore.setCurrentProject(project);
     
@@ -435,12 +450,31 @@ const applyProjectToStores = async (projectId) => {
 };
 
 // v3.37: 跟随后端激活项目 (外部 MES 入站开工切项目后, 界面不刷新也能自动跟上)。
+// 工位导航只同步本窗内存，不激活全局项目、恢复输入源、连接报警或回写检测设置。
+const syncStationProject = async () => {
+  const response = await getWorkstations();
+  const count = Math.max(1, response.data.channel_count || 1);
+  const channel = Math.min(windowChannel.value, count - 1);
+  const projectId = response.data.source_configs?.[String(channel)]?.project_id || null;
+  if (projectId === projectStore.currentProjectId) return;
+  const project = projectId ? (await getProjectDetail(projectId)).data : null;
+  if (!station.value) return;
+  projectStore.setCurrentProject(project);
+  selectedProjectId.value = projectId;
+  if (project && !projectList.value.some(item => item.id === projectId)) projectList.value.push(project);
+  if (project?.detection_config) store.loadDetectionForChannel(channel, project.detection_config);
+};
+
 // 只对齐前端显示/store, 不回调 activate (后端已经激活, 再调会无谓重载模型)。
 let _syncingActiveProject = false;
 const syncActiveProjectFromBackend = async () => {
   if (_syncingActiveProject) return;
   _syncingActiveProject = true;
   try {
+    if (station.value) {
+      await syncStationProject();
+      return;
+    }
     const res = await getActiveProject();
     const backendActive = res.data;
     if (backendActive && backendActive.id
@@ -513,6 +547,7 @@ const handleMinimizeWindow = async () => {
 };
 
 const handleCommand = (command) => {
+  if (displayReadonly.value) return;
   switch (command) {
     case 'auto_save':
       toggleAutoSave();
@@ -574,6 +609,7 @@ const setLang = (lang, msg) => {
 
 // v3.10.0 用户系统: 顶栏账号登录/登出 (区别于"退出软件"的 handleCommand-logout)
 const handleAccountLogin = () => {
+  if (displayReadonly.value) return;
   if (store.isDetecting) {
     ElMessage.warning(t('navbar.detectingNoLogout'));
     return;
@@ -583,6 +619,7 @@ const handleAccountLogin = () => {
 };
 
 const handleAccountLogout = async () => {
+  if (displayReadonly.value) return;
   if (store.isDetecting) {
     ElMessage.warning(t('navbar.detectingNoLogout'));
     return;

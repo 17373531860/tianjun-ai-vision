@@ -126,6 +126,44 @@ def test_reconnect_replaces_only_the_same_viewer_slot(monkeypatch):
         new_station.close()
 
 
+def test_main_station_and_legacy_share_frames(monkeypatch):
+    """三个观看槽共存且共享每个源帧的 JPEG 编码。"""
+    from backend.api.channel_manager import channel_manager
+
+    manager = _make_stream_manager()
+    monkeypatch.setattr(channel_manager, "channel_count", 2)
+    encoded_values: list[int] = []
+
+    def fake_encode(frame):
+        encoded_values.append(int(frame[0, 0, 0]))
+        return MJPEG_CHUNK
+
+    manager._encode_and_yield = fake_encode
+    streams = {
+        "main": manager.generate_mjpeg(viewer="main"),
+        "station": manager.generate_mjpeg(viewer="station"),
+        "legacy": manager.generate_mjpeg(),
+    }
+
+    try:
+        for stream in streams.values():
+            assert next(stream) == MJPEG_CHUNK
+        assert encoded_values == [0]
+        assert set(manager._mjpeg_active_conn_ids) == set(streams)
+        assert manager._mjpeg_active_streams == 3
+
+        _publish_frame(manager, 6)
+        for stream in reversed(tuple(streams.values())):
+            assert next(stream) == MJPEG_CHUNK
+        assert encoded_values == [0, 6]
+    finally:
+        for stream in streams.values():
+            stream.close()
+
+    assert manager._mjpeg_active_streams == 0
+    assert manager._mjpeg_active_conn_ids == {}
+
+
 def test_concurrent_viewers_encode_a_source_frame_once(monkeypatch):
     """两个响应线程同时抢新帧也只能有一个 JPEG 编码者。"""
     from backend.api.channel_manager import channel_manager
@@ -280,7 +318,10 @@ def test_stopped_source_shares_one_placeholder_encode_and_cleans_slots(monkeypat
     assert manager._mjpeg_active_streams == 0
 
 
-def test_legacy_connections_keep_later_connection_wins(monkeypatch):
+@pytest.mark.parametrize(
+    "invalid_viewer", [None, "", "lan", "arbitrary-window-id", "visitor", "VISITOR", "visitor ", "visitor:overview"],
+)
+def test_legacy_connections_keep_later_connection_wins(monkeypatch, invalid_viewer):
     """缺省/非法 viewer 都归 legacy，同槽仍保持后来者上位。"""
     from backend.api.channel_manager import channel_manager
 
@@ -288,17 +329,27 @@ def test_legacy_connections_keep_later_connection_wins(monkeypatch):
     monkeypatch.setattr(channel_manager, "channel_count", 2)
     manager._encode_and_yield = lambda _frame: MJPEG_CHUNK
     old_stream = manager.generate_mjpeg()
-    new_stream = manager.generate_mjpeg(viewer="arbitrary-window-id")
+    new_stream = manager.generate_mjpeg(viewer=invalid_viewer)
+    main = manager.generate_mjpeg(viewer="main")
+    station = manager.generate_mjpeg(viewer="station")
 
     try:
+        assert next(main) == MJPEG_CHUNK
+        assert next(station) == MJPEG_CHUNK
         assert next(old_stream) == MJPEG_CHUNK
         assert next(new_stream) == MJPEG_CHUNK
-        assert set(manager._mjpeg_active_conn_ids) == {"legacy"}
+        assert set(manager._mjpeg_active_conn_ids) == {"legacy", "main", "station"}
         with pytest.raises(StopIteration):
             next(old_stream)
+        _publish_frame(manager, 2)
+        assert next(main) == MJPEG_CHUNK
+        assert next(station) == MJPEG_CHUNK
+        assert next(new_stream) == MJPEG_CHUNK
     finally:
         old_stream.close()
         new_stream.close()
+        main.close()
+        station.close()
 
 
 def test_video_feed_forwards_viewer_to_channel_manager(monkeypatch):

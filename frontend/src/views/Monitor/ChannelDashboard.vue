@@ -123,7 +123,7 @@
       class="flex flex-shrink-0 gap-2 rounded-lg border border-slate-800 bg-slate-950 p-2"
       data-testid="single-channel-controls"
       :data-readonly="readonly ? 'true' : 'false'"
-      :title="readonly ? '一期只读监看，控制操作将在二期开放' : ''"
+      :title="readonly ? '只读监看：请在多屏工位显示设置中切换为可操作' : ''"
     >
       <button type="button" class="control-button bg-emerald-500 hover:bg-emerald-400" :disabled="readonly || !hasProject || channelData?.isDetecting" data-testid="single-channel-start" @click="$emit('start')">开始</button>
       <button type="button" class="control-button bg-red-500 hover:bg-red-400" :disabled="readonly || !channelData?.isRunning" data-testid="single-channel-stop" @click="$emit('stop')">停止</button>

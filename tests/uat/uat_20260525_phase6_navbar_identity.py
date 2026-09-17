@@ -1,21 +1,21 @@
-"""UAT — 阶段 6: Navbar / BottomBar 身份显示随鉴权状态切换.
+"""UAT — 阶段 6: Navbar 身份显示随鉴权状态切换，BottomBar 不重复身份信息.
 
-验证 3 个场景 × 2 个位置 (顶栏 / 底栏):
+验证 3 个鉴权场景中的顶栏身份状态，并确认底栏不再重复作业员与设备编号:
 
   A. 鉴权关闭 + inspectorName 已设
      - Navbar 显示 "作业员: <inspectorName>" (cyan-300)
      - 无角色徽章, 无登录/登出按钮
-     - BottomBar 同步显示 inspectorName
+     - BottomBar 不显示作业员与设备编号
 
   B. 鉴权启用 + 已登录 admin
      - Navbar 显示 admin 的 display_name + "管理员" 红徽章 (emerald-300)
      - 显示登出按钮, 无登录按钮
-     - BottomBar 显示 display_name + 角色徽章
+     - BottomBar 不显示 display_name、角色徽章与设备编号
 
   C. 鉴权启用 + 未登录 (登出后)
      - Navbar 显示 "操作员（未登录）" (amber-300)
      - 显示登录按钮, 无登出按钮, 无角色徽章
-     - BottomBar 显示 "操作员（未登录）"
+     - BottomBar 不显示 "操作员（未登录）" 与设备编号
 
 跑法: python -u tests/uat/uat_20260525_phase6_navbar_identity.py
 """
@@ -134,13 +134,21 @@ def has_logout_btn(page):
 
 
 def get_bottombar_text(page):
-    loc = page.locator('[data-testid="bottombar-identity-name"]')
+    loc = page.locator("footer")
     return loc.inner_text().strip() if loc.count() else ""
 
 
-def get_bottombar_role(page):
-    loc = page.locator('[data-testid="bottombar-role-badge"]')
-    return loc.inner_text().strip() if loc.count() else ""
+def bottombar_has_duplicate_identity(page):
+    text = get_bottombar_text(page)
+    duplicated_values = (
+        "作业员",
+        "设备编号",
+        INSPECTOR_NAME,
+        ADMIN_DISPLAY,
+        "操作员（未登录）",
+        "P6-TEST",
+    )
+    return any(value in text for value in duplicated_values), text
 
 
 # ============================================================
@@ -160,7 +168,7 @@ def scene_a(page):
     badge = get_role_badge_text(page)
     has_login = has_login_btn(page)
     has_logout = has_logout_btn(page)
-    bottom = get_bottombar_text(page)
+    bottom_has_duplicate, bottom = bottombar_has_duplicate_identity(page)
 
     step("A-Navbar 显示 inspectorName", name == INSPECTOR_NAME,
          f"got='{name}', expect='{INSPECTOR_NAME}'")
@@ -170,8 +178,8 @@ def scene_a(page):
          f"has_login={has_login}")
     step("A-Navbar 无登出按钮 (鉴权关)", not has_logout,
          f"has_logout={has_logout}")
-    step("A-BottomBar 显示 inspectorName", bottom == INSPECTOR_NAME,
-         f"got='{bottom}'")
+    step("A-BottomBar 不重复作业员与设备编号", not bottom_has_duplicate,
+         f"footer='{bottom}'")
 
 
 # ============================================================
@@ -217,8 +225,7 @@ def scene_b(page):
     badge = get_role_badge_text(page)
     has_login = has_login_btn(page)
     has_logout = has_logout_btn(page)
-    bottom = get_bottombar_text(page)
-    bottom_badge = get_bottombar_role(page)
+    bottom_has_duplicate, bottom = bottombar_has_duplicate_identity(page)
 
     # 注意: 已登录后, "作业员"位置内容应该是 admin 的 display_name (覆盖 inspectorName)
     step("B-Navbar 显示登录用户名 (覆盖 inspectorName)",
@@ -230,10 +237,8 @@ def scene_b(page):
          f"has_logout={has_logout}")
     step("B-Navbar 不显示登录按钮", not has_login,
          f"has_login={has_login}")
-    step("B-BottomBar 显示登录用户名", bottom == ADMIN_DISPLAY,
-         f"got='{bottom}'")
-    step("B-BottomBar 显示'管理员'徽章", bottom_badge == "管理员",
-         f"got='{bottom_badge}'")
+    step("B-BottomBar 不重复登录身份与设备编号", not bottom_has_duplicate,
+         f"footer='{bottom}'")
 
 
 # ============================================================
@@ -262,7 +267,7 @@ def scene_c(page):
     badge = get_role_badge_text(page)
     has_login = has_login_btn(page)
     has_logout = has_logout_btn(page)
-    bottom = get_bottombar_text(page)
+    bottom_has_duplicate, bottom = bottombar_has_duplicate_identity(page)
 
     step("C-Navbar 显示'操作员（未登录）'",
          name == "操作员（未登录）",
@@ -273,9 +278,9 @@ def scene_c(page):
          f"has_login={has_login}")
     step("C-Navbar 不显示登出按钮", not has_logout,
          f"has_logout={has_logout}")
-    step("C-BottomBar 显示'操作员（未登录）'",
-         bottom == "操作员（未登录）",
-         f"got='{bottom}'")
+    step("C-BottomBar 不重复未登录身份与设备编号",
+         not bottom_has_duplicate,
+         f"footer='{bottom}'")
 
 
 # ============================================================

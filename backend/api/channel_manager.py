@@ -689,27 +689,28 @@ class ChannelManager:
     # 多屏工位窗口配置
     # ------------------------------------------------------------------
     @staticmethod
+    def _normalize_multi_monitor_bounds(raw_bounds):
+        normalized_bounds = None
+        if isinstance(raw_bounds, dict):
+            try:
+                candidate = {
+                    "x": int(raw_bounds.get("x")),
+                    "y": int(raw_bounds.get("y")),
+                    "width": int(raw_bounds.get("width")),
+                    "height": int(raw_bounds.get("height")),
+                }
+                if candidate["width"] > 0 and candidate["height"] > 0:
+                    normalized_bounds = candidate
+            except (TypeError, ValueError, OverflowError):
+                normalized_bounds = None
+        return normalized_bounds
+
+    @staticmethod
     def _normalize_multi_monitor_mapping(raw_mapping) -> dict:
         """规范化工位主/副屏映射，丢弃越界工位和不可定位项。"""
         if not isinstance(raw_mapping, dict):
             return {}
-
-        def _normalize_bounds(raw_bounds):
-            normalized_bounds = None
-            if isinstance(raw_bounds, dict):
-                try:
-                    candidate = {
-                        "x": int(raw_bounds.get("x")),
-                        "y": int(raw_bounds.get("y")),
-                        "width": int(raw_bounds.get("width")),
-                        "height": int(raw_bounds.get("height")),
-                    }
-                    if candidate["width"] > 0 and candidate["height"] > 0:
-                        normalized_bounds = candidate
-                except (TypeError, ValueError):
-                    normalized_bounds = None
-            return normalized_bounds
-
+        _normalize_bounds = ChannelManager._normalize_multi_monitor_bounds
         normalized = {}
         for raw_channel_id, raw_item in raw_mapping.items():
             try:
@@ -767,9 +768,13 @@ class ChannelManager:
                 }
         except Exception as e:
             print(f"[ChannelManager] read multi_monitor config failed: {e}")
-        return {"enabled": False, "readonly": True, "mapping": {}}
+        return {
+            "enabled": False, "readonly": True, "mapping": {},
+        }
 
-    def set_multi_monitor_config(self, enabled: bool, readonly: bool, mapping: dict) -> dict:
+    def set_multi_monitor_config(
+        self, enabled: bool, readonly: bool, mapping: dict,
+    ) -> dict:
         """只替换顶层 multi_monitor 段并返回规范化后的已保存配置。
 
         写入失败抛出 RuntimeError，由 API 转成 500；不会覆盖 channels 或其他顶层段。
@@ -922,7 +927,7 @@ def save_channel_config(body: dict):
     "/multi-monitor",
     summary="读取多屏配置",
     response_model=MultiMonitorConfig,
-    response_model_exclude_none=True,
+    response_model_exclude_unset=True,
 )
 def get_multi_monitor_config():
     """[内部端点] 读取多屏工位开关、只读策略和显示器映射。
@@ -936,7 +941,7 @@ def get_multi_monitor_config():
     "/multi-monitor",
     summary="保存多屏配置",
     response_model=MultiMonitorConfig,
-    response_model_exclude_none=True,
+    response_model_exclude_unset=True,
     dependencies=[Depends(require_perm("settings.edit"))],
 )
 def set_multi_monitor_config(req: MultiMonitorConfig):
@@ -950,7 +955,9 @@ def set_multi_monitor_config(req: MultiMonitorConfig):
         for channel_id, item in req.mapping.items()
     }
     try:
-        return channel_manager.set_multi_monitor_config(req.enabled, req.readonly, mapping)
+        return channel_manager.set_multi_monitor_config(
+            req.enabled, req.readonly, mapping,
+        )
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 

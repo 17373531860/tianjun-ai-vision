@@ -25,15 +25,46 @@ from backend.api.source_custom_mix import compose_settle_event
 
 
 class SettlementMixin:
-    def _settle_custom_cycle(self):
-        """结算自定义模式的当前周期（在第一步重新出现且不匹配任何条件前缀时调用）"""
+    def _settle_custom_cycle(self, unmatched_event_id=None,
+                             terminal_static_label=None):
+        """结算自定义模式周期；支持超时中断与不入周期的静态终点。"""
         if not self.project_config:
             return
         
         pipeline_config = self.project_config.get('pipeline_config', {})
         steps_config = self.project_config.get('steps_config', [])
         custom_based_on = pipeline_config.get('custom_based_on')
-        
+
+        is_pure_custom = custom_based_on not in ('sequential', 'detection')
+
+        def _event_exists(event_id):
+            return any(
+                str(event.get('id')) == str(event_id)
+                for event in self.project_config.get('events_config', []) or []
+            )
+
+        def _condition_steps(cycle_steps):
+            """构造条件匹配视图，不改变 join_cycle=False 的实际周期账本。"""
+            steps = list(cycle_steps)
+            if terminal_static_label and (
+                    not steps or steps[-1] != terminal_static_label):
+                steps.append(terminal_static_label)
+            return steps
+
+        def _arm_post_settle_latch(condition_labels=None):
+            """阻止刚结算周期相关标签直接开启下一个纯 custom 周期。"""
+            latched = getattr(
+                self, '_pure_custom_settle_latched_labels', None)
+            if latched is None:
+                latched = {}
+                self._pure_custom_settle_latched_labels = latched
+            now = time.time()
+            labels = set(
+                getattr(self, '_current_detected_labels', set()) or set())
+            labels.update(condition_labels or [])
+            for label in labels:
+                latched[label] = now
+
         # 创建步骤ID到标签的映射，并获取启用的步骤ID集合
         # v3.19.x: 物品行 (detect_role='item') 归混合子状态机管, 永不算步骤
         id_to_label = {}
@@ -49,18 +80,48 @@ class SettlementMixin:
         # 获取启用的步骤标签
         enabled_step_labels = [s.get('label') for s in steps_config
                                if s.get('enabled', True) and s.get('detect_role') != 'item']
+
+        # 新增的 idle 中断事件先做无副作用校验，但完整条件的事件优先级更高。
+        # 用纯读取的 duration filter 预判完整条件；仅“有效条件未命中且中断事件
+        # 失效”才在 PT 补算/计数之前返回，避免同一超时周期逐帧重复累加。
+        if unmatched_event_id is not None and not _event_exists(unmatched_event_id):
+            preview_steps = _condition_steps(self._filter_cycle_by_duration(
+                list(self.current_cycle_steps)))
+            has_valid_full_match = False
+            for condition in pipeline_config.get('custom_conditions', []) or []:
+                condition_event_id = condition.get('event_id')
+                condition_labels = [
+                    id_to_label.get(step_id)
+                    for step_id in (condition.get('sequence', []) or [])
+                    if step_id in id_to_label and step_id in enabled_step_ids
+                ]
+                if (condition_labels
+                        and preview_steps == condition_labels
+                        and _event_exists(condition_event_id)):
+                    has_valid_full_match = True
+                    break
+            if not has_valid_full_match:
+                print(
+                    f"  -> idle interrupt event not found: {unmatched_event_id}，"
+                    "保留当前周期"
+                )
+                return
         
         self._supplement_step_durations()
         
         self.current_cycle_steps = self._filter_cycle_by_duration(self.current_cycle_steps)
         # v3.8.x: 结算前对同时出现组成员按优先顺序兜底重排
-        self._reorder_simultaneous_groups_in_cycle()
+        # 纯 custom 的唯一顺序真相是 custom_conditions；同帧分支已经按条件
+        # priority 互斥选定，不能再让 simultaneous priority 推翻合法条件序列。
+        if not is_pure_custom:
+            self._reorder_simultaneous_groups_in_cycle()
+        condition_steps = _condition_steps(self.current_cycle_steps)
         
         print(f"[Settle/Custom] current sequence={self.current_cycle_steps}")
         if debug_center.is_on("backend.settlement"):
             debug_center.dbg("backend.settlement", "自定义模式结算入口", f"channel={self.channel_id} steps={self.current_cycle_steps}")
         
-        if not self.current_cycle_steps:
+        if not condition_steps:
             self._discard_empty_cycle()
             self.current_cycle_steps = []
             self.backup_steps_seen_in_cycle = set()
@@ -69,6 +130,7 @@ class SettlementMixin:
             self.step_start_time.clear()
             self.step_consecutive_frames.clear()
             self.step_frame_confirmed.clear()
+            self._pure_custom_pending_static_label = None
             self.last_step_completed_time = None
             return
         
@@ -87,11 +149,16 @@ class SettlementMixin:
                 # 只包含启用的步骤
                 cond_labels = [id_to_label.get(sid) for sid in cond_sequence if sid in id_to_label and sid in enabled_step_ids]
                 
-                if self.current_cycle_steps == cond_labels:
+                if condition_steps == cond_labels:
                     print(f"  -> condition matched! trigger event {cond_event_id}")
                     if debug_center.is_on("backend.settlement"):
                         debug_center.dbg("backend.settlement", "自定义条件匹配结算", f"event_id={cond_event_id} seq={cond_labels}")
                     self._reconcile_step_records()
+                    if is_pure_custom:
+                        # 动态条件的 completed_step 在本帧已从稳定检测集移除；
+                        # 必须连同仍可见标签一起锁存，分别等 configured
+                        # disappear_delay 真离场后才能参与下一周期。
+                        _arm_post_settle_latch(cond_labels)
                     self._trigger_event(*compose_settle_event(
                         self, cond_event_id, f'自定义条件匹配: {cond_labels}'))
                     self.current_cycle_steps = []
@@ -103,6 +170,7 @@ class SettlementMixin:
                     self.step_frame_confirmed.clear()
                     if hasattr(self, '_step_raw_start'):
                         self._step_raw_start.clear()
+                    self._pure_custom_pending_static_label = None
                     self.last_step_completed_time = None
                     return
         
@@ -255,6 +323,17 @@ class SettlementMixin:
                 reason = '；'.join(ng_reasons)
                 print(f"  → {reason} → NG")
                 self._trigger_event(*compose_settle_event(self, 2, reason))
+
+        elif unmatched_event_id is not None:
+            # 仅显式带参的调用（当前为空闲超时）把不完整纯 custom 前缀
+            # 结算为中断事件；历史无参调用仍保持静默清池。
+            self._reconcile_step_records()
+            _arm_post_settle_latch()
+            self._trigger_event(*compose_settle_event(
+                self,
+                unmatched_event_id,
+                f'空闲超时中断: {list(self.current_cycle_steps)}',
+            ))
         
         # 重置周期
         self._cycle_regression = False
@@ -265,6 +344,10 @@ class SettlementMixin:
         self.step_start_time.clear()
         self.step_consecutive_frames.clear()
         self.step_frame_confirmed.clear()
+        if unmatched_event_id is not None and hasattr(self, '_step_raw_start'):
+            self._step_raw_start.clear()
+        if is_pure_custom:
+            self._pure_custom_pending_static_label = None
         self.last_step_completed_time = None
     
     def _settle_detection_cycle(self):
@@ -764,6 +847,18 @@ class SettlementMixin:
         """
         consumed = set()
         if not self._simultaneous_groups:
+            return consumed
+
+        # 纯 custom 的步骤准入必须统一经过条件前缀选择器；跨周期组会直接写入
+        # current_cycle_steps，若继续运行将绕过三路互斥门禁。基于 sequential
+        # 的 custom 仍保留原有跨周期语义。
+        project_config = self.project_config or {}
+        pipeline_config = project_config.get('pipeline_config', {}) or {}
+        is_pure_custom = (
+            project_config.get('logic_mode') == 'custom'
+            and pipeline_config.get('custom_based_on') not in ('sequential', 'detection')
+        )
+        if is_pure_custom:
             return consumed
 
         # 应用被屏蔽集合: 本帧若识别到屏蔽中的标签, 直接消费掉
@@ -1998,7 +2093,9 @@ class SettlementMixin:
 
     def _process_single_step(self, label, current_time, enabled_labels, is_seq_like,
                              should_update_screenshot, original_frame, det_info,
-                             just_confirmed_labels=None):
+                             just_confirmed_labels=None,
+                             pure_custom_admitted=True,
+                             pure_custom_is_new=None):
         """处理单个标签的步骤逻辑：新出现判定、周期结算触发、周期记录、截图更新。
         
         从 _update_step_stats 的 for 循环体中提取，供缓冲层输出和普通标签共用。
@@ -2008,9 +2105,20 @@ class SettlementMixin:
         if label not in enabled_labels:
             return
 
+        logic_mode = self.project_config.get('logic_mode') if self.project_config else 'detection'
+        pipeline_config = self.project_config.get('pipeline_config', {}) if self.project_config else {}
+        custom_based_on = pipeline_config.get('custom_based_on')
+        is_pure_custom = (
+            logic_mode == 'custom'
+            and custom_based_on not in ('sequential', 'detection')
+        )
+
         # v3.44 缺步挂起豁免: 挂起等补做时, 仍缺失的步骤是被明确期待的 —
         # 严格顺序/严格+单次守门放行它入周期 (断点补做语义, 顺序已由挂起兜底)
-        if self.step_strict_order.get(label) and not self._settle_hold_wants(label):
+        # 纯 custom 的唯一合法性来源是条件前缀；不能先走顺序违例实时 NG。
+        if (not is_pure_custom
+                and self.step_strict_order.get(label)
+                and not self._settle_hold_wants(label)):
             expected = self._get_expected_sequence_labels()
             if label in expected:
                 idx = expected.index(label)
@@ -2034,10 +2142,6 @@ class SettlementMixin:
                     self._fire_strict_order_violation(
                         label, f'违反严格顺序: [{label}] 过早出现, 前置步骤 [{pred}] 未完成')
                     return
-        
-        logic_mode = self.project_config.get('logic_mode') if self.project_config else 'detection'
-        pipeline_config = self.project_config.get('pipeline_config', {}) if self.project_config else {}
-        custom_based_on = pipeline_config.get('custom_based_on')
         
         # ── 截图：在任何 return 之前执行，确保 SOP 卡片始终有图 ──
         force_screenshot = just_confirmed_labels and label in just_confirmed_labels
@@ -2068,7 +2172,14 @@ class SettlementMixin:
         # - step_last_seen 已被 del (消失结算路径已清理) → 新出现
         # 检测模式下"步骤交替"(last_added_step != label) 这条独立的新出现信号保留,
         # 因为顺序无关时不同步骤交替本就该算一次"切换"而非"接续".
-        if old_last_seen is None:
+        if is_pure_custom and pure_custom_is_new is not None:
+            # 同帧候选选择前已按帧首状态冻结。否则优先分支 append 改写
+            # last_added_step 后，后处理的持续可见前序标签会被误判成“新出现”，
+            # 导致它的 last_seen 是否刷新取决于 set 迭代顺序。
+            is_new_appearance = bool(pure_custom_is_new)
+        elif is_pure_custom:
+            is_new_appearance = old_last_seen is None
+        elif old_last_seen is None:
             is_new_appearance = True
         elif (not is_seq_like
               and self.last_added_step is not None
@@ -2076,6 +2187,19 @@ class SettlementMixin:
             is_new_appearance = True
         else:
             is_new_appearance = False
+
+        # 纯 custom 只允许沿任一启用条件的前缀推进。同帧出现多个分支时，
+        # StepStatsMixin 已按条件 priority 选出唯一候选；直接调用本方法时仍由
+        # 前缀检查兜底。守门必须早于 closing guard、last_seen、外设门控及所有
+        # 入账/NG 路径，非法分支只能静默拒收。
+        if (is_new_appearance
+                and logic_mode == 'custom'
+                and custom_based_on not in ('sequential', 'detection')):
+            candidate = list(self.current_cycle_steps) + [label]
+            if not pure_custom_admitted or not self._is_condition_prefix(candidate):
+                self._dbg_step_rejected(
+                    label, f"纯custom条件分支拒绝: {candidate}")
+                return
 
         # ── v3.44 收尾防呆守门 (数量门拒收 + 缺步挂起吸收, 默认关零差异) ──
         # 位置有讲究: 在严格+单次守门之前 — 数量不足时报"箱内数量未满"比报"违序"
@@ -2296,7 +2420,14 @@ class SettlementMixin:
                 if logic_mode == 'custom' or logic_mode == 'sequential':
                     if len(self.current_cycle_steps) == 0:
                         self._cycle_regression = False
-                    if self._settle_hold_wants(label):
+                    if is_pure_custom:
+                        # 前缀/同帧互斥守门已在本方法前半段通过；纯 custom
+                        # 不应再借 custom_sequence_order 判重复，否则合法的
+                        # [A,A] / [A,B,A] 会被拦截或错误标记为回退。
+                        self.current_cycle_steps.append(label)
+                        self.last_added_step = label
+                        self._last_step_added_time = current_time
+                    elif self._settle_hold_wants(label):
                         # v3.44 缺步挂起补做: 缺失步骤入周期 (不标回退/不报实时NG,
                         # 顺序由挂起销结时按期望重排兜底)
                         self.current_cycle_steps.append(label)
@@ -2489,11 +2620,11 @@ class SettlementMixin:
             static_label: 触发的静态步骤标签
         """
         if not self.project_config:
-            return
+            return False
         
         logic_mode = self.project_config.get('logic_mode', 'detection')
         if logic_mode != 'custom':
-            return  # 只在自定义模式下生效
+            return False  # 只在自定义模式下生效
         
         pipeline_config = self.project_config.get('pipeline_config', {})
         custom_conditions = pipeline_config.get('custom_conditions', [])
@@ -2501,7 +2632,7 @@ class SettlementMixin:
         events_config = self.project_config.get('events_config', [])
         
         if not custom_conditions:
-            return
+            return False
         
         # 创建步骤ID到标签的映射
         id_to_label = {}
@@ -2518,7 +2649,7 @@ class SettlementMixin:
         
         static_step_id = label_to_id.get(static_label)
         if not static_step_id:
-            return
+            return False
         
         self.current_cycle_steps = self._filter_cycle_by_duration(self.current_cycle_steps)
         
@@ -2526,6 +2657,38 @@ class SettlementMixin:
         
         # 按优先级排序自定义条件
         sorted_conditions = sorted(custom_conditions, key=lambda c: c.get('priority', 999))
+
+        # 纯 custom 统一采用严格全等语义，并复用 _settle_custom_cycle 的
+        # compose/落账/清池链。此前这里用“前置步骤都出现过”会绕过顺序和同帧
+        # 分支互斥；custom+sequential/detection 保留原有 static 兼容路径。
+        custom_based_on = pipeline_config.get('custom_based_on')
+        if custom_based_on not in ('sequential', 'detection'):
+            condition_steps = list(self.current_cycle_steps)
+            terminal_not_joined = (
+                not condition_steps or condition_steps[-1] != static_label)
+            if terminal_not_joined:
+                condition_steps.append(static_label)
+            for cond in sorted_conditions:
+                cond_sequence = cond.get('sequence', [])
+                cond_event_id = cond.get('event_id')
+                if not cond_sequence or not cond_event_id:
+                    continue
+                cond_labels = [
+                    id_to_label.get(sid)
+                    for sid in cond_sequence
+                    if sid in id_to_label and sid in enabled_step_ids
+                ]
+                if (cond_labels
+                        and cond_labels[-1] == static_label
+                        and condition_steps == cond_labels):
+                    self._settle_custom_cycle(
+                        terminal_static_label=(
+                            static_label if terminal_not_joined else None
+                        )
+                    )
+                    return True
+            print("  -> no matching custom condition found")
+            return False
         
         for cond in sorted_conditions:
             cond_sequence = cond.get('sequence', [])
@@ -2546,16 +2709,17 @@ class SettlementMixin:
                 # 单步骤条件，直接触发
                 print(f"  -> matched single-step custom condition: [{static_label}], trigger event ID: {cond_event_id}")
                 self._trigger_event(cond_event_id, f'静态步骤自定义条件触发: {static_label}')
-                return  # 匹配后不再检查其他条件
+                return True  # 匹配后不再检查其他条件
             elif cond_labels and cond_labels[-1] == static_label:
                 # 组合条件，检查前面的步骤是否都在当前周期中
                 prefix_labels = cond_labels[:-1]
                 if all(pl in self.current_cycle_steps for pl in prefix_labels):
                     print(f"  -> matched combo custom condition: {cond_labels}, trigger event ID: {cond_event_id}")
                     self._trigger_event(cond_event_id, f'静态步骤自定义条件触发: {static_label}')
-                    return  # 匹配后不再检查其他条件
+                    return True  # 匹配后不再检查其他条件
         
         print("  -> no matching custom condition found")
+        return False
     
     # ================================================================
     # Counting Mode (物品清点模式) — stats / cycle logic

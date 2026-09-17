@@ -57,6 +57,68 @@ class StepStatsMixin:
         last_map[key] = now
         debug_center.dbg("backend.settlement", "步骤检出被拒",
                          f"channel={self.channel_id} 步骤[{label}] {reason} → 该步骤不计入周期")
+
+    def _select_pure_custom_frame_candidate(self, labels) -> str | None:
+        """同帧纯 custom 分支按条件优先级只选择一个可推进标签。
+
+        先在所有条件里寻找“追加后完整命中”的候选，再寻找普通合法前缀；
+        两轮均按 ``priority`` 升序及配置原始顺序稳定选择，不依赖 set / 检测框
+        顺序或同时组的 ``priority_order``。
+        """
+        cfg = self.project_config or {}
+        pipeline = cfg.get('pipeline_config', {}) or {}
+        if (cfg.get('logic_mode') != 'custom'
+                or pipeline.get('custom_based_on') in ('sequential', 'detection')):
+            return None
+
+        candidates = set(labels or [])
+        conditions = pipeline.get('custom_conditions', []) or []
+        if not candidates or not conditions:
+            return None
+
+        id_to_label = {}
+        enabled_ids = set()
+        for step in cfg.get('steps_config', []) or []:
+            sid = step.get('id')
+            label = step.get('label', '')
+            if sid and label:
+                id_to_label[sid] = label
+                if step.get('enabled', True) and step.get('detect_role') != 'item':
+                    enabled_ids.add(sid)
+
+        ranked = sorted(
+            enumerate(conditions),
+            key=lambda item: (item[1].get('priority', 999), item[0]),
+        )
+        current = list(self.current_cycle_steps)
+
+        def _next_label(condition, *, require_full):
+            # 与结算路径同口径：没有事件的条件不可执行，不能抢占一个合法分支。
+            if not condition.get('event_id'):
+                return None
+            sequence = condition.get('sequence', []) or []
+            condition_labels = [
+                id_to_label[sid]
+                for sid in sequence
+                if sid in id_to_label and sid in enabled_ids
+            ]
+            if not condition_labels or len(current) >= len(condition_labels):
+                return None
+            if current != condition_labels[:len(current)]:
+                return None
+            is_full = len(current) + 1 == len(condition_labels)
+            if is_full != require_full:
+                return None
+            next_label = condition_labels[len(current)]
+            return next_label if next_label in candidates else None
+
+        for require_full in (True, False):
+            for _, condition in ranked:
+                selected = _next_label(condition, require_full=require_full)
+                if selected is not None:
+                    return selected
+        return None
+
     def _update_step_stats(self, detections: list, original_frame: np.ndarray):
         """更新步骤统计和截图
         
@@ -170,6 +232,26 @@ class StepStatsMixin:
         if not hasattr(self, '_step_raw_start_frame_pos'):
             self._step_raw_start_frame_pos = {}
 
+        # 纯 custom 已结算工件仍在画面的标签不能直接成为下一周期首步，否则
+        # 常驻的 A 会反复打开周期（static 会立即重报，idle 会按超时间隔重报）。
+        # 每个标签按自身 disappear_delay 真正离场后再解除锁存。
+        _settle_latched = getattr(
+            self, '_pure_custom_settle_latched_labels', None)
+        if _settle_latched:
+            for label, last_seen in list(_settle_latched.items()):
+                if label in frame_detected_labels:
+                    _settle_latched[label] = current_time
+                    continue
+                disappear_delay = (
+                    self.step_time_config.get(label, {}).get('disappear_delay') or 0
+                )
+                if disappear_delay <= 0 or current_time - last_seen > disappear_delay:
+                    _settle_latched.pop(label, None)
+                    self._step_raw_start.pop(label, None)
+                    self._step_raw_last_seen.pop(label, None)
+                    self._step_raw_start_frame_pos.pop(label, None)
+            frame_detected_labels -= set(_settle_latched)
+
         for label in frame_detected_labels:
             prev_count = self.step_consecutive_frames.get(label, 0)
             if prev_count == 0:
@@ -236,7 +318,14 @@ class StepStatsMixin:
                 if label in self.step_static_triggered:
                     self.step_static_triggered[label] = False
         
-        # 检查静态步骤是否达到触发条件
+        # 检查静态步骤是否达到触发条件。纯 custom 必须先经过下方同帧分支
+        # 选择与前缀入账守门，故延后到 _process_single_step 之后处理。
+        _pipeline_for_static = (_pc.get('pipeline_config', {}) or {})
+        _defer_pure_custom_static = (
+            _pc.get('logic_mode') == 'custom'
+            and _pipeline_for_static.get('custom_based_on') not in (
+                'sequential', 'detection')
+        )
         for label in frame_detected_labels:
             if self.step_detection_type.get(label) == 'static':
                 static_config = self.step_static_config.get(label, {})
@@ -246,6 +335,8 @@ class StepStatsMixin:
                 # 检查是否达到静态触发帧数且未触发过
                 if (self.step_consecutive_frames.get(label, 0) >= trigger_frames 
                     and not self.step_static_triggered.get(label, False)):
+                    if _defer_pure_custom_static:
+                        continue
                     
                     self.step_static_triggered[label] = True
                     print(f"静态步骤 [{label}] 达到触发条件（{trigger_frames}帧）")
@@ -395,6 +486,10 @@ class StepStatsMixin:
         _pipeline_for_sort = self.project_config.get('pipeline_config', {}) if self.project_config else {}
         _is_seq_like = (_logic_mode_for_sort == 'sequential' or
                         (_logic_mode_for_sort == 'custom' and _pipeline_for_sort.get('custom_based_on') == 'sequential'))
+        _is_pure_custom = (
+            _logic_mode_for_sort == 'custom'
+            and _pipeline_for_sort.get('custom_based_on') not in ('sequential', 'detection')
+        )
 
         # v3.15 RFC 12: 步骤进行中计时广播 (通用基础设施, 节流 1Hz, 无插件时早退).
         # 主程序只广播 elapsed_sec + 步骤身份, 阈值/分档/实时报警策略全交给插件.
@@ -422,6 +517,57 @@ class StepStatsMixin:
                 if label in getattr(self, '_step_raw_start', {}):
                     del self._step_raw_start[label]
 
+        # 同帧可能同时看到互斥分支的多个标签。max_duration 重置可能刚刚把
+        # last_seen 清掉，所以必须在重置之后冻结“本帧是否新出现”。纯 custom
+        # 按顺序语义只把已完成消失清理（old_seen is None）的标签视为新出现；
+        # 持续可见的前序标签不因 last_added_step 改变而反复变成新步骤。
+        _pure_custom_new_candidates = []
+        _pure_custom_newness = {}
+        if _is_pure_custom:
+            _candidate_order = list(ready_ordered)
+            _candidate_order.extend(
+                label for label in detected_labels
+                if label not in pending_labels and label not in ready_ordered_set
+            )
+            for label in _candidate_order:
+                if label not in enabled_labels:
+                    continue
+                _min_cfg = self.step_time_config.get(label, {}).get('min_duration')
+                _raw_started = self._step_raw_start.get(label)
+                if (_min_cfg and _min_cfg > 0 and _raw_started
+                        and (current_time - _raw_started) < _min_cfg):
+                    continue
+                _is_new = self.step_last_seen.get(label) is None
+                _pure_custom_newness[label] = _is_new
+                if _is_new:
+                    _pure_custom_new_candidates.append(label)
+        _pure_custom_selected = None
+        _pending_static_label = getattr(
+            self, '_pure_custom_pending_static_label', None)
+        if _is_pure_custom and _pending_static_label:
+            _pending_last_seen = self.step_last_seen.get(_pending_static_label)
+            _pending_delay = (
+                self.step_time_config.get(_pending_static_label, {})
+                .get('disappear_delay') or 0
+            )
+            _pending_still_active = (
+                _pending_static_label in frame_detected_labels
+                or (
+                    _pending_last_seen is not None
+                    and current_time - _pending_last_seen <= _pending_delay
+                )
+            )
+            if _pending_still_active:
+                # join_cycle=False 的 static 终点不会写入 cycle_steps；在达到
+                # trigger_frames 前仍须持久锁住首帧选定分支，不能让下一帧的
+                # 低优先级标签改道。
+                _pure_custom_selected = _pending_static_label
+            else:
+                self._pure_custom_pending_static_label = None
+        if _pure_custom_selected is None:
+            _pure_custom_selected = self._select_pure_custom_frame_candidate(
+                _pure_custom_new_candidates)
+
         for label in ready_ordered:
             # min_duration gate: step must be continuously present for min_duration
             # before it can enter any cycle logic. Detection box still shows.
@@ -436,7 +582,15 @@ class StepStatsMixin:
                     continue
             self._process_single_step(label, current_time, enabled_labels, _is_seq_like,
                                       should_update_screenshot, original_frame,
-                                      det_by_label.get(label), just_confirmed_labels)
+                                      det_by_label.get(label), just_confirmed_labels,
+                                      pure_custom_admitted=(
+                                          not _is_pure_custom
+                                          or label == _pure_custom_selected
+                                      ),
+                                      pure_custom_is_new=(
+                                          _pure_custom_newness.get(label)
+                                          if _is_pure_custom else None
+                                      ))
         
         for label in detected_labels:
             if label in pending_labels:
@@ -454,7 +608,51 @@ class StepStatsMixin:
                     continue
             self._process_single_step(label, current_time, enabled_labels, _is_seq_like,
                                       should_update_screenshot, original_frame,
-                                      det_by_label.get(label), just_confirmed_labels)
+                                      det_by_label.get(label), just_confirmed_labels,
+                                      pure_custom_admitted=(
+                                          not _is_pure_custom
+                                          or label == _pure_custom_selected
+                                      ),
+                                      pure_custom_is_new=(
+                                          _pure_custom_newness.get(label)
+                                          if _is_pure_custom else None
+                                      ))
+
+        if (_is_pure_custom
+                and _pure_custom_selected
+                and self.step_detection_type.get(_pure_custom_selected) == 'static'):
+            _selected_static_cfg = self.step_static_config.get(
+                _pure_custom_selected, {})
+            if (not _selected_static_cfg.get('join_cycle', True)
+                    and self.step_last_seen.get(_pure_custom_selected) == current_time
+                    and not self.step_static_triggered.get(
+                        _pure_custom_selected, False)):
+                self._pure_custom_pending_static_label = _pure_custom_selected
+
+        # 纯 custom 的 static 标签只有被本帧唯一分支选择并实际通过所有守门
+        # （以 last_seen==current_time 为证）后才能触发。条件全等优先于步骤自身
+        # trigger_event；一旦结算立即结束本帧，避免其它分支或消失路径二次结算。
+        if _is_pure_custom:
+            for label in frame_detected_labels:
+                if self.step_detection_type.get(label) != 'static':
+                    continue
+                static_config = self.step_static_config.get(label, {})
+                trigger_frames = static_config.get('trigger_frames', 30)
+                if (self.step_consecutive_frames.get(label, 0) < trigger_frames
+                        or self.step_static_triggered.get(label, False)
+                        or self.step_last_seen.get(label) != current_time):
+                    continue
+                self.step_static_triggered[label] = True
+                print(f"静态步骤 [{label}] 达到触发条件（{trigger_frames}帧）")
+                if self._check_static_step_conditions(label):
+                    return
+                if getattr(
+                        self, '_pure_custom_pending_static_label', None) == label:
+                    self._pure_custom_pending_static_label = None
+                trigger_event = static_config.get('trigger_event')
+                if trigger_event and self._trigger_event(
+                        trigger_event, f'静态步骤触发: {label}'):
+                    return
 
         # v3.45 周期开始即时通知包装协调器 (箱标签扫码授权: 未扫就开做当场报警).
         # 每周期只发一次, 非包装通道零开销 — 见 settlement mixin 同名方法.
@@ -641,7 +839,10 @@ class StepStatsMixin:
                 _lm = self.project_config.get('logic_mode') if self.project_config else 'detection'
                 _pc = self.project_config.get('pipeline_config', {}) if self.project_config else {}
                 _cbo = _pc.get('custom_based_on')
-                if _lm == 'custom' and _cbo == 'sequential':
+                if _lm == 'custom' and _cbo not in ('sequential', 'detection'):
+                    _idle_event_id = getattr(self, 'idle_timeout_event_id', None) or 2
+                    self._settle_custom_cycle(unmatched_event_id=_idle_event_id)
+                elif _lm == 'custom' and _cbo == 'sequential':
                     self._settle_custom_cycle()
                 elif _lm == 'sequential':
                     self._settle_sequential_cycle()

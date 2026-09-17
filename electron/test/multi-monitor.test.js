@@ -7,6 +7,7 @@ const {
   buildKioskHash,
   buildMainWindowHash,
   buildStationAssignments,
+  stationStreamRedirect,
   displayTargetsOverlap,
   enumerateDisplaysForApply,
   filterStationAssignmentsByChannelCount,
@@ -407,4 +408,26 @@ test('只有主窗口 renderer sender 通过布局应用授权', () => {
   assert.equal(isMainRenderer(mainWebContents, mainWebContents), true);
   assert.equal(isMainRenderer(kioskWebContents, mainWebContents), false);
   assert.equal(isMainRenderer(null, mainWebContents), false);
+});
+
+
+test('已移除的窗口角色拒绝构造 hash，旧配置字段被忽略', () => {
+  assert.throws(() => buildKioskHash(0, 'visitor'), /未知工位窗口角色/);
+  const { config, warnings } = normalizeMultiMonitorConfig({
+    enabled: true, mapping: {}, visitor_display_id: 'wavlink-1',
+    visitor_bounds: { invalid: true },
+  });
+  assert.deepEqual(config, { enabled: true, readonly: true, mapping: {} });
+  assert.deepEqual(warnings, []);
+  assert.deepEqual(buildStationAssignments(config.mapping), []);
+});
+
+test('工位窗手拼流强制 station，保留真实 channel 且不循环重定向', () => {
+  const rewritten = stationStreamRedirect('http://localhost:8001/video_feed?channel=3&t=123');
+  assert.equal(rewritten, 'http://localhost:8001/video_feed?channel=3&t=123&viewer=station');
+  assert.equal(stationStreamRedirect(rewritten), null);
+  assert.equal(stationStreamRedirect('http://localhost:8001/video_feed?viewer=main&viewer=station'),
+    'http://localhost:8001/video_feed?viewer=station');
+  assert.equal(stationStreamRedirect('http://localhost:8001/snapshot?channel=3'), null);
+  assert.equal(stationStreamRedirect('not a URL'), null);
 });

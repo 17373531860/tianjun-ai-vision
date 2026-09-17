@@ -139,7 +139,7 @@ function stationWindowKey(channelId, role) {
   return `${channelId}:${role}`;
 }
 
-function buildStationAssignments(mapping) {
+function buildStationAssignments(mapping, readonly = false) {
   const assignments = [];
   const normalizedMapping = isRecord(mapping) ? mapping : {};
   for (const [channelKey, item] of Object.entries(normalizedMapping)) {
@@ -156,7 +156,7 @@ function buildStationAssignments(mapping) {
         role: 'main',
         // 主屏内容角色: projection=投影光引导画布 (feat/light-sensor), 其余归一 monitor
         contentRole: item.role === 'projection' ? 'projection' : 'monitor',
-        readonly: false,
+        readonly: item.role === 'projection' ? false : readonly,
         assignment: {
           display_id: displayId,
           ...(bounds ? { bounds } : {}),
@@ -298,9 +298,25 @@ function enumerateDisplaysForApply(getDisplays) {
   }
 }
 
+function stationStreamRedirect(rawUrl) {
+  return monitorStreamRedirect(rawUrl, 'station');
+}
+
+function monitorStreamRedirect(rawUrl, viewer) {
+  try {
+    const url = new URL(rawUrl);
+    const viewers = url.searchParams.getAll('viewer');
+    if (url.pathname !== '/video_feed' || (viewers.length === 1 && viewers[0] === viewer)) return null;
+    url.searchParams.set('viewer', viewer);
+    return url.href;
+  } catch (_) {
+    return null;
+  }
+}
+
 // role: 窗口角色 main=工位主屏窗 / aux=手部裁切副屏窗；
 // contentRole: 主屏内容角色 monitor=监控页(默认) / projection=投影光引导画布。
-function buildKioskHash(channelId, role, auxViewMode = 'follow', contentRole = 'monitor') {
+function buildKioskHash(channelId, role, auxViewMode = 'follow', contentRole = 'monitor', readonly = false) {
   if (role !== 'main' && role !== 'aux') {
     throw new Error(`未知工位窗口角色: ${role}`);
   }
@@ -308,7 +324,7 @@ function buildKioskHash(channelId, role, auxViewMode = 'follow', contentRole = '
     // 投影引导画布: 本身就是全屏输出介质, 无 readonly 语义 (交互只有标定快捷键)
     return `/projection?channel=${encodeURIComponent(channelId)}&kiosk=1&multi_monitor=1`;
   }
-  const base = `/monitor?channel=${encodeURIComponent(channelId)}&kiosk=1&readonly=${role === 'aux' ? '1' : '0'}&multi_monitor=1`;
+  const base = `/monitor?channel=${encodeURIComponent(channelId)}&kiosk=1&readonly=${role === 'aux' || readonly ? '1' : '0'}&multi_monitor=1`;
   return role === 'aux'
     ? `${base}&video_only=1&hands_crop=1&aux_view_mode=${normalizeAuxViewMode(auxViewMode)}`
     : base;
@@ -351,5 +367,6 @@ module.exports = {
   partitionResolvedStationAssignments,
   resolveDisplayTarget,
   stationWindowKey,
+  stationStreamRedirect,
   toDisplayDto,
 };

@@ -1463,6 +1463,8 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         self._last_step_added_time = None
         self.last_step_completed_time = None
         self._cycle_regression = False
+        self._pure_custom_settle_latched_labels = {}
+        self._pure_custom_pending_static_label = None
         # v3.44 收尾防呆缺步挂起态: 周期没了挂起就没了 (停止/切项目/强制结算)
         self._settle_hold = None
         # v3.44.4 结算NG确认后强制清运行时的单次标记: 运行时既已清, 标记一并消费,
@@ -1854,6 +1856,8 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         # Settlement / cycle-regression tracking
         self._last_step_added_time = None
         self._cycle_regression = False
+        self._pure_custom_settle_latched_labels = {}
+        self._pure_custom_pending_static_label = None
         # v3.48 计数组合判定表: 清最近判型 tag (配置 _combo_table 保留, 属项目配置)
         self._combo_last_tag = None
         self._step_raw_start = {}
@@ -1996,6 +2000,7 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
     @staticmethod
     def _normalize_mjpeg_viewer(viewer):
         """把外部订阅身份限制在固定槽位，避免任意值造成连接表无界增长。"""
+        # 预留 viewer 名 'lan'：后续局域网一体机工位页使用，本期不加入白名单。
         return viewer if viewer in {'main', 'station'} else 'legacy'
 
     @staticmethod
