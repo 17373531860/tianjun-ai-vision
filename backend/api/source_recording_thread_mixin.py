@@ -129,16 +129,23 @@ class RecordingThreadMixin:
                 
                 # 从队列取帧（带超时，避免阻塞）
                 try:
-                    frame = self._recording_queue.get(timeout=0.1)
+                    item = self._recording_queue.get(timeout=0.1)
                 except:
                     # 队列空，继续等待
                     continue
-                
+
+                # 2026-09 检测框 sidecar: 队列载荷为 (frame, dets) 元组,
+                # dets 是入队瞬间的检测框快照 (未开启时恒为 None)
+                if isinstance(item, tuple):
+                    frame, dets = item
+                else:
+                    frame, dets = item, None
+
                 if frame is None:
                     continue
-                
+
                 # 实际写入 VideoWriter
-                self._write_frame_to_writers(frame)
+                self._write_frame_to_writers(frame, dets)
                 frame_count += 1
                 
                 # 每30秒打印一次详细状态
@@ -181,15 +188,28 @@ class RecordingThreadMixin:
             self._recording_drop_count += 1
             return
 
+        # 2026-09 检测框 sidecar: 开启时同拍快照检测框, 帧和框成对进队列
+        # (在录制线程写帧成功那一刻按帧号落账, 天然免疫丢帧漂移)。
+        # 未开启时 dets 恒为 None, 只多一个元组打包, 零实质开销。
+        dets = None
+        if getattr(self, '_boxes_sidecar_active', False):
+            try:
+                with self.detection_lock:
+                    src = self.current_detections
+                    dets = [dict(d) for d in src] if src else []
+            except Exception:
+                dets = None
+
+        payload = (small_frame, dets)
         try:
-            self._recording_queue.put_nowait(small_frame)
+            self._recording_queue.put_nowait(payload)
         except queue.Full:
             try:
                 self._recording_queue.get_nowait()
             except Exception:
                 pass
             try:
-                self._recording_queue.put_nowait(small_frame)
+                self._recording_queue.put_nowait(payload)
             except Exception:
                 pass
             self._recording_drop_count += 1
@@ -199,11 +219,14 @@ class RecordingThreadMixin:
                 self._recording_queue_warned = True
             self._recording_drop_count += 1
     
-    def _write_frame_to_writers(self, frame):
+    def _write_frame_to_writers(self, frame, dets=None):
         """
         实际写入帧到所有 VideoWriter（在录制线程中调用）
         帧已在入队时缩小到录制分辨率，FFmpegRecorder.write() 内部会
         自行 resize 到各自目标尺寸，这里不再做冗余缩放。
+
+        dets: 该帧入队瞬间的检测框快照 (2026-09 检测框 sidecar);
+        cycle writer 写帧成功后按 _frame_count 帧号喂给收集器。
         """
         if frame is None:
             return
@@ -252,6 +275,14 @@ class RecordingThreadMixin:
                         ok = cycle_w.write(frame)
                         if not ok:
                             raise RuntimeError(getattr(cycle_w, "last_error", "write_failed"))
+                        # 2026-09 检测框 sidecar: 写帧成功才落账,
+                        # 帧号 = 刚写入的 0-based 帧序 (_frame_count 已 +1)
+                        _collector = getattr(cycle_w, '_boxes_collector', None)
+                        if _collector is not None and dets is not None:
+                            try:
+                                _collector.observe(cycle_w._frame_count - 1, dets)
+                            except Exception:
+                                pass  # 记框失败不影响录像
                 except Exception as e:
                     print(f"[RecThread/Warn] write cycle video failed: {e}")
                     self._append_recording_failure("cycle", "write_failed", writer=cycle_w, error=str(e))

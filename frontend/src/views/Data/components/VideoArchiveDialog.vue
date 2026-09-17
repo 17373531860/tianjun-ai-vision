@@ -95,6 +95,7 @@
                 </div>
                 <div class="text-gray-500 truncate" :title="row.filename_template">{{ row.filename_template }}</div>
                 <div class="text-[10px] text-gray-500 mt-0.5">
+                  <span v-if="row.annotated_video" class="mr-1">🎯带框版</span>
                   <span v-if="row.attach_keyframe" class="mr-1">📷关键帧</span>
                   <span v-if="row.sidecar_template_id" class="mr-1">📄报告</span>
                   <span v-if="row.bundle_zip" class="mr-1">📦证据包</span>
@@ -347,6 +348,12 @@
               <span class="text-xs text-gray-500 ml-2">录像+关键帧+报告一个 zip</span>
             </el-form-item>
           </el-col>
+          <el-col :span="8">
+            <el-form-item label="投递带框版录像">
+              <el-switch v-model="editing.annotated_video" data-testid="rule-annotated-switch" />
+              <span class="text-xs text-gray-500 ml-2">按检测框数据烧框后交付（需在记录设置开启「记录检测框数据」；无框数据/渲染失败时投递原片）</span>
+            </el-form-item>
+          </el-col>
         </el-row>
         <el-row :gutter="12">
           <el-col :span="8">
@@ -492,6 +499,7 @@ function defaultRule() {
     bundle_zip: false,
     transform: 'none',
     clip_seconds: 10,
+    annotated_video: false,
     // 四期: 远端与治理
     dest_type: 'local_dir',
     dest_config: {},
@@ -670,6 +678,7 @@ async function onSave() {
       bundle_zip: editing.bundle_zip,
       transform: editing.transform,
       clip_seconds: editing.clip_seconds || 10,
+      annotated_video: editing.annotated_video,
       // 四期: 远端与治理
       dest_type: editing.dest_type,
       dest_config: destConfig,

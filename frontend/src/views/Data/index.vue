@@ -309,7 +309,7 @@
               <el-table-column prop="event_name" label="事件" min-width="80" />
               <el-table-column label="操作" width="70" align="center">
                 <template #default="{ row }">
-                  <el-button v-if="row.video_id" type="primary" link size="small" @click="playCycleVideo(row)">
+                  <el-button v-if="row.video_id" type="primary" link size="small" data-testid="cycle-play-btn" @click="playCycleVideo(row)">
                     <el-icon><VideoPlay /></el-icon>
                   </el-button>
                 </template>
@@ -893,7 +893,8 @@ const playStepVideo = (step) => {
 const playCycleVideo = (cycle) => {
   dbg('data.query', '回放周期视频', `cycle_id=${cycle?.id ?? ''} video_id=${cycle?.video_id ?? '无'}`);
   if (cycle.video_id) {
-    videoPlayerRef.value?.open(getVideoUrl(cycle.video_id));
+    // 2026-09: 传 video_uuid, 播放器据此拉检测框 sidecar (无数据静默降级)
+    videoPlayerRef.value?.open(getVideoUrl(cycle.video_id), cycle.video_id);
   } else {
     ElMessage.info('该周期无录制视频（请在记录设置中开启"录制周期视频"后重新检测）');
   }

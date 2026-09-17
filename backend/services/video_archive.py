@@ -624,10 +624,27 @@ def _prepare_artifacts(db, cycle, filepath: str, rule, ctx,
     artifacts: List[Dict[str, str]] = []
     # 1) 录像主件 (整段或事件切片; 切片失败回退整段 — 证据宁全勿缺)
     video_src = filepath
+    # 1a) 带框版渲染 (2026-09): 按检测框 sidecar 烧框后交付;
+    #     无 sidecar / 渲染失败一律降级投递干净原片, 绝不因画框丢证据
+    if getattr(rule, "annotated_video", False):
+        from backend.services.detection_boxes_sidecar import sidecar_path_for
+        sp = sidecar_path_for(filepath)
+        if os.path.isfile(sp):
+            try:
+                from backend.services.annotated_video import render_annotated
+                boxed = os.path.join(tmpdir, basename + "_boxed.mp4")
+                render_annotated(filepath, sp, boxed)
+                video_src = boxed
+            except Exception as e:
+                print(f"[VideoArchive] 带框渲染失败, 降级投递原片: {e}")
+        else:
+            print(f"[VideoArchive] 该录像无检测框数据(未开「记录检测框数据」?), "
+                  f"投递原片: {os.path.basename(filepath)}")
+    # 1b) 事件切片 (作用在带框版之上, 若有)
     if (rule.transform or "none") == "clip_tail":
         try:
             clipped = os.path.join(tmpdir, basename + "_clip.mp4")
-            clip_tail(filepath, clipped, int(rule.clip_seconds or 10))
+            clip_tail(video_src, clipped, int(rule.clip_seconds or 10))
             video_src = clipped
         except Exception as e:
             print(f"[VideoArchive] 事件切片失败, 回退整段归档: {e}")

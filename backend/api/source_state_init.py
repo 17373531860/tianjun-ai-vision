@@ -457,6 +457,9 @@ def _init_recording_state(h):
     h._recording_drop_count = 0
     h.recording_failures = []
     h._recording_failure_lock = threading.Lock()
+    # 2026-09 检测框 sidecar: cycle 录像开启「记录检测框数据」时为 True,
+    # 采集线程据此在入队录制帧时同拍快照 current_detections (单写多读 bool)
+    h._boxes_sidecar_active = False
 
 
 # ============================================================

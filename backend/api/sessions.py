@@ -171,6 +171,7 @@ class ExportSettingResponse(BaseModel):
     record_step_video: bool = False
     record_cycle_video: bool = False
     record_session_video: bool = False
+    record_boxes_data: bool = False  # 2026-09 检测框 sidecar
     video_quality: str = "medium"
     video_fps: int = 30
     # 导出选项
@@ -196,6 +197,7 @@ class ExportSettingUpdate(BaseModel):
     record_step_video: Optional[bool] = None
     record_cycle_video: Optional[bool] = None
     record_session_video: Optional[bool] = None
+    record_boxes_data: Optional[bool] = None  # 2026-09 检测框 sidecar
     video_quality: Optional[str] = None
     video_fps: Optional[int] = None
     # 导出选项
@@ -1037,6 +1039,48 @@ def get_video(video_id: str, db: Session = Depends(get_db)):
     )
 
 
+@router.get("/videos/{video_id}/boxes")
+def get_video_boxes(video_id: str, db: Session = Depends(get_db)):
+    """获取录像的检测框 sidecar 数据 (2026-09)。
+
+    回放叠加显示用: 帧号对齐的 run-length 检测框记录 (归一化坐标)。
+    未开启「记录检测框数据」录的录像返回 404。
+    """
+    from backend.services.detection_boxes_sidecar import (
+        load_sidecar, sidecar_path_for)
+    video = db.query(VideoClip).filter(VideoClip.video_uuid == video_id).first()
+    if not video:
+        raise HTTPException(status_code=404, detail="视频不存在")
+    data = load_sidecar(sidecar_path_for(video.file_path))
+    if not data:
+        raise HTTPException(status_code=404, detail="该录像没有检测框数据")
+    return data
+
+
+@router.get("/videos/{video_id}/annotated")
+def download_annotated_video(video_id: str, db: Session = Depends(get_db)):
+    """下载带框版录像 (2026-09): 原片+检测框 sidecar 现场渲染烧框 MP4。
+
+    渲染结果落转码缓存目录复用 (同一录像第二次下载秒回);
+    周期录像 640x360 渲染远快于实时, 同步等待与既有转码端点一致。
+    """
+    from backend.services.annotated_video import get_or_render_annotated_cached
+    video = db.query(VideoClip).filter(VideoClip.video_uuid == video_id).first()
+    if not video:
+        raise HTTPException(status_code=404, detail="视频不存在")
+    if not os.path.exists(video.file_path):
+        raise HTTPException(status_code=404, detail="视频文件不存在")
+    try:
+        out_path = get_or_render_annotated_cached(video.file_path)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"带框渲染失败: {e}")
+    base = os.path.splitext(video.file_name or f"video_{video_id}.mp4")[0]
+    return FileResponse(out_path, media_type="video/mp4",
+                        filename=f"{base}_带框.mp4")
+
+
 @router.get("/videos")
 def list_videos(
     clip_type: Optional[str] = None,
@@ -1085,6 +1129,7 @@ def _build_export_response(setting) -> ExportSettingResponse:
         record_step_video=setting.record_step_video,
         record_cycle_video=setting.record_cycle_video,
         record_session_video=setting.record_session_video,
+        record_boxes_data=bool(getattr(setting, 'record_boxes_data', False)),
         video_quality=setting.video_quality,
         video_fps=setting.video_fps,
         # 导出选项
