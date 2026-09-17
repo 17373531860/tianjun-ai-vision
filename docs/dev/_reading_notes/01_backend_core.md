@@ -2,6 +2,17 @@
 
 > 阅读范围：2026-07-05 分段通读 `backend/main.py`、`backend/core/config.py`、`backend/api/source*.py` 全族（含 23 个 mixin + 14 个 has-a 组件）、`router_manifest.py`、`channel_manager.py`、`alarm.py`、`debug.py`、`system_display.py`、`services/weighing_engine.py`。**共 47 个文件**。
 >
+> **v3.59 补账（2026-09-17，容器定界周期 custom_cycle_owner='container'）**：
+> - `source_custom_mix.py`（+133 行）：新增 `ContainerCycleGate` 类——容器定界周期门 FSM：`feed(host, detections, current_time)` 每帧喂（在场候选满 `appear_seconds` 确认到位→若周期未开则 `start_cycle`（静默未开成不刷日志下一帧重试）；离场候选满 `gone_seconds` 确认→调 `host._settle_container_cycle()` 强制结算）；`cycle_open(host)`（以 `current_cycle_uuid` 为周期开合真相）；`to_state(host)`（前端透出最小状态）；`reset()`（在场/候选清零）。`build_container_gate(config)` 从项目配置构建：非 custom / owner!='container' / 缺 `container_gate_label` → None 零差异。
+> - `source_settlement_mixin.py`（+90 行）：①新增 `_settle_container_cycle`——容器离场结算入口，按 `custom_based_on` 分支：sequential→原 `_settle_custom_cycle`；纯 custom→原结算器带 `idle_timeout_event_id` 回退；detection→**无序完备判定**（required=custom_detection_steps 或启用步骤，缺步 NG 带原因、**重复动作宽容不判 NG**），判定前走 `_supplement_step_durations`/`_inject_backup_steps`/`_filter_cycle_by_duration`/`_reconcile_step_records` 同标准链，结算后清周期态；②first_step 重现结算按 `_custom_cycle_owner != 'container'` 守门让位；③首个动作入账时若容器周期已开（uuid 在）不二次 `start_cycle` 不覆盖周期起点。
+> - `source_step_stats_mixin.py`（+23 行）：帧入口 gate.feed 后容器标签从 detected/frame_detected/just_confirmed 三集合 discard（不当普通步骤记账）；周期未开（容器缺席）三集合整帧 clear（动作不入账不误开周期，tracking_scan_gate 先例）；空闲超时对容器主权周期让位。画框/MJPEG 不经这几个集合，显示不受影响。
+> - `source_events_check_mixin.py`：custom 自定义结算块整体按 `_custom_cycle_owner != 'container'` 守门让位（尾部步骤特定事件 trigger_event 照常）。
+> - `source_project_config_apply.py`：构建 `h._container_cycle_gate = build_container_gate(config)`（异常隔离置 None）+ `h._custom_cycle_owner`（gate 存在才 'container'）。
+> - `source_state_init.py`：`_custom_cycle_owner='steps'` / `_container_cycle_gate=None` 缺省初始化。
+> - `source.py`：①`_get_enabled_labels` 放行 `container_gate_label`（容器行建议 enabled=False，不放行则 runner 出口丢弃周期永远开不了）；②`_clear_step_runtime_state` 联动 `gate.reset()`（停止/切项目不留在场残影）。
+> - `source_routes.py`：`get_detection_results` 透出 `result['container_gate'] = gate.to_state(mgr)`（未配置不透出零差异）。
+> - 回归 `tests/test_container_cycle_gate.py`（22 例）；e2e `tests/e2e_browser/test_container_cycle_owner.py`（3 例）。
+>
 > **v3.58 补账（2026-09-17，dev-qing 合并：纯 custom 互斥/多屏工位跟皮 + 检测框 sidecar 录制侧）**：
 > - `source_settlement_mixin.py`（+204 行）：**纯 custom 条件互斥**——`_settle_custom_cycle` 家族对 based_on 非 sequential/detection 的纯 custom：①同帧多条件分支竞争只推进一条（完整条件优先、条件顺序次之，无 event_id 的条件不参与同帧竞争）；②结算后进锁存 `_pure_custom_settle_latched_labels`，标签**真实离场**（连续消失帧确认）才解锁允许再开新周期（治结算余像立刻误开下一周期）；③非前缀标签不能开空周期；④空闲超时中断走 `idle_timeout_event_id` 配置事件（未配/失配回退事件 2，事件不可用保持周期不误杀），完整条件命中仍走原条件结算事件。回归 `tests/test_custom_exclusive_timeout.py`（26 用例）。
 > - `source_step_stats_mixin.py`（+209 行）：纯 custom 分支推进侧配套——同帧分支选择、静态标签 pending（`_pure_custom_pending_static_label`：静态终态标签可命中条件而不入周期，锁存至触发帧）、跨周期同现组不能绕过分支前缀守门。

@@ -810,3 +810,21 @@ pipeline_config 内, 不拍平到顶层**, 因此不动 ORM / Pydantic schema / 
 - **判定语义**：多块之间"任一块命中"。
 - 绘制统一走 `RoiEditorDialog.vue`（完成本块/撤销点/删除上一块）；`_apply_steps_config` 后 `step_roi_polygons[label]` 的值是**多边形列表**（单块也包一层）。
 - 回归：`tests/test_multi_polygon_roi.py`。
+
+## v3.59 pipeline_config 新增容器定界周期四键（2026-09-17）
+
+仅 logic_mode='custom' 消费；默认零差异：
+
+```jsonc
+{
+  "custom_cycle_owner": "steps|container",   // 默认 'steps'=步骤驱动（原行为）
+  "container_gate_label": "包装盒",           // owner='container' 必填，模型标签
+  "container_gate_appear_seconds": 1.0,      // 到位确认秒（防闪现误开周期）
+  "container_gate_gone_seconds": 3.0         // 离场确认秒（桥接俯身遮挡丢检）
+}
+```
+
+- 后端消费：`source_project_config_apply.apply_project_config` → `source_custom_mix.build_container_gate`（非 custom / owner!='container' / 缺标签 → None 零差异）。
+- 前端：LogicConfigTab「周期定界」选择器 + 参数卡；index.vue 水合（~L1228）/同步 pipeline_config（~L1802）/保存 payload（~L2015）三处都要对齐——改键名时三处+后端一起改。
+- 容器标签行建议 steps_config 里 enabled=False（不参与完备判定）；runner 过滤已在 `_get_enabled_labels` 放行该标签，别删那段否则周期永远开不了。
+- 状态机细节与排查见 `debug-source` skill「v3.59 容器定界周期」节。

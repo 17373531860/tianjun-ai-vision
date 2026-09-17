@@ -13,6 +13,11 @@
 > 多屏工位显示卡自 `Settings/DisplaySettingsTab.vue` 抽为 `views/Source/MultiMonitorPanel.vue`；
 > 容器装箱清点块自 `Project/LogicConfigTab.vue` 抽为 `Project/CustomMixBoxTab.vue`（「装箱清点」条件 tab）。
 
+> **v3.59 补账（2026-09-17，容器定界周期配置面）**：
+> - `views/Project/LogicConfigTab.vue`（+40 行）：自定义模式新增「周期定界」`el-select`（steps=步骤驱动默认 / container=容器定界）+ owner='container' 时露出参数卡——容器标签（filterable+allow-create 下拉，选项来自 nonBackupSteps；e2e 交互用"输入+回车"不点选项）、到位确认秒（0~30 步 0.5）、离场确认秒（0.5~60 步 0.5）；提示文案说明容器标签行建议步骤设置里关闭启用。
+> - `views/Project/index.vue`（+25 行）：`custom_cycle_owner`/`container_gate_label`/`container_gate_appear_seconds`/`container_gate_gone_seconds` 四字段三处对齐——水合（~L1228，从 pipeline_config 读默认 steps/''/1.0/3.0）、同步回 pipeline_config（~L1802，owner!='container' 时 label 清空）、保存 payload（~L2015）。改键名时三处+后端 apply 一起动。
+> - e2e：`tests/e2e_browser/test_container_cycle_owner.py`（预填/翻转保存落库/默认零差异 3 例）。
+>
 > **v3.58 补账（2026-09-17，工位检测屏跟皮拆参观屏 + sidecar 回放叠加 + custom 超时配置面）**：
 > - `electron/main.js` / `multi-monitor.js`：**参观屏开窗与 viewer 槽删除**（旧 visitor 配置字段忽略）；工位检测窗（station_view/kiosk）生命周期收口——License 守门（未授权不开窗/守门重应用清已存在窗）、before-quit/finishShutdown/backend-stopped 三出口清理、renderer 60s 窗口 3 次崩溃熔断、webRequest 工位流隔离（工位窗手拼流强制 station 保留真实 channel 不循环重定向）。**新 `electron/test/main-station-lifecycle.test.js`**（352 行 vm 沙箱真跑 main.js 只模拟进程边界，37 用例）。
 > - `views/Monitor/index.vue`：工位检测屏跟随总控——`layoutBodyDisplayRole`（main/station）+ `stationDisplayMode`（kiosk/station_view 且非 hands_crop）；layout.body 自定义布局同步应用到工位窗；`selectedChannel` 改 computed 锁定（工位屏 get 恒 requestedWindowChannel，插件 emit/异步初始化/运行态重置切不走）；只读统一 `singleChannelReadonly=(kiosk||station_view)&&kioskReadonly`。**新 `views/Monitor/readonlyActions.js`**：`protectMonitorActions(actions, isReadonly)` 把布局区块动作表包一层只读守门（vitest `__tests__/readonlyActions.test.js` 12 用例）。`layout/index.vue`/`Navbar.vue`/`BottomBar.vue`/`router/index.js`/`composables/useDisplayWindow.js`：工位窗沿用主屏导航、显示角色传递、参观屏路由清除。

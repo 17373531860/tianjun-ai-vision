@@ -1147,3 +1147,18 @@ if (self.project_config or {}).get('logic_mode') == 'per_item':
 - `step_roi_polygons[label]` 值语义 v3.57 起是**多边形列表**（单块也包一层）——直接下标取点的旧代码会拿到整块多边形而不是点，遍历层级错一层是典型症状。
 - 推理 ROI mask：`ensure_roi_mask` 多块一次 fillPoly 取并集；`_roi_polygon_pixels` 是 ndarray **列表**。
 - 回归：`pytest tests/test_multi_polygon_roi.py`。
+
+## v3.59 容器定界周期（custom_cycle_owner='container'，2026-09-17）
+
+自定义模式周期主权可归容器：`pipeline_config.custom_cycle_owner='container'` + `container_gate_label`（默认 'steps' 零差异）。东莞包装场景（盒体常驻画面、盒内动作无序完备）。
+
+- **架构**：`source_custom_mix.ContainerCycleGate`（`build_container_gate` 在 apply_project_config 构建，挂 `h._container_cycle_gate`，`h._custom_cycle_owner` 随之置 'container'）。容器标签稳定在场满 `container_gate_appear_seconds`（默认 1s）确认开周期；离场满 `container_gate_gone_seconds`（默认 3s，桥接工人俯身遮挡）确认后调 `_settle_container_cycle` 强制结算。
+- **容器标签独占消费**：step_stats 帧入口 gate.feed 后从 detected/frame_detected/just_confirmed 三集合 discard 容器标签——不当普通步骤刷出现/消失；周期未开（容器缺席）时三集合整帧 clear，动作不入账不误开周期。画框/MJPEG 不走这几个集合，显示不受影响。
+- **结算分支**（`_settle_container_cycle`，settlement_mixin）：custom_based_on='sequential' → 原 `_settle_custom_cycle`；纯 custom → 原结算器带 idle_timeout_event_id 回退；'detection' → 无序完备判定（required 全到场=OK / 缺步=NG；**重复动作宽容不判 NG**——与检测模式重复步骤 NG 语义刻意不同）。
+- **步骤侧让位守门**（都按 `_custom_cycle_owner != 'container'` 守）：events_check 自定义结算块整体让位（尾部步骤特定事件照常）、first_step 重现结算、空闲超时、首个动作入账不二次 start_cycle / 不覆盖容器周期起点。
+- **排查要点**：
+  - 周期永远开不了 → 查容器标签是否被 runner 过滤丢弃：容器行建议 enabled=False，`source.py _get_enabled_labels` 已显式放行 `container_gate_label`，若日志无 `[ContainerGate] 容器[X]在位 → 开周期` 先确认模型输出里有该标签、置信度过阈。
+  - `/source/detection/results` 的 `container_gate` 字段透出在场/周期开合状态（未配置不透出）。
+  - 停止/切项目残影 → `_clear_step_runtime_state` 已联动 gate.reset()。
+  - start_cycle 静默不开（session 未起/等扫码绑定）→ gate 下一帧自动重试，只在真开成后记日志。
+- 回归：`pytest tests/test_container_cycle_gate.py`（22 例）+ `tests/e2e_browser/test_container_cycle_owner.py`（3 例）。
