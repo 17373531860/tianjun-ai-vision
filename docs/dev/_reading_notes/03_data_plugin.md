@@ -4,6 +4,9 @@
 > 行号锚定当前 `tianjun-main` 工作区源码，后续改动以代码为准。
 > 2026-07-17 v3.41 复核：补账 v3.33~v3.41 变更（数据/导出/项目域），受影响小节的行数与行号已刷新；插件系统（`backend/plugin_system/`）自基线零变更，第六、七节原样有效。
 >
+> **v3.58 补账（2026-09-17，检测框 sidecar 回放/下载端点）**：
+> - `api/sessions.py`：新增 `GET /data/videos/{id}/boxes`（回放叠加用 sidecar JSON，视频不存在/无 sidecar 404）+ `GET /data/videos/{id}/annotated`（带框版下载：`services/annotated_video.get_or_render_annotated_cached` 现场烧框渲染落转码缓存目录复用，二次下载秒回，文件名 `<原名>_带框.mp4`）；DataExportSetting 读写面透出 `record_boxes_data`（默认关）。
+>
 > **v3.57 补账（2026-09-15，内置能力模型入仓 + 端到端模型消费）**：
 > - `models/models.py`：`Model` 表新增 `capability`（detect/pose/orientation/headpose/ocr/anomaly/vlm 等）与 `builtin`（出厂内置行）两列——迁移 **`db/migrations/m0011_model_capability.py`**（老库 ALTER 补列）。
 > - `api/models.py`：新增 `GET /models/capabilities` 能力目录（含引擎可用性探针）+ `POST /models/capabilities/{cap}/bind` 换权重（热重载，如 person_orientation.release）+ 内置行禁删 403 + 上传带能力类型 + 列表 capability 过滤。

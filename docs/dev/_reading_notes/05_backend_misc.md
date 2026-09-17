@@ -7,6 +7,13 @@
 >
 > **短信补账（2026-08-03）**：新增短信服务族（见下方「短信通知」节）；路由 API 条目在 `01_backend_core.md` 的 `sms.py`。
 >
+> **v3.58 补账（2026-09-17，检测框 sidecar 服务对 + 头姿全角度开关）**：
+> - **新 `services/detection_boxes_sidecar.py`**：检测框 sidecar writer/loader——路径纯命名约定 `<视频路径>.boxes.json`（`sidecar_path_for`，不加 DB 列，与录像同目录同生命周期）；**帧号对齐**设计（录制线程写帧成功那一刻的 `_frame_count`，天然免疫录制队列丢帧的墙钟漂移，视频第 N 帧恒等于 N/fps）；run-length 只记检测变化帧（`{"f":帧号,"d":[归一化框]}`，框消失记空列表），`MAX_ENTRIES=20000` 护栏；`observe()` 仅录制线程调（单线程无锁），`flush()` 由录像延迟释放线程在 release 后调。回归 `tests/test_boxes_sidecar_annotated.py`。
+> - **新 `services/annotated_video.py`**：带框版渲染——原片 + sidecar 烧框出 MP4（cv2 逐帧 + ffmpeg 合成），`get_or_render_annotated_cached` 落转码缓存目录复用；归档 worker 与 `/data/videos/{id}/annotated` 两个消费方。
+> - `services/video_archive.py`：归档规则 `annotated_video`（m0012 默认关）——投递前烧框渲染，**失败/无 sidecar 降级投原片照常归档不阻断**；`api/video_archive.py`：规则 Schema 透出该字段。
+> - `api/orientation.py`：新增 GET/PUT `/config`（`headpose_full_range`，PUT 挂 settings.edit，SystemConfig KV 落库 + 推理侧缓存即时刷新）。
+> - `services/person_orientation.py`：`headpose_full_range()` 读取/缓存/失效；False（默认，正脸模型）时**背对相机跳过头姿精化**直接用关键点几何身体朝向（六和点检常态背对看仪表，正脸模型背面输出无意义反带偏）；True（绑 6DRepNet360/WHENet 全角度权重）背面同样精化。回归 `tests/test_orientation_backends.py` 新增 8 用例。
+>
 > **v3.57 补账（2026-09-15，AI 能力/光引导/朝向 API 与引擎家族）**：
 > - **新 `api/lightguide.py`（566 行）**：投影光引导端点组 `/api/v1/lightguide/*`——ArUco 标定求解 solve（投影图案↔相机画面单应矩阵）/status/clear + 交互亮度采样 sample（悬停确认数据源）+ 引导参数全局 KV `/lightguide/params`（11 项越界钳制）。标定结果按工位持久化 SystemConfig KV。回归 `tests/test_lightguide_p1~p3.py`。
 > - **新 `api/ocr.py`/`api/anomaly.py`/`api/vlm.py`**：OCR 读字（试识别 + `_parse_roi` 多块矩形）/ 异常检测记忆库管理（建库/加样/试打分/热力图）/ VLM 看图问答（连接配置 KV + 传图/读通道画面提问，默认关零开销）。

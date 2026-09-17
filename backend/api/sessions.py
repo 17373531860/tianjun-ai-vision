@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, desc
 from typing import List, Optional
 from datetime import datetime, timedelta
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import uuid
 import os
 import csv
@@ -1039,12 +1039,35 @@ def get_video(video_id: str, db: Session = Depends(get_db)):
     )
 
 
-@router.get("/videos/{video_id}/boxes")
-def get_video_boxes(video_id: str, db: Session = Depends(get_db)):
-    """获取录像的检测框 sidecar 数据 (2026-09)。
+class VideoBoxItem(BaseModel):
+    label: str = Field(..., description="检测标签（显示名）")
+    conf: float = Field(..., description="置信度 0-1（保留 3 位小数）")
+    x: float = Field(..., description="框左上角 x（归一化 0-1，显示坐标系）")
+    y: float = Field(..., description="框左上角 y（归一化 0-1）")
+    w: float = Field(..., description="框宽（归一化 0-1）")
+    h: float = Field(..., description="框高（归一化 0-1）")
 
-    回放叠加显示用: 帧号对齐的 run-length 检测框记录 (归一化坐标)。
-    未开启「记录检测框数据」录的录像返回 404。
+
+class VideoBoxFrame(BaseModel):
+    f: int = Field(..., description="帧号（0 起，录制线程写帧成功时的帧计数）")
+    d: List[VideoBoxItem] = Field(..., description="该帧起生效的检测框；空列表=框消失")
+
+
+class VideoBoxesOut(BaseModel):
+    version: int = Field(..., description="sidecar 格式版本（当前 1）")
+    fps: int = Field(..., description="录像标称帧率（帧号→秒的换算基准）")
+    video: str = Field("", description="录像文件名")
+    frames: List[VideoBoxFrame] = Field(
+        ..., description="run-length 压缩记录：只记检测变化帧，回放沿用上一条直到下一条")
+
+
+@router.get("/videos/{video_id}/boxes", summary="录像检测框数据",
+            response_model=VideoBoxesOut)
+def get_video_boxes(video_id: str, db: Session = Depends(get_db)):
+    """获取录像的检测框 sidecar 数据 (2026-09, 回放叠加显示用)。
+
+    帧号对齐的 run-length 检测框记录 (归一化坐标)。
+    404: 视频不存在，或该录像没有检测框数据（录制时未开启「记录检测框数据」）。
     """
     from backend.services.detection_boxes_sidecar import (
         load_sidecar, sidecar_path_for)
@@ -1057,12 +1080,15 @@ def get_video_boxes(video_id: str, db: Session = Depends(get_db)):
     return data
 
 
-@router.get("/videos/{video_id}/annotated")
+@router.get("/videos/{video_id}/annotated", summary="下载带框版录像",
+            response_class=FileResponse)
 def download_annotated_video(video_id: str, db: Session = Depends(get_db)):
     """下载带框版录像 (2026-09): 原片+检测框 sidecar 现场渲染烧框 MP4。
 
     渲染结果落转码缓存目录复用 (同一录像第二次下载秒回);
     周期录像 640x360 渲染远快于实时, 同步等待与既有转码端点一致。
+    404: 视频记录/文件不存在，或该录像没有检测框数据。
+    500: 带框渲染失败（原片仍可用普通下载）。
     """
     from backend.services.annotated_video import get_or_render_annotated_cached
     video = db.query(VideoClip).filter(VideoClip.video_uuid == video_id).first()

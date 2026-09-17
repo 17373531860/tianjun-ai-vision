@@ -2,6 +2,14 @@
 
 > 阅读范围：2026-07-05 分段通读 `backend/main.py`、`backend/core/config.py`、`backend/api/source*.py` 全族（含 23 个 mixin + 14 个 has-a 组件）、`router_manifest.py`、`channel_manager.py`、`alarm.py`、`debug.py`、`system_display.py`、`services/weighing_engine.py`。**共 47 个文件**。
 >
+> **v3.58 补账（2026-09-17，dev-qing 合并：纯 custom 互斥/多屏工位跟皮 + 检测框 sidecar 录制侧）**：
+> - `source_settlement_mixin.py`（+204 行）：**纯 custom 条件互斥**——`_settle_custom_cycle` 家族对 based_on 非 sequential/detection 的纯 custom：①同帧多条件分支竞争只推进一条（完整条件优先、条件顺序次之，无 event_id 的条件不参与同帧竞争）；②结算后进锁存 `_pure_custom_settle_latched_labels`，标签**真实离场**（连续消失帧确认）才解锁允许再开新周期（治结算余像立刻误开下一周期）；③非前缀标签不能开空周期；④空闲超时中断走 `idle_timeout_event_id` 配置事件（未配/失配回退事件 2，事件不可用保持周期不误杀），完整条件命中仍走原条件结算事件。回归 `tests/test_custom_exclusive_timeout.py`（26 用例）。
+> - `source_step_stats_mixin.py`（+209 行）：纯 custom 分支推进侧配套——同帧分支选择、静态标签 pending（`_pure_custom_pending_static_label`：静态终态标签可命中条件而不入周期，锁存至触发帧）、跨周期同现组不能绕过分支前缀守门。
+> - `source_project_config_apply.py`：解析 `pipeline_config.idle_timeout_event_id`（仅纯 custom + idle_timeout_seconds>0 生效，校验存在于 events_config 否则回退事件 2 并打印告警）。`source_events_check_mixin.py`/`source_sequence_labels.py`/`source.py`：纯 custom 判定与标签流配套小改。
+> - `source_state_init.py`：新增 `_pure_custom_settle_latched_labels`/`_pure_custom_pending_static_label`/`idle_timeout_event_id`（custom 簇）+ `_boxes_sidecar_active`（录像检测框 sidecar：采集线程据此在入队录制帧时同拍快照 current_detections，单写多读 bool）。
+> - `source_recording_thread_mixin.py`：录制线程写帧成功后调 sidecar `observe(_frame_count, detections)`（帧号对齐，见 `services/detection_boxes_sidecar.py` 05 册）；`source_recording_api_mixin.py`：录像 release 延迟释放线程 flush sidecar 落盘；`source_session_lifecycle_mixin.py`：会话录像起停同步 sidecar 活跃位。
+> - `channel_manager.py`：**参观屏/独立观看槽（v3.57 二期）删除**——mapping 旧 visitor 字段读取忽略（零迁移），bounds 归一化提为静态方法 `_normalize_multi_monitor_bounds`；multi-monitor 端点 response_model 改 `exclude_unset`。
+>
 > **v3.57 补账（2026-09-15，六批次汇合发版：AI 能力/内置模型/光引导/多平台包/多屏二期/ROI 多块化）**：
 > - `source_geometry.py`：新增**多块 ROI 中央契约**——`normalize_polygons(raw)`（单块 `[[x,y],...]` / 多块 `[[[x,y],...],...]` 双格式统一归一成多边形列表，逐点 clamp 0~1）、`point_in_any_polygon(px,py,raw)`（任一块命中）、`normalize_rects(raw)`（`[x,y,w,h]` 单/多块同理）。**存储契约：单块存旧格式、多块存嵌套格式（前端 `utils/polygons.js` 同源镜像），存量配置零迁移**。全部 ROI 消费点自此只经这三个入口。回归 `tests/test_multi_polygon_roi.py`。
 > - `source_roi.py`：`_validate_roi` 走 normalize_polygons；`ensure_roi_mask` 多块一次 `cv2.fillPoly`（多块并集单 mask）；`_roi_polygon_pixels` 由单 ndarray 改 ndarray 列表；`is_bbox_center_in_roi`/`is_normalized_bbox_center_in_polygon` 遍历全部块。

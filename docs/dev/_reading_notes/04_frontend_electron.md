@@ -13,6 +13,13 @@
 > 多屏工位显示卡自 `Settings/DisplaySettingsTab.vue` 抽为 `views/Source/MultiMonitorPanel.vue`；
 > 容器装箱清点块自 `Project/LogicConfigTab.vue` 抽为 `Project/CustomMixBoxTab.vue`（「装箱清点」条件 tab）。
 
+> **v3.58 补账（2026-09-17，工位检测屏跟皮拆参观屏 + sidecar 回放叠加 + custom 超时配置面）**：
+> - `electron/main.js` / `multi-monitor.js`：**参观屏开窗与 viewer 槽删除**（旧 visitor 配置字段忽略）；工位检测窗（station_view/kiosk）生命周期收口——License 守门（未授权不开窗/守门重应用清已存在窗）、before-quit/finishShutdown/backend-stopped 三出口清理、renderer 60s 窗口 3 次崩溃熔断、webRequest 工位流隔离（工位窗手拼流强制 station 保留真实 channel 不循环重定向）。**新 `electron/test/main-station-lifecycle.test.js`**（352 行 vm 沙箱真跑 main.js 只模拟进程边界，37 用例）。
+> - `views/Monitor/index.vue`：工位检测屏跟随总控——`layoutBodyDisplayRole`（main/station）+ `stationDisplayMode`（kiosk/station_view 且非 hands_crop）；layout.body 自定义布局同步应用到工位窗；`selectedChannel` 改 computed 锁定（工位屏 get 恒 requestedWindowChannel，插件 emit/异步初始化/运行态重置切不走）；只读统一 `singleChannelReadonly=(kiosk||station_view)&&kioskReadonly`。**新 `views/Monitor/readonlyActions.js`**：`protectMonitorActions(actions, isReadonly)` 把布局区块动作表包一层只读守门（vitest `__tests__/readonlyActions.test.js` 12 用例）。`layout/index.vue`/`Navbar.vue`/`BottomBar.vue`/`router/index.js`/`composables/useDisplayWindow.js`：工位窗沿用主屏导航、显示角色传递、参观屏路由清除。
+> - `views/Data/components/VideoPlayerDialog.vue`（+158 行）：回放检测框叠加——拉 `GET /data/videos/{id}/boxes`（404=没框数据不显示开关），canvas 覆盖层按当前播放帧号（currentTime×fps）二分查 run-length 记录画归一化框，可开关；带框版下载按钮（`/annotated`）。`DataSettingsTabs.vue`：「记录检测框数据」开关（record_boxes_data）；`VideoArchiveDialog.vue`：归档规则「投递带框版」开关；`api/data.js` 对应封装。
+> - `views/Project/LogicConfigTab.vue`：「超时结算」卡 custom 模式露出「超时中断事件」下拉（`idle_timeout_event_id`，events_config 选项，清空=回退事件 2，超时=0 禁用）；`Project/index.vue` 载荷透传（custom_based_on 空值语义=纯 custom）。
+> - `views/Model/CapabilityTryDrawer.vue`：朝向 tab 加「全角度头姿模型」开关（GET/PUT /orientation/config，`api/aitools.js` 封装）。
+>
 > **v3.57 补账（2026-09-15，六批次汇合发版前端/Electron 面）**：
 > - `Project/RoiEditorDialog.vue`：**多块绘制状态机**——`finishedShapes` 存已闭合块 + `roiPoints` 当前块，双击或「完成本块」闭合后可继续画下一块；「撤销点」/「删除上一块」编辑；分色+编号渲染；保存**单块存旧格式、多块存嵌套格式**；另新增「单点标定」模式（facing_dwell 仪表点）。
 > - **新 `utils/polygons.js`**：前端多块契约（normalizePolygons/serializePolygons/hasPolygons/polygonCount/normalizeRects/serializeRects/hasRects/pointInAnyPolygon），与后端 `source_geometry.py` 同源镜像。

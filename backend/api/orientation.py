@@ -59,14 +59,20 @@ class OrientationConfig(BaseModel):
 
 @router.get("/config", summary="朝向配置", response_model=OrientationConfig)
 def orientation_get_config():
+    """读取朝向估计配置 (headpose_full_range 全角度头姿开关, KV 落库)。"""
     return OrientationConfig(
         headpose_full_range=person_orientation.headpose_full_range())
 
 
 @router.put("/config", summary="更新朝向配置",
+            response_model=OrientationConfig,
             dependencies=[Depends(require_perm("settings.edit"))])
 def orientation_put_config(payload: OrientationConfig,
                            db: Session = Depends(get_db)):
+    """更新朝向估计配置: SystemConfig KV 落库 + 推理侧缓存直写即时生效。
+
+    403: 无 settings.edit 权限。
+    """
     key = person_orientation.HEADPOSE_FULL_RANGE_KEY
     row = db.query(SystemConfig).filter(SystemConfig.key == key).first()
     val = "true" if payload.headpose_full_range else "false"
@@ -78,7 +84,7 @@ def orientation_put_config(payload: OrientationConfig,
     db.commit()
     # 推理线程按缓存消费, 直写让下一帧立即生效 (不等 TTL)
     person_orientation.set_headpose_full_range_cache(payload.headpose_full_range)
-    return {"status": "ok", "headpose_full_range": payload.headpose_full_range}
+    return OrientationConfig(headpose_full_range=payload.headpose_full_range)
 
 
 @router.post("/estimate", summary="上传图片估计人体朝向")

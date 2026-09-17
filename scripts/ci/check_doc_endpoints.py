@@ -37,22 +37,45 @@ os.environ.setdefault("BACKEND_SKIP_INIT", "1")
 os.environ.pop("RUNTIME_MODE", None)
 
 
+def _iter_api_routes(routes, prefix=""):
+    """递归展开路由为 (完整路径, APIRoute)。
+
+    FastAPI 0.14x 起 include_router 变为惰性 _IncludedRouter（app.routes 里不再是
+    平铺的 APIRoute），直接 isinstance 过滤会得到 0 条路由、门禁空转放行
+    （2026-09 发现：v3.58 发版前门禁"0 欠账"实为一条端点都没扫到）。
+    这里同时兼容两种形态：平铺 APIRoute（老版）与嵌套 _IncludedRouter（新版）。
+    """
+    from fastapi.routing import APIRoute
+
+    for route in routes:
+        if isinstance(route, APIRoute):
+            yield prefix + route.path, route
+        elif hasattr(route, "original_router") and hasattr(route, "include_context"):
+            yield from _iter_api_routes(
+                route.original_router.routes,
+                prefix + route.include_context.prefix,
+            )
+
+
 def collect_offenses():
     """挂载全部路由并返回 {端点键: [缺失项...]}。"""
     from fastapi import FastAPI
-    from fastapi.routing import APIRoute
 
     from backend.api.router_manifest import mount_all_routers
 
     app = FastAPI()
     mount_all_routers(app)
 
+    flat_routes = list(_iter_api_routes(app.routes))
+    if not flat_routes:
+        # 护栏：扫到 0 条路由必是脚本自身失灵，绝不能静默放行
+        print("[check_doc_endpoints] ❌ 扫到 0 条路由——脚本路由收集逻辑与当前 FastAPI 版本不兼容，门禁失灵。")
+        sys.exit(1)
+
     offenses: dict[str, list[str]] = {}
-    for route in app.routes:
-        if not isinstance(route, APIRoute):
-            continue
+    for path, route in flat_routes:
         methods = ",".join(sorted(m for m in route.methods if m != "HEAD"))
-        key = f"{methods} {route.path}"
+        key = f"{methods} {path}"
         missing = []
         if not (route.summary and route.summary.strip()):
             missing.append("summary")

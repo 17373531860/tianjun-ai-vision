@@ -60,6 +60,9 @@ class Project(Base):
   // 结算 / 周期超时（apply 在 _apply_pipeline_config）
   "settlement_mode": "first_step|last_step|last_first",
   "idle_timeout_seconds": 0,
+  // v3.58: 仅纯 custom（custom_based_on 非 sequential/detection）+ idle_timeout_seconds>0 生效;
+  // 空闲超时中断走哪个事件, 未配置/配置的事件不存在回退事件 2（apply 在 source_project_config_apply）
+  "idle_timeout_event_id": null,
   "cycle_max_duration": 0,
   "ng_cycle_protect_seconds": 0,
   "settle_dedup": false,

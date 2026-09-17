@@ -347,7 +347,7 @@ end_cycle commit 后
 |---|---|---|
 | sequential | source_sequential_mixin.py + settlement_mixin._settle_sequential_cycle | current_step_index, step_sequence, last_added_step, _cycle_regression |
 | detection | settlement_mixin._settle_detection_cycle | current_cycle_steps, backup_steps_seen_in_cycle |
-| custom | settlement_mixin._settle_custom_cycle (228L) | custom_conditions（按 priority 排序匹配子序列）, custom_based_on, custom_sequence_order |
+| custom | settlement_mixin._settle_custom_cycle (228L) | custom_conditions（按 priority 排序匹配子序列）, custom_based_on, custom_sequence_order；v3.58 纯 custom（based_on 非 sequential/detection）加 `_pure_custom_settle_latched_labels`（结算后标签锁存至真实离场才能再开周期）+ `_pure_custom_pending_static_label` + `idle_timeout_event_id`（空闲超时中断事件，未配回退事件 2，不可用保持周期）——同帧只推进一条条件分支（完整条件优先/条件顺序次之，无事件条件不参与竞争），非前缀标签不能开空周期；回归 `tests/test_custom_exclusive_timeout.py`（26 用例） |
 | tracking | source_tracking_mixin.py | _tracking_objects, _tracking_class_counters, _stack_state, _container_mode |
 
 详见 `source_settlement_mixin.py` 头注释。tracking 模式的**堆叠子模式**和**最大识别数子模式**

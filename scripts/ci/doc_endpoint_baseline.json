@@ -1,4 +1,8 @@
 {
+ "DELETE /api/v1/anomaly/banks/{bank_id}": [
+  "response_model",
+  "docstring"
+ ],
  "DELETE /api/v1/api-keys/{key_id}": [
   "summary",
   "response_model",
@@ -43,6 +47,10 @@
   "summary",
   "docstring"
  ],
+ "DELETE /api/v1/export/video-archive/rules/{rule_id}": [
+  "summary",
+  "docstring"
+ ],
  "DELETE /api/v1/external-devices/logs": [
   "summary",
   "response_model"
@@ -51,6 +59,9 @@
   "summary",
   "response_model",
   "docstring"
+ ],
+ "DELETE /api/v1/lightguide/config": [
+  "summary"
  ],
  "DELETE /api/v1/mes/defect-codes/{code_id}": [
   "summary",
@@ -90,6 +101,11 @@
   "summary",
   "docstring"
  ],
+ "DELETE /api/v1/plc/connections/{connection_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
  "DELETE /api/v1/plugins/{customer_code}": [
   "summary"
  ],
@@ -110,11 +126,27 @@
   "summary",
   "response_model"
  ],
+ "DELETE /api/v1/sms-report/rules/{rule_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "DELETE /api/v1/system/monitor-layouts": [
+  "summary"
+ ],
+ "DELETE /api/v1/system/monitor-layouts/{form_key}": [
+  "summary"
+ ],
  "DELETE /api/v1/tasks/batch/clear": [
   "summary"
  ],
  "DELETE /api/v1/tasks/{task_id}": [
   "summary"
+ ],
+ "DELETE /api/v1/triggers/channels/{trigger_id}": [
+  "summary",
+  "response_model",
+  "docstring"
  ],
  "DELETE /api/v1/users/{user_id}": [
   "summary",
@@ -136,6 +168,10 @@
  "GET /api/v1/alarm/status": [
   "summary",
   "response_model"
+ ],
+ "GET /api/v1/anomaly/banks": [
+  "response_model",
+  "docstring"
  ],
  "GET /api/v1/api-keys": [
   "summary",
@@ -206,6 +242,9 @@
   "response_model",
   "docstring"
  ],
+ "GET /api/v1/cluster/report-status": [
+  "response_model"
+ ],
  "GET /api/v1/cluster/slaves": [
   "summary",
   "response_model"
@@ -256,6 +295,10 @@
   "summary",
   "response_model"
  ],
+ "GET /api/v1/data/sessions/{session_id}/videos": [
+  "summary",
+  "response_model"
+ ],
  "GET /api/v1/data/stats/behavior-score": [
   "summary"
  ],
@@ -271,6 +314,10 @@
   "summary"
  ],
  "GET /api/v1/data/storage-info": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/data/storage/recording-dir": [
   "summary",
   "response_model"
  ],
@@ -342,6 +389,25 @@
   "summary",
   "docstring"
  ],
+ "GET /api/v1/export/video-archive/adapter-types": [
+  "summary"
+ ],
+ "GET /api/v1/export/video-archive/logs": [
+  "summary",
+  "docstring"
+ ],
+ "GET /api/v1/export/video-archive/rules": [
+  "summary",
+  "docstring"
+ ],
+ "GET /api/v1/export/video-archive/rules/{rule_id}": [
+  "summary",
+  "docstring"
+ ],
+ "GET /api/v1/export/video-archive/status": [
+  "summary",
+  "docstring"
+ ],
  "GET /api/v1/external-devices/": [
   "summary",
   "response_model",
@@ -356,6 +422,39 @@
   "summary",
   "response_model",
   "docstring"
+ ],
+ "GET /api/v1/interconnect/config": [
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/interconnect/health": [
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/interconnect/samples/recent": [
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/interconnect/status": [
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/lightguide/calibration/anchors": [
+  "summary"
+ ],
+ "GET /api/v1/lightguide/calibration/marker": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/lightguide/calibration/pattern": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/lightguide/config": [
+  "summary"
+ ],
+ "GET /api/v1/lightguide/params": [
+  "summary"
  ],
  "GET /api/v1/mes/defect-codes": [
   "summary",
@@ -373,9 +472,7 @@
   "docstring"
  ],
  "GET /api/v1/mes/gateway/async-dispatch": [
-  "summary",
-  "response_model",
-  "docstring"
+  "response_model"
  ],
  "GET /api/v1/mes/gateway/connections": [
   "summary",
@@ -480,6 +577,10 @@
  "GET /api/v1/models": [
   "summary"
  ],
+ "GET /api/v1/models/capabilities": [
+  "summary",
+  "response_model"
+ ],
  "GET /api/v1/models/conversions/{conv_id}/status": [
   "summary"
  ],
@@ -496,6 +597,10 @@
  "GET /api/v1/models/{model_id}/conversions": [
   "summary"
  ],
+ "GET /api/v1/ocr/status": [
+  "response_model",
+  "docstring"
+ ],
  "GET /api/v1/operators": [
   "summary",
   "response_model",
@@ -503,6 +608,10 @@
  ],
  "GET /api/v1/operators/current": [
   "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/orientation/status": [
   "response_model",
   "docstring"
  ],
@@ -516,6 +625,34 @@
   "docstring"
  ],
  "GET /api/v1/packaging-flows/{config_id}/state": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/plc/connections": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/plc/connections/{connection_id}/export": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/plc/connections/{connection_id}/live": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/plc/connections/{connection_id}/logs": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/plc/drivers": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/plc/templates": [
   "summary",
   "response_model"
  ],
@@ -538,6 +675,10 @@
  ],
  "GET /api/v1/projects": [
   "summary"
+ ],
+ "GET /api/v1/projects/activate-config": [
+  "summary",
+  "response_model"
  ],
  "GET /api/v1/projects/active/current": [
   "summary"
@@ -571,6 +712,21 @@
   "response_model",
   "docstring"
  ],
+ "GET /api/v1/scan-collect/config": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/scan-collect/records": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/scan-collect/state": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
  "GET /api/v1/scanner/check-container-mode": [
   "summary",
   "response_model"
@@ -596,6 +752,9 @@
  ],
  "GET /api/v1/scanner/scan-pair/active": [
   "summary",
+  "response_model"
+ ],
+ "GET /api/v1/scanner/scan-pair/new-code-first": [
   "response_model"
  ],
  "GET /api/v1/scanner/status": [
@@ -646,6 +805,25 @@
  "GET /api/v1/scanner/wmax/stream": [
   "summary",
   "response_model"
+ ],
+ "GET /api/v1/sms-report/providers": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/sms-report/rules": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/sms-report/rules/{rule_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/sms-report/rules/{rule_id}/logs": [
+  "summary",
+  "response_model",
+  "docstring"
  ],
  "GET /api/v1/source/cameras": [
   "summary",
@@ -712,6 +890,9 @@
  "GET /api/v1/system/log-limits": [
   "summary"
  ],
+ "GET /api/v1/system/monitor-layouts": [
+  "summary"
+ ],
  "GET /api/v1/system/polling": [
   "summary"
  ],
@@ -724,6 +905,44 @@
  "GET /api/v1/tasks/{task_id}": [
   "summary"
  ],
+ "GET /api/v1/triggers/actions": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/triggers/channels": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/triggers/channels/{trigger_id}/export": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/triggers/channels/{trigger_id}/history": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/triggers/channels/{trigger_id}/live": [
+  "summary",
+  "response_model"
+ ],
+ "GET /api/v1/triggers/channels/{trigger_id}/logs": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/triggers/templates": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/triggers/types": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
  "GET /api/v1/users": [
   "summary",
   "response_model",
@@ -731,6 +950,14 @@
  ],
  "GET /api/v1/users/{user_id}": [
   "summary",
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/vlm/config": [
+  "response_model",
+  "docstring"
+ ],
+ "GET /api/v1/vlm/status": [
   "response_model",
   "docstring"
  ],
@@ -829,6 +1056,18 @@
  "POST /api/v1/alarm/trigger/{event_type}": [
   "summary",
   "response_model"
+ ],
+ "POST /api/v1/anomaly/banks": [
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/anomaly/banks/{bank_id}/score": [
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/anomaly/banks/{bank_id}/score-frame": [
+  "response_model",
+  "docstring"
  ],
  "POST /api/v1/api-keys": [
   "summary",
@@ -940,6 +1179,25 @@
  "POST /api/v1/export/templates/{tpl_id}/clone": [
   "summary"
  ],
+ "POST /api/v1/export/video-archive/backfill": [
+  "summary"
+ ],
+ "POST /api/v1/export/video-archive/evidence-pack": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/export/video-archive/rules": [
+  "summary",
+  "docstring"
+ ],
+ "POST /api/v1/export/video-archive/rules/{rule_id}/toggle": [
+  "summary",
+  "docstring"
+ ],
+ "POST /api/v1/export/video-archive/test-run": [
+  "summary",
+  "docstring"
+ ],
  "POST /api/v1/external-devices/": [
   "summary",
   "response_model",
@@ -953,6 +1211,10 @@
   "summary",
   "response_model"
  ],
+ "POST /api/v1/external-devices/pulse": [
+  "summary",
+  "response_model"
+ ],
  "POST /api/v1/external-devices/simulate": [
   "summary",
   "response_model"
@@ -961,6 +1223,27 @@
   "summary",
   "response_model",
   "docstring"
+ ],
+ "POST /api/v1/interconnect/models/push": [
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/interconnect/pull-now": [
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/interconnect/test-connection": [
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/lightguide/calibration/solve": [
+  "summary"
+ ],
+ "POST /api/v1/lightguide/calibration/verify": [
+  "summary"
+ ],
+ "POST /api/v1/lightguide/interaction/sample": [
+  "summary"
  ],
  "POST /api/v1/mes/defect-codes": [
   "summary",
@@ -1044,6 +1327,10 @@
   "response_model",
   "docstring"
  ],
+ "POST /api/v1/models/capabilities/{capability}/bind": [
+  "summary",
+  "response_model"
+ ],
  "POST /api/v1/models/upload": [
   "summary"
  ],
@@ -1060,6 +1347,14 @@
  "POST /api/v1/models/{model_id}/set-active": [
   "summary"
  ],
+ "POST /api/v1/ocr/read": [
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/ocr/read-frame": [
+  "response_model",
+  "docstring"
+ ],
  "POST /api/v1/operators": [
   "summary",
   "response_model",
@@ -1067,6 +1362,14 @@
  ],
  "POST /api/v1/operators/set-current": [
   "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/orientation/estimate": [
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/orientation/estimate-frame": [
   "response_model",
   "docstring"
  ],
@@ -1087,6 +1390,32 @@
   "response_model"
  ],
  "POST /api/v1/packaging-flows/{config_id}/supplement-sliders": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/plc/connections": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/plc/connections/{connection_id}/enable": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/plc/connections/{connection_id}/mock-set": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/plc/connections/{connection_id}/test": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/plc/connections/{connection_id}/write": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/plc/import": [
   "summary",
   "response_model"
  ],
@@ -1119,6 +1448,24 @@
   "response_model",
   "docstring"
  ],
+ "POST /api/v1/scan-collect/clear": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/scan-collect/remove-code": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/scan-collect/resolve-ng": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/scan-collect/settle-now": [
+  "summary",
+  "response_model"
+ ],
  "POST /api/v1/scanner/devices": [
   "summary",
   "response_model",
@@ -1134,6 +1481,9 @@
  ],
  "POST /api/v1/scanner/discover": [
   "summary",
+  "response_model"
+ ],
+ "POST /api/v1/scanner/resume": [
   "response_model"
  ],
  "POST /api/v1/scanner/scan-pair/stop": [
@@ -1248,6 +1598,26 @@
  "POST /api/v1/scanner/wmax/virtual/delete": [
   "summary",
   "response_model"
+ ],
+ "POST /api/v1/sms-report/rules": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/sms-report/rules/{rule_id}/preview": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/sms-report/rules/{rule_id}/test-send": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/sms-report/rules/{rule_id}/toggle": [
+  "summary",
+  "response_model",
+  "docstring"
  ],
  "POST /api/v1/source/camera/start": [
   "summary",
@@ -1392,8 +1762,50 @@
  "POST /api/v1/tasks/record": [
   "summary"
  ],
+ "POST /api/v1/triggers/channels": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/triggers/channels/{trigger_id}/calibrate": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/triggers/channels/{trigger_id}/enable": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/triggers/channels/{trigger_id}/mock-fire": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/triggers/channels/{trigger_id}/mock-level": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/triggers/channels/{trigger_id}/test": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/triggers/fire/{key}": [
+  "summary",
+  "response_model"
+ ],
+ "POST /api/v1/triggers/import": [
+  "summary",
+  "response_model"
+ ],
  "POST /api/v1/users": [
   "summary",
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/vlm/ask": [
+  "response_model",
+  "docstring"
+ ],
+ "POST /api/v1/vlm/ask-frame": [
   "response_model",
   "docstring"
  ],
@@ -1437,6 +1849,10 @@
   "summary",
   "response_model"
  ],
+ "PUT /api/v1/anomaly/banks/{bank_id}/threshold": [
+  "response_model",
+  "docstring"
+ ],
  "PUT /api/v1/api-keys/{key_id}/toggle": [
   "summary",
   "docstring"
@@ -1467,6 +1883,10 @@
   "summary",
   "response_model"
  ],
+ "PUT /api/v1/data/storage/recording-dir": [
+  "summary",
+  "response_model"
+ ],
  "PUT /api/v1/debug/flags": [
   "summary",
   "response_model"
@@ -1489,10 +1909,21 @@
   "summary",
   "docstring"
  ],
+ "PUT /api/v1/export/video-archive/rules/{rule_id}": [
+  "summary",
+  "docstring"
+ ],
  "PUT /api/v1/external-devices/{device_id}": [
   "summary",
   "response_model",
   "docstring"
+ ],
+ "PUT /api/v1/interconnect/config": [
+  "response_model",
+  "docstring"
+ ],
+ "PUT /api/v1/lightguide/params": [
+  "summary"
  ],
  "PUT /api/v1/mes/defect-codes/{code_id}": [
   "summary",
@@ -1500,9 +1931,7 @@
   "docstring"
  ],
  "PUT /api/v1/mes/gateway/async-dispatch": [
-  "summary",
-  "response_model",
-  "docstring"
+  "response_model"
  ],
  "PUT /api/v1/mes/gateway/connections/{conn_id}": [
   "summary",
@@ -1535,6 +1964,15 @@
   "summary",
   "docstring"
  ],
+ "PUT /api/v1/plc/connections/{connection_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
+ "PUT /api/v1/projects/activate-config": [
+  "summary",
+  "response_model"
+ ],
  "PUT /api/v1/projects/{project_id}": [
   "summary"
  ],
@@ -1546,10 +1984,18 @@
   "response_model",
   "docstring"
  ],
+ "PUT /api/v1/scan-collect/config": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
  "PUT /api/v1/scanner/devices/{device_id}": [
   "summary",
   "response_model",
   "docstring"
+ ],
+ "PUT /api/v1/scanner/scan-pair/new-code-first": [
+  "response_model"
  ],
  "PUT /api/v1/scanner/wmax/indicator-config": [
   "summary",
@@ -1568,6 +2014,11 @@
   "response_model",
   "docstring"
  ],
+ "PUT /api/v1/sms-report/rules/{rule_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
  "PUT /api/v1/system/display": [
   "summary"
  ],
@@ -1577,14 +2028,26 @@
  "PUT /api/v1/system/log-limits": [
   "summary"
  ],
+ "PUT /api/v1/system/monitor-layouts/{form_key}": [
+  "summary"
+ ],
  "PUT /api/v1/system/polling": [
   "summary"
  ],
  "PUT /api/v1/tasks/{task_id}": [
   "summary"
  ],
+ "PUT /api/v1/triggers/channels/{trigger_id}": [
+  "summary",
+  "response_model",
+  "docstring"
+ ],
  "PUT /api/v1/users/{user_id}": [
   "summary",
+  "response_model",
+  "docstring"
+ ],
+ "PUT /api/v1/vlm/config": [
   "response_model",
   "docstring"
  ],
