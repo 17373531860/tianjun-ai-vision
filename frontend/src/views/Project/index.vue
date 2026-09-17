@@ -1226,6 +1226,19 @@ const initProjectDefaults = (project) => {
   if (project.custom_mixed_with === undefined) {
     project.custom_mixed_with = pipelineConfig.custom_mixed_with || null;
   }
+  // v3.59: 容器定界周期（周期主权=容器；缺省 steps = 现状零差异）
+  if (project.custom_cycle_owner === undefined) {
+    project.custom_cycle_owner = pipelineConfig.custom_cycle_owner || 'steps';
+  }
+  if (project.container_gate_label === undefined) {
+    project.container_gate_label = pipelineConfig.container_gate_label || '';
+  }
+  if (project.container_gate_appear_seconds === undefined) {
+    project.container_gate_appear_seconds = pipelineConfig.container_gate_appear_seconds ?? 1.0;
+  }
+  if (project.container_gate_gone_seconds === undefined) {
+    project.container_gate_gone_seconds = pipelineConfig.container_gate_gone_seconds ?? 3.0;
+  }
   // 自定义混合-容器装箱清点（不填容器标签 = 不启用，零差异）
   if (project.custom_mix_container_label === undefined) {
     project.custom_mix_container_label = pipelineConfig.custom_mix_container_label || '';
@@ -1800,6 +1813,12 @@ const initProjectDefaults = (project) => {
   project.pipeline_config.custom_conditions = project.custom_conditions;
   project.pipeline_config.custom_based_on = project.custom_based_on;
   project.pipeline_config.custom_mixed_with = project.custom_mixed_with;
+  // v3.59 容器定界周期（非容器主权时容器标签落空 = 不启用，零差异）
+  project.pipeline_config.custom_cycle_owner = project.custom_cycle_owner || 'steps';
+  project.pipeline_config.container_gate_label = (project.custom_cycle_owner === 'container')
+    ? (project.container_gate_label || '') : '';
+  project.pipeline_config.container_gate_appear_seconds = Number(project.container_gate_appear_seconds) || 1.0;
+  project.pipeline_config.container_gate_gone_seconds = Number(project.container_gate_gone_seconds) || 3.0;
   project.pipeline_config.custom_mix_container_label = (project.custom_mixed_with === 'tracking' && project.custom_mix_container_enabled)
     ? (project.custom_mix_container_label || '') : '';
   project.pipeline_config.custom_mix_container_count_mode = project.custom_mix_container_count_mode || 'trays';
@@ -2013,6 +2032,12 @@ const handleSaveProject = async () => {
         custom_conditions: activeProject.value.custom_conditions,
         custom_based_on: activeProject.value.custom_based_on,
         custom_mixed_with: activeProject.value.custom_mixed_with || null,
+        // v3.59 容器定界周期（周期主权=容器；缺省 steps + 空标签 = 零差异）
+        custom_cycle_owner: activeProject.value.custom_cycle_owner || 'steps',
+        container_gate_label: (activeProject.value.custom_cycle_owner === 'container')
+          ? (activeProject.value.container_gate_label || '') : '',
+        container_gate_appear_seconds: Number(activeProject.value.container_gate_appear_seconds) || 1.0,
+        container_gate_gone_seconds: Number(activeProject.value.container_gate_gone_seconds) || 3.0,
         // 自定义混合-容器装箱清点（仅混合跟踪 + 开关开 时落容器标签；否则空 = 不启用，零差异）
         custom_mix_container_label: (activeProject.value.custom_mixed_with === 'tracking' && activeProject.value.custom_mix_container_enabled)
           ? (activeProject.value.custom_mix_container_label || '') : '',

@@ -464,7 +464,83 @@ class SettlementMixin:
         if hasattr(self, '_step_raw_start'):
             self._step_raw_start.clear()
         self.last_step_completed_time = None
-    
+
+    def _settle_container_cycle(self):
+        """v3.59 容器定界周期结算 (custom_cycle_owner='container')。
+
+        由 ContainerCycleGate 在"容器离场确认"时调用 (推理线程内, 与其他
+        结算路径同线程)。周期定界与完备判定解耦 — 判定按 custom_based_on 分派:
+          - 'sequential'  → _settle_custom_cycle (期望序列比对, 含条件匹配)
+          - 纯 custom     → _settle_custom_cycle(unmatched_event_id=...)
+                            条件全等命中走条件事件, 未命中走空闲中断事件(缺省事件2)
+          - 'detection'   → 本方法内联无序完备判定: custom_detection_steps
+                            (缺省=启用非物品步骤) 全部到场 → OK, 缺步 → NG。
+                            ⚠ 与独立检测模式口径差异 (刻意): 重复出现**不判 NG** —
+                            容器在场期间动作标签闪断重现是常态 (工人手进出画面),
+                            缺步才是业务缺陷; 独立检测模式的"重复步骤 NG"语义
+                            靠 accept_once 挡, 在容器定界下不适用。
+        物品账 (混合跟踪) 经 compose_settle_event 合成, 与其他 custom 结算点同契约。
+        空周期 (容器过场没干活) 不作废 — 判 NG 缺全部步骤, 漏做必须可见。
+        """
+        if not self.project_config:
+            return
+        pipeline_config = self.project_config.get('pipeline_config', {}) or {}
+        custom_based_on = pipeline_config.get('custom_based_on')
+        if custom_based_on == 'sequential':
+            self._settle_custom_cycle()
+            return
+        if custom_based_on != 'detection':
+            idle_ev = getattr(self, 'idle_timeout_event_id', None)
+            self._settle_custom_cycle(unmatched_event_id=idle_ev or 2)
+            return
+
+        # ---- custom_based_on == 'detection': 无序完备判定 ----
+        steps_config = self.project_config.get('steps_config', []) or []
+        id_to_label = {s.get('id'): s.get('label', '') for s in steps_config
+                       if s.get('id') and s.get('label')}
+        det_ids = pipeline_config.get('custom_detection_steps') or []
+        if det_ids:
+            required = [id_to_label[sid] for sid in det_ids if sid in id_to_label]
+        else:
+            required = [s.get('label') for s in steps_config
+                        if s.get('enabled', True) and s.get('label')
+                        and s.get('detect_role') != 'item']
+        if not required:
+            print("[Settle/Container] 无启用步骤, 跳过判定")
+            return
+
+        self._supplement_step_durations()
+        self.current_cycle_steps = self._inject_backup_steps(
+            self.current_cycle_steps, required)
+        self.current_cycle_steps = self._filter_cycle_by_duration(
+            self.current_cycle_steps)
+        self._reconcile_step_records()
+
+        missing = [lbl for lbl in required if lbl not in self.current_cycle_steps]
+        print(f"[Settle/Container] required={required}, "
+              f"this_cycle={self.current_cycle_steps}, missing={missing}")
+        if debug_center.is_on("backend.settlement"):
+            debug_center.dbg(
+                "backend.settlement", "容器定界周期结算",
+                f"channel={self.channel_id} is_good={not missing} missing={missing}")
+        if missing:
+            event_id, reason = 2, f'缺少步骤: {missing}'
+        else:
+            event_id, reason = 1, '检测完成'
+        self._trigger_event(*compose_settle_event(self, event_id, reason))
+
+        self.current_cycle_steps = []
+        self.backup_steps_seen_in_cycle = set()
+        self.last_added_step = None
+        self._last_step_added_time = None
+        self.step_last_seen.clear()
+        self.step_start_time.clear()
+        self.step_consecutive_frames.clear()
+        self.step_frame_confirmed.clear()
+        if hasattr(self, '_step_raw_start'):
+            self._step_raw_start.clear()
+        self.last_step_completed_time = None
+
     def _apply_combo_verdict(self, step_counts):
         """v3.48 计数组合判定表 (纯视觉判型, RFC 14 配套项)。
 
@@ -2294,7 +2370,9 @@ class SettlementMixin:
         # 合法重复, 如 [A,A,B] 的第二个 A), 这不是"新周期开始"的信号, 跳过结算
         # 让它走下方 append 路径作为期望重复入周期.
         _just_settled_by_first_step = False
+        # v3.59 容器定界周期: 周期主权归容器, 首步重现不是周期边界信号 → 让位
         if self.settlement_mode == 'first_step' and is_seq_like \
+                and getattr(self, '_custom_cycle_owner', 'steps') != 'container' \
                 and label in self.current_cycle_steps and len(self.current_cycle_steps) > 1 \
                 and not self._is_legitimate_next_in_sequence(label):
             first_step_label = self._get_first_sequence_step_label()
@@ -2405,9 +2483,13 @@ class SettlementMixin:
             self.step_detection_times[label] = raw_start
             
             if len(self.current_cycle_steps) == 0:
-                self.cycle_start_time = current_time
-                self.cycle_start_frame_pos = self._video_frame_pos()
-                self.start_cycle()
+                # v3.59 容器定界周期: 周期已由 ContainerCycleGate 开好 (uuid 在),
+                # 首个动作入账不得二次 start_cycle / 不得覆盖容器到位的周期起点
+                if not (getattr(self, '_custom_cycle_owner', 'steps') == 'container'
+                        and getattr(self, 'current_cycle_uuid', None)):
+                    self.cycle_start_time = current_time
+                    self.cycle_start_frame_pos = self._video_frame_pos()
+                    self.start_cycle()
         
         if is_new_appearance and label in enabled_labels:
             should_join_cycle = True

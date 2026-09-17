@@ -1078,6 +1078,12 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
             guide = pipeline.get('placement_guide') or {}
             if isinstance(guide, dict) and guide.get('enabled') and guide.get('anchor_label'):
                 labels.add(guide['anchor_label'])
+            # v3.59 容器定界周期: 容器标签不是步骤 (建议 enabled=False), 但
+            # 定界门要在步骤侧收到它 — 不加进来 runner 出口就丢弃, 周期永远开不了
+            if (pipeline.get('custom_cycle_owner') or 'steps') == 'container':
+                _cg_lbl = str(pipeline.get('container_gate_label') or '').strip()
+                if _cg_lbl:
+                    labels.add(_cg_lbl)
         return labels
     
     def _emergency_gpu_reset(self):
@@ -1455,6 +1461,14 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
         self.step_static_triggered.clear()
         if hasattr(self, '_step_raw_start'):
             self._step_raw_start.clear()
+
+        # v3.59 容器定界周期门: 在场/候选状态清零 (停止-启动/切项目不留残影)
+        _cgate = getattr(self, '_container_cycle_gate', None)
+        if _cgate is not None:
+            try:
+                _cgate.reset()
+            except Exception:
+                pass
 
         # 周期序列层
         self.current_cycle_steps = []

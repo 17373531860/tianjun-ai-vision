@@ -59,7 +59,12 @@ class EventsCheckMixin:
                             if s.get('enabled', True) and s.get('detect_role') != 'item'}
         
         # 自定义模式
-        if logic_mode == 'custom':
+        # v3.59 容器定界周期 (custom_cycle_owner='container'): 周期主权归容器,
+        # 周期内条件命中 / 末步消失都不是结算信号 — 结算只在容器离场确认时由
+        # ContainerCycleGate → _settle_container_cycle 触发 (完备判定在那里做)。
+        # 本分支整体让位; 尾部"步骤特定事件"(trigger_event) 不受影响照常触发。
+        if (logic_mode == 'custom'
+                and getattr(self, '_custom_cycle_owner', 'steps') != 'container'):
             custom_based_on = pipeline_config.get('custom_based_on')  # 'sequential', 'detection', 或 None
             custom_conditions = pipeline_config.get('custom_conditions', [])
             

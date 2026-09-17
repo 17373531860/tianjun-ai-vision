@@ -950,6 +950,19 @@ def apply_project_config(h, config: dict):
     h._tracking_external_cycle = bool(
         h._custom_mix is not None and h._custom_mix.mix_type == 'tracking')
 
+    # v3.59 容器定界周期 (custom_cycle_owner='container'): 周期主权归容器 —
+    # 容器标签在场确认开周期 / 离场确认强制结算; 步骤侧结算触发全部让位
+    # (events_check 自定义结算块 + first_step 重现 + 空闲超时, 各处按
+    # h._custom_cycle_owner 守门)。缺省 'steps' + gate=None = 零差异。
+    try:
+        from backend.api.source_custom_mix import build_container_gate
+        h._container_cycle_gate = build_container_gate(config)
+    except Exception as e:
+        h._container_cycle_gate = None
+        print(f"[ContainerGate] 构建容器定界门失败: {e}")
+    h._custom_cycle_owner = (
+        'container' if h._container_cycle_gate is not None else 'steps')
+
     # 原生称重投料模式: 登记/注销本通道到称重引擎。两种登记来源:
     # - logic_mode='weighing'                      : 秤驱动 (v3.31, drive_mode 默认 scale)
     # - 其它模式 + weighing.drive_mode='step_gate' : v3.35 融合 — 视觉顺序 SOP 为周期主线,

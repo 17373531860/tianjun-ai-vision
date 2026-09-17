@@ -594,6 +594,46 @@
                 <b class="text-cyan-400">「装箱清点」</b>Tab（选择混合跟踪后出现）。
               </p>
             </el-form-item>
+
+            <!-- v3.59 容器定界周期：周期主权 = 容器 -->
+            <el-form-item label="周期定界（可选）">
+              <el-select v-model="project.custom_cycle_owner" class="w-full">
+                <el-option label="步骤驱动（默认：首个步骤入账开周期，按结算模式收尾）" value="steps" />
+                <el-option label="容器定界（容器到位开周期，容器离场立即结算）" value="container" />
+              </el-select>
+              <p class="text-xs text-gray-500 mt-1">
+                容器定界适合"工件/箱体常驻画面、周期内完成若干动作"的场景：容器稳定出现即开周期，
+                离场确认后立即按上方基于模式做完备判定（缺步 NG）；容器标签由定界门独占消费不算步骤，
+                容器缺席时检出的动作不入账、也不会误开周期。
+              </p>
+            </el-form-item>
+            <div v-if="project.custom_cycle_owner === 'container'"
+              class="border border-slate-600 rounded p-3 bg-slate-900/50 space-y-1">
+              <p class="text-xs text-cyan-400 font-bold mb-2">容器定界参数：</p>
+              <el-form-item label="容器标签">
+                <el-select v-model="project.container_gate_label" class="w-full" filterable allow-create
+                  default-first-option placeholder="选择或输入模型中的容器标签（如 包装盒）">
+                  <el-option v-for="s in nonBackupSteps" :key="s.id" :label="s.displayLabel || s.label" :value="s.label" />
+                </el-select>
+                <p class="text-xs text-gray-500 mt-1">
+                  该标签行建议在「步骤设置」中关闭启用——它是周期边界，不参与步骤完备判定。
+                </p>
+              </el-form-item>
+              <div class="grid grid-cols-2 gap-3">
+                <el-form-item label="到位确认（秒）">
+                  <el-input-number v-model="project.container_gate_appear_seconds"
+                    :min="0" :max="30" :step="0.5" class="!w-full" />
+                </el-form-item>
+                <el-form-item label="离场确认（秒）">
+                  <el-input-number v-model="project.container_gate_gone_seconds"
+                    :min="0.5" :max="60" :step="0.5" class="!w-full" />
+                </el-form-item>
+              </div>
+              <p class="text-xs text-gray-500">
+                到位确认防止容器闪现误开周期；离场确认桥接工人俯身遮挡造成的短暂丢检，
+                真离场满该秒数才结算。
+              </p>
+            </div>
           </el-form>
 
           <!-- 自定义模式独立的基础模式配置 -->
