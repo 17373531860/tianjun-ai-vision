@@ -72,6 +72,16 @@ export const getVideoUrl = (videoId) => {
   return `${getBackendHost()}/api/v1/data/videos/${videoId}`;
 };
 
+// 2026-09 检测框 sidecar: 回放叠加数据 (未记录时 404)
+export const getVideoBoxes = (videoId) => {
+  return api.get(`/data/videos/${videoId}/boxes`);
+};
+
+// 2026-09 带框版录像下载 URL (后端现场渲染烧框 MP4, 有缓存)
+export const getAnnotatedVideoUrl = (videoId) => {
+  return `${getBackendHost()}/api/v1/data/videos/${videoId}/annotated`;
+};
+
 // 会话录像分段列表 (v3.54: 长会话录像按小时分段, 老数据返回单段)
 export const getSessionVideos = (sessionId) => {
   return api.get(`/data/sessions/${sessionId}/videos`);

@@ -17,7 +17,7 @@
 | 性质 | **商业项目，客户已在用** — 工厂工控机部署 |
 | 客户场景 | 装配线视觉检测 / 包装线 / MES 数据回传 / 多工位集群 |
 | 部署模式 | Windows 工控机本地安装（Inno Setup 一键包，约 1.5 GB），Electron 桌面壳套 FastAPI 后端 + Vue3 前端 |
-| 当前线上版本 | **v3.56.0**（2026-09-01）— 周期多码采集与检测流程增强；完整变更见 `docs/changelog/`，版本权威源为 `electron/package.json`。 |
+| 当前线上版本 | **v3.59.0**（2026-09-17）— 容器定界周期：自定义模式 `pipeline_config.custom_cycle_owner='container'`（默认 'steps' 零配置差异）——`ContainerCycleGate` 容器标签到位确认（默认 1s）开周期/离场确认（默认 3s）强制结算，容器标签由门独占消费不入步骤侧、容器缺席时动作不入账不误开周期；`_settle_container_cycle` 按 custom_based_on 分支结算（detection 形态无序完备判定：缺步 NG、**重复动作宽容**）；步骤侧结算四处让位守门（events_check 自定义结算块 / first_step 重现 / 空闲超时 / 二次 start_cycle）；runner 标签过滤放行容器标签（容器行建议 enabled=False 不参与完备判定）；前端 LogicConfigTab「周期定界」选择器+参数卡；`/source/detection/results` 透出 `container_gate`（未配置不透出）。东莞包装场景（盒体常驻画面+盒内动作无序完备）诉求；检测模式 last_step 剥 accept_once × "步骤交替即新出现"结构性冲突四轮真实视频实验复现后走容器主权新架构。上一版 v3.58.0（2026-09-17）— 合并发版：①多显示器工位检测屏跟皮——总控 layout.body 自定义布局同步到工位 kiosk/station_view 窗、工位窗沿用主屏导航与插件皮、只读统一 multi_monitor.readonly（`readonlyActions.protectMonitorActions` 防护全部写通路）、工位窗 selectedChannel 锁定绑定通道，并**拆除 v3.57.0 参观屏/独立观看槽**（配置/开窗/viewer 槽删除，旧 visitor 字段读取忽略零迁移）；②纯自定义条件互斥与空闲超时中断——纯 custom 同帧只推进一条条件分支（完整条件优先/条件顺序次之）、结算后标签锁存至真实离场才能再开周期、非前缀标签不开空周期、`idle_timeout_event_id` 可配空闲超时中断事件（未配回退事件 2，不可用保持周期），based-on sequential/detection 零差异；③录像检测框 sidecar 与带框版归档投递——`record_boxes_data`（默认关）录像旁成对写帧号对齐 .boxes.json（run-length 只记变化帧免疫丢帧漂移）+ 回放 canvas 叠加（GET /data/videos/{id}/boxes）+ 归档规则 `annotated_video`（默认关）烧框 MP4 投递失败降级原片 + /annotated 手动下载（m0012）；④朝向头姿全角度模型开关 `headpose_full_range`（GET/PUT /orientation/config，KV 落库推理侧即时刷新，默认正脸模型背对相机跳过头姿精化，六和蒸镀现场）。新功能默认关或零配置差异。上一版 v3.57.0（2026-09-15）— 六批次汇合发版：①AI 能力批次——OCR 读字/异常检测升级为正式逻辑模式（`source_ai_modes_mixin` 独立采样线程不依赖 YOLO 即可开检测，OCR 稳定读数/正则判定/变化去重 + 异常合格品记忆库连续超阈/冷却/恢复收口，判定走标准 `_trigger_event` 结算链）+ VLM 坐诊（OpenAI 兼容 HTTP，默认关）+ 端到端 ONNX 无 NMS 直推（YOLO26/RF-DETR 形态，互连契约 1.1）+ 新端点组 `/ocr` `/anomaly` `/vlm`；②内置能力模型入仓与能力选用体系——models 表 capability/builtin 列（m0011）+ 六出厂行幂等 seed（检人/朝向/头姿/OCR/异常/VLM）+ `/models/capabilities` 目录/bind 换权重热重载/内置禁删 + `CapabilityAttachmentsMixin` 能力挂件副通道（pose/ocr/anomaly 独立节流线程，`capability_outputs` 透出，无挂件零开销）+ 模型页三分区与试一试抽屉，AI 能力试用独立页下线；③朝向估计三层后端收敛（关键点二选一 + headpose 精化 + YawSmoother，按授权降级）+ facing_dwell 朝向驻留规则（蒸镀点检：夹角判定/容差/超时无人取反告警 + ROI 编辑器单点标定）+ `/orientation`；④区域事件监控型规则四种（region_count/region_empty/proximity/cross_count，与动作型正交，min_seconds 上限 3600s）+「只认操作员」蓝工装 HSV 启发式（规则级 require_operator 默认关）；⑤投影光引导 P1~P3（`/lightguide` ArUco 自动标定 + `/projection` 投影画布引导渲染 + 四角自愈锚点漂移自动重标 + NG 悬停确认 + Electron 窗口角色 role×contentRole 双轨 + 参数卡，默认关）；⑥多平台安装包——Ubuntu deb + macOS dmg（arm64/Intel）、海康 Linux SDK 与嵌入式 PG 16.15 随包（setup_embedded_pg.sh 失败回落 SQLite）、License probeMacos ioreg 指纹修复（原 darwin 误走 probeLinux 弱 ID）；⑦多显示器二期——工位可操作主屏 + 手部裁切副屏（`/snapshot?view=hands` 只读、fixed/follow、无手不冻帧）+ 同工位独立观看槽（主屏放大不断副屏，JPEG 按工位共享编码）+ 扩展步骤 OK/NG 恢复；⑧**全系 ROI 多块化**——任意画区域处自由绘制任意数量区域，`source_geometry.normalize_polygons/normalize_rects/point_in_any_polygon` 与前端 `utils/polygons.js` 同源双格式契约（**单块存旧格式/多块存嵌套格式，存量配置零迁移**），全消费点"任一块命中"（推理 ROI mask/tracking/步骤/标签拆分/区域事件/称重/ScanD/OCR/异常/能力挂件），RoiEditorDialog 多块绘制（完成本块/撤销点/删除上一块）；随版收编 v3.56.0a 六和多码采集现场补丁（催扫/本件扫完/挂起单计数/count_on_settle/standby_silent）；site-pack 配方包后端落地但摘除挂载（WIP）。新功能全部默认关或零配置差异。上一版 v3.56.0（2026-09-01）— 周期多码采集子系统原生落地（六和焊接组装工位：一工件周期扫 母排×1 + 芯子×6/9 + 工装收尾×1，`ScanCollectEngine` 槽位制正则分类/组内与跨件去重/数量门/收尾结算 + 新表 `scan_collect_configs`/`scan_collect_records` + `/scan-collect/*` 8 端点 + mes_hooks 优先路径互斥单码绑定 + 槽位级策略覆盖（循环工装码跨件豁免/芯子多扫判NG）+ NG 挂起补扫转 OK·按 NG 放行 + vision_gate 视觉扫码双重验证 + `scan_group_end` 一工件一 txt（UTF-8 BOM+CRLF）+ MES 扫码器「多码采集」配置卡与五形态 ScanSlotsPanel（kiosk 只读）+ 工件追溯组件码按码组分节）；并行收编：per_item 五件套（多标签OR/吸收窗/超时未覆盖警告/按件计数/待补通知）、装箱清点 stable_anchor_s 锚点+看全下修+容器虚拟步骤、缺步提前发现（hold 档）与重复当场提示、监控清零二选一（scope=cycle 保留计数+包装流联动）、检测模式超时结算卡、MPS 读写锁并发推理+FP16、GPU 钉选落盘、lg-worktime 1.5.3 冻帧自愈。全部默认关零配置差异。上一版 v3.55.0（2026-08-22）— 检测主页按工位 `logic_mode` 切工艺面板（tracking→清点 / per_item→逐件 / weighing→称重，步骤类仍 SOP；槽位 id 落库契约 dual=`sop-row` / triple=`sop` / zoom=`sop` / single=`mode-panel` 不动）+ Monitor 巨石重构收口（composable / WorkstationColumn / WorkstationModePanel / ChannelDashboard）；放大与 kiosk 同源，kiosk 称重·逐件只读；单工位右侧栏拓扑不同不塞进 ChannelDashboard。零配置差异。上一版 v3.54.1（2026-08-22）— 补丁版：三工位（多工位路径）区域事件 SOP 按动作规则名建卡（收编 dev-qing 65cdfb5，剔除其夹带的未完成人工合格放行 UI——组件/前端 API/后端端点均缺失待原作者补全）——region_events 下 SOP/步骤表曾误用 steps_config 模型类别、无 in-flight 进行中点亮；改走 results 载荷 `region_events.rules` + `step_inflight_durations`（后端 v3.32 起已带，纯前端消费补齐），helper `regionEventRuleSteps` 单/多工位同源；e2e 补规则名建卡与 v3.54 自定义布局组合用例 + 可见 UAT 剧本；无后端改动零配置差异。上一版 v3.54.0（2026-08-21）— 检测主页自定义布局 + 录像存储自定义与长录像治理 + 前端信息架构重构：① 检测主页自定义布局——五形态（单/双/三工位/总览/放大）区块拖拽排版，"样式接管"机制（`data-layout-canvas`/`data-layout-slot` 标注 + runtime 绝对定位百分比坐标，无布局零差异），编辑器覆盖层（八向手柄/24×24 吸附/撤销重做/16:9 锁/z 序/localStorage 草稿防崩溃），按形态键存 SystemConfig KV `monitor_layout.*`（升级备份不丢，**保留命名空间**），reconcile 升级安全（新区块兜底区/孤儿忽略/坏数据整体回默认主页永不挂），新权限点 `monitor.layout.edit`，显示设置入口卡+全部恢复默认；② 录像存储位置自定义——`recording_custom_root` KV + `services/recording_storage.get_video_dirs()` 三处录制点动态解析实时生效，校验从严（黑名单/可写探测/与归档目的地双向互斥），盘失联自动回退默认根，清理/孤儿扫描/存储统计聚合双根，软件内直接回放（治"C 盘易满、无法实时指定视频路径"）；③ 长录像治理三件套（治 24h 录像"视频加载失败"）——录制改 fragmented MP4（`+frag_keyframe+empty_moov+default_base_moof`+`-flush_packets 1`，崩溃仍可解码）+ release 后台 remux_to_faststart 流拷贝出常规 MP4、回放端 h264+yuv420p 探测直出免转码、会话录像按小时分段轮转（每段独立 VideoClip + `GET /data/sessions/{id}/videos` + 播放器分段切换条）；④ 前端 IA 重构——输入源页扩为「工位与输入源」四 tab（多屏/工位组/流水线串行迁入）、MES 页分组 tab（包装结算/触发中心迁入）、项目配置条件 tab「装箱清点」（混合跟踪时出现）、系统设置瘦身，手册/skill/e2e 全量同步；⑤ 全前端文案专业化+匿名化（滑块→物品/托盘→容器/去客户名）+「存为我的模板」本地模板；⑥ 前端巨石拆分五连（Data/Settings/Alarm/Monitor/Project 行为零差异）；⑦ 收编缸体判型二期（feat/tianyong：切步数量门顺序检查/补齐消警/结算挂起/锁框叠加层/手动结算/PLC 判型码）与三工位一屏等宽三列（dev-qing）；⑧ CI 新增 Windows e2e 跑道（起服务/等端口/pytest 单 step 治 Start-Process 活不过 step 边界）。上一版 v3.53.0（2026-08-20）— 录像归档与媒体证据体系（一~四期一次落地）：规则驱动的周期录像自动归档（`video_archive_rules/logs` 两表 + 录像收尾入队独立 worker + 结果/工位/项目三重过滤 + Jinja2 文件名模板 + tmp+rename 原子落位 + 重名策略 + spool 断点重放 8 次预算 + 目录黑名单护栏 + `/api/v1/export/video-archive/*` + Data 页归档卡/弹窗/台账）+ 证据能力（NG 结算瞬间推理线程同帧抽带框关键帧 keyframe_wanted 零开销守门 / sidecar 绑导出模板成对渲染 / bundle_zip 证据包 / evidence-pack 手动批量下载 / clip_tail FFmpeg 尾段秒切失败回退整段）+ 生态联动（字段库 archived_video_path/archived_at/archive_status + aggregations 归档成败数 + MES 网关 video_archived 事件 + 插件 hook + 短信 {archive_success} 变量）+ 远端与治理（FTP/SFTP/S3/HTTP adapter 统一 deliver 契约 + Fernet 凭据加密落库密文回显打码 + PluginHost.register_archive_adapter + 时间窗窗外 defer 不耗预算 + 带宽限速 + 历史回补 + 删源字节校验一致才删）；全部默认关零配置差异。随版修复：监控页无扫码器仍画"等待扫码/清除/禁用扫码"（v3.47 守门丢失，全渲染点挂 hasScannerFor，scanner_resume_blocked 视为在场证据）。上一版 v3.52.0（2026-08-18）— 多显示器一期（dev-qing 合入）：工位子窗映射与单通道监控页——Electron multi-monitor.js 按 display_id/bounds 为每工位开无边框 kiosk 子窗（License 守门/主窗所在屏保留总览操作权/同区去重/renderer 崩溃 60s 窗口 3 次熔断/关机三出口销毁）+ 后端 workstation_config.json 新增 multi_monitor 顶层段（GET/PUT /workstations/multi-monitor，PUT 挂 settings.edit）+ 前端 SingleChannelMonitor 共用单工位组件（主屏放大态与副屏 kiosk 共用，kiosk 屏蔽 Toast/人工确认/插件覆盖/扫码等全部写通路只轮询绑定工位）+ 设置页多屏配置卡热应用 + 多屏开启时主屏总览改快照轮询让出 MJPEG + kiosk 路由不污染主窗路由记忆；默认 enabled=false 零配置差异。随版收编：_save_config 整写抹别段改 merge（不变量 17）、start HTTP 迟返时轮询按后端 is_detecting 释放前端操作锁；合并审计拦下"网格总览整卡点击放大被误改为仅选中"回归（v3.47 行为守住，e2e 双向守门）。**更早版本与逐版变更详见 `docs/changelog/`，本文件不再记版本流水账** |
 | 主仓库 | `17373531860/tianjun-ai-vision`（**PRIVATE**） |
 | 中转仓库 | `xu-yanzhi32/tianjun-releases` + `tianjun-releases-2`（Gitee 公开 release，给客户下载用） |
 | 母语 | **中文**（用户和注释主语言；技术术语保留英文） |
@@ -247,6 +247,7 @@
 | `/anomaly/*` | `anomaly.py` | 2026-09 异常检测合格品记忆库（模型仓库试一试抽屉管理 + anomaly 逻辑模式） |
 | `/vlm/*` | `vlm.py` | 2026-09 VLM 坐诊看图问答（默认关） |
 | `/orientation/*` | `orientation.py` | 2026-09 朝向估计试用/装机标定（facing_dwell 推理侧探针，三层后端） |
+| `/lightguide/*` | `lightguide.py` | v3.57 投影光引导（ArUco 标定/亮度采样/参数 KV，默认关） |
 | `/debug/*` | `debug.py` | 通道诊断 + 调试日志中心 |
 
 > **常见误解**：路径前缀是 **`/api/v1/`** 不是 `/api/`；旧手册写的 `/api/detection/*` 已删，等价端点在 `/api/v1/source/detection/*`。
@@ -330,7 +331,60 @@
 
 ## 十一、版本历史
 
-逐版变更见 `docs/changelog/`，总览见 `docs/CHANGELOG.md`。仅排查相关版本回归或准备发版时读取对应条目，不在常驻指令中复制版本流水账。
+> **逐版完整变更已下放**到 `docs/changelog/`（每版 `.md` + `.json`）。本文件**只记最近几版一句话定位**，发版时不再往这里堆 changelog。
+
+| 版本 | 日期 | 一句话 |
+|---|---|---|
+| v3.59.0 | 2026-09-17 | 容器定界周期：自定义模式周期主权可归容器（`custom_cycle_owner='container'` 默认关）——ContainerCycleGate 到位开周期/离场即结算 + 无序完备判定（缺步 NG 重复宽容）+ 步骤侧结算让位守门 + 前端周期定界选择器；东莞包装场景 |
+| v3.58.0 | 2026-09-17 | 合并发版：多显示器工位检测屏跟皮（layout.body 同步 + readonlyActions 只读防护）并拆除参观屏/观看槽（旧字段忽略零迁移）+ 纯自定义条件互斥（同帧单分支/结算锁存）与空闲超时中断事件 + 录像检测框 sidecar（帧号对齐回放叠加）与带框版归档投递（m0012，默认关）+ 朝向头姿全角度开关（/orientation/config，六和蒸镀） |
+| v3.57.0 | 2026-09-15 | 六批次汇合：OCR/异常检测正式逻辑模式 + VLM + 端到端 ONNX 直推 + 内置能力模型体系（m0011/能力挂件/试一试抽屉）+ 朝向驻留 facing_dwell + 区域事件监控型规则/蓝工装只认操作员 + 投影光引导 P1~P3 + 多平台安装包（deb/dmg/嵌入式 PG）+ 多显示器二期（工位主屏/手部副屏/独立观看槽）+ **全系 ROI 多块化**（双格式零迁移）；收编 v3.56.0a；site-pack 后端 WIP 摘除挂载 |
+| v3.56.0 | 2026-09-01 | 周期多码采集子系统（槽位制分类/去重/数量门/收尾结算 + NG 挂起补扫 + 视觉双验 + 一工件一 txt + 五形态面板与追溯反查，默认关）+ per_item 五件套 + 装箱取值锚点/虚拟步骤 + 缺步提前 + 清零二选一 + MPS 读写锁并发 |
+| v3.55.0 | 2026-08-22 | 检测主页按工位 logic_mode 切工艺面板（清点/逐件/称重，步骤类仍 SOP；槽位 id 不动）+ Monitor 巨石重构收口（ModePanel / ChannelDashboard）；kiosk 只读；零配置差异 |
+| v3.54.1 | 2026-08-22 | 补丁版：三工位（多工位路径）区域事件 SOP 按动作规则名建卡 + in-flight 进行中点亮（收编 dev-qing，剔除未完成人工合格放行夹带）；e2e 补自定义布局组合用例 + 可见 UAT；无后端改动零配置差异 |
+| v3.54.0 | 2026-08-21 | 检测主页自定义布局（五形态拖拽排版/样式接管/reconcile 升级安全/monitor.layout.edit 权限/显示设置入口）+ 录像存储位置自定义（recording_custom_root 动态解析实时生效/与归档互斥/清理聚合双根）+ 长录像治理三件套（fMP4 录制崩溃可解码 + 后台 remux faststart / h264 探测直出免转码 / 会话按小时分段+分段回放条，治 24h 录像加载失败）+ 前端 IA 重构（工位与输入源四 tab / MES 分组 tab 收包装结算与触发中心 / 装箱清点独立 Tab / 系统设置瘦身）+ 文案专业化匿名化与本地模板 + 巨石拆分五连 + 收编缸体判型二期（tianyong）与三工位一屏三列（dev-qing）+ Windows e2e 跑道 |
+| v3.53.0 | 2026-08-20 | 录像归档与媒体证据体系一~四期：规则驱动周期录像自动归档（模板命名/原子落位/spool 重放/台账/Data 页配置弹窗）+ NG 结算瞬间带框关键帧/sidecar 报告/证据包 zip/事件切片 + archived_* 进字段库/video_archived 网关事件与插件 hook/短信变量 + FTP/SFTP/S3/HTTP adapter/Fernet 凭据加密/插件 adapter 注册口/时间窗/限速/历史回补/归档后删源；全部默认关零差异。随版修监控页无扫码器仍画等待扫码/扫码按钮（v3.47 守门丢失） |
+| v3.52.0 | 2026-08-18 | 多显示器一期（dev-qing 合入）：Electron 工位子窗映射（kiosk 只读副屏 + 主屏保留操作权 + 崩溃熔断 + 关机清理）+ multi_monitor 配置段与设置页热应用 + SingleChannelMonitor 共用单工位组件 + 主屏总览快照让位 MJPEG；随版收编 _save_config 整写抹别段改 merge、start 迟返操作锁释放；合并审计拦下网格点击放大回归；默认关零配置差异 |
+| v3.51.5 | 2026-08-17 | 捷昌 B 站现场补丁收编版：v3.51.3a/b/c 热补丁全量收编（相机/模型串位、启动黑屏要切页、自动开始盖手动停止、绑项目抹相机配置、多工位追溯页藏工件致去重误拒）+ 详细调试日志体系（写盘/拒码/枚举回退全留痕）+ 捷昌三通道打包线标注规范（二工位小件 v1.0 带正误示范图 PDF）；升级零配置差异 |
+| v3.51.4 | 2026-08-15 | 交付补全补丁版：安装包收编 sqlite_to_pg 迁移工具（v3.49~v3.51.3 从未进包，成品解剖审计才发现）+ CI 打包资源自检缺失红灯 + run-tests/build-release 沉淀「交付审计逃逸复盘」；无代码行为变更 |
+| v3.51.3 | 2026-08-15 | 捷昌现场夜测补丁版 + PG 交付缺口修复：摄像头枚举 ffmpeg dshow + USB (vid,pid,serial) 物理去重（治 4 列 3/双工位同选超时）+ 跨工位抢相机预检 14ms 快速失败 + SQLite disk I/O error 启动自愈（隔离坏侧车 .corrupt-* 重试）与退出 wal_checkpoint(TRUNCATE) + CI 真正带出嵌入式 PG 16.15 可选组件（v3.49~v3.51.2 安装包从没有过 PG 选项）；四路真实 E2E（真相机/真坏库/真 PG 710 测试/真浏览器）验证 |
+| v3.51.2 | 2026-08-14 | 摄像头生命周期仿真战役补丁版：Mac 真机 67 断言仿真相机全路径（占用/抢相机/调参重开/开停竞态/强杀重启恢复/双工位异模型恢复），修相机格式探测 Strategy 3 macOS 误入 V4L2 重开留死句柄僵尸态（启动成功但画面永远 No Source）+ 全平台终检；剧本归档 tests/uat/mac_camera_sim/ |
+| v3.51.1 | 2026-08-14 | 捷昌 B 站双工位虚拟战役补丁版：虚拟双工位环境（synthetic 剧本源 + 假 TCP 扫码器）60 断言复现现场，修 6 个新功能路径 bug（新码强制收旧账对挂账周期失效 / 拒码后扫码器灯不回亮 / force_ng 超时误播已合格 / 组级 NG 覆盖跨轮污染 / 豁免漂移吞新品种 / 统一播报弹错 Toast）+ synthetic 支持 tracking 模式 + UAT 剧本归档 tests/uat/virtual_dual_station/ |
+| v3.51.0 | 2026-08-14 | 捷昌 B 站双工位整改批次：v3.50.0a 热补丁 17 条全量收编（堆损坏 0xC0000374 治本/E 码-合格-码/扫码后才计数/广播全 OK 亮灯/绑定保护/齐件即结算周期守门）+ 开机黑屏收尾兜底恢复轮 + 激活收养开关 activate.adopt_unbound（默认开=存量）+ 工位组统一播报 unified_ok_report（全员合格才一起报 OK，NG 永不抑制，默认关）+ 数据清理联动解封 ok 工件；新增项默认关或保持存量零差异 |
+| v3.50.0 | 2026-08-12 | 捷昌二期批次：跟踪模式齐件即结算（仅 ROI离开/容器策略，凑齐并稳定 N 帧立即出结果 + 步骤级"确认放入帧数" + ROI 豁免名单/容器"已结算等离开"状态机防二次入账 + scan_pair 互斥守门）+ 扫码器生命周期码-合格-码闭环（resume_on 仅 OK 亮灯 NG 灭灯等人工恢复：监控页按钮/POST /scanner/resume/触发中心 resume_scanner 三出口 + rearm_forget_last 亮灯作废旧码 + strict_ok_dedup 强制去重 + 拒绝路径统一警告 toast，m0010）；全部默认关零差异 |
+| v3.49.0 | 2026-08-12 | 捷昌整改批次：MES 外推并发派发（连接级执行器 + gateway_spool 落盘补发 + 重试预算可配）+ 集群副机上报异步化（独立线程 + cluster_report_spool 断网重放 + report-status 可观测）+ scan_pair 新码先上屏（显式 prev_wp_id 异步结算旧窗口，上屏与结算解耦；广播兄弟通道结算串身份修复）+ 结算耗时埋点 backend.timing + PostgreSQL 支持（sql_compat 方言收编 + pg_dump 备份 + DATABASE_URL 注入 + 数据库卡片 + 安装器 PG 组件 + sqlite_to_pg --verify；幽灵项目绑定 stale 忽略）+ 双方言 db-matrix 扩容与双后端可见 UAT |
+| v3.48.1 | 2026-08-11 | 体验修复补丁版：多工位监控（>4 工位）视频加载不出/WebKit 黑屏治本（MJPEG 超 6 连接上限改快照轮询 + 零帧断流自动降级 + 取帧节奏按工位数自适应）+ 数据中心录像「视频加载失败」治本（转码 .tmp 原子落位 + 缓存 `_h264v2` + 超时 300s）+ NG 录像回看三件套（周期 仅OK/仅NG 筛选 + 0.5x~4x 倍速 + 下载录像）+ Electron 退出僵尸 python 兜底（race 8s + forceKillSync）+ alembic env 补 5 组模型 import（修 PG 基线迁移 CI） |
+| v3.48.0 | 2026-08-10 | 三分支汇合发版：RFC 13 通用 PLC 连接器（8 协议驱动 + 点位引擎 + bind_sn 绑码/结果码写回 + s7_db_handshake 模板，默认无连接零开销）+ RFC 14 统一触发中心（虚拟按钮/脚踏板/HTTP/串口/定时 6 源 × 全局动作注册表，channel 裁撤第 5 处清理）+ 计数组合判定表（纯视觉判型 + positional 位置去重六参数）+ 上银 SY9（槽位完整性门 + 物品/托盘去重 IoU 可配 + 放工单只认收尾后，m0009；与 v3.47 五开关归一化桥接零差异）+ Modbus 完成脉冲外设协议（逐件覆盖 all_covered/cycle_ok 联动，台达 ES3 文档）+ 短信汇总合并分列/逐工位 + 工位筛选 |
+| v3.47.0 | 2026-08-07 | 多分支汇合发版：多工位监控布局重构（三工位横排+网格分页总览+放大详情，工位上限 4→64）+ YoloVision 训练平台互连（模型双向分发+现场帧采样回流自学习闭环，默认关，m0008）+ 开机首启提速/授权激活治本六项（Defender 排除+startup-heavy-init 后台化+machineId 快路径，m0007）+ LG 工时看板插件 v1.5.2（F8 插件导出字段落地）+ custom_mix 记账五开关 + NG 汇总数字口径可选 + macOS MPS 并发串行锁 |
+| v3.46.0 | 2026-08-05 | 主程序原生短信/微信通知栈（NG 12h 汇总 + 每日短信日报，五通道统一 sms_providers 工厂共享 sms_config，默认关，迁移 m0006，插件 hook daily_report_before_send）+ 推理设备 auto 档支持 Apple MPS（torch_device 统一出口，MPS 强制 FP32）+ tools/sms_4g 独立 AT 调试工具 + debug-sms skill |
+| v3.45.0 | 2026-07-29 | 上银 SY 包装线热补丁收编（0a~0e 滑块记账体系重做：在位身份各自累计峰值+结算挂账等真账+动作前稳定计数快照，双真实视频回归零误判）+ 箱标签扫码授权（组⑧逐箱扫码定数量）+ 包装工单同步进工单管理（默认开）+ 萍乡称重整改（清秤 Z/T 智能选择+过程提醒档+网关推送异步化+达梦溢出）+ 海康 SDK 帧率可配 + dev-qing 逐件修复合入 |
+| v3.44.0 | 2026-07-22 | 上银 SY3 NG 处置整改（箱账挂起等处置+工单收尾快照保留+收尾防呆数量门/缺步挂起，真实录像 UAT 验收）+ NG 处置配置统一模型（ng_handling 收敛五代开关，逻辑设置 6卡→2卡+事件页双向联动明示）+ 放托盘动作不应期（治闪断双结算）+ 电子秤串口延迟治本（萍乡） |
+| v3.43.0 | 2026-07-20 | 上银包装线整改（放工单=工单收尾语义重构+缺工单判定二选一+重扫拦截+gate永不放行修复+提前放工单报警+确认框闪退修复）+ 实时NG违规即时结算开关 + 人工确认弹窗原因固化/处置明示 + 称重看板被SOP抢占修复 + 操作手册封面品牌重制 |
+| v3.42.0 | 2026-07-17 | 「抓取锚点框」标定用单帧推理兜底（infer-once 端点，停止/待机可标定，治打包版标定死环）+ 川南终态工单再开工策略（revive 默认自动复活 / reject 拒收）与开工响应透明化 + 电机装配部署指南 v1.2 |
+| v3.41.1 | 2026-07-17 | 技彩 USB 相机"锁帧"修复：三条相机重开路径回放曝光设置 + 曝光按后端语义精准写值（MSMF AE=0 / DSHOW AE=0.25 分道）+ Windows 关 MSMF 硬件变换探测 + 开发文档九版补账（阅读笔记×5 + 深潜×2 + 操作手册） |
+| v3.41.0 | 2026-07-17 | 川南 MES 对接两修复：复用工单按"最新开工为准"重绑（治四要素不上屏+推送工单字段 null）+ 网关"仅 NG"周期过滤补嵌套结果取值（治合格周期误推报警接口）+ 网关事件下拉露出称重成品结案 + 模拟秤墙钟计时 + 百斯特手册 v2.1 勘误 |
+| v3.40.0 | 2026-07-17 | 川南顺序检测两修复：周期跑偏末步余像误判"合法重复"严格前缀守门（治末步 OK/NG 闪烁+结算多报重复步骤）+ 开工报文自动拉起检测时空闲监控页自动接管（空闲看门狗+轮询真相源同步）+ 末步结果权威 PT 锁定 |
+| v3.39.0 | 2026-07-16 | 萍乡百斯特两阶段流水线称重（离秤冻结结算 + 待收尾 FIFO 队列 + 秤指令自动驱动）+ 川南在途报警软件内消除出口 + 开工自动开始检测暂停源复活/原因回带 + 监控页信息条显示定制/扫码按钮可隐 |
+| v3.38.0 | 2026-07-15 | 川南"框冻结"治本三刀（收尾持久化出推理线程 + MES 网关熔断/锁窗口收敛 + 清理事务卫生）+ 运行中开工工单回填 + 萍乡自定义班次/皮重看板/称重数值条 + 扫码器旁路 SN 监控 + NG top3 保持 |
+| v3.37.0 | 2026-07-14 | 川南反馈整改（开工切项目界面自动跟随 + 开工自动开始检测 + 推理框卡死自愈 + 图像分割入口恢复）+ Logo 打包版回退回归修复 |
+| v3.36.1 | 2026-07-13 | 区域事件 overlap 规则「目标框扩边」object_margin（TP 工件下沿扫码几何盲区补丁，与帧率解耦）+ 展会插件 v1.4.1 面板对齐 |
+| v3.36.0 | 2026-07-12 | 导航栏 Logo 客户自定义上传（显示设置）+ 展会全应用插件 v1.4.0 全量对齐 v3.33~v3.35 功能面（主程序配置 schema 零改动）|
+| v3.35.0 | 2026-07-12 | 萍乡百斯特称重融合架构（视觉 SOP × 秤步骤门控 + 前置选择有效期 + 视觉料源防错）+ USB 报警确认按钮 + MES 数据库直写适配器（达梦等 5 库）+ 包装线复合条码取段/工单号识别/放工单=尾箱收尾 + 步骤消失等待不被打断 |
+| v3.34.0 | 2026-07-09 | 电机装配线真实模型上线打磨（多轮次拆分三防护 + 时长门幽灵起点/帧位口径修复 + 违序只报提前出现）+ 人工确认「确认后保留周期(断点补做)」+ 区域事件秒基确认时长 + 标注规范 v1.1/部署指南 + sensor-clean v1.4.2 |
+| v3.33.0 | 2026-07-07 | 逐件覆盖重复打防护 + 换板兜底结算 + 安装器目录可选/升级搬家 + 显示与使用一致性修复（工位绑定回写）+ sensor-clean v1.4.1 |
+| v3.32.0 | 2026-07-07 | 同标签区域拆分（虚拟步骤/多轮次）+ 区域事件模式（第 6 种逻辑模式，动作规则引擎+序列结算）+ MediaPipe 骨架样式可配 + 频闪自动诊断 + 推理线程单例守护 + 工程治理批次（视图拆分/迁移版本化/路由登记/开发者文档体系）+ showcase v1.3.1 / sensor-clean v1.3.0 |
+| v3.31.0 | 2026-06-29 | 主程序原生「称重投料模式」落地（电子秤配料防错全流程：去皮+对比标准量+缺料/超量报警+逐件记录持久化落库）+ 设备读数驱动状态机引擎 + PL2303 驱动内置 + mock_weight 模拟 + bestar 插件退役 |
+| v3.30.0 | 2026-06-28 | 规格→项目自动切换升级为统一匹配器（对照表精确→通配符→自动同名子串，入站与包装共用，与位置/分隔符解耦，按名匹配默认关+严格边界可选档）+ custom_mix 容器进箱确认多方式（仅帧/仅动作/OR/AND+放托盘动作状态机+屏蔽窗口）+ 频闪修复与逐帧诊断 |
+| v3.29.0 | 2026-06-27 | 外部 MES/中控双向对接全闭环（川南火工范式：开工切项目+四要素上屏+在途报警台账闭环+最新开工顶替回推完工+健康检查+自定义接收路径）+ 去硬编码可配置化（集群计时/面板刷新间隔/日志条数）+ 后端崩溃自愈看门狗 + 开机自启可选 |
+| v3.28.0 | 2026-06-27 | 逐件覆盖模式离场快照判定+漏打挂起待补+判定时机解耦 + 插件配置统一保存 + 传感器清洁插件 v1.2.0（选择性抑制提示框+棉签使用记录数据页） |
+| v3.27.0 | 2026-06-25 | 插件平台「插件主动触发主程序事件」桥接 + 传感器清洁插件三判定接入事件体系 |
+| v3.23.0 | 2026-06-22 | 上银包装线现场闭环增强 + 通用 NG 补做策略（人工确认定格 / 强制结案审计 / 缺油嘴 gate） |
+| v3.20.0 | 2026-06-15 | 外部 MES 工单主动拉取 + USB 键盘扫码枪 + 调试埋点 |
+| v3.19.0 | 2026-06-11 | 全局调试日志系统 + NG 原因可解释性 |
+| v3.14.0 | 2026-05-29 | RFC 11 串行流水线结算（Workpiece Flow Coordinator） |
+| v3.13.1 | 2026-05-29 | RFC 09 插件平台升级 + RFC 10 工位组主程序原生 |
+| v3.10.0 | 2026-05-25 | 用户系统完整闭环（多角色账号 + token 鉴权 + 端点级权限 + M2M API Key） |
+
+（更早版本见 `docs/changelog/`）
 
 ---
 
@@ -342,6 +396,6 @@
 
 ---
 
-**本文件最后更新**：2026-09-14（按 GPT-6 Astra 官方建议收窄流程、授权与验证范围；产品版本不变）
+**本文件最后更新**：2026-09-17（发版 v3.59.0：容器定界周期——自定义模式周期主权可归容器，`custom_cycle_owner='container'` 默认关零差异；第一节版本号 + 第十一节里程碑同步，无新路由前缀。同日上一版 v3.58.0：dev-qing 合并发版）
 **维护者**：项目主作者 + AI agents
 **维护铁律**：本文件只放"地图 + 守则 + 不变量"。模块细节进 skill，版本变更进 `docs/changelog/`，扩展点/技术债进 `docs/plugin-system/inventory/`。**发版时务必同步更新本文件第一节版本号 + 文件尾日期**（详见 `update-release` skill）。

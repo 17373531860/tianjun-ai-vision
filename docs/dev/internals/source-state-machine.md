@@ -48,6 +48,8 @@ Disclaimer（CPython InternalDocs 三行模板）：
 > - `pipeline`（v3.39 两阶段流水线）：同时最多两件在制——秤上件离秤瞬间冻结重量事实并判 OK/NG，随后进"待收尾 FIFO 队列"，视觉识别收尾动作时结案队头件；秤指令（去皮/清零）严格重量驱动，视觉标签只做加速/双确认佐证（模型漏检不影响称重主链路）。
 > 后两档都要求推理热路径喂帧给引擎（`_weighing_visual_feed`）。
 
+> **v3.59 周期主权分叉（custom 专属）**：`pipeline_config.custom_cycle_owner`（默认 `steps`）。设 `container` 时周期主权归容器——`ContainerCycleGate`（`source_custom_mix.py`）以 `container_gate_label` 的到位确认（默认 1s）开周期、离场确认（默认 3s）触发 `_settle_container_cycle` 强制结算（detection 形态无序完备判定，缺步 NG、重复动作宽容）；步骤侧结算信号（events_check custom 块 / first_step 重现 / 空闲超时 / settlement_mode）**全部让位**，容器标签由门独占消费不入步骤记账，容器缺席时动作不入账。与 `custom_mixed_with` 的"周期主权归步骤侧、容器只是计数器"契约互补——前者判"动作做没做全"，后者数"进箱多少件"。
+
 ## 四种 settlement_mode（档案卡）
 
 | settlement_mode | 含义 | 激活条件 | 核心函数 | 备注 |

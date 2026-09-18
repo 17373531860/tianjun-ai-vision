@@ -242,6 +242,11 @@ def _init_event_and_cycle_state(h):
     h._last_event_time = 0.0  # v3.10.x 防重复结算时间窗口锚
     h._cycle_regression = False  # A-B-A 步骤回退标记
 
+    # v3.59 容器定界周期 (custom_cycle_owner='container'): 周期主权归容器,
+    # 由 apply_project_config 按配置构建; 缺省 'steps' + None = 零差异。
+    h._custom_cycle_owner = 'steps'
+    h._container_cycle_gate = None
+
     # 纯 custom 条件结算后，仍在画面的标签要等真实离场才可重新入周期。
     # dict 值为最后一次原始帧看见时间，用于复用步骤 disappear_delay 语义。
     h._pure_custom_settle_latched_labels = {}
@@ -468,6 +473,9 @@ def _init_recording_state(h):
     h._recording_drop_count = 0
     h.recording_failures = []
     h._recording_failure_lock = threading.Lock()
+    # 2026-09 检测框 sidecar: cycle 录像开启「记录检测框数据」时为 True,
+    # 采集线程据此在入队录制帧时同拍快照 current_detections (单写多读 bool)
+    h._boxes_sidecar_active = False
 
 
 # ============================================================

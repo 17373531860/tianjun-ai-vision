@@ -2,6 +2,42 @@
 
 > 阅读范围：2026-07-05 分段通读 `backend/main.py`、`backend/core/config.py`、`backend/api/source*.py` 全族（含 23 个 mixin + 14 个 has-a 组件）、`router_manifest.py`、`channel_manager.py`、`alarm.py`、`debug.py`、`system_display.py`、`services/weighing_engine.py`。**共 47 个文件**。
 >
+> **v3.59 补账（2026-09-17，容器定界周期 custom_cycle_owner='container'）**：
+> - `source_custom_mix.py`（+133 行）：新增 `ContainerCycleGate` 类——容器定界周期门 FSM：`feed(host, detections, current_time)` 每帧喂（在场候选满 `appear_seconds` 确认到位→若周期未开则 `start_cycle`（静默未开成不刷日志下一帧重试）；离场候选满 `gone_seconds` 确认→调 `host._settle_container_cycle()` 强制结算）；`cycle_open(host)`（以 `current_cycle_uuid` 为周期开合真相）；`to_state(host)`（前端透出最小状态）；`reset()`（在场/候选清零）。`build_container_gate(config)` 从项目配置构建：非 custom / owner!='container' / 缺 `container_gate_label` → None 零差异。
+> - `source_settlement_mixin.py`（+90 行）：①新增 `_settle_container_cycle`——容器离场结算入口，按 `custom_based_on` 分支：sequential→原 `_settle_custom_cycle`；纯 custom→原结算器带 `idle_timeout_event_id` 回退；detection→**无序完备判定**（required=custom_detection_steps 或启用步骤，缺步 NG 带原因、**重复动作宽容不判 NG**），判定前走 `_supplement_step_durations`/`_inject_backup_steps`/`_filter_cycle_by_duration`/`_reconcile_step_records` 同标准链，结算后清周期态；②first_step 重现结算按 `_custom_cycle_owner != 'container'` 守门让位；③首个动作入账时若容器周期已开（uuid 在）不二次 `start_cycle` 不覆盖周期起点。
+> - `source_step_stats_mixin.py`（+23 行）：帧入口 gate.feed 后容器标签从 detected/frame_detected/just_confirmed 三集合 discard（不当普通步骤记账）；周期未开（容器缺席）三集合整帧 clear（动作不入账不误开周期，tracking_scan_gate 先例）；空闲超时对容器主权周期让位。画框/MJPEG 不经这几个集合，显示不受影响。
+> - `source_events_check_mixin.py`：custom 自定义结算块整体按 `_custom_cycle_owner != 'container'` 守门让位（尾部步骤特定事件 trigger_event 照常）。
+> - `source_project_config_apply.py`：构建 `h._container_cycle_gate = build_container_gate(config)`（异常隔离置 None）+ `h._custom_cycle_owner`（gate 存在才 'container'）。
+> - `source_state_init.py`：`_custom_cycle_owner='steps'` / `_container_cycle_gate=None` 缺省初始化。
+> - `source.py`：①`_get_enabled_labels` 放行 `container_gate_label`（容器行建议 enabled=False，不放行则 runner 出口丢弃周期永远开不了）；②`_clear_step_runtime_state` 联动 `gate.reset()`（停止/切项目不留在场残影）。
+> - `source_routes.py`：`get_detection_results` 透出 `result['container_gate'] = gate.to_state(mgr)`（未配置不透出零差异）。
+> - 回归 `tests/test_container_cycle_gate.py`（22 例）；e2e `tests/e2e_browser/test_container_cycle_owner.py`（3 例）。
+>
+> **v3.58 补账（2026-09-17，dev-qing 合并：纯 custom 互斥/多屏工位跟皮 + 检测框 sidecar 录制侧）**：
+> - `source_settlement_mixin.py`（+204 行）：**纯 custom 条件互斥**——`_settle_custom_cycle` 家族对 based_on 非 sequential/detection 的纯 custom：①同帧多条件分支竞争只推进一条（完整条件优先、条件顺序次之，无 event_id 的条件不参与同帧竞争）；②结算后进锁存 `_pure_custom_settle_latched_labels`，标签**真实离场**（连续消失帧确认）才解锁允许再开新周期（治结算余像立刻误开下一周期）；③非前缀标签不能开空周期；④空闲超时中断走 `idle_timeout_event_id` 配置事件（未配/失配回退事件 2，事件不可用保持周期不误杀），完整条件命中仍走原条件结算事件。回归 `tests/test_custom_exclusive_timeout.py`（26 用例）。
+> - `source_step_stats_mixin.py`（+209 行）：纯 custom 分支推进侧配套——同帧分支选择、静态标签 pending（`_pure_custom_pending_static_label`：静态终态标签可命中条件而不入周期，锁存至触发帧）、跨周期同现组不能绕过分支前缀守门。
+> - `source_project_config_apply.py`：解析 `pipeline_config.idle_timeout_event_id`（仅纯 custom + idle_timeout_seconds>0 生效，校验存在于 events_config 否则回退事件 2 并打印告警）。`source_events_check_mixin.py`/`source_sequence_labels.py`/`source.py`：纯 custom 判定与标签流配套小改。
+> - `source_state_init.py`：新增 `_pure_custom_settle_latched_labels`/`_pure_custom_pending_static_label`/`idle_timeout_event_id`（custom 簇）+ `_boxes_sidecar_active`（录像检测框 sidecar：采集线程据此在入队录制帧时同拍快照 current_detections，单写多读 bool）。
+> - `source_recording_thread_mixin.py`：录制线程写帧成功后调 sidecar `observe(_frame_count, detections)`（帧号对齐，见 `services/detection_boxes_sidecar.py` 05 册）；`source_recording_api_mixin.py`：录像 release 延迟释放线程 flush sidecar 落盘；`source_session_lifecycle_mixin.py`：会话录像起停同步 sidecar 活跃位。
+> - `channel_manager.py`：**参观屏/独立观看槽（v3.57 二期）删除**——mapping 旧 visitor 字段读取忽略（零迁移），bounds 归一化提为静态方法 `_normalize_multi_monitor_bounds`；multi-monitor 端点 response_model 改 `exclude_unset`。
+>
+> **v3.57 补账（2026-09-15，六批次汇合发版：AI 能力/内置模型/光引导/多平台包/多屏二期/ROI 多块化）**：
+> - `source_geometry.py`：新增**多块 ROI 中央契约**——`normalize_polygons(raw)`（单块 `[[x,y],...]` / 多块 `[[[x,y],...],...]` 双格式统一归一成多边形列表，逐点 clamp 0~1）、`point_in_any_polygon(px,py,raw)`（任一块命中）、`normalize_rects(raw)`（`[x,y,w,h]` 单/多块同理）。**存储契约：单块存旧格式、多块存嵌套格式（前端 `utils/polygons.js` 同源镜像），存量配置零迁移**。全部 ROI 消费点自此只经这三个入口。回归 `tests/test_multi_polygon_roi.py`。
+> - `source_roi.py`：`_validate_roi` 走 normalize_polygons；`ensure_roi_mask` 多块一次 `cv2.fillPoly`（多块并集单 mask）；`_roi_polygon_pixels` 由单 ndarray 改 ndarray 列表；`is_bbox_center_in_roi`/`is_normalized_bbox_center_in_polygon` 遍历全部块。
+> - `source.py`：①多块化——`_is_in_roi`（tracking ROI）与 `_det_passes_roi_for_label`（步骤 ROI）改任一块命中；②多屏二期——**同工位独立观看槽**：主屏放大不再踢掉 station MJPEG 连接（观看槽按 viewer 独立、JPEG 按工位共享编码一次）；扩展步骤 OK/NG 恢复（步骤结果覆盖重复步骤/周期切换/旧事件回灌，`monitorModes` 前端对偶见 04 册）。
+> - `source_label_split.py`：`_parse_polygon` 返回 canonical 多块；新增 `_point_in_regions`（任一块）/`_transform_regions`（锚点跟随对逐块做同一仿射）。
+> - `source_project_config_apply.py`：`_apply_steps_config` 步骤 ROI 经 normalize_polygons 存**多边形列表**（`step_roi_polygons[label]` 语义由单多边形变列表）；接入 ai_modes / 能力挂件配置解析。
+> - **新 `source_ai_modes_mixin.py`**：OCR/异常正式逻辑模式宿主——独立节流采样线程（不依赖 YOLO 模型即可起检测），OCR 稳定读数 N 次一致→正则规则判定→文本变化去重，异常连续超阈值→NG（冷却期）→回落恢复 OK 收口；判定统一走 `_trigger_event` 结算链；`_norm_rect` 返回 canonical 多块矩形（None=整帧）。回归 `tests/test_ai_modes.py`。
+> - **新 `source_capability_attachments.py`**：`parse_capability_attachments` + `CapabilityAttachmentsMixin`——能力挂件副通道（pose/ocr/anomaly），独立后台线程按 interval_s 节流执行，结果透出 `results.capability_outputs`；无挂件项目零开销；`_cap_crops` 多块矩形裁剪逐块跑。回归 `tests/test_builtin_models.py`。
+> - **新 `source_e2e_onnx.py`**：无 NMS 端到端 ONNX 直推 runner（YOLO26/RF-DETR 形态，互连契约 1.1 `postprocess.mode=end_to_end`），加载层自动切换，其余模型零行为变化；track() 显式拒绝提示用 class_nms 形态。
+> - `source_region_events.py`/`_mixin.py`：①**监控型规则四种** region_count/region_empty/proximity/cross_count（与动作型正交：不参与打断/去重/序列），min_seconds 上限 30→3600s；②**facing_dwell 朝向驻留**——主体朝向与人→仪表点连线夹角判定（tolerance_deg 容差 + alert_on_absent 取反超时告警），VSM 层节流注入 facing 字段 + YawSmoother；③`tag_operator_uniforms` HSV 蓝/黄工装启发式打 `is_operator`（异常隔离不进主链路）+ 规则级 `require_operator` 守门（默认关）。
+> - `source_mediapipe.py`（+923 行）：手部裁切渲染——副屏 `/snapshot?view=hands` 数据源，裁切框 fixed|follow 两模式，无手不冻帧；`_render_hands_crop` 复用 mediapipe 绘制 specs。回归 `tests/test_hands_crop_snapshot.py`。
+> - `source_container_grouping_mixin.py`：ScanD zone_polygon 多块化（normalize_polygons + 任一块命中）。`source_custom_mix.py`/`source_step_stats_mixin.py`/`source_inference_router.py`：多边形消费点同批统一走中央 helper。
+> - `services/weighing_engine.py`：`point_in_polygon` 兼容双格式、任一块命中。
+> - `channel_manager.py`：multi_monitor 段扩容——工位主屏（station_view 复用主窗/kiosk 可操作）+ 手部副屏（aux_display_id/aux_hands_enabled/aux_view_mode）+ 窗口角色 `role(main|aux)` × 内容角色 `contentRole(monitor|projection)` 双轨字段归一化（老配置零差异）。
+> - `main.py`：启动幂等 seed 内置能力模型（builtin_models）与预置 `.yvmodel`（preset_models）；multi-monitor hands 快照路由接线。
+> - `router_manifest.py`：登记 `/ocr` `/anomaly` `/vlm` `/orientation` `/lightguide`；`site_pack` **摘除挂载**（WIP：前端/测试未做，代码保留，补齐后恢复）。
+>
 > **v3.56 补账（2026-09-01，多码采集发版随行的后端核心簇）**：
 > - `source_per_item_mixin.py`：逐件五件套——①步骤级 `action_label`/`item_label` 对称支持**数组 OR**（`_collect_item_boxes` 多标签框合并，旧单串兼容）；②`absorb_new_items_sec>0` 时 auto 步骤在周期开始后 N 秒内 `unbounded` 吸收新位置个体（治稳定窗口锁死后放件）；③`warn_uncovered_after_sec`+`warn_event_id` 个体 `first_seen_time` 超时未覆盖借事件响应面报一次（`warn_fired` 防重，不结周期）；④OK 结算按首步 `covered_count` 累加 `item_count_counter_name` 计数器（读取处 `getattr(self,'_per_item_config',None) or {}` 防御，v3.56 BUG-006）；⑤`remediation_event_notify` 待补态走 `fire_external_event_response(remind_only=True)`。回归 `tests/test_per_item_v356_features.py`。
 > - `source_custom_mix.py`：稳定值取值重设计——去固定 4s 回看，改 `stable_anchor_s`（锚点=动作成立−N 秒）+ `stable_pick`（max/latest）+ `slot_verified_drop`（看全帧众数下修才允许向下修正，须配槽位门）；锚点前无稳定记录峰值兜底；内存只留 `MODES_KEEP_S=300`。回归 `tests/test_custom_mix_unit.py`。

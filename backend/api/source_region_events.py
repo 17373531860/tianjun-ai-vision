@@ -92,7 +92,9 @@ from __future__ import annotations
 import math
 from typing import Optional
 
-from backend.api.source_label_split import _parse_bbox, _parse_polygon, _point_in_polygon
+from backend.api.source_label_split import (
+    _parse_bbox, _parse_polygon, _point_in_regions,
+)
 
 
 # ==================== 几何辅助 ====================
@@ -404,11 +406,12 @@ def _parse_rule(i: int, raw: dict) -> RegionEventRule:
             except (TypeError, ValueError):
                 raise ValueError(f"region_events.rules[{i}] ({name}) target_point 非数值")
         elif raw.get('target_region') is not None:
-            poly = _parse_polygon(raw.get('target_region'))
-            if poly is None:
+            polys = _parse_polygon(raw.get('target_region'))
+            if polys is None:
                 raise ValueError(f"region_events.rules[{i}] ({name}) target_region 多边形非法")
-            target_point = (sum(p[0] for p in poly) / len(poly),
-                            sum(p[1] for p in poly) / len(poly))
+            _pts = [p for blk in polys for p in blk]  # 多块形态: 全部顶点取质心
+            target_point = (sum(p[0] for p in _pts) / len(_pts),
+                            sum(p[1] for p in _pts) / len(_pts))
         if target_point is None:
             raise ValueError(
                 f"region_events.rules[{i}] ({name}) facing_dwell 规则必须标定仪表点 "
@@ -714,8 +717,10 @@ class RegionEventEngine:
         cur, ref = entry[0], rule.anchor_ref
         sx = cur['w'] / ref['w']
         sy = cur['h'] / ref['h']
-        return [(cur['x'] + (px - ref['x']) * sx,
-                 cur['y'] + (py - ref['y']) * sy) for px, py in rule.region]
+        # region 是多块形态 (_parse_polygon 返回值), 逐块变换
+        return [[(cur['x'] + (px - ref['x']) * sx,
+                  cur['y'] + (py - ref['y']) * sy) for px, py in poly]
+                for poly in rule.region]
 
     def reset(self):
         """清空全部运行时状态 (项目切换/重新开始检测)。累计计数一并归零。"""
@@ -768,7 +773,7 @@ class RegionEventEngine:
                 if region is None:
                     continue  # 锚点丢失时区域条件不满足
                 cx, cy = _bbox_center(s)
-                cond = _point_in_polygon(cx, cy, region)
+                cond = _point_in_regions(cx, cy, region)
             else:
                 overlaps = any(self._deep_overlap(rule, s, o) for o in objects)
                 if rule.region is None:
@@ -778,7 +783,7 @@ class RegionEventEngine:
                     cond = overlaps if rule.region_mode == 'or' else False
                 else:
                     cx, cy = _bbox_center(s)
-                    in_region = _point_in_polygon(cx, cy, region)
+                    in_region = _point_in_regions(cx, cy, region)
                     cond = (overlaps and in_region) if rule.region_mode == 'and' \
                         else (overlaps or in_region)
             if cond:
@@ -816,7 +821,7 @@ class RegionEventEngine:
         inside = []
         for s in by_label.get(rule.subject_label) or []:
             cx, cy = _bbox_center(s)
-            if _point_in_polygon(cx, cy, region):
+            if _point_in_regions(cx, cy, region):
                 inside.append(s)
         if rule.rule_type == 'region_count':
             return len(inside) >= rule.min_count, (inside[0] if inside else None)
@@ -841,7 +846,7 @@ class RegionEventEngine:
         for s in by_label.get(rule.subject_label) or []:
             cx, cy = _bbox_center(s)
             if rule.region is not None:
-                if region is None or not _point_in_polygon(cx, cy, region):
+                if region is None or not _point_in_regions(cx, cy, region):
                     continue
             yaw = s.get('facing')
             if yaw is None:
@@ -1015,7 +1020,7 @@ class RegionEventEngine:
         # 未关联上的检测框开新轨迹
         for i in unclaimed:
             cx, cy = _bbox_center(dets[i])
-            in_region = region is not None and _point_in_polygon(cx, cy, region)
+            in_region = region is not None and _point_in_regions(cx, cy, region)
             st.tracks.append(_Track(dets[i], in_region, ts))
 
         # 消失确认: 进过区域的产出事件, 没进过的静默清理
@@ -1039,7 +1044,7 @@ class RegionEventEngine:
         if region is None:
             return
         cx, cy = _bbox_center(det)
-        if _point_in_polygon(cx, cy, region):
+        if _point_in_regions(cx, cy, region):
             track.in_frames += 1
             if track.in_frames >= rule.min_frames:
                 track.entered = True
@@ -1068,7 +1073,7 @@ class RegionEventEngine:
                 track.last_ts = ts
                 if region is not None:
                     cx, cy = _bbox_center(dets[best_i])
-                    if _point_in_polygon(cx, cy, region):
+                    if _point_in_regions(cx, cy, region):
                         track.in_frames += 1
                         self._maybe_count_cross(rule, st, track, ts, events)
                     # 中心暂时出区不清 in_frames/counted: 边界抖动不重复计数
@@ -1077,7 +1082,7 @@ class RegionEventEngine:
 
         for i in unclaimed:
             cx, cy = _bbox_center(dets[i])
-            in_region = region is not None and _point_in_polygon(cx, cy, region)
+            in_region = region is not None and _point_in_regions(cx, cy, region)
             track = _Track(dets[i], in_region, ts)
             st.tracks.append(track)
             if in_region:

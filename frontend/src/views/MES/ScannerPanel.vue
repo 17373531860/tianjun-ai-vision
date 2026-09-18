@@ -309,7 +309,9 @@
               <span v-if="scanDGeometryConfigured" class="text-xs text-green-400">
                 {{ form.scan_d_geometry === 'line'
                     ? '已配置触发线 (' + (form.scan_d_line?.side_a_to_b ? 'A → B' : 'B → A') + ')'
-                    : '已配置触发区域 (' + (form.scan_d_zone?.length || 0) + ' 顶点)' }}
+                    : '已配置触发区域 (' + (polygonCount(form.scan_d_zone) > 1
+                        ? polygonCount(form.scan_d_zone) + ' 块, 共 ' + polygonPointCount(form.scan_d_zone) + ' 顶点'
+                        : polygonPointCount(form.scan_d_zone) + ' 顶点') + ')' }}
               </span>
               <span v-else class="text-xs text-amber-400">未配置 (D 模式不会触发)</span>
             </div>
@@ -607,13 +609,15 @@
             </el-radio-group>
           </template>
           <template v-else>
-            <span class="text-gray-400">单击添加顶点, 点击<b class="text-amber-400">第一个点</b>闭合多边形 (双击也可闭合).</span>
+            <span class="text-gray-400">单击添加顶点, 点击<b class="text-amber-400">第一个点</b>闭合本块 (双击也可闭合); 闭合后可<b class="text-cyan-400">继续画下一块</b>, 支持任意多块.</span>
             <div class="flex-1"></div>
           </template>
           <el-button size="small" @click="triggerGeoUndo"
-                     :disabled="(triggerGeoMode === 'line' ? triggerGeoLinePts.length : triggerGeoZonePts.length) === 0">
+                     :disabled="(triggerGeoMode === 'line' ? triggerGeoLinePts.length : (triggerGeoZonePts.length + triggerGeoZoneBlocks.length)) === 0">
             撤销
           </el-button>
+          <el-button v-if="triggerGeoMode === 'zone'" size="small" type="warning" plain
+                     @click="triggerGeoRemoveLastBlock" :disabled="triggerGeoZoneBlocks.length === 0">删除最后一块</el-button>
           <el-button size="small" type="warning" @click="triggerGeoClear">全部清除</el-button>
         </div>
         <div class="relative bg-black rounded overflow-hidden flex justify-center" style="max-height: 70vh;">
@@ -632,15 +636,16 @@
             </span>
           </template>
           <template v-else>
-            <span>顶点数: {{ triggerGeoZonePts.length }}</span>
-            <span v-if="triggerGeoZoneClosed" class="text-green-400 font-bold">多边形已闭合</span>
+            <span v-if="triggerGeoZoneBlocks.length" class="text-green-400 font-bold">已画 {{ triggerGeoZoneBlocks.length }} 块区域</span>
+            <span v-if="triggerGeoZonePts.length">当前区块顶点数: {{ triggerGeoZonePts.length }}</span>
+            <span v-if="!triggerGeoZoneBlocks.length && !triggerGeoZonePts.length">未绘制</span>
           </template>
         </div>
       </div>
       <template #footer>
         <el-button @click="triggerGeoEditorVisible = false">取消</el-button>
         <el-button type="primary" @click="triggerGeoSave"
-          :disabled="triggerGeoMode === 'line' ? triggerGeoLinePts.length !== 2 : !triggerGeoZoneClosed">
+          :disabled="triggerGeoMode === 'line' ? triggerGeoLinePts.length !== 2 : (triggerGeoZoneBlocks.length === 0 && triggerGeoZonePts.length < 3)">
           保存几何
         </el-button>
       </template>
@@ -668,6 +673,7 @@ import ScanCollectConfigCard from './ScanCollectConfigCard.vue'
 import UsbScanGunDialog from './UsbScanGunDialog.vue'
 import { pullOrders } from '@/api/gateway'
 import { routeCode, setScanTestCapture } from '@/composables/useScanGun'
+import { normalizePolygons, serializePolygons, hasPolygons, polygonCount, polygonPointCount } from '@/utils/polygons'
 import { useSystemStore } from '@/store/useSystemStore'
 import { dbg, dbgErr } from '@/utils/debug'
 import { usePollingStore } from '@/store/usePollingStore'
@@ -800,12 +806,13 @@ const onScanModeChange = async (val) => {
 }
 
 // v3.4.0 D 模式几何配置: 是否已配置 + 清除
+// 2026-09 多块化: zone 单块 [[x,y],...] / 多块 [[[x,y],...],...] 双格式, hasPolygons 判有效
 const scanDGeometryConfigured = computed(() => {
   if (form.value.scan_d_geometry === 'line') {
     const ln = form.value.scan_d_line
     return !!(ln && ln.x1 != null && ln.y1 != null && ln.x2 != null && ln.y2 != null)
   } else {
-    return Array.isArray(form.value.scan_d_zone) && form.value.scan_d_zone.length >= 3
+    return hasPolygons(form.value.scan_d_zone)
   }
 })
 const clearScanDGeometry = () => {
@@ -817,12 +824,13 @@ const clearScanDGeometry = () => {
 }
 
 // v3.4.0 触发几何编辑器 (line / zone)
+// 2026-09 多块化: zone 模式支持连续画多块 (triggerGeoZoneBlocks=已闭合块, ZonePts=进行中块)
 const triggerGeoEditorVisible = ref(false)
 const triggerGeoCanvas = ref(null)
 const triggerGeoMode = ref('line')  // 'line' | 'zone'
 const triggerGeoLinePts = ref([])   // [{x,y}, {x,y}] (像素 canvas 坐标)
-const triggerGeoZonePts = ref([])
-const triggerGeoZoneClosed = ref(false)
+const triggerGeoZonePts = ref([])       // 进行中(未闭合)块的顶点
+const triggerGeoZoneBlocks = ref([])    // 已闭合块列表: [[{x,y},...], ...]
 const triggerGeoSideAtoB = ref(true)
 let triggerGeoImage = null
 let triggerGeoMousePos = null
@@ -831,7 +839,7 @@ const openTriggerGeoEditor = async () => {
   triggerGeoMode.value = form.value.scan_d_geometry || 'line'
   triggerGeoLinePts.value = []
   triggerGeoZonePts.value = []
-  triggerGeoZoneClosed.value = false
+  triggerGeoZoneBlocks.value = []
   triggerGeoSideAtoB.value = !!(form.value.scan_d_line?.side_a_to_b ?? true)
   triggerGeoMousePos = null
   triggerGeoEditorVisible.value = true
@@ -859,11 +867,11 @@ const loadTriggerGeoSnapshot = () => {
         { x: L.x1 * canvas.width, y: L.y1 * canvas.height },
         { x: L.x2 * canvas.width, y: L.y2 * canvas.height },
       ]
-    } else if (triggerGeoMode.value === 'zone' && Array.isArray(form.value.scan_d_zone)) {
-      triggerGeoZonePts.value = form.value.scan_d_zone.map(([nx, ny]) => ({
-        x: nx * canvas.width, y: ny * canvas.height,
-      }))
-      triggerGeoZoneClosed.value = triggerGeoZonePts.value.length >= 3
+    } else if (triggerGeoMode.value === 'zone') {
+      // 单块/多块双格式统一归一后逐块还原为已闭合块
+      triggerGeoZoneBlocks.value = normalizePolygons(form.value.scan_d_zone).map(
+        (poly) => poly.map(([nx, ny]) => ({ x: nx * canvas.width, y: ny * canvas.height })))
+      triggerGeoZonePts.value = []
     }
     triggerGeoRedraw()
   }
@@ -902,21 +910,14 @@ const triggerGeoCanvasClick = (e) => {
     }
     triggerGeoRedraw()
   } else {
-    // zone
-    if (triggerGeoZoneClosed.value) {
-      triggerGeoZonePts.value = [pt]
-      triggerGeoZoneClosed.value = false
-      triggerGeoRedraw()
-      return
-    }
+    // zone (2026-09 多块化): 近首点单击闭合本块入列, 之后继续点击开画下一块
     if (triggerGeoZonePts.value.length >= 3) {
       const first = triggerGeoZonePts.value[0]
       const dist = Math.hypot(pt.x - first.x, pt.y - first.y)
       const canvas = triggerGeoCanvas.value
       const scale = canvas.width / (canvas.getBoundingClientRect().width || 1)
       if (dist < 15 * scale) {
-        triggerGeoZoneClosed.value = true
-        triggerGeoRedraw()
+        triggerGeoCloseZoneBlock()
         return
       }
     }
@@ -925,12 +926,18 @@ const triggerGeoCanvasClick = (e) => {
   }
 }
 
+// 闭合进行中的 zone 块入列 (近首点单击/双击触发)
+const triggerGeoCloseZoneBlock = () => {
+  if (triggerGeoZonePts.value.length < 3) return
+  triggerGeoZoneBlocks.value.push(triggerGeoZonePts.value)
+  triggerGeoZonePts.value = []
+  triggerGeoMousePos = null
+  triggerGeoRedraw()
+}
+
 const triggerGeoCanvasDblClick = (e) => {
   e.preventDefault()
-  if (triggerGeoMode.value === 'zone' && triggerGeoZonePts.value.length >= 3 && !triggerGeoZoneClosed.value) {
-    triggerGeoZoneClosed.value = true
-    triggerGeoRedraw()
-  }
+  if (triggerGeoMode.value === 'zone') triggerGeoCloseZoneBlock()
 }
 
 const triggerGeoCanvasMouseMove = (e) => {
@@ -941,20 +948,24 @@ const triggerGeoCanvasMouseMove = (e) => {
 const triggerGeoUndo = () => {
   if (triggerGeoMode.value === 'line') {
     triggerGeoLinePts.value.pop()
-  } else {
-    if (triggerGeoZoneClosed.value) {
-      triggerGeoZoneClosed.value = false
-    } else {
-      triggerGeoZonePts.value.pop()
-    }
+  } else if (triggerGeoZonePts.value.length) {
+    triggerGeoZonePts.value.pop()
+  } else if (triggerGeoZoneBlocks.value.length) {
+    // 没有进行中的点时, 撤销 = 把最后一个已闭合块打回编辑态
+    triggerGeoZonePts.value = triggerGeoZoneBlocks.value.pop()
   }
+  triggerGeoRedraw()
+}
+
+const triggerGeoRemoveLastBlock = () => {
+  triggerGeoZoneBlocks.value.pop()
   triggerGeoRedraw()
 }
 
 const triggerGeoClear = () => {
   triggerGeoLinePts.value = []
   triggerGeoZonePts.value = []
-  triggerGeoZoneClosed.value = false
+  triggerGeoZoneBlocks.value = []
   triggerGeoMousePos = null
   triggerGeoRedraw()
 }
@@ -1027,25 +1038,35 @@ const triggerGeoRedraw = () => {
       ctx.fillText(i === 0 ? '起点' : '终点', pt.x + 10, pt.y - 6)
     })
   } else {
-    // zone polygon
-    const pts = triggerGeoZonePts.value
-    if (pts.length === 0) return
-    if (triggerGeoZoneClosed.value && pts.length >= 3) {
+    // zone polygon (2026-09 多块化): 已闭合块实线+编号, 进行中块虚线跟随鼠标
+    triggerGeoZoneBlocks.value.forEach((block, bi) => {
       ctx.fillStyle = 'rgba(34, 197, 94, 0.18)'
       ctx.beginPath()
-      ctx.moveTo(pts[0].x, pts[0].y)
-      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y)
+      ctx.moveTo(block[0].x, block[0].y)
+      for (let i = 1; i < block.length; i++) ctx.lineTo(block[i].x, block[i].y)
       ctx.closePath()
       ctx.fill()
-    }
+      ctx.strokeStyle = '#22c55e'
+      ctx.lineWidth = 2
+      ctx.stroke()
+      // 区块编号放形心
+      const cx = block.reduce((s, p) => s + p.x, 0) / block.length
+      const cy = block.reduce((s, p) => s + p.y, 0) / block.length
+      ctx.fillStyle = '#22c55e'
+      ctx.font = 'bold 14px Arial'
+      ctx.textAlign = 'center'
+      ctx.fillText(`区${bi + 1}`, cx, cy)
+      ctx.textAlign = 'start'
+    })
+    const pts = triggerGeoZonePts.value
+    if (pts.length === 0) return
     ctx.strokeStyle = '#22c55e'
     ctx.lineWidth = 2
-    ctx.setLineDash(triggerGeoZoneClosed.value ? [] : [8, 4])
+    ctx.setLineDash([8, 4])
     ctx.beginPath()
     ctx.moveTo(pts[0].x, pts[0].y)
     for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y)
-    if (triggerGeoZoneClosed.value) ctx.closePath()
-    else if (triggerGeoMousePos) ctx.lineTo(triggerGeoMousePos.x, triggerGeoMousePos.y)
+    if (triggerGeoMousePos) ctx.lineTo(triggerGeoMousePos.x, triggerGeoMousePos.y)
     ctx.stroke()
     ctx.setLineDash([])
     pts.forEach((pt, i) => {
@@ -1080,14 +1101,17 @@ const triggerGeoSave = () => {
     }
     form.value.scan_d_geometry = 'line'
   } else {
-    if (!triggerGeoZoneClosed.value || triggerGeoZonePts.value.length < 3) {
-      ElMessage.warning('区域模式需要至少 3 个点并闭合多边形')
+    // 2026-09 多块化: 进行中的块 (≥3 点) 保存时自动闭合入列; 1 块存旧格式, 多块存嵌套
+    if (triggerGeoZonePts.value.length >= 3) triggerGeoCloseZoneBlock()
+    if (triggerGeoZoneBlocks.value.length === 0) {
+      ElMessage.warning('区域模式需要至少一块 ≥3 个点的闭合多边形')
       return
     }
-    form.value.scan_d_zone = triggerGeoZonePts.value.map(p => [
+    const polys = triggerGeoZoneBlocks.value.map(block => block.map(p => [
       Math.round((p.x / W) * 10000) / 10000,
       Math.round((p.y / H) * 10000) / 10000,
-    ])
+    ]))
+    form.value.scan_d_zone = serializePolygons(polys)
     form.value.scan_d_geometry = 'zone'
   }
   triggerGeoEditorVisible.value = false

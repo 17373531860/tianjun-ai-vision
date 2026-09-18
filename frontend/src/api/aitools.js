@@ -93,3 +93,12 @@ export function orientationEstimateImage(file) {
 export function orientationEstimateFrame(channelId = 0) {
   return api.post('/orientation/estimate-frame', { channel_id: channelId }).then(r => r.data);
 }
+
+// 朝向配置 (headpose_full_range: 绑定的头姿权重是否全角度模型, KV 落库全局生效)
+export function getOrientationConfig() {
+  return api.get('/orientation/config').then(r => r.data);
+}
+
+export function saveOrientationConfig(payload) {
+  return api.put('/orientation/config', payload).then(r => r.data);
+}

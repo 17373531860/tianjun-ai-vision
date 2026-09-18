@@ -51,7 +51,8 @@ class TestParseConfigs:
         assert r['_pattern'] is not None
         assert r['_pattern'].search('SN123456')
         assert not r['_pattern'].search('XX123')
-        assert r['roi'] == [0.1, 0.2, 0.5, 0.3]
+        # 2026-09 多块化: roi 统一归一成 canonical 多块形态 [[x,y,w,h], ...]
+        assert r['roi'] == [[0.1, 0.2, 0.5, 0.3]]
         assert r['ok_event_id'] == 1 and r['ng_event_id'] == 2
         assert r['on_change_only'] is True and r['settle'] is True
 
@@ -69,10 +70,14 @@ class TestParseConfigs:
         assert cfg['ng_cooldown_s'] == 0.0
 
     def test_norm_rect(self):
-        assert _norm_rect([0.1, 0.1, 0.5, 0.5]) == [0.1, 0.1, 0.5, 0.5]
+        # 2026-09 多块化: 单块入参也归一成 canonical 多块形态
+        assert _norm_rect([0.1, 0.1, 0.5, 0.5]) == [[0.1, 0.1, 0.5, 0.5]]
         assert _norm_rect(None) is None
         assert _norm_rect([0.1, 0.1]) is None
         assert _norm_rect([0.1, 0.1, 0, 0.5]) is None   # w<=0
+        # 多块入参原样保留两块
+        assert _norm_rect([[0.1, 0.1, 0.2, 0.2], [0.5, 0.5, 0.3, 0.3]]) == \
+            [[0.1, 0.1, 0.2, 0.2], [0.5, 0.5, 0.3, 0.3]]
 
 
 # ==================== VSM 桩 ====================

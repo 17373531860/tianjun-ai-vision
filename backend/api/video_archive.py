@@ -76,6 +76,8 @@ class _RuleBase(BaseModel):
     bundle_zip: bool = False
     transform: str = Field("none", pattern="^(none|clip_tail)$")
     clip_seconds: int = Field(10, ge=1, le=600)
+    # 2026-09: 投递带框版 (按检测框 sidecar 渲染烧框 MP4, 失败降级原片)
+    annotated_video: bool = False
     # 四期: 远端与治理
     dest_type: str = Field("local_dir", pattern=_DEST_TYPE_RE)
     dest_config: Optional[Dict[str, Any]] = None
@@ -105,6 +107,7 @@ class RuleUpdate(BaseModel):
     bundle_zip: Optional[bool] = None
     transform: Optional[str] = Field(None, pattern="^(none|clip_tail)$")
     clip_seconds: Optional[int] = Field(None, ge=1, le=600)
+    annotated_video: Optional[bool] = None
     dest_type: Optional[str] = Field(None, pattern=_DEST_TYPE_RE)
     dest_config: Optional[Dict[str, Any]] = None
     active_window: Optional[str] = None
@@ -152,6 +155,7 @@ def _rule_to_dict(r: VideoArchiveRule) -> Dict[str, Any]:
         "bundle_zip": r.bundle_zip,
         "transform": r.transform,
         "clip_seconds": r.clip_seconds,
+        "annotated_video": bool(getattr(r, "annotated_video", False)),
         "dest_type": r.dest_type,
         "dest_config": mask_config(r.dest_config),
         "active_window": r.active_window,

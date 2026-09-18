@@ -23,25 +23,34 @@ router = APIRouter()
 
 
 def _parse_roi(roi) -> Optional[list]:
+    """解析读字区 (2026-09 多块化): 单块 [x,y,w,h] / 多块 [[x,y,w,h],...]。
+
+    返回 canonical 多块形态 [[x,y,w,h], ...]; 未配置返回 None (= 整帧)。
+    """
     if roi in (None, "", "null"):
         return None
     if isinstance(roi, str):
         try:
             roi = json.loads(roi)
         except Exception:
-            raise HTTPException(status_code=400, detail="roi 必须是 JSON 数组 [x,y,w,h]")
-    if (not isinstance(roi, (list, tuple)) or len(roi) < 4
-            or not all(isinstance(v, (int, float)) for v in roi[:4])):
-        raise HTTPException(status_code=400, detail="roi 必须是 [x,y,w,h] 归一化数值")
-    x, y, w, h = [float(v) for v in roi[:4]]
-    if not (0 <= x <= 1 and 0 <= y <= 1 and 0 < w <= 1 and 0 < h <= 1):
-        raise HTTPException(status_code=400, detail="roi 取值需在 0~1 归一化范围内")
-    return [x, y, w, h]
+            raise HTTPException(status_code=400, detail="roi 必须是 JSON 数组 [x,y,w,h] 或 [[x,y,w,h],...]")
+    from backend.api.source_geometry import normalize_rects
+    rects = normalize_rects(roi)
+    if not rects:
+        raise HTTPException(status_code=400, detail="roi 必须是 [x,y,w,h] 或 [[x,y,w,h],...] 归一化数值")
+    for x, y, w, h in rects:
+        if not (0 <= x <= 1 and 0 <= y <= 1 and 0 < w <= 1 and 0 < h <= 1):
+            raise HTTPException(status_code=400, detail="roi 取值需在 0~1 归一化范围内")
+    return rects
 
 
-def _run_ocr(image_bgr, roi, min_score: float) -> dict:
+def _run_ocr(image_bgr, rects, min_score: float) -> dict:
+    """rects: canonical 多块形态或 None; 逐块识别, 结果拼接。"""
+    results = []
     try:
-        results = ocr_engine.read_text(image_bgr, roi=roi, min_score=min_score)
+        for rect in (rects or [None]):
+            results.extend(
+                ocr_engine.read_text(image_bgr, roi=rect, min_score=min_score))
     except ocr_engine.OcrUnavailable as e:
         raise HTTPException(status_code=503, detail=str(e))
     except ValueError as e:

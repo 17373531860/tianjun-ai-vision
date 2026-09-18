@@ -213,10 +213,10 @@ class StepStatsMixin:
                     self._dbg_step_rejected(label, f"置信度{confidence:.2f} < 步骤阈值{threshold}")
                     continue
 
-            # 逐步骤 ROI: 仅框中心在配置多边形内才计入该步骤 (顺序/检测/自定义/共用路径)
+            # 逐步骤 ROI: 仅框中心在配置多边形(单块/多块任一块)内才计入该步骤 (顺序/检测/自定义/共用路径)
             _poly_map = getattr(self, 'step_roi_polygons', None) or {}
             _poly = _poly_map.get(label)
-            if _poly and len(_poly) >= 3:
+            if _poly:
                 if not is_normalized_bbox_center_in_polygon(det, _poly):
                     self._dbg_step_rejected(label, "检测框中心在该步骤 ROI 区域外")
                     continue
@@ -434,6 +434,26 @@ class StepStatsMixin:
                 self._diag_flicker_tick(det_by_label, detections, current_time)
             except Exception:
                 pass
+
+        # v3.59 容器定界周期 (custom_cycle_owner='container'): 门先喂
+        # (内部可能开周期 / 离场触发 _settle_container_cycle), 然后:
+        #   1. 容器标签剥离出步骤侧 — 不当普通步骤刷"出现/消失/完成";
+        #   2. 周期未开 (容器缺席) 时整帧跳过步骤入账 (tracking_scan_gate 先例)
+        #      — 工件不在位的动作不算数, 也不会误开周期。
+        # 画框/MJPEG 不走这几个集合, 显示不受影响。未配置 gate=None 零差异。
+        _cgate = getattr(self, '_container_cycle_gate', None)
+        if _cgate is not None:
+            try:
+                _cgate.feed(self, detections, current_time)
+            except Exception as _cg_e:
+                print(f"[ContainerGate] feed 失败 (隔离): {_cg_e}")
+            detected_labels.discard(_cgate.label)
+            frame_detected_labels.discard(_cgate.label)
+            just_confirmed_labels.discard(_cgate.label)
+            if not _cgate.cycle_open(self):
+                detected_labels.clear()
+                frame_detected_labels.clear()
+                just_confirmed_labels.clear()
 
         # v3.8.x (类二): 跨周期同时出现组路由
         # 顺序:
@@ -829,8 +849,11 @@ class StepStatsMixin:
 
         # ========== 空闲超时结算 ==========
         # v3.44: 缺步挂起中不走空闲超时结算 (挂起有自己的超时兜底, 双路结算会打架)
+        # v3.59: 容器定界周期主权归容器 — 周期内空闲 (箱子等着) 是常态, 不走
+        # 空闲超时; 卡死兜底走 cycle_max_duration 周期超时。
         if (self.idle_timeout_seconds > 0
                 and self.current_cycle_steps
+                and getattr(self, '_custom_cycle_owner', 'steps') != 'container'
                 and getattr(self, '_settle_hold', None) is None
                 and self._last_step_added_time is not None):
             idle_elapsed = current_time - self._last_step_added_time

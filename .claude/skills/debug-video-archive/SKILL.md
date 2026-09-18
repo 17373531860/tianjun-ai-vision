@@ -56,6 +56,14 @@ description: 诊断录像归档与媒体证据体系 (v3.53)：归档不触发/�
 5. 水印开关是规则级 `keyframe_watermark`，全局取"任一启用规则要水印"。
 6. **血泪**：cv2.imwrite 按扩展名选编码器，临时名必须 `.tmp.jpg` 结尾（BUG-002，勿改回 `.tmp`）。
 
+### 2.4 「投递带框版」录像不带框 / 是原片（v3.58）
+
+链路：规则开 `annotated_video`（m0012，默认关）→ 归档 worker 投递前调 `services/annotated_video` 用录像旁 `.boxes.json` sidecar 烧框渲染 MP4 → 交付渲染结果；**渲染失败/无 sidecar 一律降级投原片照常归档**（不阻断投递）。排查顺序：
+1. 录像录制时 Data 页「记录检测框数据」（`data_export_settings.record_boxes_data`）开了吗？没开就没有 sidecar，带框版无从渲染——开关只对**之后录的**录像生效。
+2. sidecar 在不在：录像同目录找 `<视频名>.boxes.json`（纯命名约定无 DB 列；孤儿清理按 mtime 与录像一起过期）。
+3. sidecar 帧号对齐设计：按录制线程写帧成功时的 `_frame_count` 记录（免疫录制队列丢帧漂移），run-length 只记变化帧，MAX_ENTRIES 20000 封顶（超限停止记录已记部分仍有效）。
+4. 回放叠加与手动下载不走归档链：`GET /data/videos/{id}/boxes`（无 sidecar 404）/ `GET /data/videos/{id}/annotated`（现场渲染落转码缓存目录，二次下载秒回）。
+
 ### 2.4 「证据包 zip 缺件」
 
 - 包内应有：主件 mp4（或切片）+ `<basename>.jpg`（找得到关键帧才有）+ `<basename>.<fmt>`（配了 sidecar 才有）+ `<basename>_meta.json`（恒有）。

@@ -75,7 +75,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `/ocr/*` | `ocr.py` | `aitools.js` | ★ 2026-09 OCR 读字：status 探针 + read 上传识别 + read-frame 通道画面识别（模型仓库「试一试」抽屉消费，原 AI 能力试用页已下线；引擎 rapidocr 懒加载） |
 | `/anomaly/*` | `anomaly.py` | `aitools.js` | ★ 2026-09 异常检测：合格品记忆库 banks CRUD/阈值 + score 上传评分 + score-frame 通道评分（模型仓库「试一试」抽屉管理记忆库 + anomaly 逻辑模式共用引擎） |
 | `/vlm/*` | `vlm.py` | `aitools.js` | ★ 2026-09 VLM 坐诊：config/status + ask 传图问答 + ask-frame 通道问答（默认关，OpenAI 兼容本地端点） |
-| `/orientation/*` | `orientation.py` | `aitools.js` | ★ 2026-09 朝向估计试用：status 三层后端探针（yolo11_pose/mediapipe_pose/headpose_onnx）+ estimate 上传估计 + estimate-frame 通道估计（facing_dwell 朝向驻留的推理侧试用/装机标定入口；生产路径走 person_orientation 单例不经此 API） |
+| `/orientation/*` | `orientation.py` | `aitools.js` | ★ 2026-09 朝向估计试用：status 三层后端探针（yolo11_pose/mediapipe_pose/headpose_onnx）+ estimate 上传估计 + estimate-frame 通道估计（facing_dwell 朝向驻留的推理侧试用/装机标定入口；生产路径走 person_orientation 单例不经此 API）；v3.58 加 GET/PUT `/config`（headpose_full_range 全角度头姿开关，KV 落库+推理侧即时刷新，PUT 挂 settings.edit） |
 | `/debug/*` | `debug.py` | 无封装（手测用） | 通道诊断 + 调试日志中心 |
 | `/test/synthetic/*` | `test_runtime_routes.py` | —（测试专用） | 仅 `RUNTIME_MODE=test` 挂载：虚拟剧本源 |
 
@@ -225,6 +225,8 @@ export const getSessionsByDate = (date, projectId = null, startHour = null, endH
 | GET | `/data/cycles/{id}` `/cycles/{id}/steps` | 周期详情 + 步骤 |
 | GET | `/data/cycles/by-serial/{serial_no}` | v3.4.3 工件全局检索 |
 | GET | `/data/videos` `/videos/{id}` | 录像列表/单条流（`{id}` 走 MJPEG/MP4；v3.54 起 h264+yuv420p 探测通过直出免转码） |
+| GET | `/data/videos/{id}/boxes` | v3.58 检测框 sidecar JSON（录像旁 `.boxes.json`，回放 canvas 叠加用；没开 record_boxes_data 或 sidecar 不存在返回 404） |
+| GET | `/data/videos/{id}/annotated` | v3.58 下载带框版录像（服务端 annotated_video 烧框渲染，需 sidecar 在场） |
 | GET | `/data/sessions/{id}/videos` | ★ v3.54 会话录像分段列表（长会话按小时分段，多段时 Data 页显示分段切换条） |
 | GET/PUT | `/data/storage/recording-dir` | ★ v3.54 自定义录像存储根目录（PUT 挂 `settings.edit`，校验黑名单/可写/与归档目录互斥） |
 | GET/PUT | `/data/export-settings` | 导出开关 |

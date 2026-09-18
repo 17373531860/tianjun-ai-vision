@@ -237,6 +237,7 @@ import { getModels, getAvailableFormats, convertModel, getConversionStatus, getF
 import { getBackendHost } from '@/api/index';
 import { setProjectConfig, getWorkstations } from '@/api/detection';
 import { dbg, dbgErr } from '@/utils/debug';
+import { polygonCount, polygonPointCount, rectCount, hasPolygons, normalizeRects, serializeRects } from '@/utils/polygons';
 
 const projectStore = useProjectStore();
 const systemStore = useSystemStore();
@@ -497,20 +498,23 @@ const handleRoiSavePoint = (point) => {
 };
 
 // rect 模式保存: 写 OCR 规则 roi / 异常检测 roi
+// 2026-09 多块化: rect 为单块 [x,y,w,h] 或多块 [[x,y,w,h],...] 双格式
 const handleRoiSaveRect = (rect) => {
   const t = aiRoiEditing.value;
-  if (t && Array.isArray(rect) && rect.length >= 4) {
+  const nRects = rectCount(rect);
+  if (t && nRects > 0) {
+    const blockText = nRects > 1 ? ` (${nRects} 块)` : '';
     if (t.kind === 'ocr') {
       const rule = activeProject.value?.pipeline_config?.ocr?.rules?.[t.rIdx];
       if (rule) {
         rule.roi = rect;
-        ElMessage.success(`OCR 规则 [${rule.name || `规则 ${(t.rIdx ?? 0) + 1}`}] 读字区域已框定，记得点右上角"保存配置"落库`);
+        ElMessage.success(`OCR 规则 [${rule.name || `规则 ${(t.rIdx ?? 0) + 1}`}] 读字区域已框定${blockText}，记得点右上角"保存配置"落库`);
       }
     } else if (t.kind === 'anomaly') {
       const a = activeProject.value?.pipeline_config?.anomaly;
       if (a) {
         a.roi = rect;
-        ElMessage.success('异常检测监测区域已框定，记得点右上角"保存配置"落库');
+        ElMessage.success(`异常检测监测区域已框定${blockText}，记得点右上角"保存配置"落库`);
       }
     }
   }
@@ -544,7 +548,8 @@ const _openRoiDialog = async (existingPolygon = null) => {
 
 const openRoiEditor = async () => {
   resetRoiEditorTargets();
-  await _openRoiDialog();
+  // 2026-09 多块化: 预加载已有 tracking ROI, 支持在已有区块基础上补画新块
+  await _openRoiDialog(activeProject.value?.tracking_roi_polygon || null);
 };
 
 // 2026-07 缺陷 A 修复: ROI 底图不再写死 0 号通道 —— 多工位时按「当前项目绑定在哪个通道」
@@ -572,9 +577,15 @@ const resolveRoiSnapshotChannel = async () => {
 };
 
 // 子组件点「保存 ROI」后回传归一化多边形, 这里按编辑目标路由写回
+// 2026-09 多块化: polygon 为单块 [[nx,ny],...] 或多块 [[[nx,ny],...],...] 双格式
 const handleRoiSave = async (polygon) => {
-  if (!activeProject.value || !Array.isArray(polygon) || polygon.length < 3) return;
-  dbg('project.config', '点击「保存 ROI」', `points=${polygon.length} 目标=${extraModelRoiEditingIdx.value >= 0 ? `副模型#${extraModelRoiEditingIdx.value}` : (stepRoiEditingStepId.value != null ? `步骤#${stepRoiEditingStepId.value}` : '全局tracking')}`);
+  const nBlocks = polygonCount(polygon);
+  if (!activeProject.value || nBlocks === 0) return;
+  // 显示文案: 单块保持老口径 "N 个顶点", 多块显示 "N 块区域 (共 M 个顶点)"
+  const roiDescText = nBlocks > 1
+    ? `${nBlocks} 块区域 (共 ${polygonPointCount(polygon)} 个顶点)`
+    : `${polygonPointCount(polygon)} 个顶点`;
+  dbg('project.config', '点击「保存 ROI」', `blocks=${nBlocks} points=${polygonPointCount(polygon)} 目标=${extraModelRoiEditingIdx.value >= 0 ? `副模型#${extraModelRoiEditingIdx.value}` : (stepRoiEditingStepId.value != null ? `步骤#${stepRoiEditingStepId.value}` : '全局tracking')}`);
 
   // Step 8: 副模型 ROI 编辑模式
   if (extraModelRoiEditingIdx.value >= 0) {
@@ -582,7 +593,7 @@ const handleRoiSave = async (polygon) => {
     const slot = activeProject.value.extra_models?.[idx];
     if (slot) {
       slot.roi = polygon;
-      ElMessage.success(`副模型 [${slot.name}] ROI 已保存 (${polygon.length} 个顶点)`);
+      ElMessage.success(`副模型 [${slot.name}] ROI 已保存 (${roiDescText})`);
     }
     resetRoiEditorTargets();
     roiEditorVisible.value = false;
@@ -595,7 +606,7 @@ const handleRoiSave = async (polygon) => {
     const st = activeProject.value?.steps_config?.find(s => s.id === sid);
     if (st) {
       st.roi = polygon;
-      ElMessage.success(`步骤 [${st.displayLabel || st.label}] ROI 已保存 (${polygon.length} 个顶点)`);
+      ElMessage.success(`步骤 [${st.displayLabel || st.label}] ROI 已保存 (${roiDescText})`);
     }
     resetRoiEditorTargets();
     roiEditorVisible.value = false;
@@ -607,7 +618,7 @@ const handleRoiSave = async (polygon) => {
     const rule = activeProject.value?.pipeline_config?.region_events?.rules?.[regionRuleEditingIdx.value];
     if (rule) {
       rule.region = polygon;
-      ElMessage.success(`规则 [${rule.name || `规则 ${regionRuleEditingIdx.value + 1}`}] 判定区域已保存 (${polygon.length} 个顶点)，记得点右上角"保存配置"落库`);
+      ElMessage.success(`规则 [${rule.name || `规则 ${regionRuleEditingIdx.value + 1}`}] 判定区域已保存 (${roiDescText})，记得点右上角"保存配置"落库`);
     }
     resetRoiEditorTargets();
     roiEditorVisible.value = false;
@@ -619,7 +630,7 @@ const handleRoiSave = async (polygon) => {
     const rule = activeProject.value?.pipeline_config?.weighing?.visual_guard?.rules?.[guardRuleEditingIdx.value];
     if (rule) {
       rule.polygon = polygon;
-      ElMessage.success(`料源防错规则 [${rule.name || `规则 ${guardRuleEditingIdx.value + 1}`}] 判定区域已保存 (${polygon.length} 个顶点)，记得点右上角"保存配置"落库`);
+      ElMessage.success(`料源防错规则 [${rule.name || `规则 ${guardRuleEditingIdx.value + 1}`}] 判定区域已保存 (${roiDescText})，记得点右上角"保存配置"落库`);
     }
     resetRoiEditorTargets();
     roiEditorVisible.value = false;
@@ -631,7 +642,7 @@ const handleRoiSave = async (polygon) => {
     const pipe = activeProject.value?.pipeline_config?.weighing?.pipeline;
     if (pipe) {
       pipe.onscale_polygon = polygon;
-      ElMessage.success(`秤台区已保存 (${polygon.length} 个顶点)，记得点右上角"保存配置"落库`);
+      ElMessage.success(`秤台区已保存 (${roiDescText})，记得点右上角"保存配置"落库`);
     }
     resetRoiEditorTargets();
     roiEditorVisible.value = false;
@@ -645,7 +656,7 @@ const handleRoiSave = async (polygon) => {
       activeProject.value.pipeline_config.placement_guide = { enabled: true, anchor_label: '', polygon: null, mode: 'hint' };
     }
     activeProject.value.pipeline_config.placement_guide.polygon = polygon;
-    ElMessage.success(`就位引导框已保存 (${polygon.length} 个顶点)，记得点右上角"保存配置"落库`);
+    ElMessage.success(`就位引导框已保存 (${roiDescText})，记得点右上角"保存配置"落库`);
     resetRoiEditorTargets();
     roiEditorVisible.value = false;
     return;
@@ -700,7 +711,8 @@ const _sanitizeRegionEvents = (re) => {
     .filter(r => r && (r.name || '').trim() && (r.subject_label || '').trim())
     .map((r, i) => {
       const type = ['region_exit', 'region_enter', 'region_count', 'region_empty', 'proximity', 'cross_count', 'facing_dwell'].includes(r.type) ? r.type : 'overlap';
-      const region = Array.isArray(r.region) && r.region.length >= 3 ? r.region : null;
+      // 2026-09 多块化: region 单块/多块双格式, hasPolygons 判有效 (length>=3 会误杀两块的嵌套数组)
+      const region = hasPolygons(r.region) ? r.region : null;
       const out = {
         id: r.id || `r${i + 1}`,
         name: r.name.trim(),
@@ -811,9 +823,8 @@ const _sanitizeOcrConfig = (o) => {
   const rules = (Array.isArray(src.rules) ? src.rules : [])
     .filter(r => r && (r.name || '').trim())
     .map((r, i) => {
-      const roi = Array.isArray(r.roi) && r.roi.length >= 4
-        && Number(r.roi[2]) > 0 && Number(r.roi[3]) > 0
-        ? r.roi.slice(0, 4).map(Number) : null;
+      const rects = normalizeRects(r.roi);
+      const roi = rects.length ? serializeRects(rects) : null;
       return {
         id: r.id || `ocr_${i + 1}`,
         name: r.name.trim(),
@@ -837,9 +848,8 @@ const _sanitizeOcrConfig = (o) => {
 const _sanitizeAnomalyConfig = (a) => {
   const src = a || {};
   const thr = Number(src.threshold);
-  const roi = Array.isArray(src.roi) && src.roi.length >= 4
-    && Number(src.roi[2]) > 0 && Number(src.roi[3]) > 0
-    ? src.roi.slice(0, 4).map(Number) : null;
+  const rects = normalizeRects(src.roi);
+  const roi = rects.length ? serializeRects(rects) : null;
   return {
     bank_id: String(src.bank_id || '').trim(),
     threshold: Number.isFinite(thr) && thr > 0 ? thr : null,
@@ -1215,6 +1225,19 @@ const initProjectDefaults = (project) => {
   // v3.19.x: 自定义混合模式（不填 = 现状，零差异）
   if (project.custom_mixed_with === undefined) {
     project.custom_mixed_with = pipelineConfig.custom_mixed_with || null;
+  }
+  // v3.59: 容器定界周期（周期主权=容器；缺省 steps = 现状零差异）
+  if (project.custom_cycle_owner === undefined) {
+    project.custom_cycle_owner = pipelineConfig.custom_cycle_owner || 'steps';
+  }
+  if (project.container_gate_label === undefined) {
+    project.container_gate_label = pipelineConfig.container_gate_label || '';
+  }
+  if (project.container_gate_appear_seconds === undefined) {
+    project.container_gate_appear_seconds = pipelineConfig.container_gate_appear_seconds ?? 1.0;
+  }
+  if (project.container_gate_gone_seconds === undefined) {
+    project.container_gate_gone_seconds = pipelineConfig.container_gate_gone_seconds ?? 3.0;
   }
   // 自定义混合-容器装箱清点（不填容器标签 = 不启用，零差异）
   if (project.custom_mix_container_label === undefined) {
@@ -1731,8 +1754,11 @@ const initProjectDefaults = (project) => {
         return {
           capability: a.capability,
           interval_s: Number(p.interval_s) || (a.capability === 'pose' ? 1.0 : 5.0),
-          roi: (Array.isArray(p.roi) && p.roi.length === 4)
-            ? p.roi.map(Number) : [0, 0, 0, 0],
+          roi: (() => {
+            const rects = normalizeRects(p.roi);
+            // 能力挂件 UI 仍是 4 个数字框, 多块 JSON 时取第一块展示; 无配置 = 整幅画面
+            return rects.length ? [...rects[0]] : [0, 0, 0, 0];
+          })(),
           bank_id: p.bank_id ?? null,
           event_id: p.event_id ?? null,
           cooldown_s: Number(p.cooldown_s) || 30,
@@ -1787,6 +1813,12 @@ const initProjectDefaults = (project) => {
   project.pipeline_config.custom_conditions = project.custom_conditions;
   project.pipeline_config.custom_based_on = project.custom_based_on;
   project.pipeline_config.custom_mixed_with = project.custom_mixed_with;
+  // v3.59 容器定界周期（非容器主权时容器标签落空 = 不启用，零差异）
+  project.pipeline_config.custom_cycle_owner = project.custom_cycle_owner || 'steps';
+  project.pipeline_config.container_gate_label = (project.custom_cycle_owner === 'container')
+    ? (project.container_gate_label || '') : '';
+  project.pipeline_config.container_gate_appear_seconds = Number(project.container_gate_appear_seconds) || 1.0;
+  project.pipeline_config.container_gate_gone_seconds = Number(project.container_gate_gone_seconds) || 3.0;
   project.pipeline_config.custom_mix_container_label = (project.custom_mixed_with === 'tracking' && project.custom_mix_container_enabled)
     ? (project.custom_mix_container_label || '') : '';
   project.pipeline_config.custom_mix_container_count_mode = project.custom_mix_container_count_mode || 'trays';
@@ -2000,6 +2032,12 @@ const handleSaveProject = async () => {
         custom_conditions: activeProject.value.custom_conditions,
         custom_based_on: activeProject.value.custom_based_on,
         custom_mixed_with: activeProject.value.custom_mixed_with || null,
+        // v3.59 容器定界周期（周期主权=容器；缺省 steps + 空标签 = 零差异）
+        custom_cycle_owner: activeProject.value.custom_cycle_owner || 'steps',
+        container_gate_label: (activeProject.value.custom_cycle_owner === 'container')
+          ? (activeProject.value.container_gate_label || '') : '',
+        container_gate_appear_seconds: Number(activeProject.value.container_gate_appear_seconds) || 1.0,
+        container_gate_gone_seconds: Number(activeProject.value.container_gate_gone_seconds) || 3.0,
         // 自定义混合-容器装箱清点（仅混合跟踪 + 开关开 时落容器标签；否则空 = 不启用，零差异）
         custom_mix_container_label: (activeProject.value.custom_mixed_with === 'tracking' && activeProject.value.custom_mix_container_enabled)
           ? (activeProject.value.custom_mix_container_label || '') : '',
@@ -2093,7 +2131,8 @@ const handleSaveProject = async () => {
           return acc;
         }, {}),
         tracking_roi: {
-          enabled: (activeProject.value.tracking_roi_polygon || []).length >= 3,
+          // 2026-09 多块化: 单块/多块双格式, 用 hasPolygons 判有效性 (替代 length>=3)
+          enabled: hasPolygons(activeProject.value.tracking_roi_polygon),
           polygon: activeProject.value.tracking_roi_polygon || []
         },
         tracking_container_label: activeProject.value.tracking_cycle_strategy === 'container' ? (activeProject.value.tracking_container_label || '') : '',
@@ -2299,7 +2338,7 @@ const handleSaveProject = async () => {
           unmatched: ['drop', 'keep', 'map'].includes(r.unmatched) ? r.unmatched : 'drop',
           unmatched_label: r.unmatched === 'map' ? String(r.unmatched_label || '').trim() : '',
           regions: (r.regions || [])
-            .filter(g => g && String(g.name || '').trim() && Array.isArray(g.polygon) && g.polygon.length >= 3)
+            .filter(g => g && String(g.name || '').trim() && hasPolygons(g.polygon))
             .map(g => ({ name: String(g.name).trim(), polygon: g.polygon, color: g.color || '' })),
           // v3.32 多轮次: 同一批区域按轮次映射不同虚拟步骤 (前缀+区域名)
           rounds: (() => {
@@ -2332,7 +2371,7 @@ const handleSaveProject = async () => {
                   const rnd = Math.floor(Number(key));
                   if (!(rnd >= 1 && rnd <= cnt) || !Array.isArray(list)) continue;
                   const valid = list
-                    .filter(g => g && String(g.name || '').trim() && Array.isArray(g.polygon) && g.polygon.length >= 3)
+                    .filter(g => g && String(g.name || '').trim() && hasPolygons(g.polygon))
                     .map(g => ({ name: String(g.name).trim(), polygon: g.polygon, color: g.color || '' }));
                   if (valid.length) out[String(rnd)] = valid;
                 }
@@ -2346,7 +2385,7 @@ const handleSaveProject = async () => {
           return {
             enabled: !!pg.enabled,
             anchor_label: String(pg.anchor_label || '').trim(),
-            polygon: Array.isArray(pg.polygon) && pg.polygon.length >= 3 ? pg.polygon : null,
+            polygon: hasPolygons(pg.polygon) ? pg.polygon : null,
             mode: pg.mode === 'gate' ? 'gate' : 'hint',
             // 就位后引导框显示策略 (仅前端渲染用): always=常驻 | fade_on_ready=淡化 | hide_on_ready=隐藏
             display: ['fade_on_ready', 'hide_on_ready'].includes(pg.display) ? pg.display : 'always',
@@ -2474,7 +2513,7 @@ const handleSaveProject = async () => {
               model_format: e.model_format || 'pytorch_fp32',  // v3.7.x: 副模型推理格式, Monitor 启动检测时 resolve-path 用
               conf: typeof e.conf === 'number' ? e.conf : 0.25,
               iou: typeof e.iou === 'number' ? e.iou : 0.45,
-              roi: Array.isArray(e.roi) && e.roi.length >= 3 ? e.roi : null,
+              roi: hasPolygons(e.roi) ? e.roi : null,
               schedule: {
                 type: e.schedule_type || 'every_frame',
                 n: Math.max(1, Math.floor(Number(e.schedule_n) || 1)),
@@ -2496,8 +2535,9 @@ const handleSaveProject = async () => {
           .filter(a => a && a.capability)
           .map(a => {
             const params = { interval_s: Number(a.interval_s) || 5.0 };
-            const roi = (a.roi || []).map(Number);
-            if (roi.length === 4 && roi.some(v => v > 0)) params.roi = roi;
+            const rects = normalizeRects(a.roi).filter(
+              ([x, y, w, h]) => x > 0 || y > 0 || w > 0 || h > 0);
+            if (rects.length) params.roi = serializeRects(rects);
             if (a.capability === 'anomaly') {
               params.bank_id = a.bank_id || null;
               params.event_id = a.event_id ?? null;

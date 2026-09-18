@@ -11,9 +11,11 @@
         <div class="flex items-center gap-2 text-xs flex-wrap">
           <template v-if="editingRegionIdx >= 0">
             <span class="text-amber-400 font-bold">正在绘制: {{ activeRegions[editingRegionIdx]?.name || `区域${editingRegionIdx + 1}` }}</span>
-            <span class="text-gray-400">单击加点, 点第一个点或双击闭合</span>
-            <el-button size="small" @click="undoPoint" :disabled="drawPoints.length === 0">撤销上一点</el-button>
-            <el-button size="small" type="success" @click="finishPolygon" :disabled="drawPoints.length < 3">完成绘制</el-button>
+            <span class="text-gray-400">单击加点, 点第一个点或双击闭合本块; 闭合后可继续画下一块（支持多块）</span>
+            <span v-if="drawnBlocks.length" class="text-cyan-400">已画 {{ drawnBlocks.length }} 块</span>
+            <el-button size="small" @click="undoPoint" :disabled="drawPoints.length === 0 && drawnBlocks.length === 0">撤销上一点</el-button>
+            <el-button size="small" type="warning" plain @click="removeLastBlock" :disabled="drawnBlocks.length === 0">删除最后一块</el-button>
+            <el-button size="small" type="success" @click="finishRegion" :disabled="drawnBlocks.length === 0 && drawPoints.length < 3">完成区域</el-button>
             <el-button size="small" @click="cancelDrawing">取消</el-button>
           </template>
           <template v-else>
@@ -181,12 +183,12 @@
               <el-color-picker v-model="region.color" size="small"
                 :predefine="REGION_PALETTE" @change="redraw" />
               <el-input v-model="region.name" size="small" placeholder="区域名(如 螺丝1)" class="!w-32" @input="redraw" />
-              <span class="text-[10px]" :class="region.polygon && region.polygon.length >= 3 ? 'text-green-400' : 'text-amber-400'">
-                {{ region.polygon && region.polygon.length >= 3 ? `${region.polygon.length}点` : '未画' }}
+              <span class="text-[10px]" :class="hasPolygons(region.polygon) ? 'text-green-400' : 'text-amber-400'">
+                {{ hasPolygons(region.polygon) ? (polygonCount(region.polygon) > 1 ? `${polygonCount(region.polygon)}块${polygonPointCount(region.polygon)}点` : `${polygonPointCount(region.polygon)}点`) : '未画' }}
               </span>
               <div class="flex-1"></div>
               <el-button size="small" type="primary" plain @click="startDrawing(idx)">
-                {{ region.polygon && region.polygon.length >= 3 ? '重画' : '画区域' }}
+                {{ hasPolygons(region.polygon) ? '重画' : '画区域' }}
               </el-button>
               <el-button size="small" type="danger" plain @click="removeRegion(idx)">删</el-button>
             </div>
@@ -225,6 +227,7 @@ import { ElMessage } from 'element-plus';
 import { getBackendHost } from '@/api/index';
 import { getDetectionResults, inferOnce } from '@/api/detection';
 import { QUADRANT_TEMPLATE } from './labelSplit';
+import { normalizePolygons, serializePolygons, hasPolygons, polygonCount, polygonPointCount } from '@/utils/polygons';
 
 defineProps({
   visible: { type: Boolean, required: true },
@@ -239,7 +242,8 @@ const rule = ref(null);
 const editingRegionIdx = ref(-1);
 // 区域编辑作用域: 0=共享区域, n=第n轮独立区域(rounds.region_overrides[n])
 const regionScope = ref(0);
-const drawPoints = reactive([]);   // 绘制中的像素点
+const drawPoints = reactive([]);   // 绘制中的像素点 (当前未闭合块)
+const drawnBlocks = reactive([]);  // 本次绘制会话已闭合的块 (2026-09 多块化, 像素点数组的数组)
 const grabbingAnchor = ref(false);
 let snapshotImage = null;
 let mousePos = null;
@@ -357,7 +361,8 @@ const copySharedToRound = () => {
   const list = ensureActiveList();
   list.length = 0;
   for (const g of (rule.value.regions || [])) {
-    list.push({ name: g.name, polygon: Array.isArray(g.polygon) ? g.polygon.map(p => [...p]) : null, color: g.color });
+    // 深拷贝: polygon 可能是单块或多块嵌套格式, JSON 拷贝对两者都安全
+    list.push({ name: g.name, polygon: g.polygon ? JSON.parse(JSON.stringify(g.polygon)) : null, color: g.color });
   }
   redraw();
   ElMessage.success(`共享区域已复制到第${regionScope.value}轮, 逐个「重画」挪到翻面后的位置`);
@@ -398,13 +403,22 @@ const applyQuadrantTemplate = () => {
 const startDrawing = (idx) => {
   editingRegionIdx.value = idx;
   drawPoints.length = 0;
+  drawnBlocks.length = 0;
   mousePos = null;
+  // 预载已有块, 可在原区域上补画新块 (与 RoiEditorDialog.load 对齐)
+  const canvas = canvasRef.value;
+  const w = canvas?.width || 1;
+  const h = canvas?.height || 1;
+  for (const poly of normalizePolygons(activeRegions.value[idx]?.polygon)) {
+    drawnBlocks.push(poly.map(([nx, ny]) => ({ x: nx * w, y: ny * h })));
+  }
   redraw();
 };
 
 const cancelDrawing = () => {
   editingRegionIdx.value = -1;
   drawPoints.length = 0;
+  drawnBlocks.length = 0;
   mousePos = null;
   redraw();
 };
@@ -428,7 +442,7 @@ const onCanvasClick = (e) => {
     const canvas = canvasRef.value;
     const scale = canvas.width / (canvas.getBoundingClientRect().width || 1);
     if (Math.hypot(pt.x - first.x, pt.y - first.y) < CLOSE_RADIUS * scale) {
-      finishPolygon();
+      closeCurrentBlock();
       return;
     }
   }
@@ -438,7 +452,7 @@ const onCanvasClick = (e) => {
 
 const onCanvasDblClick = (e) => {
   e.preventDefault();
-  if (editingRegionIdx.value >= 0 && drawPoints.length >= 3) finishPolygon();
+  if (editingRegionIdx.value >= 0 && drawPoints.length >= 3) closeCurrentBlock();
 };
 
 const onCanvasMouseMove = (e) => {
@@ -448,21 +462,45 @@ const onCanvasMouseMove = (e) => {
 };
 
 const undoPoint = () => {
-  drawPoints.pop();
+  if (drawPoints.length) {
+    drawPoints.pop();
+  } else if (drawnBlocks.length) {
+    // 没有进行中的点时, 撤销 = 把最后一个已闭合块打回编辑态
+    const back = drawnBlocks.pop();
+    drawPoints.push(...back);
+  }
   redraw();
 };
 
-const finishPolygon = () => {
+const removeLastBlock = () => {
+  drawnBlocks.pop();
+  redraw();
+};
+
+// 闭合当前块 (近首点单击/双击触发), 之后可继续画下一块
+const closeCurrentBlock = () => {
   if (editingRegionIdx.value < 0 || drawPoints.length < 3) return;
+  drawnBlocks.push(drawPoints.map(pt => ({ ...pt })));
+  drawPoints.length = 0;
+  mousePos = null;
+  redraw();
+};
+
+// 完成整个区域: 已闭合块 (+进行中 ≥3 点自动闭合) 归一化写回
+// 保存格式: 1 块=旧格式 [[nx,ny],...] / ≥2 块=新格式 [[[nx,ny],...],...]
+const finishRegion = () => {
+  if (editingRegionIdx.value < 0) return;
+  if (drawPoints.length >= 3) closeCurrentBlock();
+  if (!drawnBlocks.length) return;
   const canvas = canvasRef.value;
   const w = canvas?.width || 1;
   const h = canvas?.height || 1;
-  const polygon = drawPoints.map(pt => [
+  const polys = drawnBlocks.map(block => block.map(pt => [
     Math.round((pt.x / w) * 10000) / 10000,
     Math.round((pt.y / h) * 10000) / 10000,
-  ]);
+  ]));
   const target = activeRegions.value[editingRegionIdx.value];
-  if (target) target.polygon = polygon;
+  if (target) target.polygon = serializePolygons(polys);
   cancelDrawing();
 };
 
@@ -521,35 +559,37 @@ const redraw = () => {
   const r = rule.value;
   if (!r) return;
 
-  // 已有区域（当前作用域: 共享 或 某轮独立）
+  // 已有区域（当前作用域: 共享 或 某轮独立; 2026-09 多块化: 单块/多块统一归一后逐块画）
   (activeRegions.value || []).forEach((region, idx) => {
     if (idx === editingRegionIdx.value) return;  // 正在重画的旧形状不画
-    const poly = region.polygon;
-    if (!Array.isArray(poly) || poly.length < 3) return;
+    const polys = normalizePolygons(region.polygon);
+    if (!polys.length) return;
     const color = region.color || '#22d3ee';
-    ctx.beginPath();
-    poly.forEach(([nx, ny], i) => {
-      const x = nx * W, y = ny * H;
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    polys.forEach((poly) => {
+      ctx.beginPath();
+      poly.forEach(([nx, ny], i) => {
+        const x = nx * W, y = ny * H;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.closePath();
+      ctx.save();
+      ctx.fillStyle = color;
+      ctx.globalAlpha = 0.18;
+      ctx.fill();
+      ctx.restore();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      // 区域名放各块形心 (多块时每块都标, 现场一眼看出同名区域)
+      const cx = poly.reduce((s, p) => s + p[0], 0) / poly.length * W;
+      const cy = poly.reduce((s, p) => s + p[1], 0) / poly.length * H;
+      ctx.font = 'bold 16px Arial';
+      const tw = ctx.measureText(region.name || '').width;
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(cx - tw / 2 - 4, cy - 12, tw + 8, 22);
+      ctx.fillStyle = color;
+      ctx.fillText(region.name || '', cx - tw / 2, cy + 5);
     });
-    ctx.closePath();
-    ctx.save();
-    ctx.fillStyle = color;
-    ctx.globalAlpha = 0.18;
-    ctx.fill();
-    ctx.restore();
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    // 区域名放形心
-    const cx = poly.reduce((s, p) => s + p[0], 0) / poly.length * W;
-    const cy = poly.reduce((s, p) => s + p[1], 0) / poly.length * H;
-    ctx.font = 'bold 16px Arial';
-    const tw = ctx.measureText(region.name || '').width;
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    ctx.fillRect(cx - tw / 2 - 4, cy - 12, tw + 8, 22);
-    ctx.fillStyle = color;
-    ctx.fillText(region.name || '', cx - tw / 2, cy + 5);
   });
 
   // anchor 模式: 标定锚点框（白色虚线）
@@ -567,28 +607,47 @@ const redraw = () => {
     ctx.restore();
   }
 
-  // 绘制中的多边形
-  if (editingRegionIdx.value >= 0 && drawPoints.length > 0) {
+  // 绘制中的区域 (2026-09 多块化: 本会话已闭合块实线 + 进行中块虚线)
+  if (editingRegionIdx.value >= 0) {
     const color = activeRegions.value[editingRegionIdx.value]?.color || '#f59e0b';
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
-    ctx.setLineDash([6, 4]);
-    ctx.beginPath();
-    ctx.moveTo(drawPoints[0].x, drawPoints[0].y);
-    for (let i = 1; i < drawPoints.length; i++) ctx.lineTo(drawPoints[i].x, drawPoints[i].y);
-    if (mousePos) ctx.lineTo(mousePos.x, mousePos.y);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    const scale = W / (canvas.getBoundingClientRect().width || 1);
-    const nearFirst = drawPoints.length >= 3 && mousePos &&
-      Math.hypot(mousePos.x - drawPoints[0].x, mousePos.y - drawPoints[0].y) < CLOSE_RADIUS * scale;
-    drawPoints.forEach((pt, i) => {
-      const isFirst = i === 0;
-      ctx.fillStyle = isFirst ? (nearFirst ? '#22c55e' : '#f59e0b') : color;
+    // 已闭合块
+    drawnBlocks.forEach((block) => {
       ctx.beginPath();
-      ctx.arc(pt.x, pt.y, isFirst && nearFirst ? 9 : 5, 0, Math.PI * 2);
+      block.forEach((pt, i) => {
+        if (i === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y);
+      });
+      ctx.closePath();
+      ctx.save();
+      ctx.fillStyle = color;
+      ctx.globalAlpha = 0.18;
       ctx.fill();
+      ctx.restore();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.stroke();
     });
+    // 进行中块 (虚线, 跟随鼠标)
+    if (drawPoints.length > 0) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(drawPoints[0].x, drawPoints[0].y);
+      for (let i = 1; i < drawPoints.length; i++) ctx.lineTo(drawPoints[i].x, drawPoints[i].y);
+      if (mousePos) ctx.lineTo(mousePos.x, mousePos.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      const scale = W / (canvas.getBoundingClientRect().width || 1);
+      const nearFirst = drawPoints.length >= 3 && mousePos &&
+        Math.hypot(mousePos.x - drawPoints[0].x, mousePos.y - drawPoints[0].y) < CLOSE_RADIUS * scale;
+      drawPoints.forEach((pt, i) => {
+        const isFirst = i === 0;
+        ctx.fillStyle = isFirst ? (nearFirst ? '#22c55e' : '#f59e0b') : color;
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, isFirst && nearFirst ? 9 : 5, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
   }
 };
 
@@ -599,7 +658,7 @@ const handleSave = () => {
   if (!r) return;
   if (!String(r.source_label || '').trim()) { ElMessage.warning('请选择模型原始标签'); return; }
   const validRegions = (r.regions || []).filter(
-    g => g && String(g.name || '').trim() && Array.isArray(g.polygon) && g.polygon.length >= 3
+    g => g && String(g.name || '').trim() && hasPolygons(g.polygon)
   );
   if (validRegions.length === 0) { ElMessage.warning('至少画好一个区域并命名'); return; }
   const names = new Set();
@@ -626,7 +685,7 @@ const handleSave = () => {
     const overrides = {};
     for (const [key, list] of Object.entries(r.rounds.region_overrides || {})) {
       const valid = (list || []).filter(
-        g => g && String(g.name || '').trim() && Array.isArray(g.polygon) && g.polygon.length >= 3
+        g => g && String(g.name || '').trim() && hasPolygons(g.polygon)
       );
       const ns = new Set();
       for (const g of valid) {

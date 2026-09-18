@@ -378,6 +378,9 @@ class DataExportSetting(Base):
     record_step_video = Column(Boolean, default=False)  # 录制步骤视频
     record_cycle_video = Column(Boolean, default=False)  # 录制周期视频
     record_session_video = Column(Boolean, default=False)  # 录制会话视频
+    # 2026-09 检测框数据 (sidecar): 周期录像旁成对记录帧号对齐的检测框 JSON,
+    # 供回放叠加显示与"带框版"渲染导出使用; 录像本身仍是无框原始画面
+    record_boxes_data = Column(Boolean, default=False)
     
     # 视频质量设置
     video_quality = Column(String(20), default="medium")  # low, medium, high

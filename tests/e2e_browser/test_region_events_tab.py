@@ -142,7 +142,7 @@ def test_建两条规则_画区域_全结构落库(page, base_url, api_url):
     for rx, ry in [(0.82, 0.05), (0.98, 0.05), (0.98, 0.95), (0.82, 0.95)]:
         page.mouse.click(box["x"] + box["width"] * rx, box["y"] + box["height"] * ry)
         time.sleep(0.2)
-    roi_dlg.locator("button:has-text('完成绘制')").click()
+    roi_dlg.locator("button:has-text('完成本块')").click()
     time.sleep(0.4)
     roi_dlg.locator("button:has-text('保存 ROI')").click()
     time.sleep(0.8)
@@ -228,7 +228,7 @@ def test_结算判定与进区规则落库(page, base_url, api_url):
     for rx, ry in [(0.5, 0.4), (0.9, 0.4), (0.9, 0.95), (0.5, 0.95)]:
         page.mouse.click(box["x"] + box["width"] * rx, box["y"] + box["height"] * ry)
         time.sleep(0.2)
-    roi_dlg.locator("button:has-text('完成绘制')").click()
+    roi_dlg.locator("button:has-text('完成本块')").click()
     time.sleep(0.4)
     roi_dlg.locator("button:has-text('保存 ROI')").click()
     time.sleep(0.8)
@@ -299,7 +299,7 @@ def test_监控模板一键添加与落库(page, base_url, api_url):
     for rx, ry in [(0.3, 0.3), (0.7, 0.3), (0.7, 0.8), (0.3, 0.8)]:
         page.mouse.click(box["x"] + box["width"] * rx, box["y"] + box["height"] * ry)
         time.sleep(0.2)
-    roi_dlg.locator("button:has-text('完成绘制')").click()
+    roi_dlg.locator("button:has-text('完成本块')").click()
     time.sleep(0.4)
     roi_dlg.locator("button:has-text('保存 ROI')").click()
     time.sleep(0.8)

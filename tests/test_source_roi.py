@@ -69,11 +69,14 @@ def test_ensure_roi_mask_首次调用_生成_mask_和顶点():
     assert mi._roi_mask_cache.shape == (100, 200)
     assert mi._roi_mask_cache.dtype == np.uint8
     assert mi._roi_mask_shape == (100, 200)
+    # 2026-09 多块化: 顶点缓存为「逐块顶点数组」列表 (单块 ROI = 1 个元素)
     assert mi._roi_polygon_pixels is not None
-    assert mi._roi_polygon_pixels.shape == (4, 2)
+    assert isinstance(mi._roi_polygon_pixels, list)
+    assert len(mi._roi_polygon_pixels) == 1
+    assert mi._roi_polygon_pixels[0].shape == (4, 2)
     # 像素坐标对应归一化 (200*0.1, 100*0.1) ~ (20, 10), 等等
     expected_first = [int(round(0.1 * 200)), int(round(0.1 * 100))]
-    assert list(mi._roi_polygon_pixels[0]) == expected_first
+    assert list(mi._roi_polygon_pixels[0][0]) == expected_first
 
 
 def test_ensure_roi_mask_同样shape_命中缓存():

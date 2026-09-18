@@ -1213,6 +1213,7 @@ import { startDetection as apiStartDetection, stopDetection as apiStopDetection,
 import { getModelDetail, resolveModelPath as apiResolveModelPath } from '@/api/model';
 import { getProjectDetail } from '@/api/project';
 import api, { getBackendHost } from '@/api/index';
+import { hasPolygons } from '@/utils/polygons';
 import { getExtraFieldsSchema, setExtraFields, getInboundConfig } from '@/api/gateway';
 import PerItemPanel from './PerItemPanel.vue';
 import PackagingFlowCard from './PackagingFlowCard.vue';
@@ -3083,7 +3084,7 @@ const startDetection = async () => {
             name: e.name, model_path: r.path,
             conf: typeof e.conf === 'number' ? e.conf : 0.25,
             iou: typeof e.iou === 'number' ? e.iou : 0.45,
-            roi: Array.isArray(e.roi) && e.roi.length >= 3 ? e.roi : null,
+            roi: hasPolygons(e.roi) ? e.roi : null,
             schedule: e.schedule || { type: 'every_frame', n: 1, events: [] },
             class_filter: Array.isArray(e.class_filter) && e.class_filter.length
               ? e.class_filter : null,

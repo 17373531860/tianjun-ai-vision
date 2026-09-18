@@ -22,11 +22,12 @@ from __future__ import annotations
 import time
 from typing import Optional
 
+from backend.api.source_geometry import normalize_polygons
 from backend.core import debug_center
 
 
 def _point_in_polygon(px: float, py: float, polygon) -> bool:
-    """射线法: 归一化坐标点是否在多边形内（含边界近似）。polygon 已在解析期校验。"""
+    """射线法: 归一化坐标点是否在【单个】多边形内（含边界近似）。polygon 已在解析期校验。"""
     inside = False
     n = len(polygon)
     j = n - 1
@@ -41,19 +42,21 @@ def _point_in_polygon(px: float, py: float, polygon) -> bool:
     return inside
 
 
+def _point_in_regions(px: float, py: float, polys) -> bool:
+    """点是否落在多块多边形列表（_parse_polygon 的返回形态）的任一块内。"""
+    return any(_point_in_polygon(px, py, poly) for poly in (polys or []))
+
+
 def _parse_polygon(raw) -> Optional[list]:
-    """归一化多边形校验: ≥3 点、每点 2 个 float。不合法返回 None。"""
-    if not isinstance(raw, (list, tuple)) or len(raw) < 3:
+    """归一化多边形校验 (2026-09 多块化): 接受单块 [[x,y],...] / 多块 [[[x,y],...],...]。
+
+    返回 canonical 多块形态 [[(x,y),...], ...]（每块 ≥3 点, 坏块剔除）;
+    无任何有效块返回 None。判定时任一块命中即命中 (_point_in_regions)。
+    """
+    polys = normalize_polygons(raw)
+    if not polys:
         return None
-    parsed = []
-    for p in raw:
-        if not isinstance(p, (list, tuple)) or len(p) < 2:
-            return None
-        try:
-            parsed.append((float(p[0]), float(p[1])))
-        except (TypeError, ValueError):
-            return None
-    return parsed
+    return [[(float(p[0]), float(p[1])) for p in poly] for poly in polys]
 
 
 def _parse_bbox(raw) -> Optional[dict]:
@@ -91,7 +94,7 @@ class SplitRule:
         self.anchor_hold_seconds = anchor_hold_seconds
         self.unmatched = unmatched              # 'drop' | 'keep' | 'map'
         self.unmatched_label = unmatched_label
-        self.regions = regions                  # [(name, polygon), ...]
+        self.regions = regions                  # [(name, polys), ...] polys=多块列表
         # ---- 多轮次（v3.32, 同一位置按工序轮次映射不同虚拟步骤）----
         # round_count=0 → 未启用。启用时: 每次 trigger_label"重新出现"
         # （消失超过 round_trigger_gap 秒后再出现）轮次 +1, 超过总轮数回绕;
@@ -318,11 +321,16 @@ class LabelSplitEngine:
 
     @staticmethod
     def _transform_polygon(poly, ref: dict, cur: dict):
-        """标定坐标系 → 当前锚点坐标系（平移 + 各向缩放, 不做旋转）。"""
+        """标定坐标系 → 当前锚点坐标系（平移 + 各向缩放, 不做旋转）。单块多边形。"""
         sx = cur['w'] / ref['w']
         sy = cur['h'] / ref['h']
         return [(cur['x'] + (px - ref['x']) * sx,
                  cur['y'] + (py - ref['y']) * sy) for px, py in poly]
+
+    @classmethod
+    def _transform_regions(cls, polys, ref: dict, cur: dict):
+        """多块形态（_parse_polygon 返回值）逐块做锚点跟随变换。"""
+        return [cls._transform_polygon(poly, ref, cur) for poly in polys]
 
     def _base_regions(self, rule: SplitRule):
         """当前轮次生效的区域集: 该轮配了独立区域用独立的, 否则用共享区域。"""
@@ -343,8 +351,8 @@ class LabelSplitEngine:
         if cur is None:
             return None
         ref = rule.anchor_ref
-        return [(name, self._transform_polygon(poly, ref, cur))
-                for name, poly in base]
+        return [(name, self._transform_regions(polys, ref, cur))
+                for name, polys in base]
 
     # ---------- 轮次 ----------
 
@@ -464,8 +472,8 @@ class LabelSplitEngine:
             cy = float(det.get('y', 0)) + float(det.get('h', 0)) / 2
             hit_name = None
             if regions:
-                for name, poly in regions:
-                    if _point_in_polygon(cx, cy, poly):
+                for name, polys in regions:
+                    if _point_in_regions(cx, cy, polys):
                         hit_name = name
                         break
             if hit_name is not None:
@@ -535,7 +543,7 @@ class PlacementGuideState:
         if best is not None:
             cx = float(best.get('x', 0)) + float(best.get('w', 0)) / 2
             cy = float(best.get('y', 0)) + float(best.get('h', 0)) / 2
-            self._last_in_position = _point_in_polygon(cx, cy, self.polygon)
+            self._last_in_position = _point_in_regions(cx, cy, self.polygon)
             self._last_seen_ts = now
 
     def snapshot(self, now: Optional[float] = None) -> dict:

@@ -2205,6 +2205,14 @@ def get_detection_results(
     except Exception:
         pass
 
+    # v3.59: 容器定界周期门状态（容器在场/周期开合, 未配置不透出零差异）
+    try:
+        _cgate = getattr(mgr, '_container_cycle_gate', None)
+        if _cgate is not None:
+            result['container_gate'] = _cgate.to_state(mgr)
+    except Exception:
+        pass
+
     # MES 实时数据 + 录像异常详情 (录像异常不依赖 MES 开关)
     mes_data = {}
     try:

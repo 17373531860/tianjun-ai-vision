@@ -34,6 +34,8 @@ import time
 from collections import deque
 from typing import Optional
 
+from backend.api.source_geometry import normalize_polygons  # 纯函数, 无 cv2/路由依赖
+
 logger = logging.getLogger(__name__)
 
 
@@ -992,10 +994,8 @@ class PipelineStation(WeighingStation):
 
 
 # ==================== 视觉料源防错 (v3.35, 纯逻辑可单测) ====================
-def point_in_polygon(px: float, py: float, polygon) -> bool:
-    """射线法判点在归一化多边形内 (纯 Python, 不依赖 cv2, 状态机可脱主程序单测)。"""
-    if not polygon or len(polygon) < 3:
-        return True
+def _point_in_single_polygon(px: float, py: float, polygon) -> bool:
+    """射线法判点在归一化【单个】多边形内 (纯 Python, 不依赖 cv2)。"""
     inside = False
     n = len(polygon)
     j = n - 1
@@ -1008,6 +1008,18 @@ def point_in_polygon(px: float, py: float, polygon) -> bool:
                 inside = not inside
         j = i
     return inside
+
+
+def point_in_polygon(px: float, py: float, polygon) -> bool:
+    """点是否在归一化多边形内 (2026-09 多块化: 单块/多块双格式)。
+
+    语义保持: 无有效多边形 = 不限制, 返回 True; 有配置时任一块命中即 True。
+    消费点: onscale_polygon 秤台区 / visual_guard 料源防错区。
+    """
+    polys = normalize_polygons(polygon)
+    if not polys:
+        return True
+    return any(_point_in_single_polygon(px, py, poly) for poly in polys)
 
 
 class VisualGuardMatcher:

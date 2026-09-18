@@ -7,12 +7,14 @@
 场景: 每个工位一台一体机, 用浏览器开本工位 kiosk 页。工位账号只该启停自己那
 一路, 不该能对着 ?channel=3 把隔壁工位停了。
 
-合入 dev-qing 时原编号 m0011 与 m0011_model_capability 撞号, 重编号为 m0012。
-apply 幂等: inspector 探查缺列才 ALTER。
+编号沿革:
+- 原 m0011, 合入 dev-qing 时与 m0011_model_capability 撞号, 重编号 m0012
+- 吸收 v3.59 时与已发版 m0012_video_boxes_sidecar 再撞号, 重编号 m0013
+apply 幂等: inspector 探查缺列才 ALTER。该分支未合入过客户机, 无旧 ID 记账。
 """
 from sqlalchemy import inspect, text
 
-MIGRATION_ID = "m0012_user_allowed_channels"
+MIGRATION_ID = "m0013_user_allowed_channels"
 
 
 def apply(engine):

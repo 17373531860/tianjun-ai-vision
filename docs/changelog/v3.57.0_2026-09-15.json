@@ -1,0 +1,119 @@
+{
+  "version": "3.57.0",
+  "date": "2026-09-15",
+  "previous_version": "3.56.0",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "OCR/异常检测正式逻辑模式 + VLM 坐诊 + 端到端 ONNX 直推",
+      "symptom": "读字判定与免缺陷样本质检无原生模式；端到端形态模型(YOLO26/RF-DETR)无法消费",
+      "root_cause": "此前 AI 能力只有试用入口，无法作为检测主逻辑结算",
+      "fix": "source_ai_modes_mixin 独立采样线程 + ocr_engine(RapidOCR)/anomaly_engine(PatchCore风格) + 判定走 _trigger_event 结算链；source_e2e_onnx 无 NMS 直推 runner；vlm_service OpenAI 兼容 HTTP 默认关；新端点 /ocr /anomaly /vlm",
+      "files": ["backend/api/source_ai_modes_mixin.py", "backend/api/ocr.py", "backend/api/anomaly.py", "backend/api/vlm.py", "backend/api/source_e2e_onnx.py", "backend/services/ocr_engine.py", "backend/services/anomaly_engine.py", "backend/services/vlm_service.py", "backend/services/preset_models.py", "frontend/src/views/Monitor/OcrPanel.vue", "frontend/src/views/Monitor/AnomalyPanel.vue"],
+      "keywords": ["OCR", "读字", "异常检测", "anomaly", "记忆库", "免缺陷样本", "VLM", "坐诊", "端到端", "end_to_end", "ONNX", "无NMS", "RapidOCR", "PatchCore", "DINOv2", "逻辑模式", "logic_mode"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "内置能力模型入仓与能力选用体系（AI 能力试用页下线）",
+      "symptom": "AI 能力散在试用 tab 孤岛，模型仓库不是唯一事实源",
+      "root_cause": "capability 模型无入仓/选用/绑定体系",
+      "fix": "models 表 capability/builtin 列(m0011) + builtin_models 幂等 seed 六出厂行 + /models/capabilities + bind 换权重热重载 + 内置禁删 403 + CapabilityAttachmentsMixin 能力挂件副通道 + 模型页三分区/试一试抽屉 + AiTools 页删除",
+      "files": ["backend/models/models.py", "backend/db/migrations/m0011_model_capability.py", "backend/services/builtin_models.py", "backend/api/models.py", "backend/api/source_capability_attachments.py", "frontend/src/views/Model/index.vue", "frontend/src/views/Model/CapabilityTryDrawer.vue", "frontend/src/views/Project/BasicSettingsTab.vue"],
+      "keywords": ["内置模型", "builtin", "capability", "能力挂件", "attachment", "试一试抽屉", "换权重", "bind", "m0011", "模型仓库", "三分区", "AI能力试用下线"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "朝向估计三层后端收敛 + facing_dwell 朝向驻留规则",
+      "symptom": "蒸镀点检要求操作员面向仪表驻留点检，超时无人告警",
+      "root_cause": "无人员朝向估计能力",
+      "fix": "person_orientation 三层(关键点层二选一+headpose精化+YawSmoother平滑, 按授权自动降级) + facing_dwell 夹角判定规则 + alert_on_absent 取反 + ROI 编辑器单点标定 + /orientation 试用端点",
+      "files": ["backend/services/person_orientation.py", "backend/api/orientation.py", "backend/api/source_region_events.py", "backend/api/source_region_events_mixin.py", "frontend/src/views/Project/RoiEditorDialog.vue"],
+      "keywords": ["朝向", "orientation", "facing_dwell", "驻留", "点检", "蒸镀", "headpose", "yolo11-pose", "mediapipe pose", "YawSmoother", "单点标定"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "区域事件监控型规则四种 + 只认操作员蓝工装启发式",
+      "symptom": "人流计数/区域空置超时类巡检合规无规则支持；外协黄背心误计入点检",
+      "root_cause": "区域事件引擎只有动作型规则；检测框无操作员属性",
+      "fix": "region_count/region_empty/proximity/cross_count 监控型规则(与动作型正交) + min_seconds 上限 3600s + tag_operator_uniforms HSV 工装启发式 + 规则级 require_operator 默认关",
+      "files": ["backend/api/source_region_events.py", "backend/api/source_region_events_mixin.py", "frontend/src/views/Project/LogicConfigTab.vue"],
+      "keywords": ["区域事件", "监控型规则", "region_count", "region_empty", "proximity", "cross_count", "越线计数", "蓝工装", "require_operator", "is_operator", "巡检"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-005",
+      "title": "投影光引导 P1~P3（默认关）",
+      "symptom": "装配工位希望把当前步骤指引直接投影到台面",
+      "root_cause": "新子系统",
+      "fix": "/lightguide ArUco 标定+亮度采样 + /projection 前端投影画布 guideEngine + 四角自愈锚点漂移自动重标 + NG 悬停确认 + Electron 窗口角色 projection + 参数卡 11 项 KV + 流向路径 + synthetic 一键演示 + 部署手册",
+      "files": ["backend/api/lightguide.py", "backend/api/channel_manager.py", "electron/multi-monitor.js", "electron/main.js", "frontend/src/views/Projection/index.vue", "frontend/src/views/Projection/guideEngine.js", "frontend/src/views/Source/LightGuidePanel.vue"],
+      "keywords": ["投影", "光引导", "lightguide", "ArUco", "标定", "projection", "自愈锚点", "漂移重标", "悬停确认", "投影仪", "guideEngine"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-006",
+      "title": "多平台安装包：Ubuntu deb + macOS dmg，海康 SDK 与嵌入式 PG 随包",
+      "symptom": "只有 Windows 安装包",
+      "root_cause": "CI 无 linux/mac 打包跑道；License darwin 误走 probeLinux 致 machineId 弱 ID",
+      "fix": "build-linux/build-macos job(Nuitka+conda-pack+electron-builder) + 海康 Linux SDK 钉 SHA 镜像 + zonky PG 便携包+setup_embedded_pg.sh 冒烟 + backend-manager 代管 pg_ctl + probeMacos ioreg 指纹 + 三平台资源自检硬红灯; 随批修 SIGPIPE 挂死/deb 枚举/模型漏打包/产物 glob",
+      "files": [".github/workflows/build.yml", "electron/package.json", "electron/backend-manager.js", "electron/license-manager.js", "scripts/db/setup_embedded_pg.sh", "backend/requirements.txt"],
+      "keywords": ["deb", "dmg", "Ubuntu", "macOS", "多平台", "嵌入式PG", "zonky", "海康 Linux SDK", "probeMacos", "machineId", "electron-builder", "SIGPIPE", "conda-pack"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-007",
+      "title": "多显示器二期：工位主屏扩展 + 手部裁切副屏 + 同工位独立观看槽（默认关）",
+      "symptom": "工位缺可操作主屏与手部特写副屏；主屏放大会挤断副屏 MJPEG",
+      "root_cause": "多屏一期仅只读 kiosk；MJPEG 连接槽按通道互踢",
+      "fix": "station_view 主屏复用/kiosk 可操作 + aux 手部裁切副屏 /snapshot?view=hands + source_mediapipe 裁切渲染 + 同工位独立观看槽 JPEG 共享编码 + 扩展步骤 OK/NG 恢复 + role×contentRole 双轨",
+      "files": ["electron/main.js", "electron/multi-monitor.js", "backend/api/channel_manager.py", "backend/api/source_mediapipe.py", "backend/api/source.py", "frontend/src/views/Monitor/HandsCropMonitor.vue", "frontend/src/views/Source/MultiMonitorPanel.vue"],
+      "keywords": ["多显示器", "multi_monitor", "主屏", "副屏", "手部裁切", "hands", "观看槽", "MJPEG", "station_view", "aux_display_id", "独立观看槽"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-008",
+      "title": "全系 ROI 多块化：任意画区域处自由绘制任意数量区域",
+      "symptom": "所有 ROI 只能画一块，现场存在多个分离区域需求",
+      "root_cause": "各消费点只解析单块格式",
+      "fix": "source_geometry normalize_polygons/normalize_rects/point_in_any_polygon 与前端 utils/polygons.js 同源双格式契约(单块旧格式/多块嵌套, 存量零迁移) + RoiEditorDialog 多块绘制(完成本块/撤销点/删除上一块) + 全消费点任一块命中 + overlay/预览多块渲染",
+      "files": ["backend/api/source_geometry.py", "backend/api/source_roi.py", "backend/api/source.py", "backend/api/source_label_split.py", "backend/api/source_project_config_apply.py", "backend/api/source_ai_modes_mixin.py", "backend/api/source_capability_attachments.py", "backend/api/source_container_grouping_mixin.py", "backend/services/weighing_engine.py", "frontend/src/utils/polygons.js", "frontend/src/views/Project/RoiEditorDialog.vue", "frontend/src/views/Monitor/composables/useOverlayDrawing.js"],
+      "keywords": ["ROI", "多块", "多区域", "multi polygon", "normalize_polygons", "normalize_rects", "point_in_any_polygon", "完成本块", "嵌套格式", "双格式", "任一块命中", "自由绘制"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "收编 v3.56.0a 六和周期多码采集现场补丁",
+      "symptom": "少扫停采集中/挂起计两次/双计数/待机涨数/补丁bat闪退",
+      "root_cause": "见 docs/changelog/v3.56.0a_2026-09-06.md",
+      "fix": "催扫提醒+本件扫完(settle-now)+挂起 remind_only+count_on_settle+standby_silent+bat 纯 ASCII CRLF",
+      "files": ["backend/services/scan_collect.py", "backend/api/scan_collect.py", "frontend/src/views/Monitor/ScanSlotsPanel.vue", "frontend/src/views/MES/ScanCollectConfigCard.vue"],
+      "keywords": ["多码采集", "scan-collect", "催扫", "本件扫完", "settle-now", "count_on_settle", "standby_silent", "六和"],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "CHORE-001",
+      "title": "site-pack 现场配方包后端落地但摘除挂载（WIP）",
+      "symptom": "前端 UI/Electron 集成/测试未做",
+      "root_cause": "半成品不随版出厂",
+      "fix": "router_manifest 注释挂载, 代码保留, 补齐后恢复",
+      "files": ["backend/api/router_manifest.py", "backend/api/site_pack.py"],
+      "keywords": ["site-pack", "tjvsite", "配方包", "WIP", "摘除挂载"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["api-sync", "modify-model", "build-release", "create-hotfix", "debug-scan-collect", "modify-project-config", "debug-source"],
+  "files_changed": ["backend/api/", "backend/services/", "backend/db/migrations/m0011_model_capability.py", "electron/", "frontend/src/", ".github/workflows/build.yml", "scripts/db/setup_embedded_pg.sh", "tests/"]
+}

@@ -68,6 +68,10 @@ class VideoArchiveRule(Base):
     # NG 发生在周期结算瞬间, 尾段即"出事那一下")
     transform = Column(String(16), nullable=False, default="none")
     clip_seconds = Column(Integer, nullable=False, default=10)
+    # 2026-09 带框版投递: 归档前按检测框 sidecar 渲染烧框 MP4 交付
+    # (本地录像库仍是干净原片; 需数据设置开启「记录检测框数据」,
+    #  无 sidecar / 渲染失败时降级投递原片, 绝不丢证据)
+    annotated_video = Column(Boolean, nullable=False, default=False)
 
     # ---- 四期: 远端目的地与治理 ----
     # 目的地类型: local_dir | ftp | sftp | s3 | http | plugin:<name>

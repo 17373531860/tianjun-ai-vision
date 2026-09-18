@@ -238,7 +238,8 @@ class TestAttachmentsParse:
         ]})
         assert [a["capability"] for a in atts] == ["pose", "ocr", "anomaly"]
         assert atts[0]["interval_s"] == 1.0          # pose 默认 1s
-        assert atts[1]["roi"] == [0.1, 0.2, 0.3, 0.4]
+        # 2026-09 多块化: roi 归一成 canonical 多块形态
+        assert atts[1]["roi"] == [[0.1, 0.2, 0.3, 0.4]]
         assert atts[2]["bank_id"] == "b1" and atts[2]["cooldown_s"] == 5.0
 
     def test_parse_empty_zero_config(self):

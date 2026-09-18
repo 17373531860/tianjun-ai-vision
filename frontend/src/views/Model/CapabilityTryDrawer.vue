@@ -37,6 +37,21 @@
         </div>
       </div>
 
+      <!-- 朝向: 头姿精化配置 (headpose_full_range, KV 落库全局生效) -->
+      <div v-if="cap === 'pose' || cap === 'headpose'" class="bg-gray-900/60 rounded p-3 space-y-2" data-test="cap-orientation-config">
+        <div class="flex items-center gap-3">
+          <span class="text-sm text-gray-300 font-medium">头姿精化配置</span>
+          <el-switch v-model="fullRange" :loading="fullRangeSaving" size="small"
+                     active-text="全角度头姿模型" data-test="orientation-fullrange-switch"
+                     @change="doSaveFullRange" />
+        </div>
+        <div class="text-xs text-gray-500">
+          默认按正脸模型对待：人背对相机时跳过头姿精化、用身体朝向兜底（后脑勺喂给正脸模型会输出假角度，
+          把朝向判定带偏——蒸镀点检类"背对相机看仪表"场景必须保持关闭）。
+          仅当绑定 6DRepNet360 / WHENet 等全角度权重时才打开，背面输出才会被采信。改动即时生效，无需重启检测。
+        </div>
+      </div>
+
       <!-- 异常检测: 记忆库管理 (原 AI 试用页建库/阈值/删库迁入) -->
       <div v-if="cap === 'anomaly'" class="bg-gray-900/60 rounded p-3 space-y-2" data-test="cap-bank-manage">
         <div class="text-sm text-gray-300 font-medium">记忆库管理</div>
@@ -169,6 +184,7 @@ import {
   scoreAnomalyImage, scoreAnomalyFrame,
   vlmAskImage, vlmAskFrame, getVlmConfig, saveVlmConfig, getVlmStatus,
   orientationEstimateImage, orientationEstimateFrame,
+  getOrientationConfig, saveOrientationConfig,
 } from '@/api/aitools';
 import { dbg, dbgErr } from '@/utils/debug';
 
@@ -254,6 +270,30 @@ const doUpdateThreshold = async (row, v) => {
   }
 };
 
+// ---------- 朝向配置 (headpose_full_range) ----------
+const fullRange = ref(false);
+const fullRangeSaving = ref(false);
+
+const refreshOrientationCfg = async () => {
+  try {
+    const r = await getOrientationConfig();
+    fullRange.value = !!r.headpose_full_range;
+  } catch (e) { dbgErr('model.try', '拉取朝向配置', e); }
+};
+
+const doSaveFullRange = async (v) => {
+  fullRangeSaving.value = true;
+  try {
+    await saveOrientationConfig({ headpose_full_range: !!v });
+    ElMessage.success(v ? '已按全角度头姿模型处理（背面输出采信）' : '已按正脸模型处理（背对相机用身体朝向）');
+  } catch (e) {
+    fullRange.value = !v; // 保存失败回滚开关
+    ElMessage.error(e?.response?.data?.detail || '保存失败');
+  } finally {
+    fullRangeSaving.value = false;
+  }
+};
+
 // ---------- VLM 配置 ----------
 const vlmCfg = ref(null);
 const vlmForm = ref({ enabled: false, endpoint: '', model: '', api_key: '' });
@@ -300,6 +340,7 @@ watch(() => props.modelValue, async (v) => {
   vlmProbe.value = null;
   if (cap.value === 'anomaly') await refreshBanks();
   if (cap.value === 'vlm') await refreshVlm();
+  if (cap.value === 'pose' || cap.value === 'headpose') await refreshOrientationCfg();
 });
 
 const onFile = (f) => {

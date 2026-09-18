@@ -1,5 +1,6 @@
 <template>
-  <!-- ROI 编辑器对话框（2026-07 拆分批次 P-2 自 index.vue 外置；2026-09 增加 point/rect 模式） -->
+  <!-- ROI 编辑器对话框（2026-07 拆分批次 P-2 自 index.vue 外置；2026-09 增加 point/rect 模式；
+       2026-09 多块 ROI 改造: polygon/rect 模式支持连续绘制任意多块） -->
   <el-dialog :model-value="visible"
     :title="title"
     width="80%" :close-on-click-modal="false" destroy-on-close
@@ -8,13 +9,14 @@
     @close="$emit('close')">
     <div class="space-y-3">
       <div class="flex items-center gap-3 text-sm">
-        <span v-if="mode === 'polygon'" class="text-gray-400">单击添加顶点，点击<b class="text-amber-400">第一个点</b>闭合多边形（靠近时会变绿）。闭合后再次单击可重新绘制</span>
+        <span v-if="mode === 'polygon'" class="text-gray-400">单击添加顶点，点击<b class="text-amber-400">第一个点</b>闭合当前区块（靠近时会变绿）。闭合后可<b class="text-cyan-400">继续单击绘制下一块</b>，支持任意多块互不相连的区域</span>
         <span v-else-if="mode === 'point'" class="text-gray-400">在画面上<b class="text-amber-400">单击一次</b>标定目标位置（如仪表所在点），再次单击可重新标定</span>
-        <span v-else class="text-gray-400">单击两次框定矩形区域（<b class="text-amber-400">第一次点左上角、第二次点右下角</b>），框定后再次单击可重新绘制</span>
+        <span v-else class="text-gray-400">单击两次框定矩形区域（<b class="text-amber-400">第一次点左上角、第二次点右下角</b>），框定后可<b class="text-cyan-400">继续框选下一块</b>，支持任意多块</span>
         <div class="flex-1"></div>
         <el-button v-if="mode === 'polygon'" size="small" @click="roiUndoPoint" :disabled="roiPoints.length === 0">撤销上一点</el-button>
-        <el-button size="small" type="warning" @click="roiClearPoints" :disabled="roiPoints.length === 0">清除全部</el-button>
-        <el-button v-if="mode === 'polygon'" size="small" type="success" @click="roiFinishPolygon" :disabled="roiPoints.length < 3">完成绘制</el-button>
+        <el-button v-if="mode !== 'point'" size="small" type="warning" plain @click="roiRemoveLastShape" :disabled="finishedShapes.length === 0">删除最后一块</el-button>
+        <el-button size="small" type="warning" @click="roiClearPoints" :disabled="finishedShapes.length === 0 && roiPoints.length === 0">清除全部</el-button>
+        <el-button v-if="mode === 'polygon'" size="small" type="success" @click="roiFinishPolygon" :disabled="roiPoints.length < 3">完成本块</el-button>
       </div>
       <div class="relative bg-black rounded overflow-hidden flex justify-center" style="max-height: 70vh;">
         <canvas ref="roiEditorCanvas" class="cursor-crosshair" style="max-width: 100%; max-height: 70vh; object-fit: contain;"
@@ -22,17 +24,18 @@
       </div>
       <div class="flex items-center gap-2 text-xs text-gray-500">
         <template v-if="mode === 'polygon'">
-          <span>顶点数: {{ roiPoints.length }}</span>
-          <span v-if="roiPolygonClosed" class="text-green-400 font-bold">多边形已闭合</span>
+          <span v-if="finishedShapes.length" class="text-green-400 font-bold">已绘制 {{ finishedShapes.length }} 块区域</span>
+          <span v-if="roiPoints.length">当前区块顶点数: {{ roiPoints.length }}</span>
+          <span v-if="!finishedShapes.length && !roiPoints.length">未绘制</span>
         </template>
         <template v-else-if="mode === 'point'">
           <span v-if="roiPoints.length" class="text-green-400 font-bold">已标定 ({{ (roiPoints[0].x / (canvasW || 1)).toFixed(3) }}, {{ (roiPoints[0].y / (canvasH || 1)).toFixed(3) }})</span>
           <span v-else>未标定</span>
         </template>
         <template v-else>
-          <span v-if="roiPoints.length >= 2" class="text-green-400 font-bold">矩形已框定</span>
-          <span v-else-if="roiPoints.length === 1">已定第一角，点第二角完成</span>
-          <span v-else>未框定</span>
+          <span v-if="finishedShapes.length" class="text-green-400 font-bold">已框定 {{ finishedShapes.length }} 块区域</span>
+          <span v-if="roiPoints.length === 1">已定第一角，点第二角完成本块</span>
+          <span v-if="!finishedShapes.length && !roiPoints.length">未框定</span>
         </template>
       </div>
     </div>
@@ -48,12 +51,17 @@
 // 数据流约定: 本组件只管「取快照底图 + 画标注」；点保存时把归一化结果通过事件交回父级
 // —— 写到哪个目标、是否立即触发保存项目, 路由逻辑全在父级。
 // 三种模式 (2026-09):
-//   polygon (默认) : 多边形, save 事件回传 [[nx,ny],...] —— 历史行为零差异
+//   polygon (默认) : 多边形, save 事件回传
 //   point          : 单点标定 (facing_dwell 仪表点), save-point 事件回传 [nx, ny]
-//   rect           : 两点矩形 (OCR 读字区 / 异常监测区), save-rect 事件回传 [x, y, w, h]
+//   rect           : 两点矩形 (OCR 读字区 / 异常监测区), save-rect 事件回传
+// 多块 ROI (2026-09 改造): polygon / rect 模式支持连续绘制任意多块。
+//   保存格式约定 (与后端 normalize_polygons/normalize_rects 对齐):
+//     只画 1 块 → 旧格式 ([[nx,ny],...] / [x,y,w,h]) —— 存量客户降级可回退
+//     ≥2 块    → 新格式 ([[[nx,ny],...],...] / [[x,y,w,h],...])
 // 打开流程: 父级设 visible=true → nextTick 等 canvas 挂载 → 调 load(channel, 初始标注)。
 import { computed, ref } from 'vue';
 import { getBackendHost } from '@/api/index';
+import { normalizePolygons, normalizeRects } from '@/utils/polygons';
 
 const props = defineProps({
   visible: { type: Boolean, required: true },
@@ -62,9 +70,12 @@ const props = defineProps({
 });
 const emit = defineEmits(['update:visible', 'save', 'save-point', 'save-rect', 'close']);
 
+// 多块颜色轮换 (完成块)
+const SHAPE_COLORS = ['#00c8ff', '#22c55e', '#f97316', '#a855f7', '#eab308', '#ec4899'];
+
 const roiEditorCanvas = ref(null);
-const roiPoints = ref([]);
-const roiPolygonClosed = ref(false);
+const roiPoints = ref([]);          // 进行中的顶点 (polygon: 未闭合块 / rect: 第一角 / point: 标定点)
+const finishedShapes = ref([]);     // 已完成的区块: polygon=[{x,y},...] / rect=[{x,y},{x,y}] (两角)
 const canvasW = ref(0);
 const canvasH = ref(0);
 let roiImage = null;
@@ -74,8 +85,9 @@ const ROI_CLOSE_RADIUS = 15;
 
 const saveEnabled = computed(() => {
   if (props.mode === 'point') return roiPoints.value.length >= 1;
-  if (props.mode === 'rect') return roiPoints.value.length >= 2;
-  return roiPoints.value.length >= 3;
+  if (props.mode === 'rect') return finishedShapes.value.length >= 1;
+  // polygon: 已有完成块, 或进行中的块已够 3 点 (保存时自动闭合)
+  return finishedShapes.value.length >= 1 || roiPoints.value.length >= 3;
 });
 
 // d1: Promise-based, 调用方 await 图片加载完再画 polygon (替代裸 setTimeout 时序坑).
@@ -116,10 +128,13 @@ const loadRoiSnapshot = (channel = 0) => {
 };
 
 // 父级打开对话框后调用: 重置状态 → 取快照 → (可选)预加载已有标注
-// existing 形态随 mode: polygon=[[nx,ny],...] / point=[nx,ny] / rect=[x,y,w,h]
+// existing 形态随 mode (单块/多块双格式均可):
+//   polygon = [[nx,ny],...] 或 [[[nx,ny],...],...]
+//   point   = [nx,ny]
+//   rect    = [x,y,w,h] 或 [[x,y,w,h],...]
 const load = async (channel = 0, existing = null) => {
   roiPoints.value = [];
-  roiPolygonClosed.value = false;
+  finishedShapes.value = [];
   roiMousePos = null;
   const ok = await loadRoiSnapshot(channel);
   if (!ok) return false;  // 快照失败时画兜底文字, 标注没意义不画
@@ -133,14 +148,13 @@ const load = async (channel = 0, existing = null) => {
       roiRedraw();
     }
   } else if (props.mode === 'rect') {
-    if (Array.isArray(existing) && existing.length >= 4 && Number(existing[2]) > 0) {
-      const [rx, ry, rw, rh] = existing.map(Number);
-      roiPoints.value = [{ x: rx * w, y: ry * h }, { x: (rx + rw) * w, y: (ry + rh) * h }];
-      roiRedraw();
-    }
-  } else if (Array.isArray(existing) && existing.length >= 3) {
-    roiPoints.value = existing.map(([nx, ny]) => ({ x: nx * w, y: ny * h }));
-    roiPolygonClosed.value = true;
+    finishedShapes.value = normalizeRects(existing).map(([rx, ry, rw, rh]) => ([
+      { x: rx * w, y: ry * h }, { x: (rx + rw) * w, y: (ry + rh) * h },
+    ]));
+    roiRedraw();
+  } else {
+    finishedShapes.value = normalizePolygons(existing).map(
+      (poly) => poly.map(([nx, ny]) => ({ x: nx * w, y: ny * h })));
     roiRedraw();
   }
   return true;
@@ -170,19 +184,20 @@ const roiCanvasClick = (e) => {
     return;
   }
   if (props.mode === 'rect') {
-    if (roiPoints.value.length >= 2) roiPoints.value = [];  // 已框定 → 重画
     roiPoints.value.push(pt);
+    if (roiPoints.value.length >= 2) {
+      // 两角凑齐 → 本块完成, 立即可继续框下一块
+      const [a, b] = roiPoints.value;
+      if (Math.abs(b.x - a.x) > 2 && Math.abs(b.y - a.y) > 2) {
+        finishedShapes.value.push([a, b]);
+      }
+      roiPoints.value = [];
+    }
     roiRedraw();
     return;
   }
 
-  if (roiPolygonClosed.value) {
-    roiPoints.value = [];
-    roiPolygonClosed.value = false;
-    roiRedraw();
-    return;
-  }
-
+  // polygon 模式: 靠近首点 → 闭合当前块, 之后继续点击开始画下一块
   if (roiPoints.value.length >= 3) {
     const first = roiPoints.value[0];
     const canvas = roiEditorCanvas.value;
@@ -190,8 +205,7 @@ const roiCanvasClick = (e) => {
     const scale = canvas.width / rect.width;
     const dist = Math.sqrt((pt.x - first.x) ** 2 + (pt.y - first.y) ** 2);
     if (dist < ROI_CLOSE_RADIUS * scale) {
-      roiPolygonClosed.value = true;
-      roiRedraw();
+      roiFinishPolygon();
       return;
     }
   }
@@ -203,40 +217,83 @@ const roiCanvasClick = (e) => {
 const roiCanvasDblClick = (e) => {
   e.preventDefault();
   if (props.mode !== 'polygon') return;
-  if (roiPoints.value.length >= 3 && !roiPolygonClosed.value) {
-    roiPolygonClosed.value = true;
-    roiRedraw();
-  }
+  if (roiPoints.value.length >= 3) roiFinishPolygon();
 };
 
 const roiCanvasMouseMove = (e) => {
   if (props.mode === 'point') return;
   if (props.mode === 'rect' && roiPoints.value.length !== 1) return;
-  if (props.mode === 'polygon' && roiPolygonClosed.value) return;
+  if (props.mode === 'polygon' && roiPoints.value.length === 0) return;
   roiMousePos = roiGetCanvasXY(e);
   roiRedraw();
 };
 
 const roiUndoPoint = () => {
-  if (roiPolygonClosed.value) {
-    roiPolygonClosed.value = false;
-  } else {
+  if (roiPoints.value.length) {
     roiPoints.value.pop();
+  } else if (finishedShapes.value.length && props.mode === 'polygon') {
+    // 没有进行中的点时, 撤销 = 把最后一个完成块打回编辑态
+    roiPoints.value = finishedShapes.value.pop();
   }
+  roiRedraw();
+};
+
+const roiRemoveLastShape = () => {
+  finishedShapes.value.pop();
   roiRedraw();
 };
 
 const roiClearPoints = () => {
   roiPoints.value = [];
-  roiPolygonClosed.value = false;
+  finishedShapes.value = [];
   roiMousePos = null;
   roiRedraw();
 };
 
 const roiFinishPolygon = () => {
-  if (roiPoints.value.length >= 3) {
-    roiPolygonClosed.value = true;
-    roiRedraw();
+  if (props.mode !== 'polygon' || roiPoints.value.length < 3) return;
+  finishedShapes.value.push(roiPoints.value);
+  roiPoints.value = [];
+  roiMousePos = null;
+  roiRedraw();
+};
+
+const _drawClosedPolygon = (ctx, pts, color, index) => {
+  ctx.fillStyle = color + '26'; // ~15% alpha
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  // 区块编号
+  const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+  const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+  ctx.fillStyle = color;
+  ctx.font = 'bold 14px Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText(`区${index + 1}`, cx, cy);
+  ctx.textAlign = 'start';
+};
+
+const _drawRectShape = (ctx, [a, b], color, index, dashed = false) => {
+  const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
+  const rw = Math.abs(b.x - a.x), rh = Math.abs(b.y - a.y);
+  ctx.fillStyle = color + '26';
+  ctx.fillRect(x, y, rw, rh);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.setLineDash(dashed ? [6, 4] : []);
+  ctx.strokeRect(x, y, rw, rh);
+  ctx.setLineDash([]);
+  if (index >= 0) {
+    ctx.fillStyle = color;
+    ctx.font = 'bold 14px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText(`区${index + 1}`, x + rw / 2, y + rh / 2);
+    ctx.textAlign = 'start';
   }
 };
 
@@ -272,61 +329,50 @@ const roiRedraw = () => {
     return;
   }
 
-  // ---- rect 模式: 两角矩形 (第二角未定时跟随鼠标预览)
+  // ---- rect 模式: 已完成块 + 进行中预览 (第二角跟随鼠标)
   if (props.mode === 'rect') {
-    if (!pts.length) return;
-    const a = pts[0];
-    const b = pts.length >= 2 ? pts[1] : roiMousePos;
-    if (b) {
-      const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
-      const rw = Math.abs(b.x - a.x), rh = Math.abs(b.y - a.y);
-      ctx.fillStyle = 'rgba(0, 200, 255, 0.15)';
-      ctx.fillRect(x, y, rw, rh);
-      ctx.strokeStyle = '#00c8ff';
-      ctx.lineWidth = 2;
-      ctx.setLineDash(pts.length >= 2 ? [] : [6, 4]);
-      ctx.strokeRect(x, y, rw, rh);
-      ctx.setLineDash([]);
-    }
-    ctx.fillStyle = '#f59e0b';
-    pts.forEach(p => {
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
-      ctx.fill();
+    finishedShapes.value.forEach((shape, i) => {
+      _drawRectShape(ctx, shape, SHAPE_COLORS[i % SHAPE_COLORS.length], i);
     });
+    if (pts.length === 1) {
+      const b = roiMousePos;
+      if (b) {
+        _drawRectShape(ctx, [pts[0], b],
+          SHAPE_COLORS[finishedShapes.value.length % SHAPE_COLORS.length], -1, true);
+      }
+      ctx.fillStyle = '#f59e0b';
+      ctx.beginPath();
+      ctx.arc(pts[0].x, pts[0].y, 5, 0, Math.PI * 2);
+      ctx.fill();
+    }
     return;
   }
 
-  // ---- polygon 模式 (历史行为)
+  // ---- polygon 模式: 已完成块 (实线填充+编号) + 进行中块 (虚线)
+  finishedShapes.value.forEach((shape, i) => {
+    _drawClosedPolygon(ctx, shape, SHAPE_COLORS[i % SHAPE_COLORS.length], i);
+  });
+
   if (pts.length === 0) return;
 
-  if (roiPolygonClosed.value && pts.length >= 3) {
-    ctx.fillStyle = 'rgba(0, 200, 255, 0.15)';
-    ctx.beginPath();
-    ctx.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-    ctx.closePath();
-    ctx.fill();
-  }
-
-  ctx.strokeStyle = '#00c8ff';
+  const curColor = SHAPE_COLORS[finishedShapes.value.length % SHAPE_COLORS.length];
+  ctx.strokeStyle = curColor;
   ctx.lineWidth = 2;
-  ctx.setLineDash(roiPolygonClosed.value ? [] : [6, 4]);
+  ctx.setLineDash([6, 4]);
   ctx.beginPath();
   ctx.moveTo(pts[0].x, pts[0].y);
   for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-  if (roiPolygonClosed.value) ctx.closePath();
-  else if (roiMousePos) ctx.lineTo(roiMousePos.x, roiMousePos.y);
+  if (roiMousePos) ctx.lineTo(roiMousePos.x, roiMousePos.y);
   ctx.stroke();
   ctx.setLineDash([]);
 
-  const nearFirst = !roiPolygonClosed.value && pts.length >= 3 && roiMousePos &&
+  const nearFirst = pts.length >= 3 && roiMousePos &&
     Math.sqrt((roiMousePos.x - pts[0].x) ** 2 + (roiMousePos.y - pts[0].y) ** 2) < ROI_CLOSE_RADIUS * (canvas.width / (canvas.getBoundingClientRect().width || 1));
 
   pts.forEach((pt, i) => {
     const isFirst = i === 0;
     const radius = isFirst && nearFirst ? 10 : 5;
-    ctx.fillStyle = isFirst ? (nearFirst ? '#22c55e' : '#f59e0b') : '#00c8ff';
+    ctx.fillStyle = isFirst ? (nearFirst ? '#22c55e' : '#f59e0b') : curColor;
     ctx.beginPath();
     ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
     ctx.fill();
@@ -354,19 +400,25 @@ const roiSave = () => {
     return;
   }
   if (props.mode === 'rect') {
-    if (roiPoints.value.length < 2) return;
-    const [a, b] = roiPoints.value;
-    const x = Math.min(a.x, b.x) / w;
-    const y = Math.min(a.y, b.y) / h;
-    const rw = Math.abs(b.x - a.x) / w;
-    const rh = Math.abs(b.y - a.y) / h;
-    if (rw <= 0 || rh <= 0) return;
-    emit('save-rect', [r4(x), r4(y), r4(rw), r4(rh)]);
+    const rects = finishedShapes.value.map(([a, b]) => {
+      const x = Math.min(a.x, b.x) / w;
+      const y = Math.min(a.y, b.y) / h;
+      const rw = Math.abs(b.x - a.x) / w;
+      const rh = Math.abs(b.y - a.y) / h;
+      return [r4(x), r4(y), r4(rw), r4(rh)];
+    }).filter(([, , rw, rh]) => rw > 0 && rh > 0);
+    if (!rects.length) return;
+    // 1 块 → 旧格式 [x,y,w,h]; 多块 → [[x,y,w,h],...]
+    emit('save-rect', rects.length === 1 ? rects[0] : rects);
     return;
   }
 
-  if (roiPoints.value.length < 3) return;
-  const polygon = roiPoints.value.map(pt => [r4(pt.x / w), r4(pt.y / h)]);
-  emit('save', polygon);
+  // polygon: 进行中的块 (≥3 点) 保存时自动闭合入列
+  const shapes = [...finishedShapes.value];
+  if (roiPoints.value.length >= 3) shapes.push(roiPoints.value);
+  if (!shapes.length) return;
+  const polys = shapes.map((shape) => shape.map(pt => [r4(pt.x / w), r4(pt.y / h)]));
+  // 1 块 → 旧格式 [[nx,ny],...]; 多块 → [[[nx,ny],...],...]
+  emit('save', polys.length === 1 ? polys[0] : polys);
 };
 </script>

@@ -70,6 +70,37 @@ def test_试一试抽屉打开(page, base_url, api_url):
     page.keyboard.press("Escape")
 
 
+def test_朝向抽屉头姿全角度开关落库(page, base_url, api_url):
+    """pose 试一试抽屉「头姿精化配置」开关: UI 切换 → PUT /orientation/config
+    落库 (2026-09-16 六和蒸镀现场修复的可配置化: 出厂默认正脸模型=背面不精化,
+    绑全角度权重的现场在此打开)。测试收尾恢复默认 false。"""
+    items = {it["capability"]: it for it in requests.get(
+        f"{api_url}/api/v1/models/capabilities", timeout=5).json()["items"]}
+    pose_id = items["pose"]["builtin_model_id"]
+    assert pose_id, "pose 内置行应已 seed"
+    # 前置: 确保初始为默认 false
+    r = requests.get(f"{api_url}/api/v1/orientation/config", timeout=5)
+    assert r.status_code == 200 and r.json()["headpose_full_range"] is False
+
+    _open_models_page(page, base_url)
+    page.locator(f"[data-test='model-try-{pose_id}']").click()
+    time.sleep(0.6)
+    drawer = page.locator("[data-test='cap-try-drawer']")
+    assert drawer.count() == 1
+    card = drawer.locator("[data-test='cap-orientation-config']")
+    assert card.count() == 1, "pose 抽屉应渲染「头姿精化配置」卡"
+    try:
+        card.locator("[data-test='orientation-fullrange-switch']").click()
+        time.sleep(0.8)
+        # T5: UI → 后端落库双向验证 (不是只看 toast)
+        r = requests.get(f"{api_url}/api/v1/orientation/config", timeout=5)
+        assert r.json()["headpose_full_range"] is True, "开关切换应 PUT 落库"
+    finally:
+        requests.put(f"{api_url}/api/v1/orientation/config",
+                     json={"headpose_full_range": False}, timeout=5)
+    page.keyboard.press("Escape")
+
+
 def test_上传向导带能力类型(page, base_url):
     _open_models_page(page, base_url)
     page.locator("button:has-text('上传新模型')").click()

@@ -198,6 +198,8 @@ class SessionLifecycleMixin:
                 'record_step_video': setting.record_step_video,
                 'record_cycle_video': setting.record_cycle_video,
                 'record_session_video': setting.record_session_video,
+                # 2026-09 检测框 sidecar (老库缺列时按关处理)
+                'record_boxes_data': bool(getattr(setting, 'record_boxes_data', False)),
                 'video_quality': setting.video_quality,
                 'video_fps': setting.video_fps
             }
@@ -212,6 +214,7 @@ class SessionLifecycleMixin:
                 'record_step_video': False,
                 'record_cycle_video': False,
                 'record_session_video': False,
+                'record_boxes_data': False,
                 'video_quality': 'medium',
                 'video_fps': 30
             }
