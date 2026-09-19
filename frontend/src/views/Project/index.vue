@@ -1315,6 +1315,13 @@ const initProjectDefaults = (project) => {
   if (project.custom_mix_container_virtual_step_label === undefined) {
     project.custom_mix_container_virtual_step_label = pipelineConfig.custom_mix_container_virtual_step_label || '';
   }
+  // v3.57 逐件虚拟步骤 (与容器虚拟步骤对称)
+  if (project.custom_mix_per_item_virtual_step === undefined) {
+    project.custom_mix_per_item_virtual_step = pipelineConfig.custom_mix_per_item_virtual_step === true;
+  }
+  if (project.custom_mix_per_item_virtual_step_label === undefined) {
+    project.custom_mix_per_item_virtual_step_label = pipelineConfig.custom_mix_per_item_virtual_step_label || '';
+  }
   // 物品行原生字段兜底：老数据/手改 JSON 可能缺字段，表C输入框依赖它们存在
   (project.steps_config || []).forEach(s => {
     if (s.detect_role !== 'item') return;
@@ -1327,7 +1334,7 @@ const initProjectDefaults = (project) => {
       s.per_item = {
         item_label: s.label || '', action_label: '',
         item_tracking_iou: 0.3, coverage_iou: 0.3, coverage_use_center: false,
-        sustain_frames: 5, expected_count: 0, completion: 'all_covered',
+        coverage_margin: 0, sustain_frames: 5, expected_count: 0, completion: 'all_covered',
       };
     }
   });
@@ -1507,6 +1514,8 @@ const initProjectDefaults = (project) => {
   if (piCfg.stability_iou_threshold === undefined) piCfg.stability_iou_threshold = 0.6;
   if (piCfg.item_timeout_seconds === undefined) piCfg.item_timeout_seconds = 0;  // 0=不限
   if (piCfg.lock_count_on_start === undefined) piCfg.lock_count_on_start = true;
+  // v3.57 整板拖动重配准 (默认 false = 关, 固定工装现场零差异)
+  if (piCfg.board_rereg_enabled === undefined) piCfg.board_rereg_enabled = false;
   if (piCfg.finish_label === undefined) piCfg.finish_label = '';
   if (piCfg.finish_sustain_frames === undefined) piCfg.finish_sustain_frames = 3;
   if (piCfg.finish_requires_no_items === undefined) piCfg.finish_requires_no_items = false;
@@ -1796,6 +1805,9 @@ const initProjectDefaults = (project) => {
   project.pipeline_config.custom_mix_container_stable_pick = project.custom_mix_container_stable_pick === 'latest' ? 'latest' : 'max';
   project.pipeline_config.custom_mix_container_virtual_step = project.custom_mix_container_virtual_step === true;
   project.pipeline_config.custom_mix_container_virtual_step_label = (project.custom_mix_container_virtual_step_label || '').trim();
+  // v3.57 逐件虚拟步骤
+  project.pipeline_config.custom_mix_per_item_virtual_step = project.custom_mix_per_item_virtual_step === true;
+  project.pipeline_config.custom_mix_per_item_virtual_step_label = (project.custom_mix_per_item_virtual_step_label || '').trim();
   project.pipeline_config.custom_sequence_order = project.custom_sequence_order;
   project.pipeline_config.custom_detection_steps = project.custom_detection_steps;
   project.pipeline_config.accumulate_repeats = project.accumulate_repeats;
@@ -2009,6 +2021,9 @@ const handleSaveProject = async () => {
         custom_mix_container_stable_pick: activeProject.value.custom_mix_container_stable_pick === 'latest' ? 'latest' : 'max',
         custom_mix_container_virtual_step: activeProject.value.custom_mix_container_virtual_step === true,
         custom_mix_container_virtual_step_label: (activeProject.value.custom_mix_container_virtual_step_label || '').trim(),
+        // v3.57 逐件虚拟步骤 (与容器虚拟步骤对称)
+        custom_mix_per_item_virtual_step: activeProject.value.custom_mix_per_item_virtual_step === true,
+        custom_mix_per_item_virtual_step_label: (activeProject.value.custom_mix_per_item_virtual_step_label || '').trim(),
         custom_sequence_order: activeProject.value.custom_sequence_order,
         custom_detection_steps: activeProject.value.custom_detection_steps,
         accumulate_repeats: activeProject.value.accumulate_repeats,
@@ -2343,6 +2358,8 @@ const handleSaveProject = async () => {
             stability_iou_threshold: Math.max(0.1, Math.min(0.99, Number(src.stability_iou_threshold) || 0.6)),
             item_timeout_seconds: Math.max(0, Number(src.item_timeout_seconds) || 0),
             lock_count_on_start: src.lock_count_on_start !== false,
+            // v3.57 整板拖动重配准 (默认关; 滚筒线/可滑动工装现场开启)
+            board_rereg_enabled: src.board_rereg_enabled === true,
             finish_label: finishLabel,
             _finish_label_choice: _labelChoice,    // UI 记忆: 切到"全部完成"模式时不丢标签
             finish_sustain_frames: Math.max(1, Math.floor(Number(src.finish_sustain_frames) || 3)),
