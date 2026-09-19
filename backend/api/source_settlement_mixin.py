@@ -262,11 +262,21 @@ class SettlementMixin:
                 self._trigger_event(*compose_settle_event(self, 1, '顺序正确完成'))
             elif len(self.current_cycle_steps) < len(expected_labels):
                 missing = [l for l in expected_labels if l not in self.current_cycle_steps]
+                missing_desc = list(missing)
+                if not missing:
+                    # v3.57: 期望序列含重复步骤 (如 扫码-虚拟-扫码) 时, set 口径
+                    # 算不出"第二次扫码没做" → 按多重集补齐 (挂起匹配用素标签,
+                    # NG 原因带第几次注记, 现场可解释)
+                    _short = expected_counter - step_counter
+                    missing = [lbl for lbl, n in _short.items() for _ in range(n)]
+                    missing_desc = [f'{lbl}(第{expected_counter[lbl] - n + i + 1}次)'
+                                    for lbl, n in _short.items() for i in range(n)]
                 # v3.44 收尾防呆: 纯缺步可选挂起等视觉补做 (与末步消失结算同口径)
                 if self._maybe_enter_settle_hold(missing, expected_labels, None):
                     return
-                print(f"  -> cycle incomplete, missing: {missing} -> NG")
-                self._trigger_event(*compose_settle_event(self, 2, f'周期不完整，缺少: {missing}'))
+                print(f"  -> cycle incomplete, missing: {missing_desc} -> NG")
+                self._trigger_event(*compose_settle_event(
+                    self, 2, f'周期不完整，缺少: {missing_desc}'))
             else:
                 # v3.7.x: actual 与 expected multiset 相同 (前面 unexpected/duplicated 都已 NG),
                 # 直接逐位比较. 旧实现用 unique_steps + zip 截断, 在 sequence_order
@@ -1623,18 +1633,19 @@ class SettlementMixin:
         if self._violation_throttle_pass(label):
             self._fire_instant_ng(f'重复步骤: [{label}] 超出期望次数')
 
-    def _container_virtual_label(self) -> str:
-        """容器虚拟步骤标签 (v3.49; 未启用返回 '')。"""
+    def _mix_virtual_label(self) -> str:
+        """混合虚拟步骤标签 (v3.49 容器 / v3.57 逐件同一属性; 未启用返回 '')。"""
         mix = getattr(self, '_custom_mix', None)
         return (getattr(mix, 'virtual_step_label', '') or '') if mix else ''
 
     def _virtual_pred_missing(self, label) -> bool:
-        """label 的前置里含"尚未入周期的容器虚拟步骤" (v3.49.2 静默拦截口径)。
+        """label 的前置里含"尚未入周期的混合虚拟步骤" (v3.49.2 静默拦截口径)。
 
-        装箱期间后继步骤的误检是现场常态, 虚拟步骤何时完成由容器账机器判定 —
-        它没完成前后继的一切出现都按误检静默过滤, 不报违序轰炸工人。
+        装箱/逐件作业期间后继步骤的误检是现场常态 (手臂/工具/PDA 误检),
+        虚拟步骤何时完成由物品侧账机器判定 — 它没完成前后继的一切出现都按
+        误检静默过滤, 不报违序轰炸工人。
         """
-        virt = self._container_virtual_label()
+        virt = self._mix_virtual_label()
         if not virt or virt in self.current_cycle_steps:
             return False
         expected = self._get_expected_sequence_labels()
@@ -2216,12 +2227,12 @@ class SettlementMixin:
                     backup = self.step_primary_to_backup.get(pred)
                     if backup and backup in self.backup_steps_seen_in_cycle:
                         continue
-                    # 缺的前置是容器虚拟步骤 → 静默拦截不报违序。
-                    # 装箱期间手臂/油嘴包误检是常态, 虚拟步骤何时完成由容器账
-                    # 机器判定, 后继在此之前的一切出现都按误检过滤。
-                    if pred == self._container_virtual_label():
+                    # 缺的前置是混合虚拟步骤 (容器/逐件) → 静默拦截不报违序。
+                    # 装箱/逐件作业期间手臂/工具误检是常态, 虚拟步骤何时完成由
+                    # 物品侧账机器判定, 后继在此之前的一切出现都按误检过滤。
+                    if pred == self._mix_virtual_label():
                         self._dbg_step_rejected(
-                            label, f"严格顺序静默拦截: 容器虚拟步骤[{pred}]未完成")
+                            label, f"严格顺序静默拦截: 混合虚拟步骤[{pred}]未完成")
                         return
                     # v3.32: 拦截照旧, 但支持当场报违序 (工人打错对角顺序立即报警,
                     # 不必等周期结算)。未配置事件时零差异。

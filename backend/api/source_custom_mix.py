@@ -1705,6 +1705,10 @@ class _PerItemMixEngine:
         for raw in item_cfgs:
             self.steps.append(_PerItemStep(raw))
         self.item_timeout_seconds = max(0.0, float(item_timeout_seconds or 0.0))
+        # v3.57 物品侧活动脉冲: 覆盖数推进的时刻 (步骤侧空闲超时的豁免依据 —
+        # 逐件作业动辄几分钟, 步骤序列在此期间零推进, 不该按"空闲"强杀周期)
+        self.last_progress_time: float = 0.0
+        self._progress_snapshot: int = -1
         # 引擎监听的标签全集 (行标签 + 个体标签 + 动作标签)
         watch = set()
         for s in self.steps:
@@ -1720,6 +1724,8 @@ class _PerItemMixEngine:
     def reset_host_state(self, host):
         for step in self.steps:
             step.reset_for_new_cycle()
+        self.last_progress_time = 0.0
+        self._progress_snapshot = -1
 
     def feed(self, host, detections: list, current_time: float, original_frame=None):
         from backend.api.source_per_item_mixin import PerItemMixin
@@ -1747,14 +1753,28 @@ class _PerItemMixEngine:
                 continue
             boxes_by_label.setdefault(label, []).append(bbox)
 
-        for step in self.steps:
-            item_boxes = PerItemMixin._collect_item_boxes(boxes_by_label, step.item_label)
+        # v3.57 整板位移校准 (与独立模式同一套机械, 见 PerItemMixin tick 3a):
+        # 固定数量行先跨步骤汇总本帧可靠关联个体的共同位移, 把整板平移同步给
+        # 所有锁定框 — 治工装周期中被挪动后槽位留在旧位置、覆盖脱靶。
+        step_boxes = [
+            (step, PerItemMixin._collect_item_boxes(boxes_by_label, step.item_label))
+            for step in self.steps
+        ]
+        displacements = []
+        for step, item_boxes in step_boxes:
+            if step.expected_count > 0 and item_boxes:
+                displacements.extend(step.tracking_displacements(item_boxes))
+        board_translation = (
+            PerItemMixin._estimate_board_translation(displacements)
+            if displacements else None)
+
+        for step, item_boxes in step_boxes:
             fixed_count = step.expected_count > 0
-            # 无 item box 也调用，以便逐帧清除 associated；方法签名保持兼容，
-            # custom_mix 暂不启用跨步骤整板位移估算。
+            # 无 item box 也调用，以便逐帧清除 associated
             step.update_item_positions(
                 item_boxes, self._frame_id, current_time,
-                lock_count_on_start=fixed_count)
+                lock_count_on_start=fixed_count,
+                global_translation=board_translation if fixed_count else None)
             if item_boxes:
                 # 固定数量: 只更新已有个体位置, 新位置走补锁定吸收 (封顶 expected)
                 # auto: dynamic 随见随建
@@ -1771,6 +1791,15 @@ class _PerItemMixEngine:
                 step.completed = True
                 print(f"[CustomMix] 逐件步骤 [{step.display_label}] 完成 "
                       f"({step.covered_count()}/{len(step.items)})")
+
+        # v3.57 活动脉冲: 覆盖总数向前推进 → 记时刻 (只认推进, 不认账面回落)
+        total_cov = sum(s.covered_count() for s in self.steps)
+        if total_cov > self._progress_snapshot:
+            if self._progress_snapshot >= 0:      # 首帧建立基线不算活动
+                self.last_progress_time = current_time
+            self._progress_snapshot = total_cov
+        elif total_cov < self._progress_snapshot:
+            self._progress_snapshot = total_cov   # 回落只降基线, 再推进重新计
 
     def verdict(self, host):
         reasons = []
@@ -1808,6 +1837,25 @@ class _PerItemMixEngine:
         else:
             self.last_ng_detail = None
         return (not reasons), reasons
+
+    def all_items_complete(self) -> bool:
+        """全部逐件行完成 (v3.57 逐件虚拟步骤注入口径)。
+
+        与结算裁决同源: 粘性 completed 或当帧完成判定。固定数量行没锁满
+        expected_count 时 check_completion 恒 False — "板还没放 / 个体没
+        出现"不会误达标; 无任何逐件行时恒 False (虚拟步骤永不注入)。
+        """
+        if not self.steps:
+            return False
+        return all(s.completed or s.check_completion() for s in self.steps)
+
+    def items_activity(self) -> bool:
+        """逐件作业"已开始干活" (虚拟步骤缺步提前发现口径)。
+
+        任一行已有覆盖 = 工人已经开始逐件动作 (只锁定个体不算 — 工件放上来
+        还没干活, 不应触发前置缺步检查)。
+        """
+        return any(s.covered_count() > 0 for s in self.steps)
 
     def to_state(self, host):
         steps_state = [s.to_state_dict(strict_display=True) for s in self.steps]
@@ -1929,6 +1977,38 @@ class CustomMixMachine:
         """容器已开始干活 (虚拟步骤缺步提前发现口径; 非容器混合返回 False)。"""
         fn = getattr(self._engine, 'container_activity', None)
         return bool(fn()) if fn is not None else False
+
+    def virtual_step_complete(self) -> bool:
+        """虚拟步骤"完成"判定 — 注入稳定标签流的统一口径 (v3.57 两种混合对称):
+
+          tracking → 整箱达标 (v3.49 容器账 booked ≥ 目标)
+          per_item → 全部逐件行完成 (v3.57 个体账 全行 completed)
+
+        source_step_stats_mixin 的注入点只认本方法, 不再分流。
+        """
+        if self.mix_type == 'tracking':
+            return bool(self.container_box_complete())
+        fn = getattr(self._engine, 'all_items_complete', None)
+        return bool(fn()) if fn is not None else False
+
+    def virtual_step_activity(self) -> bool:
+        """虚拟步骤"已开始干活" — 缺步提前发现的统一口径 (与上同构):
+
+          tracking → 容器已有确认入账 (v3.49.1)
+          per_item → 任一逐件行已有覆盖动作 (v3.57)
+        """
+        if self.mix_type == 'tracking':
+            return self.container_activity()
+        fn = getattr(self._engine, 'items_activity', None)
+        return bool(fn()) if fn is not None else False
+
+    def item_progress_time(self) -> float:
+        """物品侧最近一次"账面推进"时刻 (v3.57 空闲超时豁免依据; 无脉冲 0)。
+
+        逐件作业动辄几分钟, 期间步骤序列零推进 — 步骤侧空闲超时不该把干活中
+        的周期强杀。目前仅逐件引擎产脉冲; 跟踪引擎无该属性返回 0 = 零差异。
+        """
+        return float(getattr(self._engine, 'last_progress_time', 0.0) or 0.0)
 
     def to_state(self):
         state = self._engine.to_state(self._host)
@@ -2134,6 +2214,26 @@ def build_custom_mix(config: dict):
             else:
                 machine.virtual_step_label = _virt_label
                 print(f"[CustomMix] 容器虚拟步骤=开: 整箱达标注入顺序步骤[{_virt_label}]")
+    # v3.57 逐件虚拟步骤 (与容器虚拟步骤全对称): 把整个逐件覆盖过程合并为一个
+    # 可排序的顺序步骤 — 全部逐件行完成瞬间注入, 用于"顺序步骤 × 逐件作业 ×
+    # 顺序步骤"编排 (如: 开头扫码 → 逐件锁螺丝 → 结尾扫码)。注入/缺步提前/
+    # 前置静默拦截与容器虚拟步骤共用同一条通路 (virtual_step_label + 统一
+    # virtual_step_complete/activity 口径), 零新分支。
+    elif mix_type == 'per_item':
+        _virt_on = bool(pipeline.get('custom_mix_per_item_virtual_step', False))
+        _virt_label = str(
+            pipeline.get('custom_mix_per_item_virtual_step_label') or '').strip()
+        if _virt_on and _virt_label:
+            # 冲突守门按引擎监听全集 (watch_labels) 查, 不用 strip_labels —
+            # 与步骤同名的动作标签会被豁免出剥离集, 但虚拟步骤与真实检测标签
+            # 重名永远是错的 (注入态与模型输出会混为一谈)
+            if _virt_label in machine._engine.watch_labels:
+                print(f"[CustomMix] ⚠️ 逐件虚拟步骤名[{_virt_label}]与个体/动作"
+                      f"标签冲突, 已忽略 (请改名)")
+            else:
+                machine.virtual_step_label = _virt_label
+                print(f"[CustomMix] 逐件虚拟步骤=开: 全部逐件行完成注入顺序步骤"
+                      f"[{_virt_label}]")
     print(f"[CustomMix] 混合子状态机就绪: mix={mix_type} 物品={sorted(machine.item_labels)}")
     return machine
 
