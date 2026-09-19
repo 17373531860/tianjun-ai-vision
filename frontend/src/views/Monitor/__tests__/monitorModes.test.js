@@ -141,6 +141,32 @@ describe('buildChannelStepViews — 守门与常规模式', () => {
     ]);
   });
 
+  it('v3.59.0a 容器定界: 标签闪断重现记多笔不推断 NG (container_gate 豁免)', () => {
+    // 容器在场期间动作标签反复进出画面, current_cycle_steps 记多笔是常态,
+    // 后端结算(容器离场)缺步才 NG — 前端不得按"重复出现"把卡片刷红。
+    const payload = {
+      detections: [],
+      container_gate: { label: '包装盒', present: true, cycle_open: true },
+      cycle_sum_step_durations: { a: 0.5, b: 0.6 },
+      project_config: {
+        logic_mode: 'custom',
+        steps_config: [
+          { label: 'a', enabled: true },
+          { label: 'b', enabled: true },
+        ],
+        pipeline_config: { custom_based_on: 'detection' },
+      },
+    };
+    const dupCycle = ['a', 'b', 'a', 'b', 'a'];
+    const r = buildChannelStepViews(payload, null, chState({ currentCycleSteps: dupCycle }));
+    expect(r.tableData.map(x => x.cycleResult)).toEqual(['ok', 'ok']);
+
+    // 对照: 同载荷去掉 container_gate (非容器定界) — 重复推断照旧标 NG
+    const { container_gate: _omit, ...noGate } = payload;
+    const r2 = buildChannelStepViews(noGate, null, chState({ currentCycleSteps: dupCycle }));
+    expect(r2.tableData.map(x => x.cycleResult)).toEqual(['ng', 'ng']);
+  });
+
   it('无序 detection 的中间步骤交换顺序仍全部为 OK', () => {
     const r = buildChannelStepViews({
       detections: [],
@@ -711,6 +737,22 @@ describe('resolveStepsToShow', () => {
       pipeline_config: { custom_conditions: [{ sequence: [1] }] },
     });
     expect(steps.map(s => s.label)).toEqual(['检查外观']);
+  });
+
+  it('v3.59.0a: 勾选列表残留"停用步骤 id"时该步骤不出现（东莞群光现场）', () => {
+    // 现场高发误配: 步骤设置里关了启用, 但逻辑设置的检测配置勾选没同步去掉 —
+    // 停用步骤不得再进 SOP/步骤表（后端结算侧同款剔除, 见 _settle_container_cycle）
+    const steps = resolveStepsToShow({
+      logic_mode: 'custom',
+      custom_based_on: 'detection',
+      steps_config: [
+        { id: 2, label: '拿取说明书', enabled: true },
+        { id: 4, label: '包装盒', enabled: false },
+        { id: 5, label: '拿取小电池', enabled: true },
+      ],
+      pipeline_config: { custom_detection_steps: [5, 2, 4] },
+    });
+    expect(steps.map(s => s.label)).toEqual(['拿取小电池', '拿取说明书']);
   });
 
   it('滤掉 backup_for', () => {

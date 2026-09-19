@@ -498,13 +498,23 @@ class SettlementMixin:
         steps_config = self.project_config.get('steps_config', []) or []
         id_to_label = {s.get('id'): s.get('label', '') for s in steps_config
                        if s.get('id') and s.get('label')}
+        # v3.59.0a 防呆 (东莞群光现场): 勾选列表(custom_detection_steps)里残留
+        # "已停用步骤"或"容器标签本身"时不得进必做清单 — 容器标签由定界门独占
+        # 消费永远不入账, 进了 required 就每周期必"缺步 NG"; 停用步骤同理。
+        id_enabled = {s.get('id'): s.get('enabled', True) for s in steps_config
+                      if s.get('id')}
+        _gate = getattr(self, '_container_cycle_gate', None)
+        _gate_label = _gate.label if _gate is not None else None
         det_ids = pipeline_config.get('custom_detection_steps') or []
         if det_ids:
-            required = [id_to_label[sid] for sid in det_ids if sid in id_to_label]
+            required = [id_to_label[sid] for sid in det_ids
+                        if sid in id_to_label and id_enabled.get(sid, True)
+                        and id_to_label[sid] != _gate_label]
         else:
             required = [s.get('label') for s in steps_config
                         if s.get('enabled', True) and s.get('label')
-                        and s.get('detect_role') != 'item']
+                        and s.get('detect_role') != 'item'
+                        and s.get('label') != _gate_label]
         if not required:
             print("[Settle/Container] 无启用步骤, 跳过判定")
             return

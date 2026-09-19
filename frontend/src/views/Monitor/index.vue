@@ -3411,6 +3411,9 @@ const startPolling = () => {
         countersWithCycle._currentCycleSteps = data.current_cycle_steps || [];
         countersWithCycle._backupCoveredLabels = data.backup_covered_labels || [];
         countersWithCycle._ngStepCycleCounts = data.ng_step_cycle_counts || {};
+        // v3.59.0a: 容器定界周期在跑 (后端只在配置了 custom_cycle_owner='container'
+        // 时透出 container_gate) — updateStepsFromBackend 用它豁免重复/乱序推断
+        countersWithCycle._containerGateActive = !!data.container_gate;
         updateStepsFromBackend(
           data.step_counts || {}, 
           data.detections || [],
@@ -3682,6 +3685,14 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
   // (动作 episode 命中累计中即有值)。结果列语义也不同: 周期好坏由后端结算判定说了算
   // (复检序列里同动作出现两次是合法的), 前端不做"重复/乱序/漏做 = NG"的顺序推断。
   const isRegionEventsMode = (currentProject.value?.logic_mode === 'region_events');
+  // v3.59.0a 容器定界周期 (custom_cycle_owner='container'): 后端结算无序且对
+  // "动作标签闪断重现在周期里记多笔"完全宽容 (缺步才 NG, 容器离场时判) —
+  // 前端沿用顺序模式的重复/乱序/漏做推断会把 SOP 卡中途刷红, 与最终 OK 结算
+  // 打架 (东莞群光现场反馈"卡片冒红光")。信号: results 载荷 container_gate
+  // (v3.59 起配置了容器定界才透出), 项目配置侧兜底。
+  const isContainerOwnerMode = !!backendCounters?._containerGateActive
+    || (currentProject.value?.logic_mode === 'custom'
+        && currentProject.value?.pipeline_config?.custom_cycle_owner === 'container');
   const stepIsLive = (label) => isRegionEventsMode
     ? ((stepInflightDurations.value[label] || 0) > 0)
     : detectingLabels.has(label);
@@ -3862,9 +3873,10 @@ const updateStepsFromBackend = (stepCounts, currentDetections, backendCounters, 
           : (_hasTimedPT && (_leftFrame || _passedThisStep))
       );
 
-      if (isRegionEventsMode) {
+      if (isRegionEventsMode || isContainerOwnerMode) {
         // 区域事件: 动作确认即 OK, 不做重复/乱序/漏做的 NG 推断
         // (复检等合法序列由后端结算判定, 前端标红会与结算结果打架)
+        // v3.59.0a 容器定界周期同口径: 无序 + 重复宽容, 完备判定在容器离场时由后端做
         step.cycleResult = _posDone ? 'ok' : null;
       } else if (cycleCount > expCnt && _posDone) {
         step.cycleResult = 'ng';
