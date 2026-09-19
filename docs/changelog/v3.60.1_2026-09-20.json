@@ -1,0 +1,37 @@
+{
+  "version": "3.60.1",
+  "date": "2026-09-20",
+  "previous_version": "3.60.0",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "检测模式首步重现结算无视「消失等待不被打断」——扫码抬离回位被切成新周期",
+      "symptom": "检测模式工位：放首步（下层母排）→ 拿起扫码 2~4s → 放回，被判成新周期开始，一次装配拆成两个 NG 周期（缺少步骤+重复步骤报警）；消失确认时间设 5s 仍复现",
+      "root_cause": "检测模式两处路径漏掉 v3.34 顺序模式已有的 disappear_uninterruptible 豁免：①首步重现结算块无 _held_visible 豁免，等待桥接中（old_last_seen 非 None）重现仍触发 _settle_detection_cycle；②'步骤交替即新出现'信号（last_added_step != label）无视该开关，回位重复入账",
+      "fix": "source_settlement_mixin.py 两处接入同源豁免：开了不被打断且等待桥接中——首步重现不结算、交替回位不算新出现；真正消失结算后（old_last_seen 为 None）仍正常切周期。开关默认 False 零差异。参数配套：首步消失等待 5s（>扫码抬离 2~4s，<工件间隔 7s+）+ 不被打断开",
+      "files": ["backend/api/source_settlement_mixin.py"],
+      "keywords": ["检测模式", "首步重现", "first step reappeared", "消失等待不被打断", "disappear_uninterruptible", "扫码抬离", "重复检测", "重复步骤", "周期被切开", "碎片周期", "_held_visible", "is_new_appearance", "步骤交替", "六和", "芯子装配", "下层母排", "消失确认时间", "disappear_delay", "detection mode settle"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "多码采集启用时每次结算仍弹「未绑定工件码」警告",
+      "symptom": "工位启用 v3.56 周期多码采集，码正常入槽，但每次周期结算都弹'未绑定工件码'警告 toast",
+      "root_cause": "多码采集是互斥路径（ScanCollectEngine.on_scan 独占消费扫码，不走单码绑定 _pending_workpiece），而 should_warn_no_barcode 只看'有扫码器在册+不在豁免窗口'，不知道多码采集已接管 → 永远等不到单码绑定，每次结算误报",
+      "fix": "source_event_trigger_mixin.py 结算警告判定前查 ScanCollectEngine.get_config(None, project_id)，项目启用多码采集即豁免未绑码警告",
+      "files": ["backend/api/source_event_trigger_mixin.py"],
+      "keywords": ["未绑定工件码", "warn_no_barcode", "should_warn_no_barcode", "多码采集", "scan collect", "ScanCollectEngine", "结算弹警告", "误报", "互斥路径", "单码绑定", "六和"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-source", "debug-scan-collect"],
+  "files_changed": [
+    "backend/api/source_settlement_mixin.py",
+    "backend/api/source_event_trigger_mixin.py",
+    "tests/test_detection_first_step_reappear_uninterruptible.py",
+    "tests/test_scan_collect_no_barcode_warn.py",
+    "tests/uat/uat_20260919_liuhe_first_step_rescan.py"
+  ]
+}

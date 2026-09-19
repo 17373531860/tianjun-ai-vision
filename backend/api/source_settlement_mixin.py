@@ -2271,7 +2271,12 @@ class SettlementMixin:
         elif (not is_seq_like
               and self.last_added_step is not None
               and self.last_added_step != label):
-            is_new_appearance = True
+            # v3.60.1: 步骤开了"消失等待不被打断"且等待桥接中 (old_last_seen
+            # 非 None 才会走到本分支) → 闪断回位不算"交替新出现", 否则拿起
+            # 扫码/短暂遮挡后回位会重复入账。与首步重现豁免同源, 默认 False
+            # 零差异。
+            is_new_appearance = not self.step_time_config.get(
+                label, {}).get('disappear_uninterruptible')
         else:
             is_new_appearance = False
 
@@ -2422,7 +2427,18 @@ class SettlementMixin:
         if logic_mode == 'detection' and len(self.current_cycle_steps) > 1 \
                 and label not in _combo_lbls:
             first_det_label = self._get_first_detection_step_label()
-            if first_det_label and label == first_det_label and label in self.current_cycle_steps:
+            # v3.60.1: 与顺序模式 first_step 结算 (v3.34) 对齐 — 首步开了
+            # "消失等待不被打断"且上一次出现尚未走完消失结算 (old_last_seen 非
+            # None, 等待桥接中) 时, 本次出现是同一次放置的闪断回位 (拿起扫码/
+            # 短暂遮挡), 不是新周期信号 → 不触发首步重现结算。真正走完消失
+            # 结算后的再次出现 (old_last_seen 为 None) 才切周期。
+            # 开关默认 False → _held_visible_det 恒 False, 老项目行为零差异。
+            _held_visible_det = (
+                old_last_seen is not None
+                and self.step_time_config.get(label, {}).get('disappear_uninterruptible')
+            )
+            if (first_det_label and label == first_det_label
+                    and label in self.current_cycle_steps and not _held_visible_det):
                 first_start = self.step_start_time.get(label) or getattr(self, '_step_raw_start', {}).get(label)
                 first_min_dur = (self.step_time_config.get(label, {}).get('min_duration')) or 0
                 first_duration = (current_time - first_start) if first_start else 0
