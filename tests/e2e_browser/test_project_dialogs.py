@@ -81,7 +81,7 @@ def test_ROI编辑器画三角形_落库(page, base_url, api_url):
     for (fx, fy) in [(0.2, 0.2), (0.8, 0.3), (0.5, 0.8)]:
         page.mouse.click(box["x"] + box["width"] * fx, box["y"] + box["height"] * fy)
         time.sleep(0.3)
-    page.locator("button:has-text('完成绘制')").click()
+    page.locator("button:has-text('完成本块')").click()
     time.sleep(0.5)
     page.locator("button:has-text('保存 ROI')").click()
     time.sleep(0.8)
@@ -91,3 +91,58 @@ def test_ROI编辑器画三角形_落库(page, base_url, api_url):
     detail = requests.get(f"{api_url}/api/v1/projects/{proj['id']}", timeout=5).json()
     roi = (detail.get("steps_config") or [{}])[0].get("roi")
     assert isinstance(roi, list) and len(roi) == 3, f"ROI 应落库 3 顶点, 实际 {roi}"
+    # 单块仍存旧格式 [[x,y],...], 首元素是数字不是数组
+    assert not isinstance(roi[0][0], (list, tuple)), f"单块应存旧格式, 实际 {roi}"
+
+
+def test_ROI编辑器画两块_落库嵌套格式(page, base_url, api_url):
+    """多块 ROI: 画两块互不相连三角形 → 落库为 [[[x,y],...], ...] 嵌套格式。"""
+    r = requests.get(f"{api_url}/api/v1/projects", timeout=5)
+    e2e = [x for x in r.json().get("items", []) if x["name"].startswith(E2E_PREFIX)]
+    assert e2e, "conftest 应已创建项目"
+    proj = e2e[0]
+    _goto_project(page, base_url)
+    _select_project(page, proj["name"])
+
+    page.locator(".el-tabs__item:has-text('步骤设置')").first.click()
+    time.sleep(1.0)
+    # 可能已有 ROI, 按钮文案是「重绘」或「设置」
+    btn = page.locator("button:has-text('重绘')").first
+    if btn.count() == 0:
+        btn = page.locator("button:has-text('设置')").first
+    btn.click()
+    time.sleep(2.0)
+
+    canvas = page.locator("canvas.cursor-crosshair").first
+    box = canvas.bounding_box()
+    assert box and box["width"] > 100, "外置 ROI 编辑器快照 canvas 应渲染"
+
+    # 清除已有块, 从空白画两块（无已有块时按钮 disabled, 跳过）
+    clear_btn = page.locator("button:has-text('清除全部')")
+    if clear_btn.count() and clear_btn.first.is_enabled():
+        clear_btn.first.click()
+        time.sleep(0.2)
+
+    # 第一块: 左上三角
+    for (fx, fy) in [(0.1, 0.1), (0.3, 0.1), (0.2, 0.3)]:
+        page.mouse.click(box["x"] + box["width"] * fx, box["y"] + box["height"] * fy)
+        time.sleep(0.25)
+    page.locator("button:has-text('完成本块')").click()
+    time.sleep(0.4)
+    # 第二块: 右下三角
+    for (fx, fy) in [(0.7, 0.7), (0.9, 0.7), (0.8, 0.9)]:
+        page.mouse.click(box["x"] + box["width"] * fx, box["y"] + box["height"] * fy)
+        time.sleep(0.25)
+    page.locator("button:has-text('完成本块')").click()
+    time.sleep(0.4)
+    page.locator("button:has-text('保存 ROI')").click()
+    time.sleep(0.8)
+    page.locator("button:has-text('保存配置')").click()
+    time.sleep(2.0)
+
+    detail = requests.get(f"{api_url}/api/v1/projects/{proj['id']}", timeout=5).json()
+    roi = (detail.get("steps_config") or [{}])[0].get("roi")
+    assert isinstance(roi, list) and len(roi) == 2, f"两块 ROI 应落库嵌套 2 块, 实际 {roi}"
+    assert isinstance(roi[0], list) and len(roi[0]) >= 3 and isinstance(roi[0][0], list), \
+        f"多块格式首元素应是多边形, 实际 {roi}"
+    assert isinstance(roi[1], list) and len(roi[1]) >= 3

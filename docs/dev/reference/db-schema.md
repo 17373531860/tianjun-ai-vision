@@ -1,7 +1,7 @@
 # 数据库表参考
 
 > **类型**：reference（生成物勿手改）
-> **生成命令**：`python scripts/docgen/gen_db_schema.py`（生成日 2026-09-01）
+> **生成命令**：`python scripts/docgen/gen_db_schema.py`（生成日 2026-09-17）
 > **单一事实源**：SQLAlchemy ORM（Base.metadata）。字段含义看模型源文件行内注释；
 > 迁移历史看 backend/db/migrations/ 与 backend/main.py 的 migrate_database。
 
@@ -237,6 +237,7 @@ ORM 类 `DataExportSetting`，定义于 `backend/models/models.py`。
 | `record_step_video` | BOOLEAN |  | False |
 | `record_cycle_video` | BOOLEAN |  | False |
 | `record_session_video` | BOOLEAN |  | False |
+| `record_boxes_data` | BOOLEAN |  | False |
 | `video_quality` | VARCHAR(20) |  | 'medium' |
 | `video_fps` | INTEGER |  | 30 |
 | `export_step_duration` | BOOLEAN |  | True |
@@ -610,6 +611,8 @@ ORM 类 `Model`，定义于 `backend/models/models.py`。
 | `status` | VARCHAR(20) |  | 'idle' |
 | `source` | VARCHAR(50) |  | 'local' |
 | `meta` | JSON |  |  |
+| `capability` | VARCHAR(50) |  | 'detect' |
+| `builtin` | BOOLEAN |  | False |
 | `upload_time` | DATETIME |  | server |
 
 ## packaging_flow_configs
@@ -1141,6 +1144,7 @@ ORM 类 `VideoArchiveRule`，定义于 `backend/models/archive_models.py`。
 | `bundle_zip` | BOOLEAN | NOT NULL | False |
 | `transform` | VARCHAR(16) | NOT NULL | 'none' |
 | `clip_seconds` | INTEGER | NOT NULL | 10 |
+| `annotated_video` | BOOLEAN | NOT NULL | False |
 | `dest_type` | VARCHAR(32) | NOT NULL | 'local_dir' |
 | `dest_config` | JSON |  |  |
 | `active_window` | VARCHAR(16) |  |  |

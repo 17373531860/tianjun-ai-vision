@@ -318,3 +318,5 @@ class ChannelManager:
 **新配置段**：`workstation_config.json` 顶层新增 `multi_monitor`（`enabled`/`readonly`/`mapping{channel_id→{display_id,bounds}}`），读写走 `GET/PUT /api/v1/workstations/multi-monitor`（PUT 挂 `settings.edit` 权限）。`set_multi_monitor_config` 只替换本段（不变量 17 分段写入），规范化丢弃越界工位（0..MAX_CHANNELS）与非法 bounds（宽高≤0），损坏/缺失时读回默认 `enabled=false, readonly=true`。回归 `tests/test_multi_monitor_config.py`。
 
 **存量隐患修复**：`_save_config`（工位数变更写盘）原先整写文件只留 `channel_count`+`channels`，会静默抹掉 `startup_ready_gate`/`multi_monitor` 等其他顶层段——v3.52 起改为读旧文件 merge 两键、其余段原样保留。再遇"某顶层段莫名消失"先排查是否有旧版本或旁路代码整写该文件。
+
+**v3.58 变更**：①参观屏/独立观看槽（v3.57 二期）**已删除**——mapping 里旧 `visitor`/viewer 相关字段读取直接忽略（零迁移），规范化只认工位主屏 + 手部副屏两类；②工位检测屏（kiosk/station_view）跟随总控 layout.body 自定义布局与插件皮，只读统一由 `multi_monitor.readonly` 控制（前端 `Monitor/readonlyActions.protectMonitorActions` 防护全部写通路），工位窗 selectedChannel 锁定绑定通道（插件 emit/异步初始化切不走）；③multi-monitor 端点 response_model 改 `exclude_unset`。Electron 侧生命周期回归 `electron/test/main-station-lifecycle.test.js`（vm 沙箱真跑 main.js，37 用例含 License 守门/退出清理/崩溃熔断/webRequest 工位流隔离）。

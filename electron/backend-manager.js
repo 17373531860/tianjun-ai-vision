@@ -81,6 +81,9 @@ class BackendManager extends EventEmitter {
     // v3.47 启动等待状态
     this._lastOutputAt = 0;               // 后端最近一次 stdout/stderr 输出时刻 (活性判据)
     this._startupExitInfo = null;         // 首次启动期进程退出信息 → waitForStartup 立即止损, 不再空轮询满超时
+    // 2026-09 多平台打包: 嵌入式 PostgreSQL 生命周期 (Linux/macOS; Windows 走系统服务)
+    this._pgOwned = false;                // 本进程是否拉起过嵌入式 PG (只停自己拉起的)
+    this._embeddedPgUnavailable = false;  // 配置了嵌入式 PG 但本轮起不来 → 跳过 DSN 注入回落 SQLite
   }
   
   /**
@@ -179,9 +182,15 @@ class BackendManager extends EventEmitter {
           const dsn = (dbConfig && typeof dbConfig.database_url === 'string')
             ? dbConfig.database_url.trim() : '';
           if (dsn) {
-            env.DATABASE_URL = dsn;
-            console.log('[BackendManager] 已从 db_config.json 注入 DATABASE_URL (' +
-              dsn.split('@').pop() + ')');
+            if (dbConfig.embedded_pg && this._embeddedPgUnavailable) {
+              // 嵌入式 PG 本轮没起来: 注入 DSN 只会让后端连库失败起不来,
+              // 跳过注入回落 SQLite (行为与 Windows "PG 服务挂了" 时不同, 但保住可用性)
+              console.warn('[BackendManager] 嵌入式 PG 未启动, 跳过 DATABASE_URL 注入 (SQLite 兜底)');
+            } else {
+              env.DATABASE_URL = dsn;
+              console.log('[BackendManager] 已从 db_config.json 注入 DATABASE_URL (' +
+                dsn.split('@').pop() + ')');
+            }
           }
         }
       } catch (e) {
@@ -490,6 +499,94 @@ class BackendManager extends EventEmitter {
     }
   }
   
+  // ---- 2026-09 多平台打包: 嵌入式 PostgreSQL 生命周期 (Linux/macOS) ----
+  // Windows 的嵌入式 PG 由 Inno 注册成系统服务 (TianjunPG) 开机自启, 不进这里。
+  // Linux/macOS 没有安装期服务注册, 改为应用代管: 后端启动前 pg_ctl start,
+  // 应用关闭时 pg_ctl stop。一次性初始化 (initdb/建库/写配置) 由
+  // resources/scripts/db/setup_embedded_pg.sh 完成, 它在 db_config.json 写入:
+  //   { "database_url": "...", "embedded_pg": { "pgdata": "...", "port": 5433, "bin_dir": "..." } }
+  // 任何失败只降级不阻断: 起不来 → 本轮跳过 DATABASE_URL 注入, 后端回落 SQLite。
+
+  _resolveEmbeddedPg() {
+    if (process.platform === 'win32') return null;
+    if (!this.options.userDataPath) return null;
+    try {
+      const cfgPath = path.join(this.options.userDataPath, 'db_config.json');
+      if (!fs.existsSync(cfgPath)) return null;
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
+      const emb = cfg && cfg.embedded_pg;
+      if (!emb || typeof emb.pgdata !== 'string' || !emb.pgdata) return null;
+      // bin 目录: 优先打包内 resources/pg-portable/bin (随应用走, 搬家不失效);
+      // 找不到再用配置里的 bin_dir (开发机/自装 PG 场景)。
+      const candidates = [];
+      if (this.options.resourcesPath) {
+        candidates.push(path.join(this.options.resourcesPath, 'pg-portable', 'bin'));
+      }
+      if (typeof emb.bin_dir === 'string' && emb.bin_dir) candidates.push(emb.bin_dir);
+      const binDir = candidates.find((d) => fs.existsSync(path.join(d, 'pg_ctl')));
+      if (!binDir) {
+        console.warn('[BackendManager] embedded_pg 已配置但找不到 pg_ctl, 候选:', candidates.join(' | '));
+        return null;
+      }
+      if (!fs.existsSync(path.join(emb.pgdata, 'PG_VERSION'))) {
+        console.warn('[BackendManager] embedded_pg 数据目录无 PG_VERSION:', emb.pgdata);
+        return null;
+      }
+      return { pgCtl: path.join(binDir, 'pg_ctl'), pgData: emb.pgdata };
+    } catch (e) {
+      console.warn('[BackendManager] 解析 embedded_pg 配置失败 (忽略):', e.message);
+      return null;
+    }
+  }
+
+  _execPgCtl(pgCtl, args, timeoutMs) {
+    return new Promise((resolve) => {
+      const { execFile } = require('child_process');
+      execFile(pgCtl, args, { timeout: timeoutMs, encoding: 'utf-8' }, (err, stdout, stderr) => {
+        const code = err ? (typeof err.code === 'number' ? err.code : 1) : 0;
+        resolve({ code, stdout: stdout || '', stderr: stderr || '' });
+      });
+    });
+  }
+
+  async _ensureEmbeddedPgStarted() {
+    this._embeddedPgUnavailable = false;
+    const pg = this._resolveEmbeddedPg();
+    if (!pg) return;
+    // pg_ctl status: 0=运行中, 3=未运行, 4=数据目录不可访问
+    const st = await this._execPgCtl(pg.pgCtl, ['status', '-D', pg.pgData], 15000);
+    if (st.code === 0) {
+      console.log('[BackendManager] 嵌入式 PostgreSQL 已在运行 (非本进程拉起, 关闭时不代停)');
+      this._pgOwned = false;
+      return;
+    }
+    console.log('[BackendManager] 启动嵌入式 PostgreSQL...');
+    const logFile = path.join(pg.pgData, 'embedded_pg.log');
+    const rs = await this._execPgCtl(
+      pg.pgCtl, ['start', '-D', pg.pgData, '-w', '-t', '60', '-l', logFile], 90000);
+    if (rs.code === 0) {
+      this._pgOwned = true;
+      console.log('[BackendManager] 嵌入式 PostgreSQL 已启动');
+    } else {
+      this._embeddedPgUnavailable = true;
+      console.error('[BackendManager] 嵌入式 PostgreSQL 启动失败, 本轮回落 SQLite:',
+        (rs.stderr || rs.stdout).slice(0, 500));
+    }
+  }
+
+  async _stopEmbeddedPg() {
+    if (!this._pgOwned) return;
+    const pg = this._resolveEmbeddedPg();
+    this._pgOwned = false;
+    if (!pg) return;
+    console.log('[BackendManager] 停止嵌入式 PostgreSQL...');
+    const rs = await this._execPgCtl(
+      pg.pgCtl, ['stop', '-D', pg.pgData, '-m', 'fast', '-w', '-t', '30'], 45000);
+    if (rs.code !== 0) {
+      console.warn('[BackendManager] pg_ctl stop 失败 (忽略):', (rs.stderr || rs.stdout).slice(0, 300));
+    }
+  }
+
   /**
    * 启动后端服务
    */
@@ -505,7 +602,11 @@ class BackendManager extends EventEmitter {
     
     // 先清理可能残留的后端进程
     await this.cleanupStaleProcesses();
-    
+
+    // 嵌入式 PG (Linux/macOS): 必须在 getEnvironment() 之前 —
+    // 起不来时要置 _embeddedPgUnavailable 让 DSN 注入跳过 (SQLite 兜底)
+    await this._ensureEmbeddedPgStarted();
+
     const pythonPath = this.getPythonPath();
     const backendPath = this.getBackendPath();
     const workingDir = path.dirname(backendPath);
@@ -680,9 +781,19 @@ class BackendManager extends EventEmitter {
   }
 
   /**
-   * 停止后端服务 - 优雅关闭
+   * 停止后端服务 - 优雅关闭。
+   * 嵌入式 PG 的停止挂在 finally: 无论后端是优雅退出还是被强杀,
+   * 只要是本进程拉起的 PG 都要代停, 不留孤儿 postgres。
    */
   async stop() {
+    try {
+      await this._stopBackendProcess();
+    } finally {
+      await this._stopEmbeddedPg();
+    }
+  }
+
+  async _stopBackendProcess() {
     // 看门狗让路: 主动停止 (关机/换版) 不触发自动重启, 并清掉待执行的重启
     this._intentionalStop = true;
     if (this._restartTimer) {

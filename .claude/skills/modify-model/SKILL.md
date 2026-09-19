@@ -27,7 +27,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | ORM 类 | 表名 | 一句话 |
 |---|---|---|
 | `Project` | `projects` | 项目主表，承载 7 个 JSON 配置字段 |
-| `Model` | `models` | 模型文件元信息（**类名是 `Model` 不是 `MLModel`，表名是 `models` 不是 `ml_models`**）；v3.47 加 `source`（'local'/'yolovision'，NULL 视同 local）+ `meta` JSON（训练分析/包 provenance，迁移 m0008）|
+| `Model` | `models` | 模型文件元信息（**类名是 `Model` 不是 `MLModel`，表名是 `models` 不是 `ml_models`**）；v3.47 加 `source`（'local'/'yolovision'，NULL 视同 local）+ `meta` JSON（训练分析/包 provenance，迁移 m0008）；2026-09 内置能力模型入仓加 `capability`（detect/segment/pose/headpose/ocr/anomaly/vlm，NULL 视同 detect）+ `builtin`（出厂内置行禁删，启动 `services/builtin_models.seed_builtin_models` 幂等 seed，迁移 m0011；能力权重绑定存 SystemConfig KV `capability_binding`）|
 | `ModelConversion` | `model_conversions` | 模型格式转换（PyTorch→TRT 等），跨项目共享 |
 | `Task` | `tasks` | 离线推理任务（前端 `task.js` 已死代码）|
 | `Camera` | `cameras` | 旧式相机表，与 `/source/*` 并存 |
@@ -38,7 +38,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `DetectionCycle` | `detection_cycles` | 一次生产周期，关联 Session/Order |
 | `StepRecord` | `step_records` | Cycle 内每个步骤的检测记录 |
 | `VideoClip` | `video_clips` | 录像文件元信息（`clip_type=session/cycle/step`）|
-| `DataExportSetting` | `data_export_settings` | CSV 导出/录像开关单行配置 |
+| `DataExportSetting` | `data_export_settings` | CSV 导出/录像开关单行配置；v3.58 加 `record_boxes_data`（默认关：周期录像旁成对写帧号对齐 `.boxes.json` 检测框 sidecar，迁移 m0012；sidecar 无 DB 列纯命名约定 `<视频路径>.boxes.json`） |
 
 ### 1.2 `backend/models/mes_models.py`（20 张，MES + 集群 + 外设 + 流水线）
 
@@ -123,7 +123,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 
 | ORM 类 | 表名 | 一句话 |
 |---|---|---|
-| `VideoArchiveRule` | `video_archive_rules` | 一行 = 一条归档规则：筛选（result_filter/channel_filter/project_filter）+ 目的地（dest_type/dest_dir/dest_config 敏感字段 Fernet 密文）+ 命名（filename_template Jinja2/subdir_by_date/overwrite_policy）+ 证据（attach_keyframe/keyframe_watermark/sidecar_template_id/bundle_zip/transform/clip_seconds）+ 治理（active_window/bandwidth_limit_kbps/delete_source_after）+ 运行统计快照；create_all 自建无迁移 |
+| `VideoArchiveRule` | `video_archive_rules` | 一行 = 一条归档规则：筛选（result_filter/channel_filter/project_filter）+ 目的地（dest_type/dest_dir/dest_config 敏感字段 Fernet 密文）+ 命名（filename_template Jinja2/subdir_by_date/overwrite_policy）+ 证据（attach_keyframe/keyframe_watermark/sidecar_template_id/bundle_zip/transform/clip_seconds）+ 治理（active_window/bandwidth_limit_kbps/delete_source_after）+ 运行统计快照；create_all 自建无迁移；v3.58 加 `annotated_video`（默认关：归档 worker 用 `services/annotated_video` 烧框渲染 MP4 后投递，失败降级原片，迁移 m0012） |
 | `VideoArchiveLog` | `video_archive_logs` | 归档台账：一行 = 一次搬运（cycle_id/src_path/dest_path/status success·failed·skipped/error/file_size/duration_ms）；export_context 反查 `cycle.archived_*` 字段的数据源 |
 
 ### 1.11 `backend/models/scan_collect_models.py`（2 张，v3.56 周期多码采集）

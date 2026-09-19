@@ -4,6 +4,7 @@
 // 虚拟步骤 = steps_config 里带 split_origin=<rule.id> 标记的普通步骤行,
 // 下游状态机 / 顺序 / 事件 / MES 对它零特殊处理。
 import { applyStepEnabledChange } from './stepEnabled';
+import { hasPolygons } from '@/utils/polygons';
 
 export const createDefaultSplitRule = () => ({
   id: `ls_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
@@ -66,7 +67,7 @@ export const QUADRANT_TEMPLATE = [
   { name: '螺丝4', polygon: [[0.5, 0.5], [0.95, 0.5], [0.95, 0.95], [0.5, 0.95]], color: '#84cc16' },
 ];
 
-const _validPolygon = (poly) => Array.isArray(poly) && poly.length >= 3;
+const _validPolygon = (poly) => hasPolygons(poly);
 
 /**
  * 保存前整体校验。返回错误文案 (string) 或 null。

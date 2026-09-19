@@ -1389,7 +1389,7 @@ class _TrackingMixEngine:
 
         def _in_roi(det, label):
             poly = poly_map.get(label)
-            if poly and len(poly) >= 3:
+            if poly:
                 return is_normalized_bbox_center_in_polygon(det, poly)
             return True
 
@@ -1743,7 +1743,7 @@ class _PerItemMixEngine:
             if threshold is not None and det.get('confidence', 0) < threshold:
                 continue
             poly = poly_map.get(label)
-            if poly and len(poly) >= 3 and not is_normalized_bbox_center_in_polygon(det, poly):
+            if poly and not is_normalized_bbox_center_in_polygon(det, poly):
                 continue
             bbox = (
                 float(det.get('x', 0)), float(det.get('y', 0)),
@@ -2236,6 +2236,139 @@ def build_custom_mix(config: dict):
                       f"[{_virt_label}]")
     print(f"[CustomMix] 混合子状态机就绪: mix={mix_type} 物品={sorted(machine.item_labels)}")
     return machine
+
+
+class ContainerCycleGate:
+    """v3.59 容器定界周期 (pipeline_config.custom_cycle_owner='container')。
+
+    周期主权归容器: 容器标签稳定在场 → 开周期; 离场确认 → 强制结算
+    (host._settle_container_cycle, 完备判定按 custom_based_on, 物品账仍经
+    compose_settle_event 合成)。与混合子状态机 (_custom_mix) 正交:
+      - 无物品行也能用 (周期内容物是"动作步骤"的场景, 如键盘装箱);
+      - 配了混合跟踪时物品账照常合成, 契约零改动。
+
+    与三条混合契约的关系: 本部件是显式的"第三种主权分配"(容器当家、步骤记账),
+    仅在 custom_cycle_owner='container' 时挂载 — 默认缺省零差异, 混合契约 2
+    ("周期主权归步骤侧") 在未挂载时依旧成立。
+
+    步骤侧联动 (source_step_stats_mixin 喂点):
+      - 容器标签从步骤侧剥离 (不当步骤刷完成/频闪);
+      - 周期未开 (容器缺席) 时整帧跳过步骤入账 (沿用 tracking_scan_gate 先例),
+        工件不在位的动作不算数。
+    步骤侧结算抑制 (events_check / first_step 路径) 由 host._custom_cycle_owner
+    守门, 见 apply_project_config。
+
+    线程模型: 仅推理线程 feed 单写, 无锁。计时用 wall-clock 秒
+    (feed 的 current_time 与步骤侧同源)。
+    """
+
+    def __init__(self, label: str, conf: float = 0.5,
+                 appear_seconds: float = 1.0, gone_seconds: float = 3.0):
+        self.label = label
+        self.conf = max(0.0, float(conf))
+        self.appear_seconds = max(0.0, float(appear_seconds))
+        self.gone_seconds = max(0.1, float(gone_seconds))
+        self.present = False           # 容器在场 (已过出现确认)
+        self._candidate_since = None   # 连续在场候选起点
+        self._last_seen_ts = None      # 最近一次看到容器的时刻
+
+    def reset(self):
+        self.present = False
+        self._candidate_since = None
+        self._last_seen_ts = None
+
+    def _container_in_frame(self, detections) -> bool:
+        for det in detections or []:
+            if (str(det.get('label') or '') == self.label
+                    and float(det.get('confidence', 0) or 0) >= self.conf):
+                return True
+        return False
+
+    def cycle_open(self, host) -> bool:
+        """周期是否进行中 (异步落库下以 uuid 为准, 见 modify-source v3.38 注)。"""
+        return bool(getattr(host, 'current_cycle_uuid', None))
+
+    def feed(self, host, detections: list, current_time: float):
+        """每帧喂入 (在步骤侧剥离/入账之前调用)。异常不外抛, 不挡主流程。"""
+        seen = self._container_in_frame(detections)
+        if seen:
+            self._last_seen_ts = current_time
+            if not self.present:
+                if self._candidate_since is None:
+                    self._candidate_since = current_time
+                if current_time - self._candidate_since >= self.appear_seconds:
+                    self.present = True
+                    print(f"[ContainerGate] 容器[{self.label}]到位 "
+                          f"(稳定 {current_time - self._candidate_since:.2f}s)")
+        else:
+            self._candidate_since = None
+            if (self.present and self._last_seen_ts is not None
+                    and current_time - self._last_seen_ts >= self.gone_seconds):
+                self.present = False
+                print(f"[ContainerGate] 容器[{self.label}]离场确认 "
+                      f"(消失 {current_time - self._last_seen_ts:.2f}s)"
+                      f"{' → 结算' if self.cycle_open(host) else ''}")
+                if self.cycle_open(host):
+                    host._settle_container_cycle()
+
+        # 在场 + 周期未开 → 开周期 (每帧检查而非仅沿变化: 周期被 cycle_max_duration
+        # 强制结算后容器仍在位, 下一帧要能立刻续开新周期)
+        if self.present and not self.cycle_open(host):
+            host.cycle_start_time = current_time
+            host.cycle_start_frame_pos = host._video_frame_pos()
+            host.start_cycle()
+            # start_cycle 可能静默不开 (session 未起 / 等扫码绑定), 只在真开成后
+            # 记日志; 未开成下一帧自动重试, 不额外刷屏
+            if self.cycle_open(host):
+                print(f"[ContainerGate] 容器[{self.label}]在位 → 开周期 "
+                      f"(uuid={getattr(host, 'current_cycle_uuid', None)})")
+
+    def to_state(self, host) -> dict:
+        """前端观测用最小状态 (get_detection_results 透出)。"""
+        return {
+            'label': self.label,
+            'present': self.present,
+            'cycle_open': self.cycle_open(host),
+        }
+
+
+def build_container_gate(config: dict):
+    """从项目配置构建容器定界门; 非 custom / 未启用 / 缺容器标签 → None (零差异)。
+
+    配置位 (pipeline_config):
+      custom_cycle_owner            : 'steps'(缺省) | 'container'
+      container_gate_label          : 容器标签 (必填, 缺失打印警告并退回步骤主权)
+      container_gate_conf           : 容器检出置信度下限 (默认 0.5)
+      container_gate_appear_seconds : 到位确认秒 (默认 1.0)
+      container_gate_gone_seconds   : 离场确认秒 (默认 3.0)
+    """
+    if not config or config.get('logic_mode') != 'custom':
+        return None
+    pipeline = config.get('pipeline_config', {}) or {}
+    if (pipeline.get('custom_cycle_owner') or 'steps') != 'container':
+        return None
+    label = str(pipeline.get('container_gate_label') or '').strip()
+    if not label:
+        print("[ContainerGate] ⚠️ custom_cycle_owner='container' 但未配置 "
+              "container_gate_label, 退回步骤侧周期主权")
+        return None
+    try:
+        conf = float(pipeline.get('container_gate_conf', 0.5) or 0.5)
+    except (TypeError, ValueError):
+        conf = 0.5
+    try:
+        appear_s = float(pipeline.get('container_gate_appear_seconds', 1.0) or 0)
+    except (TypeError, ValueError):
+        appear_s = 1.0
+    try:
+        gone_s = float(pipeline.get('container_gate_gone_seconds', 3.0) or 3.0)
+    except (TypeError, ValueError):
+        gone_s = 3.0
+    gate = ContainerCycleGate(label, conf=conf,
+                              appear_seconds=appear_s, gone_seconds=gone_s)
+    print(f"[ContainerGate] 容器定界周期=开: 容器[{label}] conf≥{conf:g} "
+          f"到位确认{appear_s:g}s 离场确认{gone_s:g}s")
+    return gate
 
 
 def compose_settle_event(host, event_id, reason):

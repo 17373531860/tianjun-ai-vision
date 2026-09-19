@@ -63,6 +63,7 @@ import cv2
 import atexit
 import signal
 import threading
+from typing import Optional
 from sqlalchemy import text
 from backend.core import debug_center
 
@@ -395,6 +396,19 @@ def _seed_export_builtin_templates():
         traceback.print_exc()
 
 
+def _seed_builtin_models():
+    """2026-09 内置能力模型入仓: 幂等登记出厂内置模型行到 models 表.
+
+    detect/pose/headpose 有出厂权重文件 (文件缺失不建假行);
+    ocr/anomaly/vlm 为无文件能力行. 失败不阻塞启动.
+    """
+    try:
+        from backend.services.builtin_models import seed_builtin_models
+        seed_builtin_models()
+    except Exception as e:
+        print(f"[启动] 内置模型 seed 失败 (跳过): {e}")
+
+
 def _seed_auth_builtin_roles():
     """v3.10.0 用户系统: 启动种子三个内置角色 (admin / engineer / operator).
 
@@ -498,6 +512,8 @@ def _run_startup_init():
     _seed_export_builtin_templates()
     # v3.10.0 用户系统: 种子三个内置角色 + 从落盘恢复内存 token 缓存
     _seed_auth_builtin_roles()
+    # 2026-09 内置能力模型入仓: 幂等登记出厂模型行 (失败不阻塞启动)
+    _seed_builtin_models()
     _restore_session_tokens()
     # 注意: active 插件加载不能放在这里 — 这里 FastAPI app 尚未创建,
     # 插件 register_plugin 需要 app 引用挂 router。移到 main.py 末尾 app
@@ -1653,8 +1669,11 @@ def shutdown_complete():
 # ========== 视频流端点 ==========
 
 @app.get("/video_feed")
-def video_feed(channel: int = 0):
-    """视频流端点 - 支持多通道。?channel=0 (default), ?channel=1, etc.
+def video_feed(channel: int = 0, viewer: Optional[str] = None):
+    """视频流端点 - 支持多通道和固定窗口身份。
+
+    ``viewer=main`` 用于主窗口，``viewer=station`` 用于工位扩展窗；缺省或
+    非法值走 legacy 槽，保持旧客户端的同通道后来者上位语义。
 
     通道未启动任何视频源时,返回一张黑底白字的 "Ch{N} - No Source" 占位 MJPEG 流,
     避免前端 <img> 因为 EOF 反复闪烁/重连. cv2.putText 在 OpenCV 4.11 + 某些
@@ -1665,7 +1684,7 @@ def video_feed(channel: int = 0):
 
     if vm.is_running or vm.source_type:
         return StreamingResponse(
-            vm.generate_mjpeg(),
+            vm.generate_mjpeg(viewer=viewer),
             media_type="multipart/x-mixed-replace; boundary=frame"
         )
 
@@ -1694,10 +1713,19 @@ def video_feed(channel: int = 0):
     )
 
 @app.get("/snapshot")
-def snapshot(channel: int = 0):
-    """单帧快照端点 - 支持多通道 ?channel=0"""
+def snapshot(channel: int = 0, view: str = "", crop_mode: str = "follow"):
+    """单帧快照端点；``view=hands`` 返回副屏专用手部裁切图。"""
     vm = get_video_manager(channel)
-    data = vm.get_snapshot()
+    if view == "hands":
+        normalized_crop_mode = (
+            "fixed"
+            if str(crop_mode).strip().lower() == "fixed"
+            else "follow"
+        )
+        data = vm.mp_overlay.get_hands_crop_snapshot(view_mode=normalized_crop_mode)
+    else:
+        # 默认路径保持原样；MES、标定页和一期多屏快照均继续取整帧。
+        data = vm.get_snapshot()
     if data:
         return Response(content=data, media_type="image/jpeg",
                         headers={"Cache-Control": "no-cache, no-store, must-revalidate"})

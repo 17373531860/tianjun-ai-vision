@@ -54,6 +54,7 @@ yarn-error.log*
 frontend/dist/
 electron/dist/
 *.tar.gz
+/output/
 
 # IDE
 .idea/
@@ -83,6 +84,12 @@ temp/
 
 # Model weights & test data
 *.pt
+# 例外: 出厂内置能力模型 (朝向估计 YOLO11-pose, 与 *.task 同为随包资源,
+# 不加白会被上面的 *.pt 挡在版本库外 → 打包丢件, v3.51.4 交付审计教训)
+!backend/data/models/yolo11n-pose.pt
+!backend/data/models/yolo11n.pt
+# 头姿精化 ONNX (90MB, 商用授权权重到位后客户侧放文件即热生效, 不入库)
+backend/data/models/headpose.onnx
 *.avi
 *.mp4
 
@@ -90,6 +97,9 @@ temp/
 patch*/
 patch*.zip
 frontend/dist.zip
+
+# 现场热补丁包 / 安装器仿真树：不进工作树。本机归档在仓库外 D:\Tianjun\tianjun-deliverables
+/deliverables/
 
 # Old version folder
 tianjun/
@@ -229,3 +239,14 @@ archive_secret.key
 
 # 本机开发用 ffmpeg 二进制 (Mac 调试落位, 打包链路另有 GPL Win64 资源)
 /ffmpeg/
+
+# 2026-09 多平台打包: 便携 PostgreSQL 由 CI 按平台铺入 (zonky 16.15), 二进制不入库;
+# 保留 .gitkeep 让 electron-builder extraResources 的 from 目录恒存在 (Windows 包只带空目录)
+/pg-portable/*
+!/pg-portable/.gitkeep
+
+# 海康 Linux SDK 由 CI 从官方直链铺入 backend/hcnetsdk/lib/ (正式客户随包分发), .so 不入库
+backend/hcnetsdk/lib/*.so
+backend/hcnetsdk/lib/*.so.*
+backend/hcnetsdk/lib/HCNetSDKCom/*.so
+backend/hcnetsdk/lib/HCNetSDKCom/*.so.*

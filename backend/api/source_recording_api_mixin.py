@@ -324,6 +324,19 @@ class RecordingApiMixin:
                 'channel_id': getattr(self, 'channel_id', 0),
             }
 
+            # 2026-09 检测框 sidecar: 开启「记录检测框数据」时挂收集器,
+            # 录制线程写帧成功后按帧号喂框, 停录 release 后落盘成对 JSON。
+            # 默认关: 不挂收集器 + _boxes_sidecar_active=False, 零开销。
+            try:
+                if self.export_settings.get('record_boxes_data'):
+                    from backend.services.detection_boxes_sidecar import (
+                        BoxesSidecarCollector)
+                    writer._boxes_collector = BoxesSidecarCollector(
+                        filepath, fps)
+                    self._boxes_sidecar_active = True
+            except Exception as _be:
+                print(f"[Recording] 检测框收集器初始化失败(不影响录像): {_be}")
+
             def _persist_cycle_video_meta():
                 from backend.db.database import SessionLocal
                 db = SessionLocal()
@@ -354,6 +367,8 @@ class RecordingApiMixin:
     
     def stop_cycle_recording(self):
         """停止周期视频录制 - delayed release to flush queued frames"""
+        # 2026-09: 停录即停检测框快照 (排空期的帧属于下一周期语境, 不再记框)
+        self._boxes_sidecar_active = False
         with self._writer_lock:
             writer = self.cycle_video_writer
             self.cycle_video_writer = None
@@ -369,6 +384,14 @@ class RecordingApiMixin:
                 try:
                     w.release()
                     print("[Recording] cycle video stopped (drained)")
+                    # 2026-09 检测框 sidecar 落盘: 必须在归档 notify 之前
+                    # (归档 worker 的带框渲染按约定路径找 sidecar)
+                    _collector = getattr(w, '_boxes_collector', None)
+                    if _collector is not None:
+                        try:
+                            _collector.flush()
+                        except Exception as _se:
+                            print(f"[Recording] 检测框数据落盘失败(不影响录像): {_se}")
                     # v3.53 录像归档: release 返回 = FFmpeg 子进程已退出,
                     # 这是"文件完整可搬运"的唯一可靠信号点。只投递不阻塞
                     # (无启用规则时 notify 内部直接短路, 零开销)。
@@ -530,6 +553,7 @@ class RecordingApiMixin:
     def _close_all_writers(self):
         """关闭所有 FFmpeg 录制进程，防止资源泄漏"""
         self._session_seg_deadline = None  # v3.54: 总清理时停分段轮转
+        self._boxes_sidecar_active = False  # 2026-09: 总清理时停检测框快照
         with self._writer_lock:
             if self.video_writer:
                 try:
@@ -540,6 +564,10 @@ class RecordingApiMixin:
             if self.cycle_video_writer:
                 try:
                     self.cycle_video_writer.release()
+                    # 异常收尾路径也尽力保住已记录的检测框数据
+                    _c = getattr(self.cycle_video_writer, '_boxes_collector', None)
+                    if _c is not None:
+                        _c.flush()
                 except Exception:
                     pass
                 self.cycle_video_writer = None

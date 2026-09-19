@@ -290,7 +290,8 @@ def test_steps_config_roi_写入_step_roi_polygons(vsm):
         'counters_config': [],
         'data_config': {},
     })
-    assert vsm.step_roi_polygons['pick'] == [[0.5, 0.5], [0.9, 0.5], [0.9, 0.9], [0.5, 0.9]]
+    # 2026-09 多块化: step_roi_polygons 存多边形列表 (单块也包一层)
+    assert vsm.step_roi_polygons['pick'] == [[[0.5, 0.5], [0.9, 0.5], [0.9, 0.9], [0.5, 0.9]]]
     assert 'place' not in vsm.step_roi_polygons
 
 

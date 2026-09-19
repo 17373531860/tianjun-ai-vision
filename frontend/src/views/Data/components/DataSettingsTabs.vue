@@ -40,6 +40,15 @@
                 <span>录制周期视频</span>
                 <el-switch v-model="exportSettings.record_cycle_video" @change="saveExportSettings" size="small" />
               </div>
+              <div v-if="exportSettings.record_cycle_video" class="setting-row">
+                <span>
+                  记录检测框数据
+                  <el-tooltip content="周期录像旁成对记录检测框（录像本身仍是无框原片）。开启后回放可叠加显示检测框，并支持下载/归档带框版录像" placement="top">
+                    <el-icon class="ml-1 text-gray-500" style="vertical-align: -2px"><QuestionFilled /></el-icon>
+                  </el-tooltip>
+                </span>
+                <el-switch v-model="exportSettings.record_boxes_data" @change="saveExportSettings" size="small" data-testid="record-boxes-switch" />
+              </div>
               <div class="setting-row">
                 <span>录制会话视频</span>
                 <el-switch v-model="exportSettings.record_session_video" @change="saveExportSettings" size="small" />
@@ -460,7 +469,7 @@
 import { ref, reactive, computed, watch, onMounted } from 'vue';
 import { useSystemStore } from '@/store/useSystemStore';
 import { useProjectStore } from '@/store/useProjectStore';
-import { Clock, Download, MagicStick, Connection, Message } from '@element-plus/icons-vue';
+import { Clock, Download, MagicStick, Connection, Message, QuestionFilled } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import RealtimeRulesDialog from './RealtimeRulesDialog.vue';
 import ScheduledRulesDialog from './ScheduledRulesDialog.vue';
@@ -530,6 +539,7 @@ const exportSettings = reactive({
   record_step_video: false,
   record_cycle_video: false,
   record_session_video: false,
+  record_boxes_data: false,
   video_quality: 'medium',
   video_fps: 30,
   export_session_info: true,

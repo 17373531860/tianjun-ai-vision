@@ -8,7 +8,8 @@
   3. [手点] 项目页创建 OCR 项目 → 逻辑设置配置读字规则 → 保存 → 落库
   4. [手点] anomaly 项目哨兵配置卡
   5. [手点] region_events 项目「面向仪表点检」模板 → facing_dwell 参数渲染
-  6. [真实链路] AI 能力试用页: 上传真图跑 OCR 识别
+  6. [真实链路] 模型仓库「试一试」抽屉: 上传真图跑 OCR 识别
+     (原 AI 能力试用独立页已下线, 2026-09 迁入模型仓库)
 
 前置: 后端 RUNTIME_MODE=test 起在 8003, 前端 6003。
 证据: 截图 + run.log 存 tests/uat/ai_modes_out/。
@@ -168,8 +169,8 @@ def main():
         page.screenshot(path=f"{OUT}/4_facing_dwell_rule.png")
         log("   ✓ facing_dwell 规则 UI 渲染: 朝向容差/仪表点标定/告警取反 (截图 4)")
 
-        # ========== 6. AI 能力试用页真 OCR ==========
-        log("== 6. AI 能力试用页真图 OCR 识别 ==")
+        # ========== 6. 模型仓库试一试抽屉真 OCR ==========
+        log("== 6. 模型仓库「试一试」抽屉真图 OCR 识别 ==")
         import cv2
         import numpy as np
         img = np.full((200, 640, 3), 255, dtype=np.uint8)
@@ -177,15 +178,21 @@ def main():
                     2.2, (0, 0, 0), 5)
         test_img = f"{OUT}/_ocr_input.png"
         cv2.imwrite(test_img, img)
-        page.goto(f"{FRONT}/#/ai-tools", wait_until="domcontentloaded")
+        caps = {it["capability"]: it
+                for it in api("GET", "/models/capabilities")["items"]}
+        ocr_model_id = caps["ocr"]["builtin_model_id"]
+        page.goto(f"{FRONT}/#/model", wait_until="domcontentloaded")
         time.sleep(2)
-        page.locator(
-            ".el-upload:has([data-test='ocr-upload-btn']) input[type='file']"
-        ).set_input_files(test_img)
+        page.locator(f"[data-test='model-try-{ocr_model_id}']").click()
+        time.sleep(1)
+        drawer = page.locator("[data-test='cap-try-drawer']")
+        drawer.locator("input[type='file']").first.set_input_files(test_img)
+        time.sleep(0.5)
+        drawer.locator("[data-test='cap-try-run']").click()
         time.sleep(6)
         body = page.evaluate("document.body.innerText")
-        assert "PH202609" in body, "AI 试用页应识别出 PH202609"
-        page.screenshot(path=f"{OUT}/5_aitools_ocr_result.png")
+        assert "PH202609" in body, "试一试抽屉应识别出 PH202609"
+        page.screenshot(path=f"{OUT}/5_model_try_ocr_result.png")
         log("   ✓ 真图 OCR 识别出 PH202609 (截图 5)")
 
         browser.close()

@@ -112,6 +112,23 @@ def _init_fps_stats(h):
     h._frame_seq = 0
 
 
+def _init_streaming_state(h):
+    """MJPEG 多窗口订阅与 latest-only 共享编码缓存。
+
+    connection registry 与 JPEG encode 各用独立锁；两把锁都不会被采集、
+    推理或录像线程获取，查看窗口的连接生命周期不会进入检测链路。
+    """
+    h._mjpeg_registry_lock = threading.Lock()
+    h._mjpeg_encode_lock = threading.Lock()
+    h._mjpeg_next_conn_id = 0
+    h._mjpeg_active_conn_ids = {}
+    h._mjpeg_active_streams = 0
+    h._mjpeg_cached_seq = -1
+    h._mjpeg_cached_chunk = None
+    h._mjpeg_cached_at = 0.0
+    h._mjpeg_cache_version = 0
+
+
 def _init_step_state(h):
     """步骤检测状态 (截图 / 计数 / 时间窗 / 帧确认 / 静态步骤 / 替补 / 同时出现组)"""
     h.step_screenshots = {}
@@ -124,6 +141,7 @@ def _init_step_state(h):
     h.project_config = None
     h.settlement_mode = 'first_step'  # 'first_step' / 'last_step' / 'last_first'(v3.8.x)
     h.idle_timeout_seconds = 0
+    h.idle_timeout_event_id = None
     h.cycle_max_duration = 0
     # v3.23 NG 补做策略 (默认全关 = 零差异); 由 _apply_pipeline_config 按项目配置覆盖
     h._ng_remediation = {'enabled': False, 'allow_step': True, 'allow_count': True}
@@ -219,6 +237,17 @@ def _init_event_and_cycle_state(h):
     h._last_ng_time = 0
     h._last_event_time = 0.0  # v3.10.x 防重复结算时间窗口锚
     h._cycle_regression = False  # A-B-A 步骤回退标记
+
+    # v3.59 容器定界周期 (custom_cycle_owner='container'): 周期主权归容器,
+    # 由 apply_project_config 按配置构建; 缺省 'steps' + None = 零差异。
+    h._custom_cycle_owner = 'steps'
+    h._container_cycle_gate = None
+
+    # 纯 custom 条件结算后，仍在画面的标签要等真实离场才可重新入周期。
+    # dict 值为最后一次原始帧看见时间，用于复用步骤 disappear_delay 语义。
+    h._pure_custom_settle_latched_labels = {}
+    # static + join_cycle=False 在累计 trigger_frames 期间仍需锁住所选条件分支。
+    h._pure_custom_pending_static_label = None
 
     # v3.8.x 跨周期同时出现组 (类二):
     # 被屏蔽标签集合: 这些标签当前不参与状态机 (不更新 step_last_seen / 不加入 cycle_steps /
@@ -440,6 +469,9 @@ def _init_recording_state(h):
     h._recording_drop_count = 0
     h.recording_failures = []
     h._recording_failure_lock = threading.Lock()
+    # 2026-09 检测框 sidecar: cycle 录像开启「记录检测框数据」时为 True,
+    # 采集线程据此在入队录制帧时同拍快照 current_detections (单写多读 bool)
+    h._boxes_sidecar_active = False
 
 
 # ============================================================
@@ -458,6 +490,7 @@ def init_state(h):
     _init_health_and_timeout(h)
     _init_components(h)
     _init_fps_stats(h)
+    _init_streaming_state(h)
     _init_step_state(h)
     _init_event_and_cycle_state(h)
     _init_tracking_state(h)

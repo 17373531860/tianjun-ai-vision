@@ -59,7 +59,12 @@ class EventsCheckMixin:
                             if s.get('enabled', True) and s.get('detect_role') != 'item'}
         
         # 自定义模式
-        if logic_mode == 'custom':
+        # v3.59 容器定界周期 (custom_cycle_owner='container'): 周期主权归容器,
+        # 周期内条件命中 / 末步消失都不是结算信号 — 结算只在容器离场确认时由
+        # ContainerCycleGate → _settle_container_cycle 触发 (完备判定在那里做)。
+        # 本分支整体让位; 尾部"步骤特定事件"(trigger_event) 不受影响照常触发。
+        if (logic_mode == 'custom'
+                and getattr(self, '_custom_cycle_owner', 'steps') != 'container'):
             custom_based_on = pipeline_config.get('custom_based_on')  # 'sequential', 'detection', 或 None
             custom_conditions = pipeline_config.get('custom_conditions', [])
             
@@ -89,11 +94,18 @@ class EventsCheckMixin:
                     # 检查是否完全匹配（数量和顺序都要相同）
                     if self.current_cycle_steps == cond_labels:
                         print(f"  → 条件匹配！触发事件 {cond_event_id}")
-                        self._trigger_event(*compose_settle_event(
-                            self, cond_event_id, f'自定义条件匹配: {cond_labels}'))
-                        self.current_cycle_steps = []
-                        self.backup_steps_seen_in_cycle = set()
-                        self.last_added_step = None
+                        if custom_based_on not in ('sequential', 'detection'):
+                            # 纯 custom 的动态条件与 static/idle 共用同一结算链，
+                            # 统一处理 PT、步骤记录、post-settle latch 与运行时清理。
+                            self._settle_custom_cycle()
+                        else:
+                            # 基于 sequential/detection 的 custom 保持历史行为。
+                            self._trigger_event(*compose_settle_event(
+                                self, cond_event_id,
+                                f'自定义条件匹配: {cond_labels}'))
+                            self.current_cycle_steps = []
+                            self.backup_steps_seen_in_cycle = set()
+                            self.last_added_step = None
                         return  # 匹配后不再检查其他条件和基础模式
             
             # 没有自定义条件匹配，回退到基础模式

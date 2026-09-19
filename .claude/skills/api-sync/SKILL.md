@@ -41,7 +41,7 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `/source/*` | `source.py`（router 容器）+ `source_routes.py` | `detection.js` | 视频源采集 + 推理状态机核心 API（⚠ 没有 source.js） |
 | `/data/*` | `sessions.py` + `sessions_export.py` + `sessions_stats.py` + `sessions_maintenance.py`（+ `showcase_stats.py` 只读统计共用前缀） | `data.js` | session/cycle/step + CSV 导出 + 数据维护 |
 | `/projects/*` | `projects.py` | `project.js` | 项目 CRUD + 激活 + `/active/current`；v3.51 加 `GET/PUT /activate-config`（激活收养开关 adopt_unbound，声明在 `/{project_id}` 之前防路由吞噬） |
-| `/models/*` | `models.py` | `model.js` | 模型上传/转换/标签解析 |
+| `/models/*` | `models.py` | `model.js` | 模型上传/转换/标签解析；2026-09 内置能力模型入仓：`GET /models/capabilities` 能力目录（类型元信息+内置行+绑定+引擎探针）+ `POST /models/capabilities/{cap}/bind` 权重绑定热重载 + upload 带 `capability` 表单字段 + list 带 `capability` 过滤 + builtin 行 DELETE 403 |
 | `/tasks/*` | `tasks.py` | 无（`task.js` 已删） | 离线推理任务（前端无入口，仅 API 在线） |
 | `/reports/*` | `reports.py` | 无（`report.js` 已删） | 趋势/日报/导出（报表展示由 Data 页接管） |
 | `/cameras/*` | `cameras.py` | 无（`camera.js` 已删） | **旧式相机表**，新代码不要往这写 |
@@ -72,6 +72,10 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `/plc/*` | `plc.py` | `plc.js` | ★ v3.48 RFC 13 通用 PLC 连接器：连接 CRUD/启停/测试 + 驱动清单 + 方案模板 + 点位实时值/手动写/IO 日志 + mock-set 联调 + 配置导入导出（MES 页「PLC 对接」tab） |
 | `/triggers/*` | `triggers.py` | `triggers.js` | ★ v3.48 RFC 14 统一触发中心：触发源实例 CRUD/启停 + 类型/动作/模板清单 + 实时状态/触发历史/日志 + 试触发/mock 注入 + 像素标定 + `fire/{key}` HTTP 触发入口 + 导入导出（MES 管理页「触发中心」tab，信息架构重构自系统设置迁入） |
 | `/scan-collect/*` | `scan_collect.py` | `scanCollect.js` | ★ v3.56 周期多码采集：按项目配置 GET/PUT config + state 实况轮询（参数名是 `channel` 不是 `channel_id`）+ remove-code/clear 纠错 + resolve-ng NG 挂起放行 + records 追溯（默认排除 status=deleted，`include_deleted=true` 才带）；Monitor 面板主数据走检测 results 载荷 `scan_collect` 段，此 API 是配置/纠错/追溯通路 |
+| `/ocr/*` | `ocr.py` | `aitools.js` | ★ 2026-09 OCR 读字：status 探针 + read 上传识别 + read-frame 通道画面识别（模型仓库「试一试」抽屉消费，原 AI 能力试用页已下线；引擎 rapidocr 懒加载） |
+| `/anomaly/*` | `anomaly.py` | `aitools.js` | ★ 2026-09 异常检测：合格品记忆库 banks CRUD/阈值 + score 上传评分 + score-frame 通道评分（模型仓库「试一试」抽屉管理记忆库 + anomaly 逻辑模式共用引擎） |
+| `/vlm/*` | `vlm.py` | `aitools.js` | ★ 2026-09 VLM 坐诊：config/status + ask 传图问答 + ask-frame 通道问答（默认关，OpenAI 兼容本地端点） |
+| `/orientation/*` | `orientation.py` | `aitools.js` | ★ 2026-09 朝向估计试用：status 三层后端探针（yolo11_pose/mediapipe_pose/headpose_onnx）+ estimate 上传估计 + estimate-frame 通道估计（facing_dwell 朝向驻留的推理侧试用/装机标定入口；生产路径走 person_orientation 单例不经此 API）；v3.58 加 GET/PUT `/config`（headpose_full_range 全角度头姿开关，KV 落库+推理侧即时刷新，PUT 挂 settings.edit） |
 | `/debug/*` | `debug.py` | 无封装（手测用） | 通道诊断 + 调试日志中心 |
 | `/test/synthetic/*` | `test_runtime_routes.py` | —（测试专用） | 仅 `RUNTIME_MODE=test` 挂载：虚拟剧本源 |
 
@@ -229,6 +233,8 @@ export function getBackendHost() {
 | GET | `/data/cycles/{id}` `/cycles/{id}/steps` | 周期详情 + 步骤 |
 | GET | `/data/cycles/by-serial/{serial_no}` | v3.4.3 工件全局检索 |
 | GET | `/data/videos` `/videos/{id}` | 录像列表/单条流（`{id}` 走 MJPEG/MP4；v3.54 起 h264+yuv420p 探测通过直出免转码） |
+| GET | `/data/videos/{id}/boxes` | v3.58 检测框 sidecar JSON（录像旁 `.boxes.json`，回放 canvas 叠加用；没开 record_boxes_data 或 sidecar 不存在返回 404） |
+| GET | `/data/videos/{id}/annotated` | v3.58 下载带框版录像（服务端 annotated_video 烧框渲染，需 sidecar 在场） |
 | GET | `/data/sessions/{id}/videos` | ★ v3.54 会话录像分段列表（长会话按小时分段，多段时 Data 页显示分段切换条） |
 | GET/PUT | `/data/storage/recording-dir` | ★ v3.54 自定义录像存储根目录（PUT 挂 `settings.edit`，校验黑名单/可写/与归档目录互斥） |
 | GET/PUT | `/data/export-settings` | 导出开关 |

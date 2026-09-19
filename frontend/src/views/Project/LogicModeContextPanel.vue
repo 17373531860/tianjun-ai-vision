@@ -90,7 +90,7 @@
           <input type="radio" v-model="project.logic_mode" value="anomaly" class="mt-1 accent-cyan-500">
           <div class="ml-3 flex-1">
             <span class="font-bold text-white block">异常检测模式</span>
-            <span class="text-xs text-gray-400 block mt-1">无需检测模型：先用好样本在「AI 能力试用」页建记忆库，运行时按间隔对画面打分，连续超阈值→事件2 报警（带冷却）。适合缺陷样本稀缺的表面质检。配置在「逻辑设置」页签</span>
+            <span class="text-xs text-gray-400 block mt-1">无需检测模型：先用好样本在「模型仓库→异常检测→试一试」建记忆库，运行时按间隔对画面打分，连续超阈值→事件2 报警（带冷却）。适合缺陷样本稀缺的表面质检。配置在「逻辑设置」页签</span>
           </div>
         </label>
       </div>

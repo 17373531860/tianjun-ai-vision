@@ -92,7 +92,9 @@ from __future__ import annotations
 import math
 from typing import Optional
 
-from backend.api.source_label_split import _parse_bbox, _parse_polygon, _point_in_polygon
+from backend.api.source_label_split import (
+    _parse_bbox, _parse_polygon, _point_in_regions,
+)
 
 
 # ==================== 几何辅助 ====================
@@ -115,6 +117,42 @@ def _bbox_iou(a: dict, b: dict) -> float:
 
 def _bbox_center(d: dict):
     return d['x'] + d['w'] / 2.0, d['y'] + d['h'] / 2.0
+
+
+def tag_operator_uniforms(detections: list, frame) -> None:
+    """给检测框打 is_operator (蓝工装启发式)。现场「只认操作员」用。
+
+    黄背心外协 / 深色便服 → False。frame 缺失时不打标 (规则侧视为非操作员)。
+    任何异常隔离, 不改主链路。
+    """
+    if frame is None or not detections:
+        return
+    try:
+        import cv2
+        h, w = frame.shape[:2]
+        if h < 8 or w < 8:
+            return
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        for d in detections:
+            try:
+                x1 = int(max(0, float(d['x']) * w))
+                y1 = int(max(0, float(d['y']) * h))
+                x2 = int(min(w, (float(d['x']) + float(d['w'])) * w))
+                y2 = int(min(h, (float(d['y']) + float(d['h'])) * h))
+            except (KeyError, TypeError, ValueError):
+                d['is_operator'] = False
+                continue
+            if x2 - x1 < 6 or y2 - y1 < 6:
+                d['is_operator'] = False
+                continue
+            crop = hsv[y1:y2, x1:x2]
+            blue = cv2.inRange(crop, (90, 40, 40), (130, 255, 255))
+            yellow = cv2.inRange(crop, (18, 80, 80), (40, 255, 255))
+            br = float(blue.mean()) / 255.0
+            yr = float(yellow.mean()) / 255.0
+            d['is_operator'] = bool(br >= 0.08 and yr < 0.12)
+    except Exception:
+        pass
 
 
 def _pair_overlaps(a: dict, b: dict, min_iou: float) -> bool:
@@ -140,7 +178,8 @@ class RegionEventRule:
                  'anchor_label', 'anchor_ref', 'anchor_hold',
                  'gone_seconds', 'min_overlap_ratio', 'min_move', 'min_seconds',
                  'object_margin', 'min_count', 'max_distance',
-                 'target_point', 'tolerance_deg', 'alert_on_absent')
+                 'target_point', 'tolerance_deg', 'alert_on_absent',
+                 'require_operator')
 
     def __init__(self, rule_id, name, rule_type, subject_label, object_label,
                  region, region_mode, min_frames, min_iou, require_label,
@@ -149,7 +188,7 @@ class RegionEventRule:
                  gone_seconds=None, min_overlap_ratio=0.0, min_move=0.0,
                  min_seconds=0.0, object_margin=0.0, min_count=3,
                  max_distance=0.15, target_point=None, tolerance_deg=35.0,
-                 alert_on_absent=False):
+                 alert_on_absent=False, require_operator=False):
         self.rule_id = rule_id
         self.name = name                    # 事件名 = 步骤落库/流水显示名, 全局唯一
         self.rule_type = rule_type          # 'overlap' | 'region_enter' | 'region_exit'
@@ -183,6 +222,9 @@ class RegionEventRule:
         self.tolerance_deg = tolerance_deg  # facing_dwell: 朝向夹角容差 (度)
         self.alert_on_absent = alert_on_absent  # facing_dwell: True=条件取反
         #                                     ("持续无人面向仪表"超时告警)
+        self.require_operator = bool(require_operator)  # 只认蓝工装操作员
+        #                                     (黄背心外协/参观不计入; 由 VSM
+        #                                      在帧上打 is_operator 标记)
         self.object_margin = object_margin  # overlap: 目标框虚拟扩边 (归一化,
         #                                     0=不扩)。真动作发生在目标框边缘
         #                                     外侧几个百分点时 (如扫工件下沿
@@ -364,11 +406,12 @@ def _parse_rule(i: int, raw: dict) -> RegionEventRule:
             except (TypeError, ValueError):
                 raise ValueError(f"region_events.rules[{i}] ({name}) target_point 非数值")
         elif raw.get('target_region') is not None:
-            poly = _parse_polygon(raw.get('target_region'))
-            if poly is None:
+            polys = _parse_polygon(raw.get('target_region'))
+            if polys is None:
                 raise ValueError(f"region_events.rules[{i}] ({name}) target_region 多边形非法")
-            target_point = (sum(p[0] for p in poly) / len(poly),
-                            sum(p[1] for p in poly) / len(poly))
+            _pts = [p for blk in polys for p in blk]  # 多块形态: 全部顶点取质心
+            target_point = (sum(p[0] for p in _pts) / len(_pts),
+                            sum(p[1] for p in _pts) / len(_pts))
         if target_point is None:
             raise ValueError(
                 f"region_events.rules[{i}] ({name}) facing_dwell 规则必须标定仪表点 "
@@ -411,6 +454,7 @@ def _parse_rule(i: int, raw: dict) -> RegionEventRule:
         target_point=target_point,
         tolerance_deg=tolerance_deg,
         alert_on_absent=bool(raw.get('alert_on_absent', False)),
+        require_operator=bool(raw.get('require_operator', False)),
     )
 
 
@@ -629,14 +673,22 @@ class RegionEventEngine:
         if self._anchor_labels:
             self._update_anchor_cache(by_label, ts)
 
+        by_label_op = None
+        if any(r.require_operator for r in self.cfg.rules):
+            by_label_op = {
+                k: [d for d in v if d.get('is_operator')]
+                for k, v in by_label.items()
+            }
+
         events = []
         for rule in self.cfg.rules:
+            src = by_label_op if rule.require_operator else by_label
             if rule.rule_type == 'region_exit':
-                self._step_exit(rule, by_label, ts, events)
+                self._step_exit(rule, src, ts, events)
             elif rule.rule_type == 'cross_count':
-                self._step_cross(rule, by_label, ts, events)
+                self._step_cross(rule, src, ts, events)
             else:
-                self._step_overlap(rule, by_label, ts, events)
+                self._step_overlap(rule, src, ts, events)
         return events
 
     # ---------- 锚点跟随 ----------
@@ -665,8 +717,10 @@ class RegionEventEngine:
         cur, ref = entry[0], rule.anchor_ref
         sx = cur['w'] / ref['w']
         sy = cur['h'] / ref['h']
-        return [(cur['x'] + (px - ref['x']) * sx,
-                 cur['y'] + (py - ref['y']) * sy) for px, py in rule.region]
+        # region 是多块形态 (_parse_polygon 返回值), 逐块变换
+        return [[(cur['x'] + (px - ref['x']) * sx,
+                  cur['y'] + (py - ref['y']) * sy) for px, py in poly]
+                for poly in rule.region]
 
     def reset(self):
         """清空全部运行时状态 (项目切换/重新开始检测)。累计计数一并归零。"""
@@ -719,7 +773,7 @@ class RegionEventEngine:
                 if region is None:
                     continue  # 锚点丢失时区域条件不满足
                 cx, cy = _bbox_center(s)
-                cond = _point_in_polygon(cx, cy, region)
+                cond = _point_in_regions(cx, cy, region)
             else:
                 overlaps = any(self._deep_overlap(rule, s, o) for o in objects)
                 if rule.region is None:
@@ -729,7 +783,7 @@ class RegionEventEngine:
                     cond = overlaps if rule.region_mode == 'or' else False
                 else:
                     cx, cy = _bbox_center(s)
-                    in_region = _point_in_polygon(cx, cy, region)
+                    in_region = _point_in_regions(cx, cy, region)
                     cond = (overlaps and in_region) if rule.region_mode == 'and' \
                         else (overlaps or in_region)
             if cond:
@@ -767,7 +821,7 @@ class RegionEventEngine:
         inside = []
         for s in by_label.get(rule.subject_label) or []:
             cx, cy = _bbox_center(s)
-            if _point_in_polygon(cx, cy, region):
+            if _point_in_regions(cx, cy, region):
                 inside.append(s)
         if rule.rule_type == 'region_count':
             return len(inside) >= rule.min_count, (inside[0] if inside else None)
@@ -792,7 +846,7 @@ class RegionEventEngine:
         for s in by_label.get(rule.subject_label) or []:
             cx, cy = _bbox_center(s)
             if rule.region is not None:
-                if region is None or not _point_in_polygon(cx, cy, region):
+                if region is None or not _point_in_regions(cx, cy, region):
                     continue
             yaw = s.get('facing')
             if yaw is None:
@@ -966,7 +1020,7 @@ class RegionEventEngine:
         # 未关联上的检测框开新轨迹
         for i in unclaimed:
             cx, cy = _bbox_center(dets[i])
-            in_region = region is not None and _point_in_polygon(cx, cy, region)
+            in_region = region is not None and _point_in_regions(cx, cy, region)
             st.tracks.append(_Track(dets[i], in_region, ts))
 
         # 消失确认: 进过区域的产出事件, 没进过的静默清理
@@ -990,7 +1044,7 @@ class RegionEventEngine:
         if region is None:
             return
         cx, cy = _bbox_center(det)
-        if _point_in_polygon(cx, cy, region):
+        if _point_in_regions(cx, cy, region):
             track.in_frames += 1
             if track.in_frames >= rule.min_frames:
                 track.entered = True
@@ -1019,7 +1073,7 @@ class RegionEventEngine:
                 track.last_ts = ts
                 if region is not None:
                     cx, cy = _bbox_center(dets[best_i])
-                    if _point_in_polygon(cx, cy, region):
+                    if _point_in_regions(cx, cy, region):
                         track.in_frames += 1
                         self._maybe_count_cross(rule, st, track, ts, events)
                     # 中心暂时出区不清 in_frames/counted: 边界抖动不重复计数
@@ -1028,7 +1082,7 @@ class RegionEventEngine:
 
         for i in unclaimed:
             cx, cy = _bbox_center(dets[i])
-            in_region = region is not None and _point_in_polygon(cx, cy, region)
+            in_region = region is not None and _point_in_regions(cx, cy, region)
             track = _Track(dets[i], in_region, ts)
             st.tracks.append(track)
             if in_region:

@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import os
 import time
 import uuid
 
@@ -19,7 +20,7 @@ from .conftest import E2E_PREFIX
 MODE_CARDS = {
     "sequential": ["结算方式", "超时结算", "顺序模式 - 步骤排序", "NG 判定与处置", "结算冷却"],
     "detection": ["检测模式 - 需检测的步骤", "超时结算", "NG 判定与处置"],
-    "custom": ["自定义模式 - 条件配置", "周期性强制动作", "NG 判定与处置"],
+    "custom": ["自定义模式 - 条件配置", "超时结算", "周期性强制动作", "NG 判定与处置"],
     "tracking": ["跟踪模式 - 物品清点配置", "结算冷却"],
     "per_item": ["逐件覆盖 — 通用参数", "逐件覆盖 — 每个步骤的角色"],
 }
@@ -87,6 +88,74 @@ def test_检测模式超时结算_可见可配_保存落库(page, base_url, api_
         f"空闲超时应落库 30, 实际 {pc.get('idle_timeout_seconds')}"
     assert pc.get("cycle_max_duration") == 300, \
         f"周期超时应落库 300, 实际 {pc.get('cycle_max_duration')}"
+
+
+def test_纯custom超时中断事件_选择清空与关闭均落库(page, base_url, api_url):
+    pid, name = _mk_project(api_url, "custom", steps=[
+        {"id": 1, "label": "A", "name": "步骤A", "enabled": True},
+        {"id": 2, "label": "B", "name": "步骤B", "enabled": True},
+    ])
+    requests.put(f"{api_url}/api/v1/projects/{pid}", json={
+        "pipeline_config": {
+            "custom_based_on": None,
+            "custom_conditions": [
+                {"id": 1, "priority": 1, "sequence": [1, 2], "event_id": 1},
+            ],
+            "idle_timeout_seconds": 0,
+            "idle_timeout_event_id": None,
+        },
+        "events_config": [
+            {"id": 1, "name": "合格", "enabled": True},
+            {"id": 2, "name": "不良", "enabled": True},
+            {"id": 4, "name": "行为不良", "enabled": True},
+        ],
+    }, timeout=5).raise_for_status()
+
+    body = _open_logic_tab(page, base_url, name)
+    assert "超时中断事件" in body
+    card = page.locator(".el-card:has-text('超时结算')").first
+    seconds = card.locator("[data-testid='idle-timeout-seconds'] input")
+    event_select = card.locator("[data-testid='idle-timeout-event-select']")
+    assert event_select.locator("input").is_disabled(), "空闲超时为 0 时事件下拉应禁用"
+
+    seconds.fill("15")
+    seconds.press("Enter")
+    event_select.click()
+    page.locator(".el-select-dropdown__item:visible", has_text="行为不良").first.click()
+    page.locator("button:has-text('保存配置')").click()
+    time.sleep(2.0)
+
+    pc = requests.get(f"{api_url}/api/v1/projects/{pid}", timeout=5).json()["pipeline_config"]
+    assert pc.get("custom_based_on") is None
+    assert pc.get("idle_timeout_seconds") == 15
+    assert pc.get("idle_timeout_event_id") == 4
+
+    _open_logic_tab(page, base_url, name)
+    card = page.locator(".el-card:has-text('超时结算')").first
+    seconds = card.locator("[data-testid='idle-timeout-seconds'] input")
+    event_select = card.locator("[data-testid='idle-timeout-event-select']")
+    assert "行为不良" in event_select.inner_text(), "保存后重载应回显中断事件"
+    screenshot_path = os.environ.get("CUSTOM_TIMEOUT_UI_SCREENSHOT")
+    if screenshot_path:
+        page.screenshot(path=screenshot_path, full_page=True)
+
+    event_select.hover()
+    event_select.locator(".el-select__clear").click()
+    page.locator("button:has-text('保存配置')").click()
+    time.sleep(2.0)
+    pc = requests.get(f"{api_url}/api/v1/projects/{pid}", timeout=5).json()["pipeline_config"]
+    assert pc.get("idle_timeout_event_id") is None
+
+    # 即使之前选过事件，关闭 idle timeout 也必须清成 null。
+    event_select.click()
+    page.locator(".el-select-dropdown__item:visible", has_text="行为不良").first.click()
+    seconds.fill("0")
+    seconds.press("Enter")
+    page.locator("button:has-text('保存配置')").click()
+    time.sleep(2.0)
+    pc = requests.get(f"{api_url}/api/v1/projects/{pid}", timeout=5).json()["pipeline_config"]
+    assert pc.get("idle_timeout_seconds") == 0
+    assert pc.get("idle_timeout_event_id") is None
 
 
 def test_sequential序列编辑_保存落库(page, base_url, api_url):

@@ -97,7 +97,7 @@
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-800 text-gray-300">
-            <tr v-for="(row, idx) in tableRows" :key="row.label || idx" class="hover:bg-slate-800/50" :class="row.status === 'completed' ? 'bg-green-800/30' : ''">
+            <tr v-for="(row, idx) in tableRows" :key="`${idx}:${row.label || ''}`" class="hover:bg-slate-800/50" :class="row.resultFinalized && row.cycleResult === 'ng' ? 'bg-red-900/30' : (row.status === 'completed' ? 'bg-green-800/30' : '')">
               <td v-if="stepTableColumns.showNo !== false" class="px-2 py-1.5">{{ idx + 1 }}</td>
               <td v-if="stepTableColumns.showStep !== false" class="px-2 py-1.5">{{ row.step }}</td>
               <td v-if="stepTableColumns.showStatus !== false" class="px-2 py-1.5">
@@ -106,7 +106,7 @@
               <td v-if="stepTableColumns.showPt !== false" class="px-2 py-1.5 font-mono text-white">{{ row.status === 'completed' ? getStepPt(row.label) : '--' }}</td>
               <td v-if="stepTableColumns.showResult !== false" class="px-2 py-1.5">
                 <span v-if="row.status === 'completed' && row.cycleResult === 'ok'" class="text-green-400">OK</span>
-                <span v-else-if="row.status === 'completed' && row.cycleResult === 'ng'" class="text-red-500">NG</span>
+                <span v-else-if="(row.status === 'completed' || row.resultFinalized) && row.cycleResult === 'ng'" class="text-red-500">NG</span>
                 <span v-else class="text-gray-500">--</span>
               </td>
             </tr>
@@ -123,7 +123,7 @@
       class="flex flex-shrink-0 gap-2 rounded-lg border border-slate-800 bg-slate-950 p-2"
       data-testid="single-channel-controls"
       :data-readonly="readonly ? 'true' : 'false'"
-      :title="readonly ? '一期只读监看，控制操作将在二期开放' : ''"
+      :title="readonly ? '只读监看：请在多屏工位显示设置中切换为可操作' : ''"
     >
       <button type="button" class="control-button bg-emerald-500 hover:bg-emerald-400" :disabled="readonly || !hasProject || channelData?.isDetecting" data-testid="single-channel-start" @click="$emit('start')">开始</button>
       <button type="button" class="control-button bg-red-500 hover:bg-red-400" :disabled="readonly || !channelData?.isRunning" data-testid="single-channel-stop" @click="$emit('stop')">停止</button>

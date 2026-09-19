@@ -1,12 +1,12 @@
 <template>
-  <div class="flex h-screen w-screen bg-ind-bg relative">
+  <div class="flex h-screen w-screen bg-ind-bg relative" :class="{ 'readonly-window': displayReadonly }" :inert="displayReadonly" :data-display-readonly="displayReadonly">
     <!-- 侧边栏遮罩 -->
-    <Transition v-if="!kioskMode" name="fade">
+    <Transition v-if="!handsOnly" name="fade">
       <div v-if="sidebarOpen" class="fixed inset-0 bg-black/40 z-30" @click="sidebarOpen = false"></div>
     </Transition>
 
     <!-- 侧边栏（默认隐藏，点击按钮滑出） -->
-    <Transition v-if="!kioskMode" name="slide">
+    <Transition v-if="!handsOnly" name="slide">
       <aside v-if="sidebarOpen" class="fixed left-0 top-0 h-full w-64 bg-ind-panel border-r border-gray-800 flex flex-col z-40 shadow-2xl">
         <div class="p-6 text-xl font-bold text-tech-blue border-b border-gray-800 flex justify-between items-center">
           <span>VISION SYSTEM</span>
@@ -40,9 +40,6 @@
           <router-link v-if="canShow('/interconnect')" to="/interconnect" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
             <el-icon class="mr-2"><Connection /></el-icon> 训练平台互连
           </router-link>
-          <router-link v-if="canShow('/ai-tools')" to="/ai-tools" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
-            <el-icon class="mr-2"><MagicStick /></el-icon> AI 能力试用
-          </router-link>
           <router-link v-if="canShow('/settings')" to="/settings" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
             <el-icon class="mr-2"><Setting /></el-icon> {{ $t('menu.settings') }}
           </router-link>
@@ -67,9 +64,9 @@
     </Transition>
 
     <main class="flex-1 flex flex-col overflow-hidden">
-      <Navbar v-if="!kioskMode">
+      <Navbar v-if="!handsOnly">
         <template #left>
-          <button @click="sidebarOpen = true" class="p-2 rounded hover:bg-slate-700 transition text-gray-400 hover:text-white mr-2" title="导航菜单">
+          <button :disabled="displayReadonly" @click="sidebarOpen = true" class="p-2 rounded hover:bg-slate-700 transition text-gray-400 hover:text-white mr-2 disabled:opacity-40" title="导航菜单">
             <el-icon class="text-[1.25rem]"><Menu /></el-icon>
           </button>
         </template>
@@ -77,12 +74,12 @@
 
       <section
         class="flex-1 bg-[#0f172a]"
-        :class="kioskMode ? 'overflow-hidden p-0' : 'overflow-auto px-4 pt-4 pb-0'"
+        :class="handsOnly ? 'overflow-hidden p-0' : 'overflow-auto px-4 pt-4 pb-0'"
       >
         <router-view />
       </section>
 
-      <BottomBar v-if="!kioskMode" />
+      <BottomBar v-if="!handsOnly" />
     </main>
   </div>
 </template>
@@ -90,27 +87,37 @@
 <script setup>
 import Navbar from './Navbar.vue';
 import BottomBar from './BottomBar.vue';
-import { computed, ref, onMounted } from 'vue';
+import { computed, ref, onMounted, onUnmounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import { Monitor, Folder, Cpu, DataLine, Setting, VideoCamera, Bell, Close, Menu, Tickets, DataAnalysis, Connection, MagicStick } from '@element-plus/icons-vue';
+import { useDisplayWindow } from '@/composables/useDisplayWindow';
+import { Monitor, Folder, Cpu, DataLine, Setting, VideoCamera, Bell, Close, Menu, Tickets, DataAnalysis, Connection } from '@element-plus/icons-vue';
 import { useSystemStore } from '@/store/useSystemStore';
 import { usePluginThemeStore } from '@/store/usePluginThemeStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { ElMessage } from 'element-plus';
-import { startScanGun } from '@/composables/useScanGun';
+import { startScanGun, stopScanGun } from '@/composables/useScanGun';
 
 const systemStore = useSystemStore();
 const pluginTheme = usePluginThemeStore();
 const authStore = useAuthStore();
 const sidebarOpen = ref(false);
 const route = useRoute();
-const kioskMode = computed(() => route.query.kiosk === '1');
+const { handsOnly, readonly: displayReadonly } = useDisplayWindow();
+// 独立工位窗不重复接管 USB 扫码枪；可操作的总控复用窗口保留原监听。
+const scanGunDisabled = computed(() => route.query.kiosk === '1' || displayReadonly.value);
 
 // USB 扫码枪: 全局挂键盘监听, 这样在任何页面 (含全屏检测页) 扫码都能按用途处理
 // (拉工单/绑工件)。关/开与用途由 扫码器→USB 扫码枪 Tab 控制 (本监听内部实时读配置)。
 onMounted(() => {
-  if (!kioskMode.value) startScanGun();
+  if (!scanGunDisabled.value) startScanGun();
 });
+watch(scanGunDisabled, (readonly) => {
+  if (readonly) {
+    sidebarOpen.value = false;
+    stopScanGun();
+  } else startScanGun();
+});
+onUnmounted(stopScanGun);
 
 // 菜单可见 = 插件主题未隐藏 AND 当前账号有路由权限.
 // 两层门各自独立: 插件主题是客户定制层 (按 brand 隐藏), 权限层是账号层 (按角色隐藏).
@@ -119,6 +126,11 @@ const canShow = (path) => {
 };
 
 const handleNav = (e) => {
+  if (displayReadonly.value) {
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
   if (systemStore.isDetecting) {
     e.preventDefault();
     e.stopPropagation();
@@ -130,6 +142,13 @@ const handleNav = (e) => {
 </script>
 
 <style scoped>
+.readonly-window :deep(button),
+.readonly-window :deep([role="button"]),
+.readonly-window :deep(input),
+.readonly-window :deep(select) {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
 .nav-item {
   @apply flex items-center px-6 py-4 text-gray-400 hover:bg-gray-800 hover:text-white transition-all;
 }

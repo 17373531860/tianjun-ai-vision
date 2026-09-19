@@ -137,6 +137,8 @@ def _reset_step_state_dicts(h):
     h._last_step_added_time = None
     h._step_raw_start = {}
     h._cycle_regression = False
+    h._pure_custom_settle_latched_labels = {}
+    h._pure_custom_pending_static_label = None
 
 
 def _apply_steps_config(h, steps_config):
@@ -206,24 +208,13 @@ def _apply_steps_config(h, steps_config):
             }
             h.step_static_triggered[label] = False
 
-        # 逐步骤 ROI (顺序 / 检测 / 自定义 / tracking 共用): 归一化多边形 ≥3 点
-        roi_raw = step.get('roi')
-        if roi_raw and isinstance(roi_raw, list) and len(roi_raw) >= 3:
-            ok = True
-            parsed = []
-            for p in roi_raw:
-                if not isinstance(p, (list, tuple)) or len(p) < 2:
-                    ok = False
-                    break
-                try:
-                    parsed.append([float(p[0]), float(p[1])])
-                except (TypeError, ValueError):
-                    ok = False
-                    break
-            if ok:
-                h.step_roi_polygons[label] = parsed
-            else:
-                h.step_roi_polygons.pop(label, None)
+        # 逐步骤 ROI (顺序 / 检测 / 自定义 / tracking 共用): 归一化多边形
+        # 2026-09 多块化: 单块 [[x,y],...] / 多块 [[[x,y],...],...] 双格式,
+        # 统一归一成多边形列表存下 (下游 is_normalized_bbox_center_in_polygon 任一块命中)
+        from backend.api.source_geometry import normalize_polygons
+        parsed_polys = normalize_polygons(step.get('roi'))
+        if parsed_polys:
+            h.step_roi_polygons[label] = parsed_polys
         else:
             h.step_roi_polygons.pop(label, None)
 
@@ -542,6 +533,26 @@ def _apply_pipeline_config(h, config, pipeline_config):
 
     h.settlement_mode = pipeline_config.get('settlement_mode', 'first_step')
     h.idle_timeout_seconds = pipeline_config.get('idle_timeout_seconds', 0)
+    h.idle_timeout_event_id = None
+    requested_idle_event_id = pipeline_config.get('idle_timeout_event_id')
+    custom_based_on = pipeline_config.get('custom_based_on')
+    is_pure_custom = (
+        config.get('logic_mode') == 'custom'
+        and custom_based_on not in ('sequential', 'detection')
+    )
+    try:
+        idle_timeout_enabled = float(h.idle_timeout_seconds or 0) > 0
+    except (TypeError, ValueError):
+        idle_timeout_enabled = False
+    if is_pure_custom and idle_timeout_enabled and requested_idle_event_id is not None:
+        for event in config.get('events_config', []) or []:
+            if str(event.get('id')) == str(requested_idle_event_id):
+                h.idle_timeout_event_id = event.get('id')
+                break
+        if h.idle_timeout_event_id is None:
+            print(
+                f"空闲超时中断事件不存在: {requested_idle_event_id}，回退到事件 2"
+            )
     h.cycle_max_duration = pipeline_config.get('cycle_max_duration', 0)
 
     # ============ v3.48 计数组合判定表 (RFC 14 配套项, 纯视觉判型) ============
@@ -887,6 +898,8 @@ def apply_project_config(h, config: dict):
     _apply_models_config(h, pipeline_config)
     _apply_label_splits(h, pipeline_config)
     _apply_region_events(h, config, pipeline_config)
+    # 2026-09 能力挂件 (pose/ocr/anomaly): 全逻辑模式可挂, 无配置零开销
+    h._apply_capability_attachments(pipeline_config)
 
     _apply_counters(h, config)
     _reset_cycle_state(h)
@@ -936,6 +949,19 @@ def apply_project_config(h, config: dict):
     # 独立 tracking 项目恒为 False — 行为零差异。
     h._tracking_external_cycle = bool(
         h._custom_mix is not None and h._custom_mix.mix_type == 'tracking')
+
+    # v3.59 容器定界周期 (custom_cycle_owner='container'): 周期主权归容器 —
+    # 容器标签在场确认开周期 / 离场确认强制结算; 步骤侧结算触发全部让位
+    # (events_check 自定义结算块 + first_step 重现 + 空闲超时, 各处按
+    # h._custom_cycle_owner 守门)。缺省 'steps' + gate=None = 零差异。
+    try:
+        from backend.api.source_custom_mix import build_container_gate
+        h._container_cycle_gate = build_container_gate(config)
+    except Exception as e:
+        h._container_cycle_gate = None
+        print(f"[ContainerGate] 构建容器定界门失败: {e}")
+    h._custom_cycle_owner = (
+        'container' if h._container_cycle_gate is not None else 'steps')
 
     # 原生称重投料模式: 登记/注销本通道到称重引擎。两种登记来源:
     # - logic_mode='weighing'                      : 秤驱动 (v3.31, drive_mode 默认 scale)

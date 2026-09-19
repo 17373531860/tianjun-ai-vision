@@ -8,7 +8,7 @@ Channel 0 is the default and always exists for backward compatibility.
 import threading
 import json
 import os
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from backend.core.auth_deps import require_perm
@@ -49,7 +49,7 @@ class DisplayBounds(BaseModel):
 
 
 class MultiMonitorMappingItem(BaseModel):
-    """单个工位绑定的显示器标识和离线降级坐标。"""
+    """单个工位主/副屏的显示器标识和离线降级坐标。"""
 
     display_id: str = Field("", description="Electron Display.id 的字符串形式；为空时仅按 bounds 定位")
     bounds: Optional[DisplayBounds] = Field(None, description="显示器 ID 变化或枚举失败时使用的持久化坐标")
@@ -57,13 +57,29 @@ class MultiMonitorMappingItem(BaseModel):
         "monitor",
         description="窗口角色：monitor=工位监控页（默认）；projection=投影光引导画布（接投影仪用）。非法值保存时归一为 monitor",
     )
+    aux_display_id: Optional[str] = Field(
+        None,
+        description="工位副屏 Electron Display.id；不配置时不创建副屏窗口",
+    )
+    aux_bounds: Optional[DisplayBounds] = Field(
+        None,
+        description="副屏 ID 变化或枚举失败时使用的持久化坐标",
+    )
+    aux_hands_enabled: Optional[bool] = Field(
+        None,
+        description="是否为该工位启用手部裁切副屏；缺失时按关闭处理",
+    )
+    aux_view_mode: Optional[Literal["fixed", "follow"]] = Field(
+        None,
+        description="副屏取景模式：fixed 固定中心，follow 固定尺寸平滑跟随手部",
+    )
 
 
 class MultiMonitorConfig(BaseModel):
     """多屏工位显示配置。"""
 
     enabled: bool = Field(False, description="是否启用多屏工位窗口；默认关闭以保持单窗行为")
-    readonly: bool = Field(True, description="工位副屏是否只读；一期默认只读")
+    readonly: bool = Field(True, description="工位副屏是否只读；不约束可操作的工位主屏")
     mapping: Dict[str, MultiMonitorMappingItem] = Field(
         default_factory=dict,
         description="工位 ID 到显示器 ID/坐标的映射；非法工位或无效尺寸会被规范化",
@@ -673,11 +689,28 @@ class ChannelManager:
     # 多屏工位窗口配置
     # ------------------------------------------------------------------
     @staticmethod
+    def _normalize_multi_monitor_bounds(raw_bounds):
+        normalized_bounds = None
+        if isinstance(raw_bounds, dict):
+            try:
+                candidate = {
+                    "x": int(raw_bounds.get("x")),
+                    "y": int(raw_bounds.get("y")),
+                    "width": int(raw_bounds.get("width")),
+                    "height": int(raw_bounds.get("height")),
+                }
+                if candidate["width"] > 0 and candidate["height"] > 0:
+                    normalized_bounds = candidate
+            except (TypeError, ValueError, OverflowError):
+                normalized_bounds = None
+        return normalized_bounds
+
+    @staticmethod
     def _normalize_multi_monitor_mapping(raw_mapping) -> dict:
-        """规范化工位到显示器的映射，丢弃越界工位和不可定位项。"""
+        """规范化工位主/副屏映射，丢弃越界工位和不可定位项。"""
         if not isinstance(raw_mapping, dict):
             return {}
-
+        _normalize_bounds = ChannelManager._normalize_multi_monitor_bounds
         normalized = {}
         for raw_channel_id, raw_item in raw_mapping.items():
             try:
@@ -688,20 +721,7 @@ class ChannelManager:
                 continue
 
             display_id = str(raw_item.get("display_id") or "").strip()
-            bounds = raw_item.get("bounds")
-            normalized_bounds = None
-            if isinstance(bounds, dict):
-                try:
-                    candidate = {
-                        "x": int(bounds.get("x")),
-                        "y": int(bounds.get("y")),
-                        "width": int(bounds.get("width")),
-                        "height": int(bounds.get("height")),
-                    }
-                    if candidate["width"] > 0 and candidate["height"] > 0:
-                        normalized_bounds = candidate
-                except (TypeError, ValueError):
-                    normalized_bounds = None
+            normalized_bounds = _normalize_bounds(raw_item.get("bounds"))
 
             # v3.57 投影光引导: 窗口角色, 非法值静默归一 monitor, 老配置无 role 键零差异
             role = raw_item.get("role")
@@ -713,6 +733,24 @@ class ChannelManager:
             item = {"display_id": display_id, "role": role}
             if normalized_bounds is not None:
                 item["bounds"] = normalized_bounds
+
+            aux_display_id = str(raw_item.get("aux_display_id") or "").strip()
+            normalized_aux_bounds = _normalize_bounds(raw_item.get("aux_bounds"))
+            if aux_display_id or normalized_aux_bounds is not None:
+                item["aux_display_id"] = aux_display_id
+                if normalized_aux_bounds is not None:
+                    item["aux_bounds"] = normalized_aux_bounds
+                item["aux_hands_enabled"] = (
+                    raw_item.get("aux_hands_enabled") is True
+                )
+                raw_aux_view_mode = str(
+                    raw_item.get("aux_view_mode") or "follow",
+                ).strip().lower()
+                item["aux_view_mode"] = (
+                    raw_aux_view_mode
+                    if raw_aux_view_mode in {"fixed", "follow"}
+                    else "follow"
+                )
             normalized[str(channel_id)] = item
         return normalized
 
@@ -730,9 +768,13 @@ class ChannelManager:
                 }
         except Exception as e:
             print(f"[ChannelManager] read multi_monitor config failed: {e}")
-        return {"enabled": False, "readonly": True, "mapping": {}}
+        return {
+            "enabled": False, "readonly": True, "mapping": {},
+        }
 
-    def set_multi_monitor_config(self, enabled: bool, readonly: bool, mapping: dict) -> dict:
+    def set_multi_monitor_config(
+        self, enabled: bool, readonly: bool, mapping: dict,
+    ) -> dict:
         """只替换顶层 multi_monitor 段并返回规范化后的已保存配置。
 
         写入失败抛出 RuntimeError，由 API 转成 500；不会覆盖 channels 或其他顶层段。
@@ -885,6 +927,7 @@ def save_channel_config(body: dict):
     "/multi-monitor",
     summary="读取多屏配置",
     response_model=MultiMonitorConfig,
+    response_model_exclude_unset=True,
 )
 def get_multi_monitor_config():
     """[内部端点] 读取多屏工位开关、只读策略和显示器映射。
@@ -898,6 +941,7 @@ def get_multi_monitor_config():
     "/multi-monitor",
     summary="保存多屏配置",
     response_model=MultiMonitorConfig,
+    response_model_exclude_unset=True,
     dependencies=[Depends(require_perm("settings.edit"))],
 )
 def set_multi_monitor_config(req: MultiMonitorConfig):
@@ -911,7 +955,9 @@ def set_multi_monitor_config(req: MultiMonitorConfig):
         for channel_id, item in req.mapping.items()
     }
     try:
-        return channel_manager.set_multi_monitor_config(req.enabled, req.readonly, mapping)
+        return channel_manager.set_multi_monitor_config(
+            req.enabled, req.readonly, mapping,
+        )
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 

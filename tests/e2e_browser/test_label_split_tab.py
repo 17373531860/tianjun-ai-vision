@@ -377,7 +377,7 @@ def test_就位提示配置落库(page, base_url, api_url):
     for rx, ry in [(0.1, 0.1), (0.9, 0.1), (0.9, 0.9), (0.1, 0.9)]:
         page.mouse.click(box["x"] + box["width"] * rx, box["y"] + box["height"] * ry)
         time.sleep(0.2)
-    roi_dlg.locator("button:has-text('完成绘制')").click()
+    roi_dlg.locator("button:has-text('完成本块')").click()
     time.sleep(0.4)
     roi_dlg.locator("button:has-text('保存 ROI')").click()
     time.sleep(0.8)

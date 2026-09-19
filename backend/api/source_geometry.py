@@ -78,6 +78,81 @@ def point_in_polygon(px: float, py: float, polygon: Sequence[Sequence[float]]) -
     return inside
 
 
+# ==================== 多块 ROI 归一化 (2026-09 全系统多块 ROI 改造) ====================
+# 存储双格式约定（全部区域配置字段通用, 老配置零迁移）:
+#   单块(旧): [[x,y], ...]            —— 元素是点
+#   多块(新): [[[x,y],...], [[x,y],...]] —— 元素是多边形
+# 判别依据: 首元素的首元素是数字 = 单块; 是 list/tuple = 多块。
+# 判定语义: 中心点落在【任一块】内即命中; 推理 mask = 所有块并集。
+
+def _is_valid_polygon(poly) -> bool:
+    """单个多边形是否合法: ≥3 点、每点至少 2 个数值。"""
+    if not isinstance(poly, (list, tuple)) or len(poly) < 3:
+        return False
+    for p in poly:
+        if not isinstance(p, (list, tuple)) or len(p) < 2:
+            return False
+        try:
+            float(p[0]); float(p[1])
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
+def normalize_polygons(raw) -> List[list]:
+    """把「单块/多块」双格式统一成多边形列表 [[[x,y],...], ...]。
+
+    - None / 空 / 完全不合法 → []
+    - 单块格式 [[x,y],...] → [该多边形]
+    - 多块格式 [[[x,y],...], ...] → 逐块校验, 坏块剔除
+    每个点统一转成 [float, float]。
+    """
+    if not isinstance(raw, (list, tuple)) or not raw:
+        return []
+    first = raw[0]
+    if isinstance(first, (list, tuple)) and first and isinstance(first[0], (list, tuple)):
+        candidates = raw          # 多块格式
+    else:
+        candidates = [raw]        # 单块格式
+    out = []
+    for poly in candidates:
+        if _is_valid_polygon(poly):
+            out.append([[float(p[0]), float(p[1])] for p in poly])
+    return out
+
+
+def point_in_any_polygon(px: float, py: float, raw) -> bool:
+    """点是否落在（单块/多块格式）任一多边形内。无有效多边形返回 False。"""
+    for poly in normalize_polygons(raw):
+        if point_in_polygon(px, py, poly):
+            return True
+    return False
+
+
+def normalize_rects(raw) -> List[list]:
+    """矩形区双格式归一: [x,y,w,h] 或 [[x,y,w,h],...] → [[x,y,w,h], ...]。
+
+    仅保留 w>0 且 h>0 的合法块; None/非法 → []。
+    """
+    if not isinstance(raw, (list, tuple)) or not raw:
+        return []
+    if isinstance(raw[0], (list, tuple)):
+        candidates = raw
+    else:
+        candidates = [raw]
+    out = []
+    for r in candidates:
+        if not isinstance(r, (list, tuple)) or len(r) < 4:
+            continue
+        try:
+            x, y, w, h = (float(r[0]), float(r[1]), float(r[2]), float(r[3]))
+        except (TypeError, ValueError):
+            continue
+        if w > 0 and h > 0:
+            out.append([x, y, w, h])
+    return out
+
+
 # 可用字体路径（按优先级排）
 _FONT_CANDIDATES: List[str] = [
     "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",

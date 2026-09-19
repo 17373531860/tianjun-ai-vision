@@ -141,7 +141,7 @@ def ask(image_bgr: np.ndarray, question: str,
 
     cfg = config or get_config()
     if not cfg.get("enabled"):
-        raise VlmError("VLM 坐诊未启用: 请在 AI 能力试用页配置本地端点后开启 "
+        raise VlmError("VLM 坐诊未启用: 请在模型仓库 VLM 卡「试一试」中配置本地端点后开启 "
                        "(推荐 Ollama + Qwen2.5-VL-7B, Apache 2.0 可商用)")
     question = (question or "").strip()
     if not question:

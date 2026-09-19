@@ -31,12 +31,11 @@
         </div>
       </el-card>
 
-      <!-- 超时结算 (项目级参数, 顺序/自定义-顺序/检测模式通用)。
+      <!-- 超时结算 (项目级参数, 顺序/检测/任意 custom 模式通用)。
            2026-08-21 现场: 检测模式(缸体判型)要"到时不等工位, 直接结算判定",
            后端空闲超时分支本就支持 detection, 此前入口误挂在仅顺序模式渲染的
            「结算方式」卡里, 检测模式无从配置 —— 拆出独立卡对齐后端能力面 -->
-      <el-card v-if="['sequential', 'detection'].includes(project.logic_mode)
-                     || (project.logic_mode === 'custom' && project.custom_based_on === 'sequential')"
+      <el-card v-if="['sequential', 'detection', 'custom'].includes(project.logic_mode)"
                shadow="never" class="bg-slate-800 border-slate-700">
         <template #header>
           <div class="flex items-center justify-between">
@@ -47,8 +46,31 @@
         <div class="space-y-4 text-sm text-gray-300">
           <div class="flex items-center gap-3">
             <span class="text-gray-400 text-xs whitespace-nowrap">空闲超时(秒)</span>
-            <el-input-number v-model="project.idle_timeout_seconds" size="small" :min="0" :step="5" :precision="2" />
+            <el-input-number data-testid="idle-timeout-seconds" v-model="project.idle_timeout_seconds" size="small" :min="0" :step="5" :precision="2" />
             <span class="text-xs text-gray-500">超过此时间无新步骤/新计数加入 → 按已做内容立即结算判定（检测模式按判定表判 OK/NG）</span>
+          </div>
+          <div v-if="project.logic_mode === 'custom'
+                     && !['sequential', 'detection'].includes(project.custom_based_on)"
+               class="flex items-center gap-3">
+            <span class="text-gray-400 text-xs whitespace-nowrap">超时中断事件</span>
+            <el-select
+              data-testid="idle-timeout-event-select"
+              v-model="project.idle_timeout_event_id"
+              class="w-64"
+              size="small"
+              clearable
+              placeholder="未选择时默认事件 2"
+              :disabled="Number(project.idle_timeout_seconds) <= 0"
+              @clear="project.idle_timeout_event_id = null"
+            >
+              <el-option
+                v-for="event in (project.events_config || [])"
+                :key="event.id"
+                :label="event.name || `事件 ${event.id}`"
+                :value="event.id"
+              />
+            </el-select>
+            <span class="text-xs text-gray-500">不完整条件到时触发；完整条件仍按条件事件结算</span>
           </div>
           <div class="flex items-center gap-3">
             <span class="text-gray-400 text-xs whitespace-nowrap">周期超时(秒)</span>
@@ -572,6 +594,46 @@
                 <b class="text-cyan-400">「装箱清点」</b>Tab（选择混合跟踪后出现）。
               </p>
             </el-form-item>
+
+            <!-- v3.59 容器定界周期：周期主权 = 容器 -->
+            <el-form-item label="周期定界（可选）">
+              <el-select v-model="project.custom_cycle_owner" class="w-full">
+                <el-option label="步骤驱动（默认：首个步骤入账开周期，按结算模式收尾）" value="steps" />
+                <el-option label="容器定界（容器到位开周期，容器离场立即结算）" value="container" />
+              </el-select>
+              <p class="text-xs text-gray-500 mt-1">
+                容器定界适合"工件/箱体常驻画面、周期内完成若干动作"的场景：容器稳定出现即开周期，
+                离场确认后立即按上方基于模式做完备判定（缺步 NG）；容器标签由定界门独占消费不算步骤，
+                容器缺席时检出的动作不入账、也不会误开周期。
+              </p>
+            </el-form-item>
+            <div v-if="project.custom_cycle_owner === 'container'"
+              class="border border-slate-600 rounded p-3 bg-slate-900/50 space-y-1">
+              <p class="text-xs text-cyan-400 font-bold mb-2">容器定界参数：</p>
+              <el-form-item label="容器标签">
+                <el-select v-model="project.container_gate_label" class="w-full" filterable allow-create
+                  default-first-option placeholder="选择或输入模型中的容器标签（如 包装盒）">
+                  <el-option v-for="s in nonBackupSteps" :key="s.id" :label="s.displayLabel || s.label" :value="s.label" />
+                </el-select>
+                <p class="text-xs text-gray-500 mt-1">
+                  该标签行建议在「步骤设置」中关闭启用——它是周期边界，不参与步骤完备判定。
+                </p>
+              </el-form-item>
+              <div class="grid grid-cols-2 gap-3">
+                <el-form-item label="到位确认（秒）">
+                  <el-input-number v-model="project.container_gate_appear_seconds"
+                    :min="0" :max="30" :step="0.5" class="!w-full" />
+                </el-form-item>
+                <el-form-item label="离场确认（秒）">
+                  <el-input-number v-model="project.container_gate_gone_seconds"
+                    :min="0.5" :max="60" :step="0.5" class="!w-full" />
+                </el-form-item>
+              </div>
+              <p class="text-xs text-gray-500">
+                到位确认防止容器闪现误开周期；离场确认桥接工人俯身遮挡造成的短暂丢检，
+                真离场满该秒数才结算。
+              </p>
+            </div>
           </el-form>
 
           <!-- 自定义模式独立的基础模式配置 -->
@@ -1047,15 +1109,15 @@
                 <div class="bg-slate-900 rounded p-2.5 space-y-2">
                   <div class="flex items-center gap-2">
                     <el-button type="primary" size="small" @click="$emit('open-roi-editor')">
-                      {{ project.tracking_roi_polygon?.length > 2 ? '重新绘制' : '设置区域' }}
+                      {{ hasPolygons(project.tracking_roi_polygon) ? '重新绘制' : '设置区域' }}
                     </el-button>
-                    <el-button v-if="project.tracking_roi_polygon?.length > 2" type="danger" size="small" plain @click="project.tracking_roi_polygon = []">清除</el-button>
-                    <span v-if="project.tracking_roi_polygon?.length > 2" class="text-xs text-green-400">
-                      已设置 {{ project.tracking_roi_polygon.length }} 个顶点
+                    <el-button v-if="hasPolygons(project.tracking_roi_polygon)" type="danger" size="small" plain @click="project.tracking_roi_polygon = []">清除</el-button>
+                    <span v-if="hasPolygons(project.tracking_roi_polygon)" class="text-xs text-green-400">
+                      已设置 {{ polygonCount(project.tracking_roi_polygon) > 1 ? `${polygonCount(project.tracking_roi_polygon)} 块区域 (共 ${polygonPointCount(project.tracking_roi_polygon)} 个顶点)` : `${polygonPointCount(project.tracking_roi_polygon)} 个顶点` }}
                     </span>
                     <span v-else class="text-xs text-gray-500">未设置（全画面）</span>
                   </div>
-                  <div v-if="project.tracking_roi_polygon?.length > 2" class="relative w-full h-28 bg-slate-800 rounded border border-slate-700 overflow-hidden">
+                  <div v-if="hasPolygons(project.tracking_roi_polygon)" class="relative w-full h-28 bg-slate-800 rounded border border-slate-700 overflow-hidden">
                     <canvas ref="roiPreviewCanvas" class="w-full h-full"></canvas>
                   </div>
                 </div>
@@ -1840,6 +1902,12 @@
                   无人面向才告警
                 </label>
               </div>
+              <div class="flex items-end pb-1">
+                <label class="flex items-center gap-1 text-gray-400" title="只把蓝工装操作员计入本规则。黄背心外协/参观即使走进站位区、面向仪表也不打卡。默认关=认画面里所有人">
+                  <el-switch v-model="rule.require_operator" size="small" />
+                  只认操作员（蓝工装）
+                </label>
+              </div>
               <div v-if="rule.type !== 'region_exit' && rule.type !== 'cross_count'">
                 <label class="block text-gray-400 mb-1" title="动作条件消失超过该秒数才算结束。真动作中途被手/身体遮挡零点几秒不会被切成两段、重复计数。0=不启用，沿用全局漏检容忍帧数">
                   消失确认（秒，0=用全局容忍）
@@ -1859,8 +1927,8 @@
             <div class="flex items-center gap-3 pt-2 border-t border-slate-800 text-xs">
               <span class="text-gray-400">判定区域：</span>
               <template v-if="rule.type !== 'proximity'">
-                <span :class="(rule.region || []).length >= 3 ? 'text-emerald-400' : 'text-gray-500'">
-                  {{ (rule.region || []).length >= 3 ? `已标定 (${rule.region.length} 个顶点)` : (rule.type === 'overlap' ? '未标定（不限区域）' : '未标定（该类型规则必须标定）') }}
+                <span :class="hasPolygons(rule.region) ? 'text-emerald-400' : 'text-gray-500'">
+                  {{ hasPolygons(rule.region) ? (polygonCount(rule.region) > 1 ? `已标定 ${polygonCount(rule.region)} 块区域 (共 ${polygonPointCount(rule.region)} 个顶点)` : `已标定 (${polygonPointCount(rule.region)} 个顶点)`) : (rule.type === 'overlap' ? '未标定（不限区域）' : '未标定（该类型规则必须标定）') }}
                 </span>
                 <el-button type="primary" size="small" plain @click="$emit('open-region-roi-editor', rIdx)">绘制区域</el-button>
                 <el-button v-if="(rule.region || []).length" size="small" link type="danger" @click="rule.region = null">清除</el-button>
@@ -2081,8 +2149,8 @@
             </div>
             <div class="flex items-center gap-3 pt-2 border-t border-slate-800 text-xs">
               <span class="text-gray-400">读字区域：</span>
-              <span :class="(Array.isArray(rule.roi) && rule.roi.length >= 4) ? 'text-emerald-400' : 'text-gray-500'">
-                {{ (Array.isArray(rule.roi) && rule.roi.length >= 4) ? '已框定' : '未框定（读整幅画面，慢且易串字，建议框定）' }}
+              <span :class="hasRects(rule.roi) ? 'text-emerald-400' : 'text-gray-500'">
+                {{ hasRects(rule.roi) ? (rectCount(rule.roi) > 1 ? `已框定 ${rectCount(rule.roi)} 块` : '已框定') : '未框定（读整幅画面，慢且易串字，建议框定）' }}
               </span>
               <el-button type="primary" size="small" plain @click="$emit('open-ai-roi-editor', { kind: 'ocr', rIdx })">框定读字区域</el-button>
               <el-button v-if="Array.isArray(rule.roi) && rule.roi.length" size="small" link type="danger" @click="rule.roi = null">清除</el-button>
@@ -2102,14 +2170,14 @@
         </template>
         <div class="space-y-4 text-sm text-gray-300">
           <p class="text-xs text-gray-400">
-            无需检测模型与缺陷样本：先在「AI 能力试用」页用 5~50 张<b>好样本</b>照片建记忆库，运行时按间隔给画面打「异常分」，
+            无需检测模型与缺陷样本：先在「模型仓库→异常检测→试一试」用 5~50 张<b>好样本</b>照片建记忆库，运行时按间隔给画面打「异常分」，
             连续 N 次超阈值→触发不良事件报警（带冷却防刷屏）。适合缺陷形态未知/样本稀缺的表面质检、状态监控。
           </p>
 
           <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs bg-slate-900 p-3 rounded border border-slate-700">
             <div class="col-span-2">
               <label class="block text-gray-400 mb-1">好样本记忆库（必选）</label>
-              <el-select v-model="anomalyCfg.bank_id" size="small" filterable class="w-full" placeholder="选择记忆库（在 AI 能力试用页创建）">
+              <el-select v-model="anomalyCfg.bank_id" size="small" filterable class="w-full" placeholder="选择记忆库（在模型仓库-异常检测-试一试中创建）">
                 <el-option v-for="b in anomalyBanks" :key="b.id" :label="`${b.name}（阈值 ${b.threshold}，${b.num_images} 张样本）`" :value="b.id" />
               </el-select>
             </div>
@@ -2149,14 +2217,14 @@
 
           <div class="flex items-center gap-3 text-xs bg-slate-900 p-3 rounded border border-slate-700">
             <span class="text-gray-400">监测区域：</span>
-            <span :class="(Array.isArray(anomalyCfg.roi) && anomalyCfg.roi.length >= 4) ? 'text-emerald-400' : 'text-gray-500'">
-              {{ (Array.isArray(anomalyCfg.roi) && anomalyCfg.roi.length >= 4) ? '已框定' : '未框定（评估整幅画面）' }}
+            <span :class="hasRects(anomalyCfg.roi) ? 'text-emerald-400' : 'text-gray-500'">
+              {{ hasRects(anomalyCfg.roi) ? (rectCount(anomalyCfg.roi) > 1 ? `已框定 ${rectCount(anomalyCfg.roi)} 块` : '已框定') : '未框定（评估整幅画面）' }}
             </span>
             <el-button type="primary" size="small" plain @click="$emit('open-ai-roi-editor', { kind: 'anomaly' })">框定监测区域</el-button>
             <el-button v-if="Array.isArray(anomalyCfg.roi) && anomalyCfg.roi.length" size="small" link type="danger" @click="anomalyCfg.roi = null">清除</el-button>
             <span class="text-gray-500">框定后只评估该区域（建库样本也应是同区域截图）</span>
           </div>
-          <p v-if="!anomalyCfg.bank_id" class="text-xs text-amber-400">尚未选择记忆库——先到「AI 能力试用」页上传好样本创建，再回来选择</p>
+          <p v-if="!anomalyCfg.bank_id" class="text-xs text-amber-400">尚未选择记忆库——先到「模型仓库→异常检测→试一试」上传好样本创建，再回来选择</p>
         </div>
       </el-card>
 
@@ -2384,6 +2452,7 @@ import { computed, nextTick, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Delete } from '@element-plus/icons-vue';
 import { dbg } from '@/utils/debug';
+import { normalizePolygons, hasPolygons, polygonCount, polygonPointCount, hasRects, rectCount } from '@/utils/polygons';
 import { getDetectionResults, inferOnce } from '@/api/detection';
 import { getPlcConnections } from '@/api/plc';
 import { _pi_itemLabelToArray, _pi_itemLabelFromArray } from './perItemLabel';
@@ -2460,7 +2529,7 @@ const addOcrRule = () => {
   });
 };
 
-// 异常检测记忆库列表 (AI 能力试用页创建, 这里只读选择)
+// 异常检测记忆库列表 (模型仓库试一试抽屉创建, 这里只读选择)
 const anomalyBanks = ref([]);
 const loadAnomalyBanks = async () => {
   try {
@@ -2638,6 +2707,7 @@ const _newRegionRule = (cfg) => {
     target_point: null,
     tolerance_deg: 35,
     alert_on_absent: false,
+    require_operator: false,
     settle: false,
     event_id: null,
   };
@@ -2806,7 +2876,10 @@ const roiPreviewCanvas = ref(null);
 
 const drawRoiPreview = () => {
   const canvas = roiPreviewCanvas.value;
-  if (!canvas || !props.project?.tracking_roi_polygon?.length) return;
+  if (!canvas) return;
+  // 2026-09 多块化: 单块/多块双格式统一归一后逐块绘制
+  const polys = normalizePolygons(props.project?.tracking_roi_polygon);
+  if (!polys.length) return;
   const parent = canvas.parentElement;
   if (parent) { canvas.width = parent.offsetWidth; canvas.height = parent.offsetHeight; }
   const ctx = canvas.getContext('2d');
@@ -2814,26 +2887,25 @@ const drawRoiPreview = () => {
   ctx.fillStyle = '#1e293b';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  const poly = props.project.tracking_roi_polygon;
-  if (poly.length < 3) return;
-
-  ctx.fillStyle = 'rgba(0, 200, 255, 0.2)';
-  ctx.strokeStyle = '#00c8ff';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(poly[0][0] * canvas.width, poly[0][1] * canvas.height);
-  for (let i = 1; i < poly.length; i++) {
-    ctx.lineTo(poly[i][0] * canvas.width, poly[i][1] * canvas.height);
-  }
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
-  poly.forEach((pt, i) => {
-    ctx.fillStyle = i === 0 ? '#f59e0b' : '#00c8ff';
+  polys.forEach((poly) => {
+    ctx.fillStyle = 'rgba(0, 200, 255, 0.2)';
+    ctx.strokeStyle = '#00c8ff';
+    ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(pt[0] * canvas.width, pt[1] * canvas.height, 3, 0, Math.PI * 2);
+    ctx.moveTo(poly[0][0] * canvas.width, poly[0][1] * canvas.height);
+    for (let i = 1; i < poly.length; i++) {
+      ctx.lineTo(poly[i][0] * canvas.width, poly[i][1] * canvas.height);
+    }
+    ctx.closePath();
     ctx.fill();
+    ctx.stroke();
+
+    poly.forEach((pt, i) => {
+      ctx.fillStyle = i === 0 ? '#f59e0b' : '#00c8ff';
+      ctx.beginPath();
+      ctx.arc(pt[0] * canvas.width, pt[1] * canvas.height, 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
   });
 };
 

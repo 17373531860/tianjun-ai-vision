@@ -1,4 +1,5 @@
-name: Build Windows Installer
+# 2026-09 多平台打包: Windows exe + Ubuntu deb + macOS dmg (arm64/x64)
+name: Build Installers (Windows / Linux / macOS)
 
 on:
   push:
@@ -110,7 +111,22 @@ jobs:
       
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
+      # 2026-09 内置能力模型入仓: headpose.onnx (90MB) 不进 git, 从模型资产
+      # release 下载进包并按 sha256 校验 (v3.51.4 交付审计: 缺文件必须红灯,
+      # 不允许静默出残缺安装包)。yolo11n.pt / yolo11n-pose.pt 已随 git 带出。
+      - name: Fetch builtin model assets (headpose.onnx)
+        shell: pwsh
+        run: |
+          $dst = "backend/data/models/headpose.onnx"
+          gh release download model-assets-headpose-v1 --pattern headpose.onnx --output $dst --clobber
+          $hash = (Get-FileHash $dst -Algorithm SHA256).Hash.ToLower()
+          $want = "422b69d17bf02e164bd1062f5e970f67f1688cadf7d700800fad5fa12a16fc82"
+          if ($hash -ne $want) { Write-Host "::error::headpose.onnx sha256 不匹配: $hash"; exit 1 }
+          Write-Host "OK headpose.onnx ($hash)"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -360,7 +376,12 @@ jobs:
             "$base\backend\main.py",
             # v3.51.4: PG 组件的配套迁移工具 (v3.49~v3.51.3 从没进过包,
             # 客户勾了 PG 也没法搬旧数据 — 解剖成品安装包才发现)
-            "$base\scripts\db\sqlite_to_pg.py"
+            "$base\scripts\db\sqlite_to_pg.py",
+            # 2026-09 内置能力模型入仓: 出厂权重三件套 (缺任一 = 内置模型行
+            # seed 跳过 = 客户拿到"没有内置模型"的安装包, 红灯阻断)
+            "$base\backend\data\models\yolo11n.pt",
+            "$base\backend\data\models\yolo11n-pose.pt",
+            "$base\backend\data\models\headpose.onnx"
           )
           foreach ($f in $extraMust) {
             if (Test-Path $f) { Write-Host "OK  extraResource: $f" }
@@ -722,6 +743,11 @@ jobs:
           - **提示 "[BAD]"**：对应分卷下载损坏，重新下载该分卷即可
           - **提示 "SHA256 mismatch"**：下载过程中断或损坏，重新下载所有分卷
 
+          ### 其他平台
+          Ubuntu (deb) 与 macOS (dmg, arm64/Intel) 安装包由后续 job 追加上传到本 Release，
+          超过 2GB 的会拆成 \`*.partNN.part\` 分卷，用 \`merge_installer.sh\` 合并（Linux/macOS 用 sh 脚本，不是 bat）。
+          macOS 包暂未签名，首次启动请右键打开或 \`xattr -cr\` 放行。
+
           ### 更新内容
           见仓库 \`docs/changelog/${VERSION}_*.md\`
           EOF
@@ -764,3 +790,727 @@ jobs:
           gh release view "${VERSION}" --repo "${TARGET_REPO}" --json assets --jq '.assets[] | "  \(.name)  \((.size/1024/1024*10|floor)/10) MB"'
           echo ""
           echo "Release URL: https://github.com/${TARGET_REPO}/releases/tag/${VERSION}"
+
+  # ==================== Ubuntu (Linux x64) 安装包 ====================
+  # 2026-09 多平台打包。与 build-windows 同构: Nuitka .so + conda-pack (linux-64,
+  # CUDA cu128 + TensorRT 全量) + electron-builder deb。
+  # 范围裁剪与必带组件 (改动前先看 docs/changelog 对应版说明):
+  #   - 只出 deb。AppImage 对 5-6GB payload 的 squashfs 运行时挂载太慢,
+  #     package.json 仍保留 AppImage target 供本地手动构建。
+  #   - 海康 Linux SDK (2026-09 起必带): 用户确认为海康正式客户 (采购上千台),
+  #     CI 从官方 legacy 直链铺进 backend/hcnetsdk/lib/ (extraResources **/*.so
+  #     带出), wrapper.py 的 libhcnetsdk.so 分支即生效; 下载失败/铺设不全都红灯。
+  #   - 嵌入式 PG (2026-09 起必带): zonky 16.15 便携包铺 pg-portable/ + 一次性
+  #     初始化脚本 scripts/db/setup_embedded_pg.sh (语义对齐 Windows Inno 组件,
+  #     Linux/macOS 由 electron/backend-manager.js 代管 pg_ctl start/stop,
+  #     初始化失败回落 SQLite 不阻断)。
+  build-linux:
+    needs: test-gate
+    if: always() && (needs.test-gate.result == 'success' || needs.test-gate.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      PIP_NO_CACHE_DIR: '1'
+    steps:
+      - name: Free disk space
+        run: |
+          echo "Disk before cleanup:"; df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift \
+            /usr/local/share/boost /usr/local/share/chromium 2>/dev/null || true
+          sudo docker image prune --all --force >/dev/null 2>&1 || true
+          echo "Disk after cleanup:"; df -h /
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: |
+            frontend/package-lock.json
+            electron/package-lock.json
+
+      - name: Install system deps (opencv runtime + electron-builder deb 工具链)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 fakeroot patchelf
+
+      - name: Setup Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-update-conda: false
+          python-version: ${{ env.PYTHON_VERSION }}
+          activate-environment: tianjun
+          channels: defaults
+          channel-priority: flexible
+        env:
+          CONDA_SOLVER: classic
+
+      - name: Install Python dependencies
+        shell: bash -l {0}
+        run: |
+          conda activate tianjun
+          python --version
+
+          echo "Installing PyTorch with CUDA 12.8 (linux wheels)..."
+          pip install --retries 5 --timeout 60 torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+
+          echo "Installing backend dependencies..."
+          pip install --retries 5 --timeout 60 -r backend/requirements.txt
+
+          echo "Installing ONNX Runtime GPU..."
+          pip install --retries 5 --timeout 60 onnxruntime-gpu
+
+          echo "Installing TensorRT (锁 <11, 同 Windows 跑道)..."
+          pip install --retries 5 --timeout 120 "tensorrt>=10.0,<11" --extra-index-url https://pypi.nvidia.com
+
+          pip install --retries 5 --timeout 60 "scipy>=1.10.0"
+
+          echo "Installing mediapipe (--no-deps, 同 Windows 跑道)..."
+          pip install --retries 5 --timeout 60 --no-deps "mediapipe>=0.10.0,<0.10.21"
+          pip install --retries 5 --timeout 60 absl-py attrs flatbuffers jax jaxlib matplotlib "protobuf>=4.25.3,<5" sounddevice sentencepiece
+
+          echo "opencv/numpy ABI dance (同 Windows 跑道)..."
+          pip uninstall opencv-python opencv-python-headless opencv-contrib-python -y 2>/dev/null || true
+          pip install --retries 5 --timeout 60 --force-reinstall "numpy>=1.24.0,<2.0"
+          pip install --retries 5 --timeout 60 --no-deps "opencv-contrib-python>=4.8.0,<4.11"
+          pip install --retries 5 --timeout 60 conda-pack
+
+          echo "Verifying installations..."
+          python -c "import torch; v=torch.__version__; c=torch.version.cuda; print(f'PyTorch: {v}, CUDA: {c}'); assert 'cu128' in v or (c or '').startswith('12.8'), f'FATAL: expected cu128, got {v} (CUDA {c})'"
+          python -c "from ultralytics import YOLO; print('ultralytics OK')"
+          python -c "import numpy as np; v=np.__version__; assert int(v.split('.')[0]) < 2, f'FATAL: numpy {v} >= 2.0'; print(f'NumPy: {v}')"
+          python -c "import cv2, numpy as np; img=np.zeros((100,100,3),dtype=np.uint8); cv2.resize(img,(50,50)); print('OpenCV+NumPy ABI: OK')"
+          python -c "import mediapipe; print(f'MediaPipe: {mediapipe.__version__}')"
+          python -c "import onnxruntime; print(f'ONNX Runtime: {onnxruntime.__version__}')"
+          python -c "import cryptography, jsonschema; print('crypto deps OK')"
+
+      - name: Compile Python backend with Nuitka (.so)
+        shell: bash -l {0}
+        run: |
+          conda activate tianjun
+          pip install --retries 5 --timeout 60 nuitka ordered-set
+
+          # 与 build-windows 的 CORE_FILES 同一份白名单 — 改这里必须同步上面 Windows job
+          CORE_FILES=(
+            "backend/api/source.py"
+            "backend/api/source_routes.py"
+            "backend/api/source_per_item_mixin.py"
+            "backend/api/source_session_lifecycle_mixin.py"
+            "backend/api/source_settlement_mixin.py"
+            "backend/api/source_tracking_mixin.py"
+            "backend/api/source_periodic_actions_mixin.py"
+            "backend/api/sessions.py"
+            "backend/api/projects.py"
+            "backend/api/cameras.py"
+            "backend/api/alarm.py"
+            "backend/api/reports.py"
+            "backend/api/tasks.py"
+            "backend/api/models.py"
+            "backend/services/scanner.py"
+            "backend/services/mes_hooks.py"
+            "backend/services/weighing_engine.py"
+          )
+
+          for pyfile in "${CORE_FILES[@]}"; do
+            if [ ! -f "$pyfile" ]; then
+              echo "::error::CORE_FILES 白名单文件不存在: $pyfile （改名/删除后请同步 build.yml）"
+              exit 1
+            fi
+          done
+
+          for pyfile in "${CORE_FILES[@]}"; do
+            dir=$(dirname "$pyfile")
+            filename=$(basename "$pyfile" .py)
+            echo "Compiling $pyfile ..."
+            python -m nuitka --module "$pyfile" --output-dir="$dir" --remove-output 2>&1 || echo "WARNING: Failed to compile $pyfile, keeping source"
+            # Linux 产物是 <name>.cpython-310-x86_64-linux-gnu.so
+            if ls "$dir"/${filename}*.so 1>/dev/null 2>&1; then
+              echo "  -> Compiled successfully, removing source: $pyfile"
+              rm -f "$pyfile"
+            else
+              echo "  -> Compilation failed, keeping source: $pyfile"
+            fi
+          done
+
+          echo "Generated .so in backend/api/:"; ls -la backend/api/*.so 2>/dev/null || echo "  (none)"
+          echo "Generated .so in backend/services/:"; ls -la backend/services/*.so 2>/dev/null || echo "  (none)"
+
+      - name: Pack Python environment
+        shell: bash -l {0}
+        run: |
+          conda activate tianjun
+          conda clean -a -y 2>/dev/null || true
+          mkdir -p python-env/python
+          conda-pack -n tianjun -o python-env/tianjun-env.tar.gz --force --ignore-missing-files
+          cd python-env
+          tar -xzf tianjun-env.tar.gz -C python
+          rm tianjun-env.tar.gz
+          du -sh python
+          echo "Verifying packed environment..."
+          python/bin/python -c "import torch; v=torch.__version__; print(f'Packed PyTorch: {v}'); assert 'cu128' in v or (torch.version.cuda or '').startswith('12.8')"
+          python/bin/python -c "import cv2, numpy as np; img=np.zeros((10,10,3),dtype=np.uint8); cv2.resize(img,(5,5)); print('Packed OpenCV ABI: OK')"
+
+      - name: Remove source conda env (释放 ~7GB 给 electron-builder)
+        shell: bash -l {0}
+        run: |
+          conda deactivate 2>/dev/null || true
+          conda env remove -n tianjun -y 2>/dev/null || rm -rf "$CONDA/envs/tianjun" || true
+          df -h /
+
+      - name: Download FFmpeg (linux64 GPL)
+        run: |
+          curl -sL --retry 5 -o ffmpeg.tar.xz \
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
+          mkdir -p ffmpeg-temp ffmpeg
+          tar -xJf ffmpeg.tar.xz -C ffmpeg-temp --strip-components=1
+          cp ffmpeg-temp/bin/ffmpeg ffmpeg-temp/bin/ffprobe ffmpeg/
+          chmod +x ffmpeg/ffmpeg ffmpeg/ffprobe
+          rm -rf ffmpeg-temp ffmpeg.tar.xz
+          ./ffmpeg/ffmpeg -version | head -1
+
+      - name: Stage HCNetSDK (Linux 64-bit, 海康正式客户随包分发)
+        run: |
+          # 2026-09: 用户确认为海康正式客户 (设备采购上千台), SDK 随包分发。
+          # 官方 legacy/ca 站直链 2026-09-14 实测全部返回 HTML 拦截页 (CI+本机双确认),
+          # 改从 GitHub 镜像仓库取 V6.1.9.4_build20220413 linux64 库集 (比官方直链的
+          # 6.1.6.3 更新)。钉死 commit SHA 防上游供应链变动; 落地后校验 ELF magic。
+          set -e
+          SDK_REPO="Mr-LuXiaoHua/hikivision-sdk"
+          SDK_SHA="96b86ad73d0e41f4f45432d3890ded6528574703"  # 2022-08-18 main
+          curl -sL --http1.1 --retry 5 --max-time 900 -o hcnetsdk-mirror.tar.gz \
+            "https://codeload.github.com/$SDK_REPO/tar.gz/$SDK_SHA"
+          mkdir -p hcnetsdk-tmp && tar -xzf hcnetsdk-mirror.tar.gz -C hcnetsdk-tmp --strip-components=1
+          SDK_LIB="hcnetsdk-tmp/lib/linux"
+          [ -f "$SDK_LIB/libhcnetsdk.so" ] || { echo "::error::镜像仓库里找不到 lib/linux/libhcnetsdk.so — 阻断发版 (不允许静默发出无 NVR/工业相机支持的 Linux 包)"; exit 1; }
+          # ELF magic 校验: 防拦截页/LFS 指针文件混进包
+          MAGIC=$(head -c 4 "$SDK_LIB/libhcnetsdk.so" | od -An -tx1 | tr -d ' \n')
+          [ "$MAGIC" = "7f454c46" ] || { echo "::error::libhcnetsdk.so 不是 ELF (magic=$MAGIC) — 阻断发版"; exit 1; }
+          cp -a "$SDK_LIB"/. backend/hcnetsdk/lib/
+          rm -rf hcnetsdk-tmp hcnetsdk-mirror.tar.gz
+          for f in libhcnetsdk.so libPlayCtrl.so libHCCore.so HCNetSDKCom/libHCPreview.so; do
+            [ -e "backend/hcnetsdk/lib/$f" ] || { echo "::error::铺设后缺 $f"; exit 1; }
+          done
+          echo "Staged SDK (V6.1.9.4):"; ls backend/hcnetsdk/lib/ | head -25
+
+      - name: Stage PostgreSQL portable (zonky 16.15, 与 Windows PG 同版本)
+        run: |
+          set -e
+          ART="embedded-postgres-binaries-linux-amd64"
+          # repo1 对该机型偶发 HTTP/2 流中断 (本地实测 exit 16), 钉 http1.1
+          curl -sL --http1.1 --retry 5 -o pg.jar \
+            "https://repo1.maven.org/maven2/io/zonky/test/postgres/$ART/16.15.0/$ART-16.15.0.jar"
+          unzip -q pg.jar -d pg-jar
+          TXZ=$(ls pg-jar/*.txz | head -1)
+          [ -n "$TXZ" ] || { echo "::error::zonky jar 里没有 txz"; exit 1; }
+          rm -rf pg-portable && mkdir -p pg-portable
+          tar -xJf "$TXZ" -C pg-portable
+          rm -rf pg-jar pg.jar
+          for b in initdb pg_ctl postgres; do
+            [ -x "pg-portable/bin/$b" ] || { echo "::error::pg-portable 缺 bin/$b — 阻断发版"; exit 1; }
+          done
+          du -sh pg-portable
+
+      - name: Smoke test embedded PG (真跑 setup_embedded_pg.sh)
+        timeout-minutes: 10
+        run: |
+          sh scripts/db/setup_embedded_pg.sh --pg-root pg-portable --data-root "$RUNNER_TEMP/pg-smoke"
+          test -f "$RUNNER_TEMP/pg-smoke/db_config.json"
+          grep -q '"embedded_pg"' "$RUNNER_TEMP/pg-smoke/db_config.json"
+          echo "setup 脚本冒烟通过:"; cat "$RUNNER_TEMP/pg-smoke/db_config.json" | sed 's/:[^:]*@/:***@/'
+          rm -rf "$RUNNER_TEMP/pg-smoke"
+
+      # 内置能力模型: headpose.onnx 不进 git, 从模型资产 release 下载 (同 Windows job)
+      - name: Fetch builtin model assets (headpose.onnx)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          gh release download model-assets-headpose-v1 --pattern headpose.onnx \
+            --output backend/data/models/headpose.onnx --clobber
+          HASH=$(openssl dgst -sha256 backend/data/models/headpose.onnx | awk '{print $NF}')
+          WANT="422b69d17bf02e164bd1062f5e970f67f1688cadf7d700800fad5fa12a16fc82"
+          [ "$HASH" = "$WANT" ] || { echo "::error::headpose.onnx sha256 不匹配: $HASH"; exit 1; }
+          echo "OK headpose.onnx ($HASH)"
+
+      - name: Build Frontend
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+
+      - name: Build Electron App (deb)
+        run: |
+          # 版本一致性校验 (bash 版, 语义同 Windows job)
+          VERSION=$(node -p "require('./electron/package.json').version")
+          REF_NAME="${{ github.ref_name }}"
+          if [[ "$REF_NAME" == v* && "${REF_NAME#v}" != "$VERSION" ]]; then
+            echo "::error::tag $REF_NAME 与 electron/package.json ($VERSION) 不一致"
+            exit 1
+          fi
+          cd electron
+          npm ci
+          npx electron-builder --linux deb --x64
+          echo "=== dist ==="
+          ls -la dist/ | grep -v unpacked || true
+          DEB=$(ls dist/TianJun-AI-Vision-*-linux-*.deb 2>/dev/null | head -1)
+          if [ -z "$DEB" ]; then echo "::error::deb 产物不存在"; exit 1; fi
+          echo "deb: $DEB ($(du -h "$DEB" | cut -f1))"
+
+      - name: Verify packaged resources (防资源漏打包自检)
+        run: |
+          BASE="electron/dist/linux-unpacked/resources"
+          FAIL=0
+          for f in \
+            "$BASE/docs/plugin-system/plugin.schema.json" \
+            "$BASE/docs/plugin-system/customer-codes.md" \
+            "$BASE/backend/main.py" \
+            "$BASE/scripts/db/sqlite_to_pg.py" \
+            "$BASE/python/bin/python" \
+            "$BASE/ffmpeg/ffmpeg" \
+            "$BASE/app/dist/index.html"; do
+            if [ -e "$f" ]; then echo "OK  $f"; else echo "::error::缺失打包资源: $f"; FAIL=1; fi
+          done
+          # Nuitka .so 进包抽查 (IP 保护有效性)
+          if ls "$BASE"/backend/api/source.cpython-*.so >/dev/null 2>&1; then
+            echo "OK  Nuitka .so 已进包"
+          else
+            echo "::warning::backend/api/source*.so 未进包 — Nuitka 编译可能失败, 核心 IP 以源码出厂"
+          fi
+          # 海康 Linux SDK (2026-09 起必带组件 — 正式客户随包分发, 缺失=阻断)
+          for f in "$BASE/backend/hcnetsdk/lib/libhcnetsdk.so" "$BASE/backend/hcnetsdk/lib/libPlayCtrl.so"; do
+            if [ -f "$f" ]; then echo "OK  $f"; else echo "::error::缺失海康 SDK: $f"; FAIL=1; fi
+          done
+          # 嵌入式 PG (2026-09 起必带组件, 血泪教训 v3.49~v3.51.2: 组件写了没进包三个版本没人发现)
+          for f in "$BASE/pg-portable/bin/pg_ctl" "$BASE/pg-portable/bin/initdb" "$BASE/pg-portable/bin/postgres" "$BASE/scripts/db/setup_embedded_pg.sh"; do
+            if [ -e "$f" ]; then echo "OK  $f"; else echo "::error::缺失嵌入式 PG 组件: $f"; FAIL=1; fi
+          done
+          # 内置能力模型 (2026-09 headpose/orientation; 打包过滤器曾漏 *.pt/*.onnx/*.task)
+          for f in "$BASE/backend/data/models/yolo11n.pt" "$BASE/backend/data/models/yolo11n-pose.pt" "$BASE/backend/data/models/headpose.onnx" "$BASE/backend/data/models/hand_landmarker.task"; do
+            if [ -f "$f" ]; then echo "OK  $f"; else echo "::error::缺失内置模型: $f"; FAIL=1; fi
+          done
+          # app.asar 关键文件
+          ASAR_LIST=$(npx --yes asar list "$BASE/app.asar")
+          for f in "splash.html" "splash/index.html" "main.js"; do
+            if echo "$ASAR_LIST" | grep -q "$f"; then echo "OK  asar: $f"; else echo "::error::app.asar 缺失: $f"; FAIL=1; fi
+          done
+          [ "$FAIL" -eq 0 ] || { echo "打包资源自检未通过 — 阻断发版"; exit 1; }
+
+      - name: Smoke test packed backend (打包布局上真 import)
+        run: |
+          cd electron/dist/linux-unpacked/resources
+          export TIANJUN_DATA_DIR="$RUNNER_TEMP/tj-smoke"
+          export BACKEND_SKIP_INIT=1
+          export TIANJUN_TEST_MODE=1
+          mkdir -p "$TIANJUN_DATA_DIR"
+          # os._exit(0) 硬退出: torch/mediapipe 组合在解释器 finalize 阶段可能挂死
+          # (本机 2026-09-14 实锤: import 成功后卡 Py_FinalizeEx 250s+), 验证点只是 import 成功
+          ./python/bin/python -c "import backend.main; print('packed backend import OK (Nuitka .so 加载通过)', flush=True); import os; os._exit(0)"
+
+      - name: Upload deb as Action Artifact
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: TianJun-AI-Vision-Linux-x64-deb
+          path: electron/dist/TianJun-AI-Vision-*-linux-*.deb
+          retention-days: 30
+          compression-level: 0
+
+  # ==================== macOS 安装包 (arm64 + Intel x64) ====================
+  # 2026-09 多平台打包。macOS 是能力子集版 (无 CUDA/TensorRT/海康 SDK — 海康无
+  # macOS 版 SDK, NVR/工业相机功能缺失属平台限制):
+  #   - 推理走 MPS (arm64, v3.46 起支持) / CPU (Intel x64)
+  #   - 嵌入式 PG 必带 (zonky 16.15 darwin 便携包, 同 Linux 方案:
+  #     setup_embedded_pg.sh 初始化 + backend-manager 代管 pg_ctl)
+  #   - Intel 注意: PyTorch 官方从 2.3 起不再发 macOS x86_64 wheel,
+  #     x64 包会解析到 torch 2.2.2 (最后一个 Intel mac 版本), 属预期
+  #   - 暂不做 Apple 签名/公证 (identity=null, ad-hoc 签名), 客户侧首启需
+  #     右键打开或 xattr -cr 放行 Gatekeeper — 正式对外分发前需补签名
+  build-macos:
+    needs: test-gate
+    if: always() && (needs.test-gate.result == 'success' || needs.test-gate.result == 'skipped')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-26
+            arch: arm64
+          - runner: macos-26-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 240
+    env:
+      PIP_NO_CACHE_DIR: '1'
+      # 不签名: 阻止 electron-builder 自动发现钥匙串身份
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: |
+            frontend/package-lock.json
+            electron/package-lock.json
+
+      - name: Setup Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-update-conda: false
+          python-version: ${{ env.PYTHON_VERSION }}
+          activate-environment: tianjun
+          channels: defaults
+          channel-priority: flexible
+        env:
+          CONDA_SOLVER: classic
+
+      - name: Install Python dependencies (macOS 无 CUDA/TensorRT)
+        shell: bash -l {0}
+        run: |
+          conda activate tianjun
+          python --version
+
+          echo "Installing PyTorch (默认 index; arm64=MPS, x64 解析到 2.2.2 CPU)..."
+          pip install --retries 5 --timeout 60 torch torchvision torchaudio
+
+          echo "Installing backend dependencies..."
+          pip install --retries 5 --timeout 60 -r backend/requirements.txt
+
+          pip install --retries 5 --timeout 60 "scipy>=1.10.0"
+
+          echo "Installing mediapipe (--no-deps, universal2 wheel 覆盖双架构)..."
+          pip install --retries 5 --timeout 60 --no-deps "mediapipe>=0.10.0,<0.10.21"
+          pip install --retries 5 --timeout 60 absl-py attrs flatbuffers jax jaxlib matplotlib "protobuf>=4.25.3,<5" sounddevice sentencepiece
+
+          echo "opencv/numpy ABI dance (同 Windows 跑道)..."
+          pip uninstall opencv-python opencv-python-headless opencv-contrib-python -y 2>/dev/null || true
+          pip install --retries 5 --timeout 60 --force-reinstall "numpy>=1.24.0,<2.0"
+          pip install --retries 5 --timeout 60 --no-deps "opencv-contrib-python>=4.8.0,<4.11"
+          pip install --retries 5 --timeout 60 conda-pack
+
+          echo "Verifying installations..."
+          python -c "import torch; print(f'PyTorch: {torch.__version__}, MPS built: {torch.backends.mps.is_built()}')"
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            python -c "import torch; assert torch.backends.mps.is_built(), 'FATAL: arm64 包必须带 MPS 支持'"
+          fi
+          python -c "from ultralytics import YOLO; print('ultralytics OK')"
+          python -c "import numpy as np; v=np.__version__; assert int(v.split('.')[0]) < 2, f'FATAL: numpy {v} >= 2.0'; print(f'NumPy: {v}')"
+          python -c "import cv2, numpy as np; img=np.zeros((100,100,3),dtype=np.uint8); cv2.resize(img,(50,50)); print('OpenCV+NumPy ABI: OK')"
+          python -c "import mediapipe; print(f'MediaPipe: {mediapipe.__version__}')"
+          python -c "import onnxruntime; print(f'ONNX Runtime: {onnxruntime.__version__}')"
+          python -c "import cryptography, jsonschema; print('crypto deps OK')"
+
+      - name: Compile Python backend with Nuitka (.so)
+        shell: bash -l {0}
+        run: |
+          conda activate tianjun
+          pip install --retries 5 --timeout 60 nuitka ordered-set
+
+          # 与 build-windows 的 CORE_FILES 同一份白名单 — 改这里必须同步上面 Windows job
+          CORE_FILES=(
+            "backend/api/source.py"
+            "backend/api/source_routes.py"
+            "backend/api/source_per_item_mixin.py"
+            "backend/api/source_session_lifecycle_mixin.py"
+            "backend/api/source_settlement_mixin.py"
+            "backend/api/source_tracking_mixin.py"
+            "backend/api/source_periodic_actions_mixin.py"
+            "backend/api/sessions.py"
+            "backend/api/projects.py"
+            "backend/api/cameras.py"
+            "backend/api/alarm.py"
+            "backend/api/reports.py"
+            "backend/api/tasks.py"
+            "backend/api/models.py"
+            "backend/services/scanner.py"
+            "backend/services/mes_hooks.py"
+            "backend/services/weighing_engine.py"
+          )
+
+          for pyfile in "${CORE_FILES[@]}"; do
+            if [ ! -f "$pyfile" ]; then
+              echo "::error::CORE_FILES 白名单文件不存在: $pyfile"
+              exit 1
+            fi
+          done
+
+          for pyfile in "${CORE_FILES[@]}"; do
+            dir=$(dirname "$pyfile")
+            filename=$(basename "$pyfile" .py)
+            echo "Compiling $pyfile ..."
+            python -m nuitka --module "$pyfile" --output-dir="$dir" --remove-output 2>&1 || echo "WARNING: Failed to compile $pyfile, keeping source"
+            # macOS 产物是 <name>.cpython-310-darwin.so
+            if ls "$dir"/${filename}*.so 1>/dev/null 2>&1; then
+              echo "  -> Compiled successfully, removing source: $pyfile"
+              rm -f "$pyfile"
+            else
+              echo "  -> Compilation failed, keeping source: $pyfile"
+            fi
+          done
+
+          echo "Generated .so in backend/api/:"; ls -la backend/api/*.so 2>/dev/null || echo "  (none)"
+          echo "Generated .so in backend/services/:"; ls -la backend/services/*.so 2>/dev/null || echo "  (none)"
+
+      - name: Pack Python environment
+        shell: bash -l {0}
+        run: |
+          conda activate tianjun
+          conda clean -a -y 2>/dev/null || true
+          mkdir -p python-env/python
+          conda-pack -n tianjun -o python-env/tianjun-env.tar.gz --force --ignore-missing-files
+          cd python-env
+          tar -xzf tianjun-env.tar.gz -C python
+          rm tianjun-env.tar.gz
+          du -sh python
+          echo "Verifying packed environment..."
+          python/bin/python -c "import torch; print(f'Packed PyTorch: {torch.__version__}')"
+          python/bin/python -c "import cv2, numpy as np; img=np.zeros((10,10,3),dtype=np.uint8); cv2.resize(img,(5,5)); print('Packed OpenCV ABI: OK')"
+
+      - name: Download FFmpeg (macOS ${{ matrix.arch }}, 含 x264 的 GPL 静态构建)
+        run: |
+          # martin-riedl.de: 静态构建带 x264/x265, 与 Windows 跑道的 BtbN GPL 能力对齐;
+          # 二进制已签名。注意 redirect 端点不支持 HEAD, 必须 GET。
+          ARCH="${{ matrix.arch }}"
+          [ "$ARCH" = "x64" ] && ARCH="amd64"
+          mkdir -p ffmpeg
+          for tool in ffmpeg ffprobe; do
+            curl -sL --http1.1 --retry 5 -o "$tool.zip" \
+              "https://ffmpeg.martin-riedl.de/redirect/latest/macos/$ARCH/release/$tool.zip"
+            unzip -o "$tool.zip" -d ffmpeg
+            rm "$tool.zip"
+          done
+          chmod +x ffmpeg/ffmpeg ffmpeg/ffprobe
+          ./ffmpeg/ffmpeg -version | head -1
+
+      - name: Stage PostgreSQL portable (zonky 16.15 darwin, 与 Windows/Linux 同版本)
+        run: |
+          set -e
+          ARCH="${{ matrix.arch }}"
+          if [ "$ARCH" = "arm64" ]; then ART="embedded-postgres-binaries-darwin-arm64v8"; else ART="embedded-postgres-binaries-darwin-amd64"; fi
+          curl -sL --http1.1 --retry 5 -o pg.jar \
+            "https://repo1.maven.org/maven2/io/zonky/test/postgres/$ART/16.15.0/$ART-16.15.0.jar"
+          unzip -q pg.jar -d pg-jar
+          TXZ=$(ls pg-jar/*.txz | head -1)
+          [ -n "$TXZ" ] || { echo "::error::zonky jar 里没有 txz"; exit 1; }
+          rm -rf pg-portable && mkdir -p pg-portable
+          tar -xJf "$TXZ" -C pg-portable
+          rm -rf pg-jar pg.jar
+          for b in initdb pg_ctl postgres; do
+            [ -x "pg-portable/bin/$b" ] || { echo "::error::pg-portable 缺 bin/$b — 阻断发版"; exit 1; }
+          done
+          du -sh pg-portable
+
+      - name: Smoke test embedded PG (真跑 setup_embedded_pg.sh)
+        timeout-minutes: 10
+        run: |
+          sh scripts/db/setup_embedded_pg.sh --pg-root pg-portable --data-root "$RUNNER_TEMP/pg-smoke"
+          test -f "$RUNNER_TEMP/pg-smoke/db_config.json"
+          grep -q '"embedded_pg"' "$RUNNER_TEMP/pg-smoke/db_config.json"
+          echo "setup 脚本冒烟通过:"; cat "$RUNNER_TEMP/pg-smoke/db_config.json" | sed 's/:[^:]*@/:***@/'
+          rm -rf "$RUNNER_TEMP/pg-smoke"
+
+      # 内置能力模型: headpose.onnx 不进 git, 从模型资产 release 下载 (同 Windows job)
+      - name: Fetch builtin model assets (headpose.onnx)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          gh release download model-assets-headpose-v1 --pattern headpose.onnx \
+            --output backend/data/models/headpose.onnx --clobber
+          HASH=$(openssl dgst -sha256 backend/data/models/headpose.onnx | awk '{print $NF}')
+          WANT="422b69d17bf02e164bd1062f5e970f67f1688cadf7d700800fad5fa12a16fc82"
+          [ "$HASH" = "$WANT" ] || { echo "::error::headpose.onnx sha256 不匹配: $HASH"; exit 1; }
+          echo "OK headpose.onnx ($HASH)"
+
+      - name: Build Frontend
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+
+      - name: Build Electron App (dmg, 未签名/ad-hoc)
+        run: |
+          VERSION=$(node -p "require('./electron/package.json').version")
+          REF_NAME="${{ github.ref_name }}"
+          if [[ "$REF_NAME" == v* && "${REF_NAME#v}" != "$VERSION" ]]; then
+            echo "::error::tag $REF_NAME 与 electron/package.json ($VERSION) 不一致"
+            exit 1
+          fi
+          cd electron
+          npm ci
+          npx electron-builder --mac dmg --${{ matrix.arch }}
+          echo "=== dist ==="
+          ls -la dist/*.dmg
+          DMG=$(ls dist/TianJun-AI-Vision-*-mac-${{ matrix.arch }}.dmg 2>/dev/null | head -1)
+          if [ -z "$DMG" ]; then echo "::error::dmg 产物不存在"; exit 1; fi
+          echo "dmg: $DMG ($(du -h "$DMG" | cut -f1))"
+
+      - name: Verify packaged resources (防资源漏打包自检)
+        run: |
+          # mac 解包目录: dist/mac-arm64 或 dist/mac (x64), app 名含中文用 glob
+          APP_RES=$(ls -d electron/dist/mac*/*.app/Contents/Resources 2>/dev/null | head -1)
+          if [ -z "$APP_RES" ]; then echo "::error::找不到 .app/Contents/Resources"; exit 1; fi
+          echo "APP_RES=$APP_RES"
+          FAIL=0
+          for f in \
+            "$APP_RES/docs/plugin-system/plugin.schema.json" \
+            "$APP_RES/docs/plugin-system/customer-codes.md" \
+            "$APP_RES/backend/main.py" \
+            "$APP_RES/scripts/db/sqlite_to_pg.py" \
+            "$APP_RES/scripts/db/setup_embedded_pg.sh" \
+            "$APP_RES/pg-portable/bin/pg_ctl" \
+            "$APP_RES/pg-portable/bin/initdb" \
+            "$APP_RES/pg-portable/bin/postgres" \
+            "$APP_RES/backend/data/models/yolo11n.pt" \
+            "$APP_RES/backend/data/models/yolo11n-pose.pt" \
+            "$APP_RES/backend/data/models/headpose.onnx" \
+            "$APP_RES/backend/data/models/hand_landmarker.task" \
+            "$APP_RES/python/bin/python" \
+            "$APP_RES/ffmpeg/ffmpeg" \
+            "$APP_RES/app/dist/index.html"; do
+            if [ -e "$f" ]; then echo "OK  $f"; else echo "::error::缺失打包资源: $f"; FAIL=1; fi
+          done
+          if ls "$APP_RES"/backend/api/source.cpython-*.so >/dev/null 2>&1; then
+            echo "OK  Nuitka .so 已进包"
+          else
+            echo "::warning::backend/api/source*.so 未进包 — Nuitka 编译可能失败, 核心 IP 以源码出厂"
+          fi
+          ASAR_LIST=$(npx --yes asar list "$APP_RES/app.asar")
+          for f in "splash.html" "splash/index.html" "main.js"; do
+            if echo "$ASAR_LIST" | grep -q "$f"; then echo "OK  asar: $f"; else echo "::error::app.asar 缺失: $f"; FAIL=1; fi
+          done
+          [ "$FAIL" -eq 0 ] || { echo "打包资源自检未通过 — 阻断发版"; exit 1; }
+
+      - name: Smoke test packed backend (打包布局上真 import)
+        run: |
+          APP_RES=$(ls -d electron/dist/mac*/*.app/Contents/Resources 2>/dev/null | head -1)
+          cd "$APP_RES"
+          export TIANJUN_DATA_DIR="$RUNNER_TEMP/tj-smoke"
+          export BACKEND_SKIP_INIT=1
+          export TIANJUN_TEST_MODE=1
+          mkdir -p "$TIANJUN_DATA_DIR"
+          # os._exit(0) 硬退出: torch/mediapipe 组合在解释器 finalize 阶段可能挂死
+          # (本机 2026-09-14 实锤: import 成功后卡 Py_FinalizeEx 250s+), 验证点只是 import 成功
+          ./python/bin/python -c "import backend.main; print('packed backend import OK (Nuitka .so 加载通过)', flush=True); import os; os._exit(0)"
+
+      - name: Upload dmg as Action Artifact
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: TianJun-AI-Vision-macOS-${{ matrix.arch }}-dmg
+          path: electron/dist/TianJun-AI-Vision-*-mac-${{ matrix.arch }}.dmg
+          retention-days: 30
+          compression-level: 0
+
+  # ==================== 非 Windows 产物上传 Release (仅 tag) ====================
+  # 设计说明: Release 的创建/删除权在 build-windows (含 --cleanup-tag 清场)。
+  # 本 job needs 全部构建 job, 在 Windows 建好 release 之后追加上传 deb/dmg,
+  # 从结构上消除"两个 job 同时 create 同名 release"的竞态。
+  # Windows 失败时兜底自建 release (只含非 Windows 资产, 属降级交付)。
+  release-upload-nonwin:
+    if: always() && startsWith(github.ref, 'refs/tags/v')
+    needs: [build-windows, build-linux, build-macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Download non-Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: 'TianJun-AI-Vision-{Linux,macOS}*'
+          path: nonwin-dist
+          merge-multiple: true
+
+      - name: Split large files + 生成 sh 合并脚本 + 上传 Release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          set -e
+          VERSION="${GITHUB_REF_NAME}"
+          TARGET_REPO="17373531860/tianjun-releases"
+          OUT="release-parts-nonwin"
+          mkdir -p "$OUT"
+
+          echo "=== artifacts 到位情况 ==="
+          ls -la nonwin-dist/ || true
+          COUNT=$(ls nonwin-dist/ 2>/dev/null | wc -l)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::warning::没有任何非 Windows 产物 (构建 job 可能全部失败), 跳过上传"
+            exit 0
+          fi
+
+          # >1.9GB 的切分卷 (与 Windows 同一命名约定 *.partNN.part), 小文件整传
+          LIMIT=$((1900 * 1024 * 1024))
+          for f in nonwin-dist/*; do
+            name=$(basename "$f")
+            size=$(stat -c %s "$f")
+            if [ "$size" -gt "$LIMIT" ]; then
+              echo "Splitting $name ($((size / 1024 / 1024)) MB)..."
+              split -b 1900m -d -a 2 "$f" "$OUT/$name.part"
+              for p in "$OUT/$name".part[0-9][0-9]; do mv "$p" "$p.part"; done
+            else
+              cp "$f" "$OUT/"
+            fi
+          done
+
+          # 分卷校验文件 (与 Windows 的 checksums.txt 区分命名, 避免同 release 撞名)
+          cd "$OUT"
+          if ls *.part >/dev/null 2>&1; then
+            sha256sum *.part > checksums-nonwin.txt
+          fi
+
+          # POSIX sh 合并脚本 (Ubuntu / macOS 通用; bat 的 CRLF 军规不适用于 sh — 必须 LF)
+          cat > merge_installer.sh << 'MERGE_EOF'
+          #!/bin/sh
+          # TianJun AI Vision - Linux/macOS 分卷合并脚本
+          # 用法: 把所有 .part 文件 + checksums-nonwin.txt + 本脚本放同一目录, 然后:
+          #   sh merge_installer.sh
+          cd "$(dirname "$0")" || exit 1
+          if command -v sha256sum >/dev/null 2>&1; then SHA="sha256sum"; else SHA="shasum -a 256"; fi
+          if [ -f checksums-nonwin.txt ]; then
+            echo "Verifying SHA256..."
+            $SHA -c checksums-nonwin.txt || {
+              echo "[WARN] 部分分卷校验失败, 继续合并; 若安装失败请重新下载对应分卷"
+            }
+          fi
+          found=0
+          for first in *.part00.part; do
+            [ -e "$first" ] || continue
+            found=1
+            out="${first%.part00.part}"
+            echo "Merging -> $out"
+            rm -f "$out"
+            cat "$out".part[0-9][0-9].part > "$out"
+            echo "  Done: $(du -h "$out" | cut -f1)"
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "[ERROR] 当前目录没有 *.part00.part 分卷文件"
+            exit 1
+          fi
+          echo "合并完成。deb: sudo apt install ./<文件名>; dmg: 双击挂载后拖入应用程序。"
+          echo "macOS 未签名包首启: 右键打开, 或 xattr -cr /Applications/<App 名>.app"
+          MERGE_EOF
+          chmod +x merge_installer.sh
+          cd ..
+
+          echo "=== 待上传文件 ==="
+          ls -la "$OUT/"
+
+          # release 应已由 build-windows 创建; 不存在则兜底自建 (Windows 失败的降级交付)
+          if ! gh release view "$VERSION" --repo "$TARGET_REPO" >/dev/null 2>&1; then
+            echo "::warning::release $VERSION 不存在 (build-windows 可能失败), 兜底创建"
+            gh release create "$VERSION" --repo "$TARGET_REPO" \
+              --title "$VERSION - 天军科技AI视觉检测系统" \
+              --notes "$VERSION 多平台安装包。Windows 包缺失 (构建失败), 本次仅含 Ubuntu/macOS 产物。分卷用 merge_installer.sh 合并。"
+          fi
+
+          gh release upload "$VERSION" --repo "$TARGET_REPO" --clobber "$OUT"/*
+
+          echo "=== Release 资产清单 ==="
+          gh release view "$VERSION" --repo "$TARGET_REPO" --json assets --jq '.assets[] | "  \(.name)  \((.size/1024/1024*10|floor)/10) MB"'

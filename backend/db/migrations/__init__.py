@@ -47,6 +47,8 @@ _MIGRATION_MODULES = [
     # (apply 幂等补列, 上银现场老库若已按旧 ID 记账, 重跑也零影响)
     "m0009_pkg_tail_paper_only_after_awaiting",
     "m0010_scanner_lifecycle",
+    "m0011_model_capability",
+    "m0012_video_boxes_sidecar",
 ]
 
 # m0000 不看记账、每次启动都幂等跑（老库任意版本起跳的安全网）

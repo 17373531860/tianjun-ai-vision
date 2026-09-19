@@ -1,0 +1,69 @@
+{
+  "version": "3.59.0",
+  "date": "2026-09-17",
+  "previous_version": "3.58.0",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "容器定界周期：自定义模式周期主权可归容器",
+      "symptom": "容器常驻画面+周期内动作无序完备的包装场景（东莞现场：包装盒进来开周期、离开马上结算），用检测模式 last_step 结算永远 NG 报重复步骤；既有混合跟踪周期主权归步骤侧、独立跟踪只有数量判定，全部不匹配",
+      "root_cause": "检测模式 last_step 自动剥掉结算步骤 accept_once + '步骤交替即算新出现'规则，常驻容器每次动作交替后重复入账（结构性冲突）；custom_mixed_with 契约 2 明确周期主权归步骤侧，容器只是计数器",
+      "fix": "pipeline_config.custom_cycle_owner='container'（默认 'steps' 零差异）：ContainerCycleGate 容器标签在场确认(默认1s)开周期/离场确认(默认3s)强制结算，容器标签独占消费不入步骤侧，容器缺席动作不入账；_settle_container_cycle 按 custom_based_on 分支结算，detection 形态无序完备判定（缺步 NG、重复动作宽容）；步骤侧四处让位守门（events_check 结算块/first_step 重现/空闲超时/二次 start_cycle）；runner 标签过滤放行容器标签；前端周期定界选择器+参数卡；results 透出 container_gate 状态",
+      "files": [
+        "backend/api/source_custom_mix.py",
+        "backend/api/source_settlement_mixin.py",
+        "backend/api/source_step_stats_mixin.py",
+        "backend/api/source_events_check_mixin.py",
+        "backend/api/source_project_config_apply.py",
+        "backend/api/source_state_init.py",
+        "backend/api/source.py",
+        "backend/api/source_routes.py",
+        "frontend/src/views/Project/LogicConfigTab.vue",
+        "frontend/src/views/Project/index.vue",
+        "tests/test_container_cycle_gate.py",
+        "tests/e2e_browser/test_container_cycle_owner.py"
+      ],
+      "keywords": [
+        "容器定界",
+        "容器周期",
+        "custom_cycle_owner",
+        "ContainerCycleGate",
+        "container_gate_label",
+        "周期主权",
+        "cycle sovereignty",
+        "容器进来开周期",
+        "容器离开结算",
+        "包装盒",
+        "无序完备",
+        "重复步骤NG",
+        "accept_once",
+        "last_step",
+        "步骤交替即新出现",
+        "自定义模式",
+        "custom mode",
+        "混合跟踪",
+        "到位确认",
+        "离场确认",
+        "appear_seconds",
+        "gone_seconds"
+      ],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-source", "modify-project-config"],
+  "files_changed": [
+    "backend/api/source_custom_mix.py",
+    "backend/api/source_settlement_mixin.py",
+    "backend/api/source_step_stats_mixin.py",
+    "backend/api/source_events_check_mixin.py",
+    "backend/api/source_project_config_apply.py",
+    "backend/api/source_state_init.py",
+    "backend/api/source.py",
+    "backend/api/source_routes.py",
+    "frontend/src/views/Project/LogicConfigTab.vue",
+    "frontend/src/views/Project/index.vue",
+    "tests/test_container_cycle_gate.py",
+    "tests/e2e_browser/test_container_cycle_owner.py"
+  ]
+}

@@ -466,31 +466,6 @@
     "title": "Body_ask_api_v1_vlm_ask_post",
     "type": "object"
    },
-   "Body_import_pack_api_v1_site_pack_import_post": {
-    "properties": {
-     "file": {
-      "contentMediaType": "application/octet-stream",
-      "title": "File",
-      "type": "string"
-     },
-     "password": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Password"
-     }
-    },
-    "required": [
-     "file"
-    ],
-    "title": "Body_import_pack_api_v1_site_pack_import_post",
-    "type": "object"
-   },
    "Body_install_plugin_api_v1_plugins_install_post": {
     "properties": {
      "file": {
@@ -539,29 +514,19 @@
     "title": "Body_ocr_read_api_v1_ocr_read_post",
     "type": "object"
    },
-   "Body_preview_pack_api_v1_site_pack_preview_post": {
+   "Body_orientation_estimate_api_v1_orientation_estimate_post": {
     "properties": {
      "file": {
       "contentMediaType": "application/octet-stream",
+      "description": "图片文件 (jpg/png/bmp), 整幅当人框",
       "title": "File",
       "type": "string"
-     },
-     "password": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Password"
      }
     },
     "required": [
      "file"
     ],
-    "title": "Body_preview_pack_api_v1_site_pack_preview_post",
+    "title": "Body_orientation_estimate_api_v1_orientation_estimate_post",
     "type": "object"
    },
    "Body_push_model_package_api_v1_interconnect_models_push_post": {
@@ -680,6 +645,11 @@
    },
    "Body_upload_model_api_v1_models_upload_post": {
     "properties": {
+     "capability": {
+      "default": "detect",
+      "title": "Capability",
+      "type": "string"
+     },
      "description": {
       "anyOf": [
        {
@@ -1010,6 +980,23 @@
      }
     },
     "title": "CameraUpdate",
+    "type": "object"
+   },
+   "CapabilityBindRequest": {
+    "properties": {
+     "model_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Model Id"
+     }
+    },
+    "title": "CapabilityBindRequest",
     "type": "object"
    },
    "ChangePasswordRequest": {
@@ -3430,6 +3417,17 @@
     "title": "EnableAuthRequest",
     "type": "object"
    },
+   "EstimateFrameRequest": {
+    "properties": {
+     "channel_id": {
+      "default": 0,
+      "title": "Channel Id",
+      "type": "integer"
+     }
+    },
+    "title": "EstimateFrameRequest",
+    "type": "object"
+   },
    "EvidencePackRequest": {
     "description": "三选一: cycle_ids 直接给 / session_id 整会话 / date 整天。默认只打 NG。",
     "properties": {
@@ -3486,56 +3484,6 @@
     "title": "EvidencePackRequest",
     "type": "object"
    },
-   "ExportRequest": {
-    "properties": {
-     "domains": {
-      "items": {
-       "type": "string"
-      },
-      "title": "Domains",
-      "type": "array"
-     },
-     "local_settings": {
-      "anyOf": [
-       {
-        "additionalProperties": true,
-        "type": "object"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Local Settings"
-     },
-     "note": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Note"
-     },
-     "password": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Password"
-     }
-    },
-    "required": [
-     "domains"
-    ],
-    "title": "ExportRequest",
-    "type": "object"
-   },
    "ExportSettingResponse": {
     "properties": {
      "export_counters": {
@@ -3586,6 +3534,11 @@
      "record_avg_step_time": {
       "default": true,
       "title": "Record Avg Step Time",
+      "type": "boolean"
+     },
+     "record_boxes_data": {
+      "default": false,
+      "title": "Record Boxes Data",
       "type": "boolean"
      },
      "record_counters": {
@@ -3753,6 +3706,17 @@
        }
       ],
       "title": "Record Avg Step Time"
+     },
+     "record_boxes_data": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Record Boxes Data"
      },
      "record_counters": {
       "anyOf": [
@@ -4781,6 +4745,30 @@
    },
    "ModelResponse": {
     "properties": {
+     "builtin": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": false,
+      "title": "Builtin"
+     },
+     "capability": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": "detect",
+      "title": "Capability"
+     },
      "description": {
       "anyOf": [
        {
@@ -5107,7 +5095,7 @@
      },
      "readonly": {
       "default": true,
-      "description": "工位副屏是否只读；一期默认只读",
+      "description": "工位副屏是否只读；不约束可操作的工位主屏",
       "title": "Readonly",
       "type": "boolean"
      }
@@ -5116,8 +5104,59 @@
     "type": "object"
    },
    "MultiMonitorMappingItem": {
-    "description": "单个工位绑定的显示器标识和离线降级坐标。",
+    "description": "单个工位主/副屏的显示器标识和离线降级坐标。",
     "properties": {
+     "aux_bounds": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/DisplayBounds"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "副屏 ID 变化或枚举失败时使用的持久化坐标"
+     },
+     "aux_display_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "工位副屏 Electron Display.id；不配置时不创建副屏窗口",
+      "title": "Aux Display Id"
+     },
+     "aux_hands_enabled": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "是否为该工位启用手部裁切副屏；缺失时按关闭处理",
+      "title": "Aux Hands Enabled"
+     },
+     "aux_view_mode": {
+      "anyOf": [
+       {
+        "enum": [
+         "fixed",
+         "follow"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "副屏取景模式：fixed 固定中心，follow 固定尺寸平滑跟随手部",
+      "title": "Aux View Mode"
+     },
      "bounds": {
       "anyOf": [
        {
@@ -5499,6 +5538,17 @@
      }
     },
     "title": "OrderUpdate",
+    "type": "object"
+   },
+   "OrientationConfig": {
+    "properties": {
+     "headpose_full_range": {
+      "default": false,
+      "title": "Headpose Full Range",
+      "type": "boolean"
+     }
+    },
+    "title": "OrientationConfig",
     "type": "object"
    },
    "OutputConfigRequest": {
@@ -7662,30 +7712,6 @@
     "title": "ParamsUpdate",
     "type": "object"
    },
-   "PathRequest": {
-    "properties": {
-     "password": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Password"
-     },
-     "path": {
-      "title": "Path",
-      "type": "string"
-     }
-    },
-    "required": [
-     "path"
-    ],
-    "title": "PathRequest",
-    "type": "object"
-   },
    "PresetRequest": {
     "properties": {
      "config_id": {
@@ -8875,6 +8901,11 @@
       ],
       "title": "Active Window"
      },
+     "annotated_video": {
+      "default": false,
+      "title": "Annotated Video",
+      "type": "boolean"
+     },
      "attach_keyframe": {
       "default": false,
       "title": "Attach Keyframe",
@@ -9519,6 +9550,17 @@
        }
       ],
       "title": "Active Window"
+     },
+     "annotated_video": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Annotated Video"
      },
      "attach_keyframe": {
       "anyOf": [
@@ -14120,6 +14162,108 @@
      }
     },
     "title": "VerifyRequest",
+    "type": "object"
+   },
+   "VideoBoxFrame": {
+    "properties": {
+     "d": {
+      "description": "该帧起生效的检测框；空列表=框消失",
+      "items": {
+       "$ref": "#/components/schemas/VideoBoxItem"
+      },
+      "title": "D",
+      "type": "array"
+     },
+     "f": {
+      "description": "帧号（0 起，录制线程写帧成功时的帧计数）",
+      "title": "F",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "f",
+     "d"
+    ],
+    "title": "VideoBoxFrame",
+    "type": "object"
+   },
+   "VideoBoxItem": {
+    "properties": {
+     "conf": {
+      "description": "置信度 0-1（保留 3 位小数）",
+      "title": "Conf",
+      "type": "number"
+     },
+     "h": {
+      "description": "框高（归一化 0-1）",
+      "title": "H",
+      "type": "number"
+     },
+     "label": {
+      "description": "检测标签（显示名）",
+      "title": "Label",
+      "type": "string"
+     },
+     "w": {
+      "description": "框宽（归一化 0-1）",
+      "title": "W",
+      "type": "number"
+     },
+     "x": {
+      "description": "框左上角 x（归一化 0-1，显示坐标系）",
+      "title": "X",
+      "type": "number"
+     },
+     "y": {
+      "description": "框左上角 y（归一化 0-1）",
+      "title": "Y",
+      "type": "number"
+     }
+    },
+    "required": [
+     "label",
+     "conf",
+     "x",
+     "y",
+     "w",
+     "h"
+    ],
+    "title": "VideoBoxItem",
+    "type": "object"
+   },
+   "VideoBoxesOut": {
+    "properties": {
+     "fps": {
+      "description": "录像标称帧率（帧号→秒的换算基准）",
+      "title": "Fps",
+      "type": "integer"
+     },
+     "frames": {
+      "description": "run-length 压缩记录：只记检测变化帧，回放沿用上一条直到下一条",
+      "items": {
+       "$ref": "#/components/schemas/VideoBoxFrame"
+      },
+      "title": "Frames",
+      "type": "array"
+     },
+     "version": {
+      "description": "sidecar 格式版本（当前 1）",
+      "title": "Version",
+      "type": "integer"
+     },
+     "video": {
+      "default": "",
+      "description": "录像文件名",
+      "title": "Video",
+      "type": "string"
+     }
+    },
+    "required": [
+     "version",
+     "fps",
+     "frames"
+    ],
+    "title": "VideoBoxesOut",
     "type": "object"
    },
    "VideoProgressRequest": {
@@ -19076,6 +19220,85 @@
      }
     },
     "summary": "Get Video",
+    "tags": [
+     "data"
+    ]
+   }
+  },
+  "/api/v1/data/videos/{video_id}/annotated": {
+   "get": {
+    "description": "下载带框版录像 (2026-09): 原片+检测框 sidecar 现场渲染烧框 MP4。\n\n渲染结果落转码缓存目录复用 (同一录像第二次下载秒回);\n周期录像 640x360 渲染远快于实时, 同步等待与既有转码端点一致。\n404: 视频记录/文件不存在，或该录像没有检测框数据。\n500: 带框渲染失败（原片仍可用普通下载）。",
+    "operationId": "download_annotated_video_api_v1_data_videos__video_id__annotated_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "video_id",
+      "required": true,
+      "schema": {
+       "title": "Video Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "下载带框版录像",
+    "tags": [
+     "data"
+    ]
+   }
+  },
+  "/api/v1/data/videos/{video_id}/boxes": {
+   "get": {
+    "description": "获取录像的检测框 sidecar 数据 (2026-09, 回放叠加显示用)。\n\n帧号对齐的 run-length 检测框记录 (归一化坐标)。\n404: 视频不存在，或该录像没有检测框数据（录制时未开启「记录检测框数据」）。",
+    "operationId": "get_video_boxes_api_v1_data_videos__video_id__boxes_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "video_id",
+      "required": true,
+      "schema": {
+       "title": "Video Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/VideoBoxesOut"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "录像检测框数据",
     "tags": [
      "data"
     ]
@@ -25285,7 +25508,7 @@
   },
   "/api/v1/models": {
    "get": {
-    "description": "获取模型列表",
+    "description": "获取模型列表 (capability 过滤: NULL 存量行视同 detect)",
     "operationId": "get_models_api_v1_models_get",
     "parameters": [
      {
@@ -25323,6 +25546,22 @@
        ],
        "title": "Project Id"
       }
+     },
+     {
+      "in": "query",
+      "name": "capability",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Capability"
+      }
      }
     ],
     "responses": {
@@ -25348,6 +25587,77 @@
      }
     },
     "summary": "Get Models",
+    "tags": [
+     "models"
+    ]
+   }
+  },
+  "/api/v1/models/capabilities": {
+   "get": {
+    "description": "能力目录: 类型元信息 + 内置行 + 当前绑定 + 引擎可用性。\n\n模型仓库页 (分区/徽标/试用抽屉) 与项目页能力挂件选择器共用此端点。",
+    "operationId": "get_capability_catalog_api_v1_models_capabilities_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Get Capability Catalog",
+    "tags": [
+     "models"
+    ]
+   }
+  },
+  "/api/v1/models/capabilities/{capability}/bind": {
+   "post": {
+    "description": "绑定用户上传的模型为某能力的当前权重 (model_id=null 恢复出厂默认)。\n\n生效方式: 引擎解析顺序 env > 绑定 > 出厂默认; 绑定后释放引擎实例,\n下次推理按新路径热重载。",
+    "operationId": "bind_capability_weight_api_v1_models_capabilities__capability__bind_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "capability",
+      "required": true,
+      "schema": {
+       "title": "Capability",
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/CapabilityBindRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Bind Capability Weight",
     "tags": [
      "models"
     ]
@@ -25476,7 +25786,7 @@
   },
   "/api/v1/models/upload": {
    "post": {
-    "description": "上传模型文件",
+    "description": "上传模型文件 (capability: detect/segment/pose/headpose, 无文件能力不可上传)",
     "operationId": "upload_model_api_v1_models_upload_post",
     "requestBody": {
      "content": {
@@ -25518,7 +25828,7 @@
   },
   "/api/v1/models/{model_id}": {
    "delete": {
-    "description": "删除模型",
+    "description": "删除模型 (出厂内置行禁删, 只能停用/更换绑定)",
     "operationId": "delete_model_api_v1_models__model_id__delete",
     "parameters": [
      {
@@ -26155,6 +26465,165 @@
     "tags": [
      "Operators",
      "Operators (Deprecated)"
+    ]
+   }
+  },
+  "/api/v1/orientation/config": {
+   "get": {
+    "description": "读取朝向估计配置 (headpose_full_range 全角度头姿开关, KV 落库)。",
+    "operationId": "orientation_get_config_api_v1_orientation_config_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/OrientationConfig"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "朝向配置",
+    "tags": [
+     "orientation"
+    ]
+   },
+   "put": {
+    "description": "更新朝向估计配置: SystemConfig KV 落库 + 推理侧缓存直写即时生效。\n\n403: 无 settings.edit 权限。",
+    "operationId": "orientation_put_config_api_v1_orientation_config_put",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/OrientationConfig"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/OrientationConfig"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "更新朝向配置",
+    "tags": [
+     "orientation"
+    ]
+   }
+  },
+  "/api/v1/orientation/estimate": {
+   "post": {
+    "operationId": "orientation_estimate_api_v1_orientation_estimate_post",
+    "requestBody": {
+     "content": {
+      "multipart/form-data": {
+       "schema": {
+        "$ref": "#/components/schemas/Body_orientation_estimate_api_v1_orientation_estimate_post"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "上传图片估计人体朝向",
+    "tags": [
+     "orientation"
+    ]
+   }
+  },
+  "/api/v1/orientation/estimate-frame": {
+   "post": {
+    "operationId": "orientation_estimate_frame_api_v1_orientation_estimate_frame_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/EstimateFrameRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "估计通道当前画面的人体朝向",
+    "tags": [
+     "orientation"
+    ]
+   }
+  },
+  "/api/v1/orientation/status": {
+   "get": {
+    "operationId": "orientation_status_api_v1_orientation_status_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "朝向估计引擎状态",
+    "tags": [
+     "orientation"
     ]
    }
   },
@@ -31449,223 +31918,6 @@
     "tags": [
      "WMax Scanner",
      "WMax Scanner"
-    ]
-   }
-  },
-  "/api/v1/site-pack/export": {
-   "post": {
-    "operationId": "export_pack_api_v1_site_pack_export_post",
-    "requestBody": {
-     "content": {
-      "application/json": {
-       "schema": {
-        "$ref": "#/components/schemas/ExportRequest"
-       }
-      }
-     },
-     "required": true
-    },
-    "responses": {
-     "200": {
-      "content": {
-       "application/json": {
-        "schema": {}
-       }
-      },
-      "description": "Successful Response"
-     },
-     "422": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      },
-      "description": "Validation Error"
-     }
-    },
-    "summary": "Export Pack",
-    "tags": [
-     "site-pack"
-    ]
-   }
-  },
-  "/api/v1/site-pack/import": {
-   "post": {
-    "operationId": "import_pack_api_v1_site_pack_import_post",
-    "requestBody": {
-     "content": {
-      "multipart/form-data": {
-       "schema": {
-        "$ref": "#/components/schemas/Body_import_pack_api_v1_site_pack_import_post"
-       }
-      }
-     },
-     "required": true
-    },
-    "responses": {
-     "200": {
-      "content": {
-       "application/json": {
-        "schema": {}
-       }
-      },
-      "description": "Successful Response"
-     },
-     "422": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      },
-      "description": "Validation Error"
-     }
-    },
-    "summary": "Import Pack",
-    "tags": [
-     "site-pack"
-    ]
-   }
-  },
-  "/api/v1/site-pack/import-path": {
-   "post": {
-    "operationId": "import_pack_path_api_v1_site_pack_import_path_post",
-    "requestBody": {
-     "content": {
-      "application/json": {
-       "schema": {
-        "$ref": "#/components/schemas/PathRequest"
-       }
-      }
-     },
-     "required": true
-    },
-    "responses": {
-     "200": {
-      "content": {
-       "application/json": {
-        "schema": {}
-       }
-      },
-      "description": "Successful Response"
-     },
-     "422": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      },
-      "description": "Validation Error"
-     }
-    },
-    "summary": "Import Pack Path",
-    "tags": [
-     "site-pack"
-    ]
-   }
-  },
-  "/api/v1/site-pack/overview": {
-   "get": {
-    "description": "各分域当前内容量, 供导出页勾选。",
-    "operationId": "overview_api_v1_site_pack_overview_get",
-    "responses": {
-     "200": {
-      "content": {
-       "application/json": {
-        "schema": {}
-       }
-      },
-      "description": "Successful Response"
-     }
-    },
-    "summary": "Overview",
-    "tags": [
-     "site-pack"
-    ]
-   }
-  },
-  "/api/v1/site-pack/preview": {
-   "post": {
-    "description": "上传 .tjvsite 看内容概要, 不改任何配置。",
-    "operationId": "preview_pack_api_v1_site_pack_preview_post",
-    "requestBody": {
-     "content": {
-      "multipart/form-data": {
-       "schema": {
-        "$ref": "#/components/schemas/Body_preview_pack_api_v1_site_pack_preview_post"
-       }
-      }
-     },
-     "required": true
-    },
-    "responses": {
-     "200": {
-      "content": {
-       "application/json": {
-        "schema": {}
-       }
-      },
-      "description": "Successful Response"
-     },
-     "422": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      },
-      "description": "Validation Error"
-     }
-    },
-    "summary": "Preview Pack",
-    "tags": [
-     "site-pack"
-    ]
-   }
-  },
-  "/api/v1/site-pack/preview-path": {
-   "post": {
-    "description": "按本机路径预览 (Electron 双击 .tjvsite 打开的场景)。",
-    "operationId": "preview_pack_path_api_v1_site_pack_preview_path_post",
-    "requestBody": {
-     "content": {
-      "application/json": {
-       "schema": {
-        "$ref": "#/components/schemas/PathRequest"
-       }
-      }
-     },
-     "required": true
-    },
-    "responses": {
-     "200": {
-      "content": {
-       "application/json": {
-        "schema": {}
-       }
-      },
-      "description": "Successful Response"
-     },
-     "422": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      },
-      "description": "Validation Error"
-     }
-    },
-    "summary": "Preview Pack Path",
-    "tags": [
-     "site-pack"
     ]
    }
   },

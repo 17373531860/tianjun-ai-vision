@@ -55,6 +55,21 @@ const i18n = createI18n({
 
 console.log(`[⬛ Boot] main.js 开始执行 ${new Date().toLocaleTimeString()}`);
 
+// 手部副屏是只读图片终端：初始路由命中时不启动鉴权/插件网络引导，
+// 避免除 /snapshot?view=hands 外的任何业务 API 与写通路。
+const handsCropBootstrap = (() => {
+  try {
+    const hash = window.location.hash || '';
+    const queryIndex = hash.indexOf('?');
+    const query = new URLSearchParams(queryIndex >= 0 ? hash.slice(queryIndex + 1) : '');
+    return query.get('kiosk') === '1'
+      && query.get('video_only') === '1'
+      && query.get('hands_crop') === '1';
+  } catch {
+    return false;
+  }
+})();
+
 const app = createApp(App);
 
 app.config.errorHandler = (err, vm, info) => {
@@ -89,6 +104,7 @@ try {
 // v3.10.0 用户系统: 启动时拉一次 /auth/status + /auth/me 让 store 就位
 // (失败静默 — 后端可能正在启动, 路由守卫和 Settings 页都会再 init 一次)
 (async () => {
+  if (handsCropBootstrap) return;
   try {
     const { useAuthStore } = await import('./store/useAuthStore.js');
     const authStore = useAuthStore();
@@ -108,6 +124,7 @@ try {
 //   "[⬛ PluginLoader] 拿 active manifest 失败 :: Network Error"). 修法: 先轮询探活
 //   等后端就绪再拉, 拉不到就重试, 覆盖后端冷启动窗口.
 (async () => {
+  if (handsCropBootstrap) return;
   const api = (await import('./api/index')).default;
 
   // 用插件清单端点探活 (无 active 插件也返回 200), 轮询直到后端就绪, 最多等 90s.

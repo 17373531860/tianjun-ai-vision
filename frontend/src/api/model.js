@@ -49,5 +49,14 @@ export const getModelConversions = (id) => api.get(`/models/${id}/conversions`);
 // 删除转换记录
 export const deleteConversion = (convId) => api.delete(`/models/conversions/${convId}`);
 
+// ==================== 2026-09 内置能力模型入仓 ====================
+
+// 能力目录: 类型元信息 + 内置行 + 当前绑定 + 引擎可用性 (模型页/项目挂件选择器共用)
+export const getCapabilityCatalog = () => api.get('/models/capabilities');
+
+// 绑定用户模型为某能力当前权重 (modelId=null 恢复出厂默认); 引擎热重载
+export const bindCapability = (capability, modelId) =>
+  api.post(`/models/capabilities/${capability}/bind`, { model_id: modelId });
+
 // 解析实际模型路径（根据项目格式配置）
 export const resolveModelPath = (modelId, format) => api.post(`/models/${modelId}/resolve-path?format=${format}`);

@@ -29,7 +29,7 @@ const routes = [
       {
         path: 'monitor',
         name: 'Monitor',
-        component: () => import('@/views/Monitor/index.vue'),
+        component: () => import('@/views/Monitor/MonitorRoute.vue'),
       },
       {
         path: 'project',
@@ -72,12 +72,8 @@ const routes = [
         name: 'Interconnect',
         component: () => import('@/views/Interconnect/index.vue'),
       },
-      {
-        // 2026-09 AI 能力试用: OCR 读字 + 异常检测 (谈单演示/现场试用)
-        path: 'ai-tools',
-        name: 'AiTools',
-        component: () => import('@/views/AiTools/index.vue'),
-      },
+      // 2026-09 「AI 能力试用」页已下线: 能力试用/记忆库管理/VLM 配置
+      // 全量迁入模型仓库 (/model) 内置能力模型分区的「试一试」抽屉
     ]
   }
 ];
@@ -99,7 +95,12 @@ const REMEMBERABLE_NAMES = new Set([
 
 // 工位子窗与主窗口共用 /monitor；子窗 query 不得读写主窗口的路由记忆。
 const isMultiMonitorRoute = (route) =>
-  route?.query?.kiosk === '1' || route?.query?.multi_monitor === '1';
+  route?.query?.kiosk === '1' || route?.query?.station_view === '1' || route?.query?.multi_monitor === '1';
+
+const isHandsCropRoute = (route) =>
+  route?.query?.kiosk === '1'
+  && route?.query?.video_only === '1'
+  && route?.query?.hands_crop === '1';
 
 /**
  * v3.10.0 用户系统: 在路由守卫中确保 useAuthStore 已 init.
@@ -122,6 +123,37 @@ async function ensureAuthInitialized() {
 
 router.beforeEach(async (to, from) => {
   console.log(`[⬛ Router] 导航: ${from.fullPath} → ${to.fullPath} (name: ${to.name})`);
+
+  // 普通导航不能丢掉工位身份；只读窗不能通过菜单/插件路由切换绕过操作限制。
+  // Login / Activation 仍由原有鉴权守卫处理，桌面重载可应用新的只读配置。
+  if (isMultiMonitorRoute(from) && !isHandsCropRoute(from) && from.path !== '/projection'
+      && to.name !== 'Login' && to.name !== 'Activation') {
+    if (from.query.readonly !== '0' && to.fullPath !== from.fullPath) return false;
+    // 独立工位窗保留绑定；总控复用的 station_view 仍能通过侧栏返回总览管理。
+    if (from.query.kiosk === '1') {
+      const context = Object.fromEntries(['kiosk', 'channel', 'readonly', 'multi_monitor']
+        .filter(key => from.query[key] !== undefined).map(key => [key, from.query[key]]));
+      if (Object.entries(context).some(([key, value]) => to.query[key] !== value)) {
+        return { path: to.path, query: { ...to.query, ...context }, hash: to.hash, replace: true };
+      }
+    }
+  }
+
+  // 副屏窗口由 Electron 的 License 守门后创建；这里只保留一次本地 IPC 复核，
+  // 不初始化 AuthStore/插件，确保页面网络只剩 hands snapshot 短轮询。
+  if (isHandsCropRoute(to)) {
+    if (!licenseChecked && window.electronAPI?.isElectron) {
+      try {
+        const status = await window.electronAPI.getLicenseStatus();
+        licenseChecked = true;
+        if (!status.valid) return { name: 'Activation' };
+      } catch (e) {
+        console.error('[⬛ Router] 副屏授权检查异常:', e);
+        return { name: 'Activation' };
+      }
+    }
+    return;
+  }
 
   // 冷启动恢复: 第一次进入且目标是默认 /monitor 时, 尝试取上次路由
   if (!lastRouteRestored && from.name === undefined && to.path === '/monitor' && !isMultiMonitorRoute(to)) {
@@ -202,7 +234,9 @@ router.beforeEach(async (to, from) => {
 router.afterEach((to, from) => {
   console.log(`[⬛ Router] ✓ 导航完成: ${to.fullPath}`);
   // 调试设置 'page.nav': 每次页面切换留痕 (开关关闭时零开销)
-  dbg('page.nav', `页面切换 ${from.fullPath} → ${to.fullPath}`, `name=${String(to.name || '')}`);
+  if (!isHandsCropRoute(to)) {
+    dbg('page.nav', `页面切换 ${from.fullPath} → ${to.fullPath}`, `name=${String(to.name || '')}`);
+  }
   // 只记可恢复的页面
   if (to.name && REMEMBERABLE_NAMES.has(to.name) && !isMultiMonitorRoute(to)) {
     try {

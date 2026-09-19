@@ -166,14 +166,15 @@
                     <div class="flex flex-col gap-1 min-w-[7rem]">
                       <div class="flex flex-wrap gap-1">
                         <el-button size="small" type="primary" plain @click="$emit('open-step-roi-editor', step)">
-                          {{ step.roi && step.roi.length >= 3 ? '重绘' : '设置' }}
+                          {{ hasPolygons(step.roi) ? '重绘' : '设置' }}
                         </el-button>
-                        <el-button v-if="step.roi && step.roi.length >= 3" size="small" type="danger" plain @click="clearStepRoi(step)">清除</el-button>
+                        <el-button v-if="hasPolygons(step.roi)" size="small" type="danger" plain @click="clearStepRoi(step)">清除</el-button>
                       </div>
-                      <svg v-if="step.roi && step.roi.length >= 3" width="72" height="40" viewBox="0 0 1 1" preserveAspectRatio="none"
+                      <!-- 2026-09 多块化: 单块/多块双格式统一归一后逐块画缩略 -->
+                      <svg v-if="hasPolygons(step.roi)" width="72" height="40" viewBox="0 0 1 1" preserveAspectRatio="none"
                         class="border border-slate-700 bg-slate-950 rounded">
-                        <polygon
-                          :points="step.roi.map(p => `${p[0]},${p[1]}`).join(' ')"
+                        <polygon v-for="(poly, pi) in normalizePolygons(step.roi)" :key="pi"
+                          :points="poly.map(p => `${p[0]},${p[1]}`).join(' ')"
                           fill="rgba(167,139,250,0.25)" stroke="#a78bfa" stroke-width="0.008" stroke-linejoin="round" />
                       </svg>
                       <span v-else class="text-[0.625rem] text-gray-500">未限制</span>
@@ -324,14 +325,15 @@
               <div class="text-gray-400">引导框区域</div>
               <div class="flex items-center gap-2">
                 <el-button size="small" type="primary" plain @click="$emit('open-placement-guide-editor')">
-                  {{ placementGuide.polygon && placementGuide.polygon.length >= 3 ? '重绘引导框' : '绘制引导框' }}
+                  {{ hasPolygons(placementGuide.polygon) ? '重绘引导框' : '绘制引导框' }}
                 </el-button>
-                <el-button v-if="placementGuide.polygon && placementGuide.polygon.length >= 3"
+                <el-button v-if="hasPolygons(placementGuide.polygon)"
                   size="small" type="danger" plain @click="placementGuide.polygon = null">清除</el-button>
               </div>
-              <svg v-if="placementGuide.polygon && placementGuide.polygon.length >= 3" width="96" height="54" viewBox="0 0 1 1"
+              <svg v-if="hasPolygons(placementGuide.polygon)" width="96" height="54" viewBox="0 0 1 1"
                 preserveAspectRatio="none" class="border border-slate-700 bg-slate-950 rounded">
-                <polygon :points="placementGuide.polygon.map(p => `${p[0]},${p[1]}`).join(' ')"
+                <polygon v-for="(poly, pi) in normalizePolygons(placementGuide.polygon)" :key="pi"
+                  :points="poly.map(p => `${p[0]},${p[1]}`).join(' ')"
                   fill="rgba(34,197,94,0.2)" stroke="#22c55e" stroke-width="0.01" stroke-linejoin="round" />
               </svg>
             </div>
@@ -1173,6 +1175,7 @@ import { _pi_itemLabelToArray, _pi_itemLabelFromArray } from './perItemLabel';
 import { ensureMixItemDefaults } from './mixItemDefaults';
 import { applyStepEnabledChange } from './stepEnabled';
 import { splitRuleStepNames } from './labelSplit';
+import { hasPolygons, normalizePolygons } from '@/utils/polygons';
 
 const props = defineProps({
   project: { type: Object, required: true },

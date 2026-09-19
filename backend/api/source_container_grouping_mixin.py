@@ -707,7 +707,7 @@ class ContainerGroupingMixin:
         # 0.5 在 [0,1]² 几乎不可能达到 → 会把所有点判为线上, 是原 bug 之一.
 
         line_check = None
-        zone_polygon = None
+        zone_check = None
         side_a_to_b = True
 
         if geometry == 'line':
@@ -733,16 +733,16 @@ class ContainerGroupingMixin:
                 return 0
             line_check = _side_of
         elif geometry == 'zone':
-            zone_norm = cfg.get('zone') or []
-            if len(zone_norm) < 3:
+            # 2026-09 多块化: zone 支持单块 [[x,y],...] / 多块 [[[x,y],...],...]
+            from backend.api.source_geometry import normalize_polygons
+            zone_polygons = normalize_polygons(cfg.get('zone'))
+            if not zone_polygons:
                 return
-            zone_polygon = [
-                [float(p[0]), float(p[1])]
-                for p in zone_norm
-                if isinstance(p, (list, tuple)) and len(p) >= 2
-            ]
-            if len(zone_polygon) < 3:
-                return
+
+            def _in_zone_any(cx, cy):
+                return any(self._point_in_polygon(cx, cy, poly)
+                           for poly in zone_polygons)
+            zone_check = _in_zone_any
         else:
             return
 
@@ -769,7 +769,7 @@ class ContainerGroupingMixin:
                           f"出现 (cx={cx:.3f},cy={cy:.3f}) side={side_label}, "
                           f"配置方向={need_dir}, 等待跨线...", flush=True)
                 else:
-                    in_zone = self._point_in_polygon(cx, cy, zone_polygon)
+                    in_zone = zone_check(cx, cy)
                     print(f"[ScanD] ch{getattr(self,'channel_id','?')} {box_did} 首次"
                           f"出现 (cx={cx:.3f},cy={cy:.3f}) in_zone={in_zone}, "
                           f"等待进入区域...", flush=True)
@@ -780,7 +780,7 @@ class ContainerGroupingMixin:
                 if geometry == 'line':
                     st['side'] = line_check(cx, cy)
                 else:
-                    st['in_zone'] = self._point_in_polygon(cx, cy, zone_polygon)
+                    st['in_zone'] = zone_check(cx, cy)
                 continue
 
             triggered = False
@@ -802,7 +802,7 @@ class ContainerGroupingMixin:
                               f"未触发 (是不是把方向选反了?)", flush=True)
                 st['side'] = cur_side
             else:
-                cur_in = self._point_in_polygon(cx, cy, zone_polygon)
+                cur_in = zone_check(cx, cy)
                 prev_in = st.get('in_zone')
                 if prev_in is False and cur_in:
                     triggered = True

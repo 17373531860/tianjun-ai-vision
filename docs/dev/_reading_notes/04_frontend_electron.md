@@ -13,6 +13,32 @@
 > 多屏工位显示卡自 `Settings/DisplaySettingsTab.vue` 抽为 `views/Source/MultiMonitorPanel.vue`；
 > 容器装箱清点块自 `Project/LogicConfigTab.vue` 抽为 `Project/CustomMixBoxTab.vue`（「装箱清点」条件 tab）。
 
+> **v3.59 补账（2026-09-17，容器定界周期配置面）**：
+> - `views/Project/LogicConfigTab.vue`（+40 行）：自定义模式新增「周期定界」`el-select`（steps=步骤驱动默认 / container=容器定界）+ owner='container' 时露出参数卡——容器标签（filterable+allow-create 下拉，选项来自 nonBackupSteps；e2e 交互用"输入+回车"不点选项）、到位确认秒（0~30 步 0.5）、离场确认秒（0.5~60 步 0.5）；提示文案说明容器标签行建议步骤设置里关闭启用。
+> - `views/Project/index.vue`（+25 行）：`custom_cycle_owner`/`container_gate_label`/`container_gate_appear_seconds`/`container_gate_gone_seconds` 四字段三处对齐——水合（~L1228，从 pipeline_config 读默认 steps/''/1.0/3.0）、同步回 pipeline_config（~L1802，owner!='container' 时 label 清空）、保存 payload（~L2015）。改键名时三处+后端 apply 一起动。
+> - e2e：`tests/e2e_browser/test_container_cycle_owner.py`（预填/翻转保存落库/默认零差异 3 例）。
+>
+> **v3.58 补账（2026-09-17，工位检测屏跟皮拆参观屏 + sidecar 回放叠加 + custom 超时配置面）**：
+> - `electron/main.js` / `multi-monitor.js`：**参观屏开窗与 viewer 槽删除**（旧 visitor 配置字段忽略）；工位检测窗（station_view/kiosk）生命周期收口——License 守门（未授权不开窗/守门重应用清已存在窗）、before-quit/finishShutdown/backend-stopped 三出口清理、renderer 60s 窗口 3 次崩溃熔断、webRequest 工位流隔离（工位窗手拼流强制 station 保留真实 channel 不循环重定向）。**新 `electron/test/main-station-lifecycle.test.js`**（352 行 vm 沙箱真跑 main.js 只模拟进程边界，37 用例）。
+> - `views/Monitor/index.vue`：工位检测屏跟随总控——`layoutBodyDisplayRole`（main/station）+ `stationDisplayMode`（kiosk/station_view 且非 hands_crop）；layout.body 自定义布局同步应用到工位窗；`selectedChannel` 改 computed 锁定（工位屏 get 恒 requestedWindowChannel，插件 emit/异步初始化/运行态重置切不走）；只读统一 `singleChannelReadonly=(kiosk||station_view)&&kioskReadonly`。**新 `views/Monitor/readonlyActions.js`**：`protectMonitorActions(actions, isReadonly)` 把布局区块动作表包一层只读守门（vitest `__tests__/readonlyActions.test.js` 12 用例）。`layout/index.vue`/`Navbar.vue`/`BottomBar.vue`/`router/index.js`/`composables/useDisplayWindow.js`：工位窗沿用主屏导航、显示角色传递、参观屏路由清除。
+> - `views/Data/components/VideoPlayerDialog.vue`（+158 行）：回放检测框叠加——拉 `GET /data/videos/{id}/boxes`（404=没框数据不显示开关），canvas 覆盖层按当前播放帧号（currentTime×fps）二分查 run-length 记录画归一化框，可开关；带框版下载按钮（`/annotated`）。`DataSettingsTabs.vue`：「记录检测框数据」开关（record_boxes_data）；`VideoArchiveDialog.vue`：归档规则「投递带框版」开关；`api/data.js` 对应封装。
+> - `views/Project/LogicConfigTab.vue`：「超时结算」卡 custom 模式露出「超时中断事件」下拉（`idle_timeout_event_id`，events_config 选项，清空=回退事件 2，超时=0 禁用）；`Project/index.vue` 载荷透传（custom_based_on 空值语义=纯 custom）。
+> - `views/Model/CapabilityTryDrawer.vue`：朝向 tab 加「全角度头姿模型」开关（GET/PUT /orientation/config，`api/aitools.js` 封装）。
+>
+> **v3.57 补账（2026-09-15，六批次汇合发版前端/Electron 面）**：
+> - `Project/RoiEditorDialog.vue`：**多块绘制状态机**——`finishedShapes` 存已闭合块 + `roiPoints` 当前块，双击或「完成本块」闭合后可继续画下一块；「撤销点」/「删除上一块」编辑；分色+编号渲染；保存**单块存旧格式、多块存嵌套格式**；另新增「单点标定」模式（facing_dwell 仪表点）。
+> - **新 `utils/polygons.js`**：前端多块契约（normalizePolygons/serializePolygons/hasPolygons/polygonCount/normalizeRects/serializeRects/hasRects/pointInAnyPolygon），与后端 `source_geometry.py` 同源镜像。
+> - `Project/index.vue`/`LogicConfigTab.vue`/`StepsConfigTab.vue`/`LabelSplitDialog.vue`/`labelSplit.js`/`MES/ScannerPanel.vue`：全部 ROI 载入/保存/预览走 polygons.js 多块化（预览 v-for 渲染全部块）；LogicConfigTab 另增 OCR/异常检测配置卡；`Project/BasicSettingsTab.vue` 新增「能力挂件」卡（pose/ocr/anomaly 多选）。
+> - Monitor：**新 `OcrPanel.vue`/`AnomalyPanel.vue`**（OCR 读数与判定/异常分数曲线+热力图面板）；`useOverlayDrawing.js` 全部多边形 overlay 多块渲染 + `pointInAnyPolygon` 框过滤；`monitorModes.js`/`useMultiStreams.js`/`useChannelResults.js`/**新 `useSingleStream.js` 触点**——同工位独立观看槽（主屏放大不断副屏）+ 扩展步骤 OK/NG 恢复；**新 `HandsCropMonitor.vue`/`MonitorRoute.vue`**（手部裁切副屏只读路由终端）。
+> - `Model/index.vue`：三分区（我的/平台下发/内置能力）+ 能力/引擎徽标 + 更换权重对话框；**新 `Model/CapabilityTryDrawer.vue`（378 行）**：试一试抽屉（传图/读通道画面双入口、异常记忆库管理、VLM 连接配置、朝向罗盘、异常热力图）。**`AiTools/index.vue` 已删除**（v3.57 下线，路由/菜单同步移除，功能全量迁入抽屉）——本册旧 AiTools 条目视为历史。
+> - **新 `Projection/index.vue`（628 行）+ `Projection/guideEngine.js`（620 行）**：投影光引导全屏画布——Canvas2D 渲染（待机呼吸/目标区辉光/步骤链/OK 扫光+粒子/NG 脉冲），按 C 自动标定，四角自愈锚点，NG 悬停确认进度环，流向贝塞尔流光路径；**新 `Source/LightGuidePanel.vue`**（设置页参数卡）；`Source/MultiMonitorPanel.vue` 增「主屏内容」下拉（monitor|projection）+ 工位主屏/手部副屏配置行。
+> - **新 `api/lightguide.js`/`api/aitools.js`**、`api/model.js`（capabilities/bind）、`api/scanCollect.js`（settle-now）。
+> - `MES/ScanCollectConfigCard.vue`/`Monitor/ScanSlotsPanel.vue`：v3.56.0a 四开关（催扫秒数/扫满结算/待机静默/扫码结算计数）+「本件扫完」按钮。
+> - `electron/main.js`/`multi-monitor.js`：窗口角色 `role(main|aux)` × 内容角色 `contentRole(monitor|projection)` 双轨——`buildKioskHash` 第 4 参、contentRole 进 signature 换角色重建、投影画布永远独立建窗不参与主窗复用；工位主屏落 OS 主显示器时复用主应用窗 station_view。
+> - `electron/backend-manager.js`：代管嵌入式 PG `pg_ctl start/stop`（Linux/macOS 包），起不来跳过 DSN 注入回落 SQLite。
+> - `electron/license-manager.js`：新增 `probeMacos()` ioreg 硬件指纹——修 darwin 误走 probeLinux 读 /sys 全空致 machineId 永为弱 ID（License 体系在 Mac 不可用）。
+> - `router/index.js`/`App.vue`/`main.js`：新增 `/projection`、hands 副屏路由；AiTools 路由删除。
+>
 > **v3.56 补账（2026-09-01，多码采集前端全链 + 并行簇）**：
 > - **新文件 `views/Monitor/ScanSlotsPanel.vue`**：多码采集面板双形态——`compact`（徽标条：总进度 N/M + NG 挂起脉冲徽标 + 逐槽 got/expected 徽标 + 「明细」浮层 `.scan-slots-popover`，teleport 到 body 需全局样式压深色）与完整形态（NG 挂起横幅带「按 NG 放行」popconfirm + `ScanSlotsDetail` + 上组结算行 `scan-last-settled` + **上组码列表灰显保留到下一件开扫**（确认单 7.4，`!state.collecting` 时显示 last_settled.codes））。`readonly`（kiosk）屏蔽删码/清空/放行全部写通路。数据源：检测结果轮询载荷 `scan_collect` 段（`composables/useChannelResults.js` 透出），未启用项目=null 零渲染。
 > - **新文件 `views/Monitor/ScanSlotsDetail.vue`**：逐槽码列表（`scan-code-chip`/`scan-code-remove`/`scan-clear-btn`），删码/清空走 `api/scanCollect.js`。

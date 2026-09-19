@@ -15,6 +15,8 @@ const chState = (over = {}) => ({
   backupCoveredLabels: [],
   stepInflightDurations: {},
   prevSteps: [],
+  prevTableData: [],
+  resetPreviousResults: false,
   ...over,
 });
 
@@ -114,6 +116,389 @@ describe('buildChannelStepViews — 守门与常规模式', () => {
     );
     expect(r.tableData.map(x => x.label)).toEqual(['fb']);
   });
+
+  it('普通顺序模式与主屏一致渲染逐步骤 OK/NG', () => {
+    const payload = {
+      detections: [],
+      cycle_sum_step_durations: { a: 0.8, b: 1.1 },
+      project_config: {
+        logic_mode: 'sequential',
+        steps_config: [
+          { label: 'a', enabled: true },
+          { label: 'b', enabled: true },
+        ],
+      },
+    };
+    const r = buildChannelStepViews(
+      payload,
+      null,
+      chState({ currentCycleSteps: ['b', 'a'] }),
+    );
+
+    expect(r.tableData.map(x => [x.label, x.status, x.cycleResult])).toEqual([
+      ['a', 'completed', 'ok'],
+      ['b', 'completed', 'ng'],
+    ]);
+  });
+
+  it('无序 detection 的中间步骤交换顺序仍全部为 OK', () => {
+    const r = buildChannelStepViews({
+      detections: [],
+      cycle_sum_step_durations: { a: 0.5, b: 0.6, c: 0.7, d: 0.8 },
+      project_config: {
+        logic_mode: 'detection',
+        steps_config: [
+          { label: 'a', enabled: true },
+          { label: 'b', enabled: true },
+          { label: 'c', enabled: true },
+          { label: 'd', enabled: true },
+        ],
+      },
+    }, null, chState({ currentCycleSteps: ['a', 'c', 'b', 'd'] }));
+
+    expect(r.tableData.map(x => [x.label, x.status, x.cycleResult])).toEqual([
+      ['a', 'completed', 'ok'],
+      ['b', 'completed', 'ok'],
+      ['c', 'completed', 'ok'],
+      ['d', 'completed', 'ok'],
+    ]);
+  });
+
+  it('周期间隙保留上一轮逐步骤结果，新周期首步未入列时也清除旧结果', () => {
+    const project_config = {
+      logic_mode: 'sequential',
+      steps_config: [
+        { label: 'a', enabled: true },
+        { label: 'b', enabled: true },
+      ],
+    };
+    const settled = buildChannelStepViews(
+      {
+        detections: [],
+        cycle_sum_step_durations: { a: 0.8, b: 1.1 },
+        project_config,
+      },
+      null,
+      chState({ currentCycleSteps: ['b', 'a'] }),
+    );
+    const idle = buildChannelStepViews(
+      { detections: [], project_config },
+      null,
+      chState({ prevTableData: settled.tableData }),
+    );
+    const nextCycle = buildChannelStepViews(
+      {
+        detections: [],
+        cycle_sum_step_durations: {},
+        project_config,
+      },
+      null,
+      chState({
+        currentCycleSteps: [],
+        prevTableData: idle.tableData,
+        resetPreviousResults: true,
+      }),
+    );
+
+    expect(idle.tableData.map(x => x.cycleResult)).toEqual(['ok', 'ng']);
+    expect(nextCycle.tableData.map(x => x.cycleResult)).toEqual([null, null]);
+    expect(nextCycle.tableData.map(x => x.status)).toEqual(['pending', 'pending']);
+    expect(settled.sopSteps.map(x => x.cycleResult)).toEqual(['ok', 'ng']);
+  });
+
+  it('新周期边界后的连续空轮询不会让上一轮新鲜事件重新回灌', () => {
+    const project_config = {
+      logic_mode: 'sequential',
+      steps_config: [
+        { label: 'a', enabled: true },
+        { label: 'b', enabled: true },
+      ],
+    };
+    const staleEventPayload = {
+      detections: [],
+      project_config,
+      recent_events: [{ event_id: '1', seq: 9, timestamp: 300, reason: '上一轮顺序正确' }],
+    };
+    const boundaryMs = 300_100;
+    const firstPoll = buildChannelStepViews(staleEventPayload, null, chState({
+      resetPreviousResults: true,
+      resultEventIgnoreBeforeMs: boundaryMs,
+      cycleInProgress: false,
+      nowMs: 300_100,
+    }));
+    const secondPoll = buildChannelStepViews(staleEventPayload, null, chState({
+      prevTableData: firstPoll.tableData,
+      resultEventIgnoreBeforeMs: boundaryMs,
+      cycleInProgress: false,
+      nowMs: 300_200,
+    }));
+
+    expect(firstPoll.tableData.map(x => x.cycleResult)).toEqual([null, null]);
+    expect(secondPoll.tableData.map(x => x.cycleResult)).toEqual([null, null]);
+  });
+
+  it('结算清空步骤后用新鲜 OK 结算提示补齐末步，并同步表格与 SOP', () => {
+    const project_config = {
+      logic_mode: 'sequential',
+      steps_config: [
+        { label: 'a', enabled: true },
+        { label: 'b', enabled: true },
+      ],
+    };
+    const beforeSettle = buildChannelStepViews({
+      detections: [{ label: 'b' }],
+      cycle_sum_step_durations: { a: 0.8 },
+      project_config,
+    }, null, chState({ currentCycleSteps: ['a', 'b'] }));
+    const settled = buildChannelStepViews({
+      detections: [],
+      cycle_sum_step_durations: { a: 0.8, b: 1.1 },
+      recent_events: [{ event_id: '1', seq: 7, timestamp: 100, reason: '顺序正确' }],
+      project_config,
+    }, null, chState({ prevTableData: beforeSettle.tableData, nowMs: 100_100 }));
+
+    expect(beforeSettle.tableData.map(x => x.cycleResult)).toEqual(['ok', null]);
+    expect(settled.tableData.map(x => [x.status, x.cycleResult, x.resultFinalized])).toEqual([
+      ['completed', 'ok', true],
+      ['completed', 'ok', true],
+    ]);
+    expect(settled.sopSteps.map(x => x.cycleResult)).toEqual(['ok', 'ok']);
+  });
+
+  it('NG 结算提示把明确缺失步骤标红，已做步骤保持 OK', () => {
+    const r = buildChannelStepViews({
+      detections: [],
+      cycle_sum_step_durations: { a: 0.8 },
+      recent_events: [{
+        event_id: 2,
+        seq: 8,
+        timestamp: 200,
+        reason: "周期不完整，缺少: ['b']",
+      }],
+      project_config: {
+        logic_mode: 'sequential',
+        steps_config: [
+          { label: 'a', enabled: true },
+          { label: 'b', enabled: true },
+        ],
+      },
+    }, null, chState({ nowMs: 200_100 }));
+
+    expect(r.tableData.map(x => [x.status, x.cycleResult, x.resultFinalized])).toEqual([
+      ['completed', 'ok', true],
+      ['pending', 'ng', true],
+    ]);
+    expect(r.sopSteps.map(x => x.cycleResult)).toEqual(['ok', 'ng']);
+  });
+
+  it('明确缺项清单允许 A-B-A 的非缺项重复步骤保持 OK', () => {
+    const r = buildChannelStepViews({
+      detections: [],
+      cycle_sum_step_durations: { a: 0.8 },
+      recent_events: [{
+        event_id: 2,
+        seq: 80,
+        timestamp: 204,
+        reason: "周期不完整，缺少: ['b']",
+      }],
+      project_config: {
+        logic_mode: 'sequential',
+        pipeline_config: {
+          sequence_order: [{ step_id: 1 }, { step_id: 2 }, { step_id: 1 }],
+        },
+        steps_config: [
+          { id: 1, label: 'a', enabled: true },
+          { id: 2, label: 'b', enabled: true },
+        ],
+      },
+    }, null, chState({ nowMs: 204_100 }));
+
+    expect(r.tableData.map(x => x.cycleResult)).toEqual(['ok', 'ng', 'ok']);
+  });
+
+  it('缺步 NG 事件只消费一次，后续轮询靠 finalized 前态持续保留 pending+NG', () => {
+    const event = {
+      event_id: 2,
+      seq: 81,
+      timestamp: 205,
+      reason: "周期不完整，缺少: ['b']",
+    };
+    const payload = {
+      detections: [],
+      cycle_sum_step_durations: { a: 0.8 },
+      recent_events: [event],
+      project_config: {
+        logic_mode: 'sequential',
+        steps_config: [
+          { label: 'a', enabled: true },
+          { label: 'b', enabled: true },
+        ],
+      },
+    };
+    const first = buildChannelStepViews(payload, null, chState({ nowMs: 205_100 }));
+    const second = buildChannelStepViews(payload, null, chState({
+      prevTableData: first.tableData,
+      lastHandledResultEventKey: first.handledResultEventKey,
+      nowMs: 205_250,
+    }));
+
+    expect(first.handledResultEventKey).toBe('2|81|205');
+    expect(second.handledResultEventKey).toBeNull();
+    expect(second.tableData.map(x => [x.status, x.cycleResult, x.resultFinalized])).toEqual([
+      ['completed', 'ok', true],
+      ['pending', 'ng', true],
+    ]);
+  });
+
+  it('外部事件响应和补做挂起事件不能冒充周期结算结果', () => {
+    const project_config = {
+      logic_mode: 'sequential',
+      steps_config: [{ label: 'a', enabled: true }],
+    };
+    const external = buildChannelStepViews({
+      detections: [],
+      project_config,
+      recent_events: [{ event_id: 1, seq: 82, timestamp: 210, source: 'channel_group' }],
+    }, null, chState({ nowMs: 210_100 }));
+    const remediation = buildChannelStepViews({
+      detections: [],
+      project_config,
+      pending_remediation: { kind: 'missing_step' },
+      recent_events: [{ event_id: 2, seq: 83, timestamp: 211, remediation: true }],
+    }, null, chState({ nowMs: 211_100 }));
+
+    expect(external.tableData[0].cycleResult).toBeNull();
+    expect(remediation.tableData[0].cycleResult).toBeNull();
+  });
+
+  it('周期计数器确认的最终 verdict 优先于可能被插件翻转前写入的事件 ID', () => {
+    const r = buildChannelStepViews({
+      detections: [],
+      recent_events: [{ event_id: 2, seq: 84, timestamp: 215, reason: "缺少: ['b']" }],
+      project_config: {
+        logic_mode: 'sequential',
+        steps_config: [
+          { label: 'a', enabled: true },
+          { label: 'b', enabled: true },
+        ],
+      },
+    }, null, chState({ settledVerdict: 'ok', nowMs: 215_100 }));
+
+    expect(r.tableData.map(x => x.cycleResult)).toEqual(['ok', 'ok']);
+  });
+
+  it('NG 结算提示的“第 N 步顺序错误”精确标记对应位置，不能全步 OK', () => {
+    const r = buildChannelStepViews({
+      detections: [],
+      cycle_sum_step_durations: { a: 0.8, b: 1.1 },
+      recent_events: [{ event_id: 2, seq: 10, timestamp: 220, reason: '第2步顺序错误' }],
+      project_config: {
+        logic_mode: 'sequential',
+        steps_config: [
+          { label: 'a', enabled: true },
+          { label: 'b', enabled: true },
+        ],
+      },
+    }, null, chState({ nowMs: 220_100 }));
+
+    expect(r.tableData.map(x => x.cycleResult)).toEqual(['ok', 'ng']);
+  });
+
+  it('无法定位具体步骤的 NG 不猜测位置，也不能用 PT 伪造全步 OK', () => {
+    const r = buildChannelStepViews({
+      detections: [],
+      cycle_sum_step_durations: { a: 0.8, b: 1.1 },
+      recent_events: [{ event_id: 2, seq: 11, timestamp: 230, reason: '物品校验未通过' }],
+      project_config: {
+        logic_mode: 'sequential',
+        steps_config: [
+          { label: 'a', enabled: true },
+          { label: 'b', enabled: true },
+        ],
+      },
+    }, null, chState({ nowMs: 230_100 }));
+
+    expect(r.tableData.map(x => x.cycleResult)).toEqual([null, null]);
+  });
+
+  it('custom 条件事件不能把未参与条件的全部步骤盖成 OK', () => {
+    const r = buildChannelStepViews({
+      detections: [],
+      recent_events: [{
+        event_id: 1,
+        seq: 111,
+        timestamp: 235,
+        reason: "自定义条件匹配: ['a']",
+      }],
+      project_config: {
+        logic_mode: 'custom',
+        custom_based_on: 'sequential',
+        steps_config: [
+          { label: 'a', enabled: true },
+          { label: 'b', enabled: true },
+        ],
+      },
+    }, null, chState({ nowMs: 235_100 }));
+
+    expect(r.tableData.map(x => x.cycleResult)).toEqual([null, null]);
+  });
+
+  it('重复标签 NG 依据前态唯一未决位置落点，不把 A-B-A 两张 A 全部染红', () => {
+    const r = buildChannelStepViews({
+      detections: [],
+      cycle_sum_step_durations: { a: 0.8, b: 0.6 },
+      recent_events: [{ event_id: 2, seq: 12, timestamp: 240, reason: "重复步骤: ['a']" }],
+      project_config: {
+        logic_mode: 'sequential',
+        pipeline_config: {
+          sequence_order: [{ step_id: 1 }, { step_id: 2 }, { step_id: 1 }],
+        },
+        steps_config: [
+          { id: 1, label: 'a', enabled: true },
+          { id: 2, label: 'b', enabled: true },
+        ],
+      },
+    }, null, chState({
+      prevTableData: [
+        { label: 'a', status: 'completed', cycleResult: 'ok' },
+        { label: 'b', status: 'completed', cycleResult: 'ok' },
+        { label: 'a', status: 'pending', cycleResult: null },
+      ],
+      nowMs: 240_100,
+    }));
+
+    expect(r.tableData.map(x => x.cycleResult)).toEqual(['ok', 'ok', 'ng']);
+  });
+
+  it('A-B-A 重复标签按位置分配，不会把第一张 A 状态串给第三张', () => {
+    const project_config = {
+      logic_mode: 'sequential',
+      pipeline_config: {
+        sequence_order: [{ step_id: 1 }, { step_id: 2 }, { step_id: 1 }],
+      },
+      steps_config: [
+        { id: 1, label: 'a', enabled: true },
+        { id: 2, label: 'b', enabled: true },
+      ],
+    };
+    const partial = buildChannelStepViews({
+      detections: [],
+      cycle_sum_step_durations: { a: 0.4 },
+      project_config,
+    }, null, chState({ currentCycleSteps: ['a'] }));
+    const complete = buildChannelStepViews({
+      detections: [],
+      cycle_sum_step_durations: { a: 0.8, b: 0.6 },
+      project_config,
+    }, null, chState({ currentCycleSteps: ['a', 'b', 'a'] }));
+
+    expect(partial.tableData.map(x => [x.label, x.status, x.cycleResult])).toEqual([
+      ['a', 'completed', 'ok'],
+      ['b', 'pending', null],
+      ['a', 'pending', null],
+    ]);
+    expect(complete.tableData.map(x => x.cycleResult)).toEqual(['ok', 'ok', 'ok']);
+  });
 });
 
 describe('buildChannelStepViews — region_events', () => {
@@ -146,6 +531,14 @@ describe('buildChannelStepViews — region_events', () => {
       chState(),
     );
     expect(r.tableData.map(x => x.label)).toEqual(['兜底规则']);
+  });
+
+  it('区域事件模式不把通用 recent_events 文案推断成步骤 NG', () => {
+    const r = buildChannelStepViews({
+      ...payload,
+      recent_events: [{ event_id: 2, timestamp: 300, reason: "缺少: ['扫码']" }],
+    }, null, chState({ nowMs: 300_100 }));
+    expect(r.tableData.map(x => x.cycleResult)).toEqual([null, null]);
   });
 });
 
@@ -212,6 +605,21 @@ describe('buildChannelStepViews — tracking', () => {
       },
     }, null, chState());
     expect(r.tableData[0]).toMatchObject({ label: '螺丝', status: 'completed', cycleResult: 'ok' });
+  });
+
+  it('tracking 新周期 checklist 清空时不继承上一轮 OK', () => {
+    const r = buildChannelStepViews({
+      detections: [],
+      tracking: { item_checklist: { '螺丝': { counted: 0 } } },
+      project_config: {
+        logic_mode: 'tracking',
+        steps_config: [{ label: '螺丝', enabled: true }],
+      },
+    }, null, chState({
+      resetPreviousResults: true,
+      prevTableData: [{ label: '螺丝', status: 'completed', cycleResult: 'ok' }],
+    }));
+    expect(r.tableData[0]).toMatchObject({ status: 'pending', cycleResult: null });
   });
 });
 

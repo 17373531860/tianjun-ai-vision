@@ -9,7 +9,7 @@
   <!-- tj-layout-body-override: 稳定类名, 供插件 theme.css 选做全屏化 (盖掉宿主导航栏, 与插件其它整页覆盖页视觉连续) -->
   <div
     v-if="effectiveLayoutBodyOverride"
-    class="tj-layout-body-override relative -mx-4 -mt-4 h-[calc(100vh-6.25rem)] min-h-0 w-[calc(100%+2rem)] overflow-hidden"
+    class="tj-layout-body-override relative min-h-0 overflow-hidden -mx-4 -mt-4 h-[calc(100vh-6.25rem)] w-[calc(100%+2rem)]"
   >
     <component
       :is="effectiveLayoutBodyOverride"
@@ -20,6 +20,8 @@
       :current-project="currentProject"
       :actions="layoutBodyActions"
       :stream-url-builder="buildMultiStreamUrl"
+      :display-role="layoutBodyDisplayRole"
+      :readonly="stationDisplayMode && kioskReadonly"
       @update:selected-channel="selectedChannel = $event"
     />
 
@@ -86,7 +88,7 @@
       @clear="clearRecordingFailures" />
   </div>
 
-  <!-- 主屏放大态与副屏 kiosk 共用同一套单工位监看组件；组件只消费父级轮询/画布。 -->
+  <!-- 总控放大态与工位检测屏、手部副屏共用同一套单工位监看组件；组件只消费父级轮询/画布。 -->
   <SingleChannelMonitor
     v-else-if="singleChannelViewActive"
     :channel-id="activeSingleChannel"
@@ -94,6 +96,7 @@
     :model-stats="channelModelStats[activeSingleChannel]"
     :readonly="singleChannelReadonly"
     :kiosk="kioskMode"
+    :show-navigation="!stationViewMode"
     :has-project="!!(multiChannelData[activeSingleChannel]?.project || multiChannelData[activeSingleChannel]?._pollProjectConfig || currentProject)"
     :display-ct="getDisplayCT(multiChannelData[activeSingleChannel])"
     :show-fps="systemStore.display.monitor.showFps !== false"
@@ -114,10 +117,10 @@
     @back="exitZoom"
     @previous="zoomStep(-1)"
     @next="zoomStep(1)"
-    @start="startDetectionForChannel(activeSingleChannel)"
-    @stop="stopDetectionForChannel(activeSingleChannel)"
-    @standby="standbyForChannel(activeSingleChannel)"
-    @reset="openResetDialog(activeSingleChannel)"
+    @start="!singleChannelReadonly && startDetectionForChannel(activeSingleChannel)"
+    @stop="!singleChannelReadonly && stopDetectionForChannel(activeSingleChannel)"
+    @standby="!singleChannelReadonly && standbyForChannel(activeSingleChannel)"
+    @reset="!singleChannelReadonly && openResetDialog(activeSingleChannel)"
     @toggle-ng-top-mode="toggleNgTopMode()"
   >
     <template #context-bar>
@@ -824,7 +827,6 @@
         class="flex-shrink-0"
         :state="scanCollectFor(selectedChannel)"
         :channel-id="selectedChannel"
-        :readonly="false"
       />
 
       <!-- Middle: Charts + NG Ranking -->
@@ -1211,6 +1213,7 @@ import { startDetection as apiStartDetection, stopDetection as apiStopDetection,
 import { getModelDetail, resolveModelPath as apiResolveModelPath } from '@/api/model';
 import { getProjectDetail } from '@/api/project';
 import api, { getBackendHost } from '@/api/index';
+import { hasPolygons } from '@/utils/polygons';
 import { getExtraFieldsSchema, setExtraFields, getInboundConfig } from '@/api/gateway';
 import PerItemPanel from './PerItemPanel.vue';
 import PackagingFlowCard from './PackagingFlowCard.vue';
@@ -1234,6 +1237,7 @@ import { createFramePump } from './framePump';
 import { resolveLogicMode, resolveModePanelKind, resolveStepsToShow } from './monitorModes';
 import { useMultiStreams } from './composables/useMultiStreams';
 import { useSingleStream } from './composables/useSingleStream';
+import { protectMonitorActions } from './readonlyActions';
 import { useToastVoice } from './composables/useToastVoice';
 import { useOverlayDrawing } from './composables/useOverlayDrawing';
 import { useChannelResults } from './composables/useChannelResults';
@@ -1257,12 +1261,18 @@ const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
 const kioskMode = computed(() => route.query.kiosk === '1');
+const stationViewMode = computed(() => route.query.station_view === '1' && !kioskMode.value);
+const handsCropMode = computed(() => route.query.hands_crop === '1');
+// 工位检测屏跟随总控的插件皮；副屏仅指手部裁切，不包含工位检测屏。
+const stationDisplayMode = computed(() => !handsCropMode.value
+  && (kioskMode.value || stationViewMode.value));
+const layoutBodyDisplayRole = computed(() => stationDisplayMode.value ? 'station' : 'main');
 
 // ==================== v3.54 检测主页自定义布局 ====================
 // 形态键: 布局按形态独立保存。工位数/放大态决定形态族; 单工位再按逻辑模式细分
 // (不同模式下方看板不同)。插件整页覆盖 (monitor.layout.body) 时不套自定义布局。
 const { editMode: layoutEditMode } = layoutRuntimeState();
-const layoutEditActive = computed(() => layoutEditMode.value && !kioskMode.value);
+const layoutEditActive = computed(() => layoutEditMode.value && !kioskMode.value && !singleChannelReadonly.value);
 const canEditLayout = computed(() => authStore.hasPermission('monitor.layout.edit'));
 
 const monitorFormKey = computed(() => {
@@ -1297,7 +1307,7 @@ const enterLayoutEditWithRetry = (attempt = 0) => {
 // 立刻求值 source 触发 TDZ (真浏览器验证时整页白屏), 挂载后注册即安全。
 const setupLayoutWatchers = () => {
   watch(() => route.query.layout_edit, (v) => {
-    if (kioskMode.value) return;
+    if (kioskMode.value || singleChannelReadonly.value) return;
     if (v === '1') {
       if (!canEditLayout.value) {
         ElMessage.warning('当前账号没有「自定义检测主页布局」权限');
@@ -1331,7 +1341,9 @@ const kioskReadonly = computed(() => route.query.readonly !== '0');
 
 // v3.13 M2.2b: layout slot 覆盖 (整体 layout / 底栏). 没插件时永远是 null = 走原 layout.
 const layoutBodyOverride = computed(() => pluginThemeStore.getSlotComponent('monitor.layout.body'));
-const effectiveLayoutBodyOverride = computed(() => kioskMode.value ? null : layoutBodyOverride.value);
+const effectiveLayoutBodyOverride = computed(() => (
+  handsCropMode.value ? null : layoutBodyOverride.value
+));
 const layoutFooterOverride = computed(() => pluginThemeStore.getSlotComponent('monitor.layout.footer'));
 
 /** layout.body 插件内渲染主程序 TjSlot（步骤表 PT/结果列等） */
@@ -1343,7 +1355,7 @@ const renderMonitorSlot = (name, attrs, defaultRender) => {
 // v3.13.2 补丁: layout.body 插件需要的控制方法集合,
 // 没插件 (layoutBodyOverride === null) 时这个对象不会被消费, 主程序行为零差异.
 // 这些方法都封装了项目/模型解析 + 扫码闭环 + 报警等完整业务逻辑, 插件直接调即可.
-const layoutBodyActions = computed(() => ({
+const layoutBodyActions = computed(() => protectMonitorActions({
   startDetectionForChannel,
   stopDetectionForChannel,
   standbyForChannel,
@@ -1449,12 +1461,12 @@ const layoutBodyActions = computed(() => ({
     });
   },
   isMonitorSlotHidden: (name) => pluginThemeStore.isSlotHidden(name),
-}));
+}, () => stationDisplayMode.value && kioskReadonly.value));
 
 // 给 layout.body 插件构造每通道 MJPEG 流 URL 的 helper.
 // 主程序内部用 startMultiStreams 拉 multipart MJPEG 到 canvas (双缓冲), 插件用简化版 <img :src=url> 直接吃就够了.
 // 端点是 main.py 的 `/video_feed?channel=N` (不在 /api/v1/source 前缀下, 是顶层端点).
-const buildMultiStreamUrl = (ch) => `${getBackendHost()}/video_feed?channel=${ch}&t=${Date.now()}`;
+const buildMultiStreamUrl = (ch) => `${getBackendHost()}/video_feed?channel=${stationDisplayMode.value ? selectedChannel.value : ch}&viewer=${layoutBodyDisplayRole.value}&t=${Date.now()}`;
 
 // v3.4.2 "禁用扫码"按工位开关 helper
 const isScanDisabledFor = (ch) => scannerDisableStore.isChannelDisabled(ch);
@@ -1629,7 +1641,7 @@ onMounted(async () => {
   loadMonitorLayouts();
   setupLayoutWatchers();
   detachLayoutRuntime = attachLayoutRoot(document.body, () => monitorFormKey.value);
-  if (route.query.layout_edit === '1' && !kioskMode.value) {
+  if (route.query.layout_edit === '1' && !kioskMode.value && !singleChannelReadonly.value) {
     if (canEditLayout.value) nextTick(() => enterLayoutEditWithRetry());
     else router.replace({ query: { ...route.query, layout_edit: undefined } });
   }
@@ -1860,7 +1872,12 @@ const videoElement = computed(() => activeStream.value === 0 ? streamImg0.value 
 
 // ==================== Multi-Channel State ====================
 const channelCount = ref(1);
-const selectedChannel = ref(0);
+const overviewSelectedChannel = ref(0);
+// 插件 emit、异步工位初始化和运行态重置都不能把工位检测屏切到别的通道。
+const selectedChannel = computed({
+  get: () => stationDisplayMode.value ? Math.max(0, requestedWindowChannel.value) : overviewSelectedChannel.value,
+  set: (ch) => { if (!stationDisplayMode.value) overviewSelectedChannel.value = ch; },
+});
 const multiCanvasRefs = {};
 const multiChannelData = ref({});
 const multiLastSeenSeq = {};
@@ -1875,15 +1892,17 @@ const recordingFailureLoading = ref(false);
 const GRID_LAYOUT_KEY = 'monitor_grid_layout';
 const gridLayout = ref(localStorage.getItem(GRID_LAYOUT_KEY) || 'auto');  // 'auto' | '2x2' | '3x3' | '4x4'
 const gridPage = ref(0);
-const zoomedChannel = ref(null);  // null = 总览网格; 数字 = 放大的工位
-const requestedKioskChannel = computed(() => {
+const requestedWindowChannel = computed(() => {
   const value = Number.parseInt(String(route.query.channel ?? '0'), 10);
   return Number.isFinite(value) ? value : 0;
 });
+// station_view 是复用 OS 主屏的正常应用窗：首次加载即锁定指定工位并保留应用侧栏。
+const zoomedChannel = ref(stationViewMode.value ? requestedWindowChannel.value : null);
+const requestedKioskChannel = computed(() => requestedWindowChannel.value);
 const kioskChannel = computed(() => Math.min(Math.max(requestedKioskChannel.value, 0), Math.max(0, channelCount.value - 1)));
 const activeSingleChannel = computed(() => kioskMode.value ? kioskChannel.value : Math.min(Math.max(zoomedChannel.value ?? 0, 0), Math.max(0, channelCount.value - 1)));
 const singleChannelViewActive = computed(() => kioskMode.value || (channelCount.value > 1 && zoomedChannel.value !== null));
-const singleChannelReadonly = computed(() => kioskMode.value ? kioskReadonly.value : false);
+const singleChannelReadonly = computed(() => (kioskMode.value || stationViewMode.value) && kioskReadonly.value);
 
 // 主屏总览是否需要为多屏模式让出 MJPEG 长连接；配置获取失败保持默认关闭。
 const multiMonitorRuntime = ref({ enabled: false, readonly: true, mapping: {} });
@@ -1935,13 +1954,13 @@ const zoomChannel = (ch) => {
   nextTick(() => syncMultiStreams());
 };
 const selectOverviewChannel = (ch) => {
-  if (multiMonitorRuntime.value.enabled) {
-    zoomChannel(ch);
-  } else {
-    selectedChannel.value = ch;
-  }
+  // 双/三工位与 4+ 网格保持同一交互：点击总览视频卡即进入该工位详情。
+  // 多屏开启时的取流隔离由 useMultiStreams 负责：主窗口放大走 main 槽 MJPEG，
+  // 扩展出去的工位主窗走 station 槽，两者不会互相抢断。
+  zoomChannel(ch);
 };
 const exitZoom = () => {
+  if (stationViewMode.value) return;
   const ch = zoomedChannel.value;
   zoomedChannel.value = null;
   if (ch !== null) gridPage.value = Math.floor(ch / gridDims.value.pageSize);  // 返回总览停在该工位所在页
@@ -1949,6 +1968,7 @@ const exitZoom = () => {
 };
 
 const zoomStep = (delta) => {
+  if (stationViewMode.value) return;
   const n = channelCount.value || 1;
   if (zoomedChannel.value === null || n < 1) return;
   zoomChannel((zoomedChannel.value + delta + n) % n);
@@ -1963,6 +1983,13 @@ watch([gridPage, () => gridDims.value.pageSize, zoomedChannel], () => {
 watch(kioskChannel, (ch) => {
   if (!kioskMode.value) return;
   selectedChannel.value = ch;
+  nextTick(() => syncMultiStreams());
+});
+watch([stationViewMode, requestedWindowChannel], ([enabled, ch]) => {
+  if (!enabled) return;
+  const next = Math.min(Math.max(ch, 0), Math.max(0, channelCount.value - 1));
+  zoomedChannel.value = next;
+  selectedChannel.value = next;
   nextTick(() => syncMultiStreams());
 });
 watch(gridPageCount, (n) => { if (gridPage.value >= n) gridPage.value = 0; });
@@ -2077,7 +2104,7 @@ const {
   reconnectChannelStream,
   isMultiStreamRunning,
 } = useMultiStreams({
-  channelCount, kioskMode, kioskChannel, zoomedChannel,
+  channelCount, kioskMode, stationViewMode, kioskChannel, zoomedChannel,
   gridPageChannels, multiMonitorRuntime, effectiveLayoutBodyOverride,
   multiFrameNaturalSize,
   bitmapDecodeEnabled: () => systemStore.performance?.multiChannelBitmapDecode,
@@ -2093,11 +2120,16 @@ const fetchChannelCount = async () => {
     const count = res.data.channel_count || 1;
     channelCount.value = count;
     if (kioskMode.value) selectedChannel.value = kioskChannel.value;
+    if (stationViewMode.value && zoomedChannel.value !== null) {
+      const stationChannel = Math.min(Math.max(requestedWindowChannel.value, 0), count - 1);
+      zoomedChannel.value = stationChannel;
+      selectedChannel.value = stationChannel;
+    }
     if (selectedChannel.value >= count) {
       selectedChannel.value = 0;
     }
     // v3.47: 工位数变化后放大工位可能越界 → 退回总览
-    if (zoomedChannel.value !== null && zoomedChannel.value >= count) {
+    if (!stationViewMode.value && zoomedChannel.value !== null && zoomedChannel.value >= count) {
       zoomedChannel.value = null;
       gridPage.value = 0;
     }
@@ -2194,8 +2226,6 @@ const {
   selectedChannel,
   onFirstFrame: () => resizeCanvas(),
 });
-
-
 
 // 当前项目
 const currentProject = computed(() => projectStore.currentProject);
@@ -2902,9 +2932,10 @@ const syncProjectConfig = async (channel = 0, explicitProject = null) => {
     sequence_order: proj.sequence_order || proj.pipeline_config?.sequence_order || [],
     detection_steps: proj.detection_steps || proj.pipeline_config?.detection_steps || [],
     custom_conditions: proj.custom_conditions || proj.pipeline_config?.custom_conditions || [],
-    custom_based_on: proj.custom_based_on || proj.pipeline_config?.custom_based_on || 'sequential',
+    custom_based_on: proj.custom_based_on ?? proj.pipeline_config?.custom_based_on ?? null,
     settlement_mode: proj.settlement_mode || proj.pipeline_config?.settlement_mode || 'first_step',
-    idle_timeout_seconds: proj.idle_timeout_seconds ?? proj.pipeline_config?.idle_timeout_seconds ?? 0
+    idle_timeout_seconds: proj.idle_timeout_seconds ?? proj.pipeline_config?.idle_timeout_seconds ?? 0,
+    idle_timeout_event_id: proj.idle_timeout_event_id ?? proj.pipeline_config?.idle_timeout_event_id ?? null
   };
   await setProjectConfig({
     project_id: proj.id,
@@ -3053,7 +3084,7 @@ const startDetection = async () => {
             name: e.name, model_path: r.path,
             conf: typeof e.conf === 'number' ? e.conf : 0.25,
             iou: typeof e.iou === 'number' ? e.iou : 0.45,
-            roi: Array.isArray(e.roi) && e.roi.length >= 3 ? e.roi : null,
+            roi: hasPolygons(e.roi) ? e.roi : null,
             schedule: e.schedule || { type: 'every_frame', n: 1, events: [] },
             class_filter: Array.isArray(e.class_filter) && e.class_filter.length
               ? e.class_filter : null,
@@ -3529,6 +3560,7 @@ const handleScanToast = (scanEvent, ch = 0) => {
 // rebind 弹窗去重 — 传入事件所在通道而非 selectedChannel
 let rebindPromptShowing = false;
 const handleRebindPrompt = async (rebindData, ch = 0) => {
+  if (singleChannelReadonly.value) return;
   if (rebindPromptShowing) return;
   rebindPromptShowing = true;
   const chLabel = channelCount.value > 1 ? `工位 ${ch + 1} - ` : '';
@@ -4189,8 +4221,14 @@ const resetCountersForChannel = async (ch) => {
       ng: 0,
       yieldRate: 0,
       ngStepRanking: [],
-      steps: (chData.steps || []).map(s => ({ ...s, status: 'pending', screenshot: null })),
-      tableData: (chData.tableData || []).map(t => ({ ...t, count: 0, status: 'pending' })),
+      resultEventIgnoreBeforeMs: Date.now(),
+      counterSettledVerdict: null,
+      steps: (chData.steps || []).map(s => ({
+        ...s, status: 'pending', cycleResult: null, resultFinalized: false, screenshot: null,
+      })),
+      tableData: (chData.tableData || []).map(t => ({
+        ...t, count: 0, status: 'pending', cycleResult: null, resultFinalized: false,
+      })),
     };
   }
   ElMessage.success(`工位 ${ch + 1} 计数器已清零`);
@@ -4230,8 +4268,14 @@ const confirmResetCycle = async () => {
       const chData = multiChannelData.value[ch];
       multiChannelData.value[ch] = {
         ...chData,
-        steps: (chData.steps || []).map(s => ({ ...s, status: 'pending' })),
-        tableData: (chData.tableData || []).map(t => ({ ...t, status: 'pending' })),
+        resultEventIgnoreBeforeMs: Date.now(),
+        counterSettledVerdict: null,
+        steps: (chData.steps || []).map(s => ({
+          ...s, status: 'pending', cycleResult: null, resultFinalized: false,
+        })),
+        tableData: (chData.tableData || []).map(t => ({
+          ...t, status: 'pending', cycleResult: null, resultFinalized: false,
+        })),
       };
     }
     ElMessage.success(res?.data?.message || '本周期数据已清理');
@@ -4366,6 +4410,7 @@ const triggerEvent = (eventId) => {
 // 自动恢复输入源（返回是否成功恢复）
 // 优先检查后端是否已自动恢复（auto_restore_video_sources），其次用 localStorage 兜底
 const autoRestoreSource = async () => {
+  if (kioskMode.value || singleChannelReadonly.value) return false;
   try {
     const status = await getSourceStatus();
     if (status.data.is_running) {
@@ -4488,8 +4533,8 @@ onMounted(async () => {
   await loadMultiMonitorRuntime();
   await fetchChannelCount();
   if (!monitorMounted) return;
-  // kiosk 仅保留自己的 multi 轮询与一路视频；不启动扫码、自动恢复、全局看门狗等写通路。
-  if (kioskMode.value) return;
+  // 独立工位窗和只读窗不重复自动恢复主窗口输入源；可操作总控保留原启动行为。
+  if (kioskMode.value || singleChannelReadonly.value) return;
   loadExtraFieldsSchema();
   scannerDisableStore.loadStatus();
 

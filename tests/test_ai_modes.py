@@ -51,7 +51,8 @@ class TestParseConfigs:
         assert r['_pattern'] is not None
         assert r['_pattern'].search('SN123456')
         assert not r['_pattern'].search('XX123')
-        assert r['roi'] == [0.1, 0.2, 0.5, 0.3]
+        # 2026-09 多块化: roi 统一归一成 canonical 多块形态 [[x,y,w,h], ...]
+        assert r['roi'] == [[0.1, 0.2, 0.5, 0.3]]
         assert r['ok_event_id'] == 1 and r['ng_event_id'] == 2
         assert r['on_change_only'] is True and r['settle'] is True
 
@@ -69,10 +70,14 @@ class TestParseConfigs:
         assert cfg['ng_cooldown_s'] == 0.0
 
     def test_norm_rect(self):
-        assert _norm_rect([0.1, 0.1, 0.5, 0.5]) == [0.1, 0.1, 0.5, 0.5]
+        # 2026-09 多块化: 单块入参也归一成 canonical 多块形态
+        assert _norm_rect([0.1, 0.1, 0.5, 0.5]) == [[0.1, 0.1, 0.5, 0.5]]
         assert _norm_rect(None) is None
         assert _norm_rect([0.1, 0.1]) is None
         assert _norm_rect([0.1, 0.1, 0, 0.5]) is None   # w<=0
+        # 多块入参原样保留两块
+        assert _norm_rect([[0.1, 0.1, 0.2, 0.2], [0.5, 0.5, 0.3, 0.3]]) == \
+            [[0.1, 0.1, 0.2, 0.2], [0.5, 0.5, 0.3, 0.3]]
 
 
 # ==================== VSM 桩 ====================
@@ -314,6 +319,20 @@ class TestFacingDwell:
         eng.frame_aspect = 0.5625
         ok, _ = eng._facing_condition(cfg.rules[0], {'人': [det]}, time.time())
         assert not ok
+
+    def test_require_operator_filters_non_ops(self):
+        """黄背心外协即使朝向命中也不确认; 蓝工装 is_operator=True 才算。"""
+        cfg = _facing_cfg(require_operator=True, min_frames=1)
+        assert cfg.rules[0].require_operator is True
+        eng = RegionEventEngine(cfg)
+        eng.frame_aspect = 0.5625
+        vest = {'label': '人', 'x': 0.45, 'y': 0.4, 'w': 0.1, 'h': 0.2,
+                'confidence': 0.9, 'facing': -20.0, 'is_operator': False}
+        evs = eng.process_frame([vest], 1.0)
+        assert evs == []
+        op = dict(vest, is_operator=True)
+        evs = eng.process_frame([op], 2.0)
+        assert any(e.get('action') == 'confirmed' for e in evs)
 
     def test_episode_confirm_via_process_frame(self):
         """facing 连续满足 min_frames 帧 → confirmed 事件产出。"""

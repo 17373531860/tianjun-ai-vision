@@ -1888,6 +1888,10 @@ def get_detection_results(
         # v3.8.x: in-flight 实时 PT (步骤还在画面里, 持续涨), 独立字段, 不污染权威值。
         # 前端用法: PT 列 fallback 显示, 状态判定不取这个 (否则"没稳定就标 OK")。
         "step_inflight_durations": step_inflight_durations,
+        # 2026-09 能力挂件输出 (pose 朝向角 / ocr 最近读字 / anomaly 最近得分);
+        # 无挂件恒 {} (前端按空对象跳过渲染)
+        "capability_outputs": (mgr.capability_attachment_outputs()
+                               if hasattr(mgr, 'capability_attachment_outputs') else {}),
         "avg_step_durations": avg_step_durations,
         "last_step_durations": last_step_durations,
         # v3.5.x: PT 合并档 — 当前周期内 SUM / 最近一周期 SUM / 历史周期 SUM 平均
@@ -2162,6 +2166,14 @@ def get_detection_results(
             pa_status = mgr.get_periodic_actions_status()
             if pa_status:
                 result['periodic_actions'] = pa_status
+    except Exception:
+        pass
+
+    # v3.59: 容器定界周期门状态（容器在场/周期开合, 未配置不透出零差异）
+    try:
+        _cgate = getattr(mgr, '_container_cycle_gate', None)
+        if _cgate is not None:
+            result['container_gate'] = _cgate.to_state(mgr)
     except Exception:
         pass
 
