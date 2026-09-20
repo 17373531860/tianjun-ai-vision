@@ -74,6 +74,9 @@ def test_hands_aux_secondary_screen_never_pulls_video_feed(page, hands_aux_guard
     page.wait_for_timeout(3_000)
 
     assert page.locator("[data-testid=hands-crop-image]").count() == 1
+    assert page.locator("button, nav, canvas").count() == 0
+    assert page.locator("img").count() == 1
+    assert not recorder.api, f"手部屏不应启动业务轮询: {recorder.api[:3]}"
     assert not recorder.feed, f"副屏不该拉 /video_feed: {recorder.feed[:2]}"
     assert recorder.snapshot, "副屏应该在轮询 /snapshot"
     assert all("view=hands" in u for u in recorder.snapshot), recorder.snapshot[:2]

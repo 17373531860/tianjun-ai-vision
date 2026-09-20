@@ -4,14 +4,11 @@
 
 <script setup>
 import { computed, defineAsyncComponent } from 'vue';
-import { useRoute } from 'vue-router';
+import { useDisplayWindow } from '@/composables/useDisplayWindow';
 
 const FullMonitor = defineAsyncComponent(() => import('./index.vue'));
 const HandsCropMonitor = defineAsyncComponent(() => import('./HandsCropMonitor.vue'));
 
-const route = useRoute();
-const handsCropMode = computed(() => (
-  route.query.video_only === '1' && route.query.hands_crop === '1'
-));
+const { handsOnly: handsCropMode } = useDisplayWindow();
 const activeView = computed(() => handsCropMode.value ? HandsCropMonitor : FullMonitor);
 </script>

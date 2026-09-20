@@ -45,7 +45,7 @@ SCENARIO = {
     ],
 }
 
-# kiosk 页面绝不该出现的入口（本期禁止一体机做项目管理）
+# kiosk 页面保留外观但必须禁用的管理入口。
 FORBIDDEN_NAV = ["/project", "/model", "/source", "/settings", "/interconnect"]
 
 
@@ -217,10 +217,7 @@ def main() -> int:
             # --- 同源：这是一拖多最容易静默失效的一环 ---
             # .env.production 里写死 VITE_API_BASE_URL=http://localhost:8001 时，
             # 一体机会把所有请求打给自己那台没后端的机器，页面看着"在转"其实全挂。
-            run.step("axios baseURL 解析为同源相对路径 (没有写死 localhost)",
-                     "/api/v1" in k0.base_url_log and "localhost" not in k0.base_url_log
-                     and "127.0.0.1" not in k0.base_url_log,
-                     k0.base_url_log or "(没捕获到 [API] Final baseURL 日志)")
+            # 生产构建静默 console.log，以请求地址验证同源行为。
             off_origin_api = [u for u in k0.api_reqs if not u.startswith(STATION)]
             run.step("所有 API 请求都打回页面 origin",
                      k0.api_reqs and not off_origin_api,
@@ -230,15 +227,16 @@ def main() -> int:
                      streams0 and not off_origin_stream,
                      f"样本={streams0[:1]} 跑偏={off_origin_stream[:2]}")
 
-            # --- kiosk 无项目/设置入口 ---
+            # --- kiosk 保留导航外观，管理入口禁用 ---
             for label, page in (("工位 0", page0), ("工位 1", page1)):
-                html = page.content()
-                leaked = [nav for nav in FORBIDDEN_NAV if f'href="#{nav}"' in html]
-                run.step(f"{label} kiosk 无项目/模型/输入源/设置入口",
-                         not leaked, f"泄漏={leaked}")
-            run.step("kiosk 无侧边栏汉堡与顶栏",
-                     page0.locator('button[title="导航菜单"]').count() == 0,
-                     "汉堡按钮数=0")
+                page.get_by_title("导航菜单").click()
+                links = [page.locator(f'nav a[href="#{nav}"]') for nav in FORBIDDEN_NAV]
+                run.step(f"{label} 导航入口可见且禁用",
+                         all(link.is_visible() and link.get_attribute("aria-disabled") == "true"
+                             for link in links))
+                page.locator("aside").filter(has=page.locator("nav")).get_by_role("button").click()
+            run.step("kiosk 保留顶栏与导航菜单",
+                     page0.get_by_title("导航菜单").is_visible() and page0.locator("header").is_visible())
 
             # --- readonly=0 放开本工位操作 ---
             ro0 = page0.locator("[data-testid=single-channel-controls]").get_attribute("data-readonly")
@@ -304,14 +302,15 @@ def main() -> int:
                      f"viewers={stream_viewers()}")
 
             # ============================================================
-            # E. kiosk 钉死 hash：一体机漂不走
+            # E. 深链不固定路径，保留工位身份和管理只读态
             # ============================================================
             page1.evaluate("() => { window.location.hash = '#/project'; }")
-            page1.wait_for_timeout(1500)
-            run.step("kiosk 页手改 hash 进项目页 → 被钉回本工位监控页",
-                     "/monitor" in page1.url and "kiosk=1" in page1.url,
+            page1.wait_for_url("**/#/project?**")
+            run.step("深链进入项目页仍保留工位身份且管理操作禁用",
+                     "kiosk=1" in page1.url
+                     and page1.locator("main section").get_attribute("inert") is not None,
                      f"url={page1.url}")
-            run.shot(page1, "05_station1_hash_pinned")
+            run.shot(page1, "05_station1_management_readonly")
 
             # ============================================================
             # F. 开发态 6001 同样能开（用户验收路径）

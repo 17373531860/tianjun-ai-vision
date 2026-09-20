@@ -4,11 +4,12 @@
 设备 CRUD、连接测试、状态查询、扫码记录。
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 
-from backend.core.auth_deps import require_perm
-from backend.db.database import SessionLocal
+from backend.core.auth_deps import CurrentUser, require_channel_scope, require_perm
+from backend.db.database import SessionLocal, get_db
+from sqlalchemy.orm import Session
 from backend.models.mes_models import ScannerDevice, ScanLog
 from backend.services.scanner import get_scanner_service
 
@@ -97,6 +98,20 @@ class ScannerSimulate(BaseModel):
     channel_id: int = 0
     external_only: bool = False
     pairing_group: Optional[str] = None
+
+
+class UsbScanRequest(BaseModel):
+    barcode: str = Field(..., min_length=1, description="USB 键盘扫码枪输入的条码")
+    device_id: int = Field(..., ge=1, description="本工位已启用的 USB 扫码设备 ID")
+    channel_id: int = Field(..., ge=0, description="工位屏绑定的通道编号，从 0 开始")
+
+
+class UsbScanResponse(BaseModel):
+    success: bool = Field(..., description="条码解析是否成功")
+    device_id: int = Field(..., description="实际使用的 USB 设备 ID")
+    channel_id: int = Field(..., description="实际接收扫码的通道编号")
+    barcode: str = Field(..., description="原始扫码内容")
+    serial_no: str = Field(..., description="解析后的工件码")
 
 
 def _serialize_device(d):
@@ -313,6 +328,38 @@ def trigger_scan(device_id: Optional[int] = None, ip: Optional[str] = None):
         return svc.trigger_scan_by_ip(ip)
     else:
         raise HTTPException(400, "需要提供 device_id 或 ip")
+
+
+@router.post("/usb-scan", summary="接收工位USB扫码", response_model=UsbScanResponse)
+def receive_usb_scan(
+    body: UsbScanRequest,
+    user: CurrentUser = Depends(require_perm("monitor.detection.control")),
+    db: Session = Depends(get_db),
+):
+    """[内部端点] 接收操作屏 USB 扫码，复用设备解析、去重及 MES/插件扫码链路。
+
+    - 空白条码返回 400；账号无本工位操作权限返回 403。
+    - 设备不存在、未启用、非 USB 或未绑定本工位返回 404。
+    - 广播跨工位或仅外部配对的设备返回 403，须由管理端配置独立工位设备。
+    - 设备配置尚未加载或正在变更返回 409，不使用调试虚拟设备兜底。
+    """
+    require_channel_scope(channel=body.channel_id, user=user)
+    barcode = body.barcode.strip()
+    if not barcode:
+        raise HTTPException(400, "barcode 不能为空")
+    device = db.get(ScannerDevice, body.device_id)
+    if (device is None or not device.enabled or device.device_type != "usb_hid"
+            or device.channel_id != body.channel_id):
+        raise HTTPException(404, "未找到本工位启用的 USB 扫码设备")
+    if device.external_only or any(ch != body.channel_id for ch in (device.broadcast_channels or [])):
+        raise HTTPException(403, "工位屏扫码只允许本工位独立绑定")
+    svc = get_scanner_service()
+    connection = svc._usb_devices.get(body.device_id)
+    if (connection is None or not connection.enabled or connection.channel_id != body.channel_id
+            or connection.external_only
+            or any(ch != body.channel_id for ch in (connection.broadcast_channels or []))):
+        raise HTTPException(409, "USB 设备配置正在更新，请稍后重试")
+    return svc.simulate_scan(barcode=barcode, device_id=body.device_id, channel_id=body.channel_id)
 
 
 @router.post("/simulate",

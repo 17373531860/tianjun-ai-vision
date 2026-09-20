@@ -97,9 +97,6 @@ const REMEMBERABLE_NAMES = new Set([
 const isMultiMonitorRoute = (route) =>
   route?.query?.kiosk === '1' || route?.query?.station_view === '1' || route?.query?.multi_monitor === '1';
 
-// kiosk = 工位屏形态（Electron 副屏子窗，或一拖多里一体机浏览器全屏开的工位页）。
-const isKioskRoute = (route) => route?.query?.kiosk === '1';
-
 const isHandsCropRoute = (route) =>
   route?.query?.kiosk === '1'
   && route?.query?.video_only === '1'
@@ -154,7 +151,7 @@ async function resolveAuthRedirect(to) {
     if (to.path !== '/monitor' && !authStore.canAccessRoute(to.path)) {
       console.log(`[⬛ Router] 权限不足, 拦下 ${to.fullPath} → /monitor`);
       dbg('auth.ops', '无权限页面被拦截 → 回监控页', `target=${to.fullPath}`);
-      return { path: '/monitor' };
+      return { path: '/monitor', query: isMultiMonitorRoute(to) ? to.query : {} };
     }
   } catch (e) {
     console.warn('[⬛ Router] 账号守卫失败 (不阻断导航):', e?.message || e);
@@ -165,11 +162,10 @@ async function resolveAuthRedirect(to) {
 router.beforeEach(async (to, from) => {
   console.log(`[⬛ Router] 导航: ${from.fullPath} → ${to.fullPath} (name: ${to.name})`);
 
-  // 普通导航不能丢掉工位身份；只读窗不能通过菜单/插件路由切换绕过操作限制。
+  // 普通导航保留工位身份；操作限制由界面禁用与账号权限承担，不固定页面路径。
   // Login / Activation 仍由原有鉴权守卫处理，桌面重载可应用新的只读配置。
   if (isMultiMonitorRoute(from) && !isHandsCropRoute(from) && from.path !== '/projection'
       && to.name !== 'Login' && to.name !== 'Activation') {
-    if (from.query.readonly !== '0' && to.fullPath !== from.fullPath) return false;
     // 独立工位窗保留绑定；总控复用的 station_view 仍能通过侧栏返回总览管理。
     if (from.query.kiosk === '1') {
       const context = Object.fromEntries(['kiosk', 'channel', 'readonly', 'multi_monitor']
@@ -194,14 +190,6 @@ router.beforeEach(async (to, from) => {
       }
     }
     return;
-  }
-
-  // 工位屏钉死本工位：kiosk 页面一旦打开，任何跳转（误触、插件菜单、深链）都拒绝。
-  // 一体机现场没有键盘鼠标退路，漂到别的页面等于这台工位屏当场报废。
-  // 只留登录/激活两个出口，其余一律留在原地。
-  if (isKioskRoute(from) && !isKioskRoute(to) && !isEscapeHatchRoute(to)) {
-    console.log(`[⬛ Router] kiosk 工位屏钉死当前页, 拒绝跳转 → ${to.fullPath}`);
-    return false;
   }
 
   // 冷启动恢复: 第一次进入且目标是默认 /monitor 时, 尝试取上次路由

@@ -51,7 +51,7 @@
 ## 当前多屏工位显示指针
 
 一期使用同一个 `/monitor` hash 路由承载主屏放大态与副屏 kiosk，不新增平行页面。
-代码位置：`frontend/src/router/index.js` → `isMultiMonitorRoute`；`frontend/src/layout/index.vue` → `kioskMode`。
+代码位置：`frontend/src/router/index.js` → `isMultiMonitorRoute`；`frontend/src/composables/useDisplayWindow.js` → `useDisplayWindow`。
 
 `SingleChannelMonitor` 是主屏放大态与副屏 kiosk 的共用单工位组件，只消费父级传入的通道快照和 canvas 注册函数，不自行取流或轮询。
 只读模式保留开始、停止、待机和清零按钮但全部原生禁用；显式 `readonly=0` 时仍 emit 到 Monitor 既有 actions。
@@ -79,7 +79,16 @@ CI 浏览器回归覆盖设置 roundtrip、Electron apply payload 可结构化�
 
 1. Windows 先把所有显示器设为“扩展这些显示器”，主屏接独显 HDMI；应用内进入“设置 → 显示设置 → 多屏工位显示（一期）”。
 2. 点击“刷新显示器”，为每个工位选择不同显示器，保持“副屏只读”开启，再点击“保存并应用”。同一物理区域只允许一个工位窗口；重复映射会被 Electron 跳过并返回提示。
-3. 主屏仍显示总览；多屏开启时点击工位卡进入共用单工位大屏并可返回。副屏直接加载同一 `/monitor` 路由的 kiosk query，不显示导航，写操作按钮保留但在一期只读配置下全部禁用。
+3. 主屏仍显示总览；多屏开启时点击工位卡进入共用单工位大屏并可返回。工位屏使用同一 `/monitor` 路由的 kiosk query，保留顶栏、导航和底栏；管理入口禁用，本工位操作由 `readonly` 控制。手部屏同时带 `kiosk=1&video_only=1&hands_crop=1`，只显示裁切图片，不显示导航。
+
+局域网操作屏在 `readonly=0` 时监听本机 USB 扫码枪，并按 URL 绑定的工位筛选设备配置。
+Electron 独立子窗不重复监听同机扫码枪。
+代码位置：`frontend/src/layout/index.vue` → `syncScanGun`；`frontend/src/composables/useScanGun.js` → `refreshScanGunConfig`。
+绑定扫码使用 `POST /api/v1/scanner/usb-scan`，按工位操作权限校验本工位已启用的独立 USB 设备，复用既有扫码解析、去重和 MES/插件链路；调试扫码仍要求扫码器管理权限。
+代码位置：`backend/api/scanner.py` → `receive_usb_scan`；`frontend/src/api/scanner.js` → `submitUsbScan`。
+
+路由不固定在 `/monitor`；普通深链保留 kiosk 工位上下文，管理页保持禁用，账号权限继续拦截未授权页面。
+工作站或管理电脑用普通 URL 管理项目、模型和系统设置。
 4. 检测中心不提供独立的全局退出按钮；关闭多屏统一回到本设置卡片，关闭“启用多屏工位显示”并保存后，Electron 立即销毁所有工位子窗。配置默认仍为 `enabled=false`、`readonly=true`。
 
 只有一两块物理屏时，可在隔离数据目录调用 `PUT /api/v1/workstations/multi-monitor` 写入不存在的 `display_id` 与非重叠 `bounds`，验证主进程 `manual_bounds` 降级、重复区域拒绝和关闭清理；这只能验证窗口编排，不能代替四屏现场钉屏验收。

@@ -3,8 +3,8 @@
 覆盖四件事：
   1. 工作站用 HTTP 把 frontend dist 送出去，一体机同源打开（/api、/video_feed、
      /snapshot 全同一主机），且 /api 下打错的地址仍回 JSON 404。
-  2. 工位 URL 契约 ``?channel=N&kiosk=1&readonly=0``：无项目/模型/输入源/设置入口，
-     只订阅自己那一路且走 station 槽，readonly=0 时本工位可操作，hash 被钉死。
+  2. 工位 URL 契约 ``?channel=N&kiosk=1&readonly=0``：导航保留、管理入口禁用，
+     只订阅自己那一路且走 station 槽，readonly=0 时本工位可操作、可 USB 扫码。
   3. axios baseURL 必须是同源相对路径 —— 这条曾被 .env.production 里写死的
      ``VITE_API_BASE_URL=http://localhost:8001`` 静默打穿（一体机把请求打给自己）。
   4. 工作站总览不跟一体机抢同一路 MJPEG：一体机占着 station 槽的工位降快照，
@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 import requests
+from playwright.sync_api import expect
 
 from .conftest import API_URL
 
@@ -257,8 +258,7 @@ def test_station_page_resolves_same_origin_api(page):
     """baseURL 写死 localhost 时，一体机整页 Network Error —— 钉死这条判据。"""
     recorder = _open_kiosk(page, API_URL, 0)
 
-    assert "/api/v1" in recorder.base_url_log, recorder.base_url_log
-    assert "localhost" not in recorder.base_url_log, recorder.base_url_log
+    # 生产构建静默 console.log；以实际请求地址验证同源契约。
     assert recorder.api, "页面没发出任何 API 请求"
     off_origin = [u for u in recorder.api if not u.startswith(API_URL)]
     assert not off_origin, f"API 请求跑到别的 origin: {off_origin[:3]}"
@@ -271,14 +271,25 @@ def test_station_page_resolves_same_origin_api(page):
 # ============================================================
 
 @requires_static_hosting
-def test_kiosk_hides_project_and_settings_entries(page):
-    """本期禁止一体机做项目管理：入口一个都不能露。"""
+def test_kiosk_shows_navigation_with_management_entries_disabled(page):
+    """操作屏保留导航外观，鼠标和键盘均不能打开管理入口。"""
     _open_kiosk(page, API_URL, 0)
-
-    html = page.content()
-    leaked = [nav for nav in FORBIDDEN_NAV if f'href="#{nav}"' in html]
-    assert not leaked, f"kiosk 泄漏了导航入口: {leaked}"
-    assert page.locator('button[title="导航菜单"]').count() == 0, "kiosk 不该有侧边栏汉堡"
+    menu = page.get_by_title("导航菜单")
+    expect(menu).to_be_visible()
+    expect(menu).to_be_enabled()
+    menu.click()
+    initial = page.url
+    for nav in FORBIDDEN_NAV:
+        link = page.locator(f'nav a[href="#{nav}"]')
+        expect(link).to_be_visible()
+        expect(link).to_have_attribute("aria-disabled", "true")
+        # aria-disabled 元素 Playwright 默认拒绝点击；force 验证实际事件防线。
+        link.click(force=True)
+        link.focus()
+        page.keyboard.press("Enter")
+        assert page.url == initial
+    page.locator("aside").filter(has=page.locator("nav")).get_by_role("button").click()
+    expect(page.get_by_role("button", name="选择", exact=True)).to_be_disabled()
 
 
 @requires_static_hosting
@@ -299,6 +310,8 @@ def test_kiosk_readonly_one_locks_controls(page):
     controls = page.locator("[data-testid=single-channel-controls]")
     assert controls.get_attribute("data-readonly") == "true"
     assert page.locator("[data-testid=single-channel-reset]").is_disabled()
+    expect(page.get_by_title("导航菜单")).to_be_visible()
+    expect(page.get_by_title("导航菜单")).to_be_disabled()
 
 
 @requires_static_hosting
@@ -315,14 +328,57 @@ def test_station_subscribes_only_its_own_channel_via_station_slot(
 
 
 @requires_static_hosting
-def test_kiosk_hash_is_pinned_to_its_own_station(page):
-    """一体机现场没有键盘鼠标退路，漂到别的页面等于这台屏当场报废。"""
-    _open_kiosk(page, API_URL, 0)
+@pytest.mark.parametrize("readonly", ["0", "1"])
+def test_kiosk_deep_link_preserves_context_without_pinning_monitor(page, readonly):
+    """导航禁用不靠锁 hash；直接深链仍保留工位身份和管理只读态。"""
+    _open_kiosk(page, API_URL, 0, readonly)
+    page.evaluate("window.location.hash = '#/project'")
+    page.wait_for_url("**/#/project?**")
+    assert "kiosk=1" in page.url and f"readonly={readonly}" in page.url
+    expect(page.locator("main section")).to_have_attribute("inert", "")
 
-    page.evaluate("() => { window.location.hash = '#/project'; }")
-    page.wait_for_timeout(1_200)
-    assert "/monitor" in page.url and "kiosk=1" in page.url, page.url
-    assert "project" not in page.url, page.url
+
+@requires_static_hosting
+@pytest.mark.parametrize("query", ["", "?channel=0&station_view=1&readonly=0&multi_monitor=1"])
+def test_main_navigation_remains_operable(page, query):
+    page.goto(f"{API_URL}/#/monitor{query}", wait_until="domcontentloaded")
+    page.get_by_title("导航菜单").click()
+    page.locator('nav a[href="#/project"]').click()
+    page.wait_for_url("**/#/project")
+    expect(page.locator("main section")).not_to_have_attribute("inert", "")
+
+
+@requires_static_hosting
+def test_station_usb_scanner_uses_bound_channel(page, synthetic_sources):
+    """一体机的键盘扫码进入本工位设备链路，不采用列表里第一把其它工位的枪。"""
+    devices = []
+    code = "__E2E-LAN-STATION-1"
+    try:
+        for ch in (0, 1):
+            r = requests.post(f"{API_URL}/api/v1/scanner/devices", timeout=10, json={
+                "name": f"__e2e_lan_usb_{ch}", "ip": "", "port": 0,
+                "channel_id": ch, "enabled": True, "device_type": "usb_hid",
+                "parse_config": {"usb": {"usage": "bind"}},
+            })
+            r.raise_for_status()
+            devices.append(r.json()["id"])
+        with page.expect_response("**/api/v1/scanner/devices") as config:
+            _open_kiosk(page, API_URL, 1)
+        assert config.value.ok
+        with page.expect_response("**/api/v1/scanner/usb-scan") as scanned:
+            page.keyboard.type(code, delay=5)
+            page.keyboard.press("Enter")
+        response = scanned.value
+        assert response.ok, response.text()
+        payload = response.request.post_data_json
+        assert payload["channel_id"] == 1 and payload["device_id"] == devices[1]
+        assert payload["barcode"] == code
+        assert _wait_on_page(page, lambda: code in str(requests.get(
+            f"{API_URL}/api/v1/source/detection/results?channel=1", timeout=5
+        ).json().get("mes", {}).get("scan_event"))), "本工位未收到扫码事件"
+    finally:
+        for device in devices:
+            requests.delete(f"{API_URL}/api/v1/scanner/devices/{device}", timeout=10)
 
 
 # ============================================================
@@ -356,6 +412,8 @@ def test_overview_yields_mjpeg_to_connected_station(
         assert _wait_on_page(page, lambda: 1 in recorder.snapshot_channels(),
                              timeout_ms=15_000), \
             f"总览没给一体机让流: feed={recorder.feed_channels()} snap={recorder.snapshot_channels()}"
+        assert _wait_on_page(page, lambda: 0 in recorder.feed_channels()), \
+            "未接屏的工位 0 应建立主窗 MJPEG 连接"
 
         recorder.reset()
         page.wait_for_timeout(5_000)
@@ -363,8 +421,9 @@ def test_overview_yields_mjpeg_to_connected_station(
         assert 1 not in recorder.feed_channels(), \
             f"稳态下总览仍在抢工位 1 的 MJPEG: {[u for u in recorder.feed if 'channel=1' in u][:2]}"
         assert 1 in recorder.snapshot_channels(), "让流后应持续用快照看工位 1"
-        assert 0 in recorder.feed_channels(), \
-            f"没接屏的工位 0 应该照旧 MJPEG: feed={recorder.feed_channels()}"
+        # MJPEG 是持续连接；清空请求账本后不应要求它在 5 秒内重连。
+        assert _stream_viewers().get("0", {}).get("main") is True, \
+            "未接屏的工位 0 应保持主窗 MJPEG 连接"
     finally:
         station_ctx.close()
 

@@ -14011,6 +14011,73 @@
     "title": "UsbDeviceBindRequest",
     "type": "object"
    },
+   "UsbScanRequest": {
+    "properties": {
+     "barcode": {
+      "description": "USB 键盘扫码枪输入的条码",
+      "minLength": 1,
+      "title": "Barcode",
+      "type": "string"
+     },
+     "channel_id": {
+      "description": "工位屏绑定的通道编号，从 0 开始",
+      "minimum": 0.0,
+      "title": "Channel Id",
+      "type": "integer"
+     },
+     "device_id": {
+      "description": "本工位已启用的 USB 扫码设备 ID",
+      "minimum": 1.0,
+      "title": "Device Id",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "barcode",
+     "device_id",
+     "channel_id"
+    ],
+    "title": "UsbScanRequest",
+    "type": "object"
+   },
+   "UsbScanResponse": {
+    "properties": {
+     "barcode": {
+      "description": "原始扫码内容",
+      "title": "Barcode",
+      "type": "string"
+     },
+     "channel_id": {
+      "description": "实际接收扫码的通道编号",
+      "title": "Channel Id",
+      "type": "integer"
+     },
+     "device_id": {
+      "description": "实际使用的 USB 设备 ID",
+      "title": "Device Id",
+      "type": "integer"
+     },
+     "serial_no": {
+      "description": "解析后的工件码",
+      "title": "Serial No",
+      "type": "string"
+     },
+     "success": {
+      "description": "条码解析是否成功",
+      "title": "Success",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "success",
+     "device_id",
+     "channel_id",
+     "barcode",
+     "serial_no"
+    ],
+    "title": "UsbScanResponse",
+    "type": "object"
+   },
    "UserCreate": {
     "properties": {
      "active": {
@@ -30467,6 +30534,49 @@
      }
     },
     "summary": "Trigger Scan",
+    "tags": [
+     "Scanner",
+     "Scanner"
+    ]
+   }
+  },
+  "/api/v1/scanner/usb-scan": {
+   "post": {
+    "description": "[内部端点] 接收操作屏 USB 扫码，复用设备解析、去重及 MES/插件扫码链路。\n\n- 空白条码返回 400；账号无本工位操作权限返回 403。\n- 设备不存在、未启用、非 USB 或未绑定本工位返回 404。\n- 广播跨工位或仅外部配对的设备返回 403，须由管理端配置独立工位设备。\n- 设备配置尚未加载或正在变更返回 409，不使用调试虚拟设备兜底。",
+    "operationId": "receive_usb_scan_api_v1_scanner_usb_scan_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/UsbScanRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/UsbScanResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "接收工位USB扫码",
     "tags": [
      "Scanner",
      "Scanner"

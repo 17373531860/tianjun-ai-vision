@@ -17,11 +17,12 @@
  *           HID 键盘), 按一下 = 解除本工位"需人工确认"报警定格 (ack-event)。
  *           称重缺料/超量/投错等 require_ack 报警的物理确认入口。
  *
- * 后端零改动 (路由都复用已有接口; usb_hid 设备后端不建网络连接)。
+ * 工位屏绑定走受工位权限保护的 /scanner/usb-scan；管理端保留 /scanner/simulate。
+ * usb_hid 设备后端不建网络连接。
  */
 import { ElNotification } from 'element-plus'
 import { pullOrders } from '@/api/gateway'
-import { getScannerDevices, simulateScannerScan } from '@/api/scanner'
+import { getScannerDevices, simulateScannerScan, submitUsbScan } from '@/api/scanner'
 import { packagingScan } from '@/api/packaging_flow'
 import { ackPendingEvent } from '@/api/detection'
 import { dbg } from '@/utils/debug'
@@ -33,14 +34,19 @@ const DEFAULT_CFG = {
 
 // 全局键盘监听用的当前生效配置 (从设备表刷新而来, 避免每次扫码都打 HTTP)
 let cached = { ...DEFAULT_CFG }
+let boundChannelId = null
+let configRevision = 0
 
-/** 从扫码器设备表拉一次, 取第一台启用的 USB 扫码枪配置, 刷新全局缓存。 */
+/** 刷新启用的 USB 枪配置；工位屏只选择绑定工位的设备。 */
 export async function refreshScanGunConfig() {
+  const revision = ++configRevision
   try {
     const resp = await getScannerDevices()
+    if (revision !== configRevision) return cached
     const list = resp?.data ?? resp ?? []
     const usb = (Array.isArray(list) ? list : []).find(
-      d => d.device_type === 'usb_hid' && d.enabled)
+      d => d.device_type === 'usb_hid' && d.enabled
+        && (boundChannelId === null || Number(d.channel_id ?? 0) === boundChannelId))
     if (usb) {
       const u = (usb.parse_config || {}).usb || {}
       cached = {
@@ -130,6 +136,7 @@ async function dispatch(cfg, code) {
     dbg('mes.scanner', 'USB 扫码枪扫到码', `code=${code} 用途=${cfg.usage} → 路由=${route}`)
     // v3.35: 报警确认按钮 — 不进包装/拉单/绑定任何链路, 直接解除本工位人工确认定格
     if (route === 'ack') { await doAck(cfg, code); return }
+    if (boundChannelId !== null && route === 'bind') { await doBind(cfg, code); return }
     // v3.22: 包装结算优先 — 当前工位归属某个启用的包装结算配置时, 扫码全走它 (工单/换单);
     // 没有任何启用配置或工位不匹配时后端返回 handled=false, 回退默认 pull/bind, 零差异。
     if (await tryPackaging(cfg, code)) return
@@ -204,7 +211,8 @@ async function doPull(cfg, code) {
 
 async function doBind(cfg, code) {
   try {
-    const resp = await simulateScannerScan({
+    const submit = boundChannelId === null ? simulateScannerScan : submitUsbScan
+    const resp = await submit({
       barcode: code, channel_id: cfg.bindChannelId || 0,
       // v3.46: 带上设备号 → 后端按本枪落库配置走完整处理链 (与网络扫码器对齐)
       ...(cfg.deviceId != null ? { device_id: cfg.deviceId } : {}),
@@ -221,14 +229,21 @@ async function doBind(cfg, code) {
   }
 }
 
-export function startScanGun() {
+export function startScanGun({ channelId = null } = {}) {
   if (started) return
+  boundChannelId = channelId
+  cached = { ...DEFAULT_CFG }
+  buffer = ''
+  segStart = lastTime = 0
   started = true
   window.addEventListener('keydown', onKeydown, true)
   refreshScanGunConfig()  // 启动即拉一次设备配置
 }
 
 export function stopScanGun() {
+  configRevision++
+  cached = { ...DEFAULT_CFG }
+  buffer = ''
   if (!started) return
   started = false
   window.removeEventListener('keydown', onKeydown, true)
