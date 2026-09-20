@@ -45,9 +45,19 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libgl1 libglib2.0-0 libsm6 libxext6 libxrender1
 
+      # ubuntu-latest 可用盘 ~14GB；torch 2.14 起默认拉 CUDA 13 全家桶 (解压 >20GB) 必爆
+      # "No space left on device" (v3.60.1 两次复现)。门禁 runner 无 GPU，先钉 CPU 版
+      # torch 再装 requirements (torch>=1.8.0 已满足即跳过)，另清预装大件保底。
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost \
+            /usr/local/lib/android "$AGENT_TOOLSDIRECTORY/CodeQL" || true
+          df -h /
+
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           pip install -r backend/requirements.txt
           pip install pytest pytest-bdd httpx
 
