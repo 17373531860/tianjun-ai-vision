@@ -541,3 +541,44 @@ mgr._per_item_last_ng_detail = {
 - 换板后老板不结算 → 该键 >0 吗 + 换板瞬间是否真有"全标签消失"的帧窗（遮挡下有残检出就不累计）
 - 误结算（工件还在就被结了）→ 调大帧数；跟踪计数字段 `workpiece_absent_frames` 在 item state
 - 单测: `tests/test_per_item_board_swap.py`
+
+## 十二、v3.60 增量功能（整板重配准 / 扩边救援 / 混合逐件虚拟步骤 · 六和二工位批次）
+
+### 12.1 整板拖动重配准（board_rereg_enabled，默认关）
+
+**位置**: `pipeline_config.per_item.board_rereg_enabled`（项目级 bool）
+
+**治的 bug**: 六和锁螺丝工装板在周期中被工人整体拖动 → 锁定槽位留在旧位置 → 覆盖脱靶 31/32 永不合格。部分现场工装真固定，所以做成开关默认关。
+
+**机制**（`source_per_item_mixin.py` `_attempt_board_rereg`，独立/混合同源——混合侧 `_PerItemMixEngine.feed` 汇总跨步骤可靠位移）:
+- 触发: 可靠关联 <50% 槽位 且 本帧检出 ≥50% 槽位，连续 4 帧
+- 求解: 质心平移做初值 → 两轮最近邻中位数精配 → ≥60% 一一对应验证通过才提交
+- 提交: 整板槽位平移 + 刷新 `last_aligned_frame`；验证不过静默放弃（打印 `[per_item] 整板重配准`）
+
+**调试线索**: 拖动后不跟 → 开关开了吗 + 检出数是否 ≥50%（遮挡大时凑不齐验证集）；误迁移 → 一一对应验证≥60% 挡大部分，布局镜像/等距阵列极端场景下调 `--` 无参数可调（写死保守值），单测 `tests/test_per_item_drag_rereg.py`（含布局不匹配拒绝迁移用例）。
+
+### 12.2 动作框扩边救援（coverage_margin，步骤级默认 0）
+
+**位置**: `steps_config[i].per_item.coverage_margin`（0~2 倍）
+
+**治的 bug**: 模型"已完成"框标注系统性偏离螺丝中心（数据集问题），个别槽位物理上永远盖不到。
+
+**机制**: 常规覆盖判定失败后，动作框按倍数扩边，**恰有一个**"最近的未覆盖合格槽位"时才就近记账（多个候选=歧义不救，防误伤）。UI 在独立模式角色卡与混合配对卡都有（`coverage-margin-input` / `mix-coverage-margin-input`）。
+
+**调试线索**: 救不回 → 扩完还是没交集（建议 0.5 起步）或附近有多个未覆盖槽位（歧义弃救）；救错槽 → 调小倍数。单测 `tests/test_per_item_coverage_margin.py`，e2e `tests/e2e_browser/test_coverage_margin_field.py`。
+
+### 12.3 混合逐件虚拟步骤（custom_mix_per_item_virtual_step，默认关）
+
+**位置**: `pipeline_config.custom_mix_per_item_virtual_step` + `custom_mix_per_item_virtual_step_label`（混合逐件专用）
+
+**场景**: 「开头扫码 → 逐件锁付 → 结尾扫码」——扫码不计次数但首尾必须各确认到。序列 [扫码,扫码] 连续重复会被 v3.19 "连续重复步骤 disappear_delay 强制清零"守门拦住无法合并连扫；虚拟步骤把序列变成 [扫码, 锁付完成(虚拟), 扫码]，两个扫码不再相邻 → 消失确认等待自然合并同阶段连扫。
+
+**机制**（与 v3.49 容器虚拟步骤全对称，同一条注入通路零新分支）:
+- `CustomMixMachine.virtual_step_complete()` 统一口径分发: tracking=整箱达标 / per_item=全部逐件行完成（粘性 completed，固定数量行没锁满恒 False 不误注入）
+- `virtual_step_activity()`: 缺步提前发现口径（任一行已有覆盖=开始干活）
+- 注入点 `source_step_stats_mixin.py`: 达标瞬间把虚拟标签加进稳定标签流，走常规序列状态机（严格顺序/缺步提前/结算期望全部自然生效）
+- 前端 `StepsConfigTab.vue` `syncPerItemVirtualStepRow`: 开关+名称自动生成/移除 `per_item_virtual: true` 步骤行（名称与已有标签重名会被 build_custom_mix 冲突守门忽略并打印）
+- **物品侧活动脉冲**: `_PerItemMixEngine.last_progress_time` 覆盖账面推进顺推空闲锚点——逐件干活几分钟不被步骤侧 idle_timeout 强杀（跟踪混合返回 0 零差异）
+- **结算缺步多重集**: 期望序列含重复步骤时 NG 原因按多重集补齐，报"扫码(第2次)"（`source_settlement_mixin.py`；`_container_virtual_label` 已更名 `_mix_virtual_label`）
+
+**调试线索**: 虚拟步骤不注入 → 逐件行真的全完成了吗（固定数量行必须锁满 expected_count）+ 标签是否与检测标签重名被守门忽略（看启动日志）；扫码被合并不结算 → 末步重复配额守门（期望 2 次只到 1 次不结算，是特性不是 bug）；干活中被空闲强杀 → 确认走的是混合逐件（脉冲只在逐件引擎产生）。单测 `tests/test_custom_mix_pi_virtual_step.py`（11 用例），e2e `tests/e2e_browser/test_pi_virtual_step_field.py`，真实视频回放剧本见 v3.60 changelog。

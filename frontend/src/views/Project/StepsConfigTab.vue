@@ -114,6 +114,9 @@
                       <el-tooltip v-if="step.container_virtual" content="容器虚拟步骤：由「逻辑设置 → 装箱清点 → 合并为顺序步骤」自动生成，整箱达标那一刻自动完成入周期。模型不检测此标签，阈值/ROI/帧数等检测参数对它无效；严格顺序/单次接受等步骤参数照常生效。改名/删除请回装箱清点操作" placement="top">
                         <el-tag size="small" type="success" effect="plain" class="!h-5 !leading-5">装箱</el-tag>
                       </el-tooltip>
+                      <el-tooltip v-if="step.per_item_virtual" content="逐件虚拟步骤：由下方「物品校验参数 → 逐件作业合并为一步」自动生成，全部目标覆盖完成那一刻自动完成入周期。模型不检测此标签，阈值/ROI/帧数等检测参数对它无效；严格顺序/单次接受等步骤参数照常生效。改名/删除请回下方开关操作" placement="top">
+                        <el-tag size="small" type="success" effect="plain" class="!h-5 !leading-5">逐件</el-tag>
+                      </el-tooltip>
                     </div>
                   </td>
                   <td class="p-2"><el-switch v-model="step.enabled" size="small" @change="(val) => onStepEnabledChange(step, val)" /></td>
@@ -1106,6 +1109,20 @@
                       active-text="中心点" inactive-text="重合度" inline-prompt size="default" />
                   </div>
                 </div>
+                <div class="col-span-2 px-2 py-1.5 bg-slate-900/60 border border-slate-700 rounded">
+                  <div class="flex items-center justify-between gap-3">
+                    <div class="flex-1">
+                      <div class="text-[11px] font-bold text-cyan-300">动作框扩边救援</div>
+                      <div class="text-[10px] text-gray-500 mt-0.5">
+                        治 <span class="text-amber-300">动作框相对目标固定偏移</span> 导致个别目标永远盖不到;
+                        原判定没盖到任何未覆盖目标时扩边、只计最近一个未覆盖目标。0=关 (默认), 建议从 0.5 起试
+                      </div>
+                    </div>
+                    <el-input-number v-model="step.per_item.coverage_margin"
+                      data-testid="mix-coverage-margin-input"
+                      size="small" :min="0" :max="2" :step="0.1" :precision="1" class="!w-24 shrink-0" />
+                  </div>
+                </div>
               </div>
             </div>
             <div v-if="mixItemRows.length === 0" class="text-center text-gray-500 py-6 text-xs">
@@ -1114,6 +1131,25 @@
             <div v-if="mixItemRows.length > 0" class="text-[10px] text-gray-500">
               ※ 周期由上方步骤侧驱动：周期开始时个体清零重新锁定，步骤侧结算时检查"目标是否全部被覆盖 + 件数是否达期望"，任一不满足整周期降级 NG<br/>
               ※ 独立逐件模式的"收尾标签 / 稳定窗口 / 双超时 / 手动结算"在混合下不生效（周期主权在步骤侧）
+            </div>
+
+            <!-- v3.57 逐件虚拟步骤: 与容器"整箱装箱合并为一步"全对称 -->
+            <div v-if="mixItemRows.length > 0" class="px-3 py-2 bg-slate-900/60 border border-slate-700 rounded">
+              <div class="flex items-center gap-3 text-xs flex-wrap">
+                <el-switch v-model="project.custom_mix_per_item_virtual_step" size="small"
+                  data-testid="pi-virtual-step-switch" />
+                <span class="font-bold text-gray-300 shrink-0">逐件作业合并为一步</span>
+                <template v-if="project.custom_mix_per_item_virtual_step">
+                  <span class="text-gray-400 shrink-0">步骤名称</span>
+                  <el-input v-model="project.custom_mix_per_item_virtual_step_label" size="small"
+                    class="!w-40" placeholder="如：锁付完成" data-testid="pi-virtual-step-label-input" />
+                </template>
+              </div>
+              <p class="text-[10px] text-gray-500 mt-1 mb-0">
+                开启并填好名称后，整个逐件覆盖过程合并成一个顺序步骤，自动出现在「步骤设置」表格与判定序列候选里，全部目标覆盖完成那一刻自动入周期。
+                适用「<span class="text-amber-300">开头扫码 → 逐件作业 → 结尾扫码</span>」这类前后有确认动作的编排（确认动作各配一个普通步骤，配上消失确认等待时间即可把连扫多次合并为一次）。
+                名称不能与个体/动作等已有标签同名。
+              </p>
             </div>
           </div>
         </div>
@@ -1131,7 +1167,8 @@
 //   consecutiveDupStepIds → 父级 syncDupDisappearDelay watch 同源（连续重复清消失延迟）
 //   isSettlementStep      → 父级 settlement_mode watch 同源（结算步禁严格顺序/单次接受）
 // 打开步骤 ROI 编辑器走 emit（对话框编排/通道解析/保存路由在父级）。
-import { computed } from 'vue';
+import { computed, watch } from 'vue';
+import { ElMessage } from 'element-plus';
 import TjSlot from '@/components/TjSlot.vue';
 import { usePluginThemeStore } from '@/store/usePluginThemeStore';
 import { _pi_itemLabelToArray, _pi_itemLabelFromArray } from './perItemLabel';
@@ -1188,6 +1225,55 @@ const onDetectRoleChange = (step, val) => {
   step.detect_role = val;
   if (val === 'item') ensureMixItemDefaults(props.project, step);
 };
+
+// v3.57 逐件虚拟步骤 ↔ steps_config 行同步（与 CustomMixBoxTab 的容器虚拟步骤同构）:
+// 开启+有名 → 自动维护一条 per_item_virtual 标记的步骤行（进序列候选）；
+// 关闭/清名/切走混合类型 → 移除该行并从判定序列剔除。
+const syncPerItemVirtualStepRow = () => {
+  const p = props.project;
+  if (!p || !Array.isArray(p.steps_config)) return;
+  const steps = p.steps_config;
+  const idx = steps.findIndex(s => s && s.per_item_virtual);
+  const label = (p.custom_mix_per_item_virtual_step_label || '').trim();
+  const on = p.logic_mode === 'custom'
+    && p.custom_mixed_with === 'per_item'
+    && p.custom_mix_per_item_virtual_step === true
+    && !!label;
+  if (!on) {
+    if (idx !== -1) {
+      const removed = steps.splice(idx, 1)[0];
+      if (Array.isArray(p.custom_sequence_order)) {
+        p.custom_sequence_order = p.custom_sequence_order.filter(
+          o => o && o.step_id !== removed.id);
+      }
+    }
+    return;
+  }
+  const clash = steps.some((s, i) => i !== idx && s && s.label === label);
+  if (clash) {
+    ElMessage.warning(`步骤名「${label}」已被占用，请换一个（不能与个体/动作等已有标签同名）`);
+    return;
+  }
+  if (idx === -1) {
+    const nextId = steps.reduce((m, s) => Math.max(m, Number(s?.id) || 0), 0) + 1;
+    steps.push({
+      id: nextId, label, enabled: true, threshold: 40, min_frames: 1,
+      detection_type: 'dynamic', join_cycle: true, per_item_virtual: true,
+    });
+  } else {
+    steps[idx].label = label;
+    steps[idx].enabled = true;
+  }
+};
+watch(
+  () => [
+    props.project?.logic_mode,
+    props.project?.custom_mixed_with,
+    props.project?.custom_mix_per_item_virtual_step,
+    props.project?.custom_mix_per_item_virtual_step_label,
+  ],
+  syncPerItemVirtualStepRow,
+);
 
 // v3.50 齐件即结算: 仅逻辑设置开了"全部合格立即结算"且策略为 ROI离开/容器时,
 // 步骤表才露出"确认放入帧数"列

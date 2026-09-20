@@ -1170,6 +1170,23 @@
             </div>
           </div>
 
+          <!-- v3.57 整板拖动重配准 (默认关) -->
+          <div class="px-3 py-2 bg-slate-900/60 border border-slate-700 rounded">
+            <div class="flex items-center justify-between gap-3">
+              <div class="flex-1">
+                <div class="text-[12px] font-bold text-cyan-300">整板拖动重配准</div>
+                <div class="text-[10px] text-gray-500 mt-0.5">
+                  适用 <span class="text-amber-300">滚筒线 / 工装可被工人拖动</span> 的现场: 周期中整板被快速拖走导致全部目标跟丢时, 自动把整套逻辑位置拉回真实位置, 已覆盖状态保留<br/>
+                  工装真正固定不动的现场请保持关闭
+                </div>
+              </div>
+              <el-switch
+                v-model="project.pipeline_config.per_item.board_rereg_enabled"
+                data-testid="board-rereg-switch"
+                active-text="开启" inactive-text="关闭" inline-prompt size="default" />
+            </div>
+          </div>
+
           <!-- 收尾标签 / 双条件 已迁入下方「结算触发方式」唯一入口, 此处不再重复 -->
 
           <!-- v3.9+ 新增: 稳定性进阶 -->
@@ -1591,6 +1608,7 @@
                       item_tracking_iou: 0.3,
                       coverage_iou: 0.3,
                       coverage_use_center: false,
+                      coverage_margin: 0,
                       sustain_frames: 5,
                       completion: 'all_covered',
                       min_item_count: 'auto',
@@ -1685,6 +1703,21 @@
                   </div>
                   <el-switch v-model="step.per_item.coverage_use_center"
                     active-text="中心点" inactive-text="重合度" inline-prompt size="default" />
+                </div>
+              </div>
+              <div class="col-span-2 px-2 py-1.5 bg-slate-900/60 border border-slate-700 rounded">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="flex-1">
+                    <div class="text-[11px] font-bold text-cyan-300">动作框扩边救援</div>
+                    <div class="text-[10px] text-gray-500 mt-0.5">
+                      治 <span class="text-amber-300">动作框相对目标固定偏移</span> (如电枪"已完成"框标在枪头, 偏离螺丝中心) 导致个别目标永远盖不到<br/>
+                      本帧原判定没盖到任何未覆盖目标时, 动作框按此比例扩边、只计"最近的一个未覆盖目标" (一枪绝不同时绿两颗)<br/>
+                      0 = 关 (默认); 建议从 0.5 起试, 最大 2 倍框宽
+                    </div>
+                  </div>
+                  <el-input-number v-model="step.per_item.coverage_margin"
+                    data-testid="coverage-margin-input"
+                    size="small" :min="0" :max="2" :step="0.1" :precision="1" class="!w-24 shrink-0" />
                 </div>
               </div>
             </div>

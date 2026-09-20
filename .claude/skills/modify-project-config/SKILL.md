@@ -828,3 +828,13 @@ pipeline_config 内, 不拍平到顶层**, 因此不动 ORM / Pydantic schema / 
 - 前端：LogicConfigTab「周期定界」选择器 + 参数卡；index.vue 水合（~L1228）/同步 pipeline_config（~L1802）/保存 payload（~L2015）三处都要对齐——改键名时三处+后端一起改。
 - 容器标签行建议 steps_config 里 enabled=False（不参与完备判定）；runner 过滤已在 `_get_enabled_labels` 放行该标签，别删那段否则周期永远开不了。
 - 状态机细节与排查见 `debug-source` skill「v3.59 容器定界周期」节。
+
+## v3.60 逐件覆盖三键（2026-09-19，六和二工位批次）
+
+| 键 | 层级 | 说明 |
+|---|---|---|
+| `pipeline_config.per_item.board_rereg_enabled` | 项目级 bool（默认 false） | 整板拖动重配准：工装板周期中被拖动后槽位整板迁移（关联<50%且检出≥50%连续4帧触发+质心初值+两轮中位数精配+≥60%一一对应验证）；独立/混合逐件同源。前端 LogicConfigTab 通用参数卡 `board-rereg-switch` |
+| `steps_config[i].per_item.coverage_margin` | 步骤级 float 0~2（默认 0） | 动作框扩边救援：扩边后仅当恰有一个最近未覆盖合格槽位时就近记账。前端独立角色卡 `coverage-margin-input` / 混合配对卡 `mix-coverage-margin-input` |
+| `pipeline_config.custom_mix_per_item_virtual_step` (+`_label`) | 项目级 bool + str（默认关/空） | 混合逐件虚拟步骤：全部逐件行完成瞬间把 `_label` 注入稳定标签流走常规序列状态机（与 v3.49 容器虚拟步骤全对称）；前端 StepsConfigTab `syncPerItemVirtualStepRow` 自动生成/移除 `per_item_virtual: true` 步骤行——**该行勿手工编辑**；标签与检测标签重名会被 `build_custom_mix` 守门忽略 |
+
+⚠️ 前端 `Project/index.vue` 的 per_item 白名单 normalize 块登记了 `board_rereg_enabled`；新加 per_item 键必须同步登记否则保存即丢（e2e 已踩过）。全链路详见 `debug-per-item` skill §十二。

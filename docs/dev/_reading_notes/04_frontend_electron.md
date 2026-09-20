@@ -13,6 +13,12 @@
 > 多屏工位显示卡自 `Settings/DisplaySettingsTab.vue` 抽为 `views/Source/MultiMonitorPanel.vue`；
 > 容器装箱清点块自 `Project/LogicConfigTab.vue` 抽为 `Project/CustomMixBoxTab.vue`（「装箱清点」条件 tab）。
 
+> **v3.60 补账（2026-09-19，六和二工位逐件批次配置面）**：
+> - `views/Project/LogicConfigTab.vue`：逐件通用参数卡新增「整板拖动重配准」开关（`board-rereg-switch`，写 `pipeline_config.per_item.board_rereg_enabled`）+ 独立模式角色卡「覆盖扩边救援」数字输入（`coverage-margin-input`，步骤级 `per_item.coverage_margin` 0~2 步 0.1）。
+> - `views/Project/StepsConfigTab.vue`：混合逐件配对卡新增扩边输入（`mix-coverage-margin-input`）+「虚拟步骤」开关与名称输入（`custom_mix_per_item_virtual_step`/`_label`）；`syncPerItemVirtualStepRow` + watcher 自动生成/移除 `per_item_virtual: true` 步骤行（该行表格里带 tooltip 标识，勿手工编辑）。
+> - `views/Project/index.vue`：per_item 白名单 normalize 块登记 `board_rereg_enabled`；`custom_mix_per_item_virtual_step`/`_label` 水合/同步/保存三处对齐（对称容器虚拟步骤四键）。`views/Project/mixItemDefaults.js`：配对行默认值补 `coverage_margin: 0`。
+> - e2e：`tests/e2e_browser/test_coverage_margin_field.py`（3 例）+ `test_pi_virtual_step_field.py`（开关建行/关闭移除 2 例）。
+>
 > **v3.59 补账（2026-09-17，容器定界周期配置面）**：
 > - `views/Project/LogicConfigTab.vue`（+40 行）：自定义模式新增「周期定界」`el-select`（steps=步骤驱动默认 / container=容器定界）+ owner='container' 时露出参数卡——容器标签（filterable+allow-create 下拉，选项来自 nonBackupSteps；e2e 交互用"输入+回车"不点选项）、到位确认秒（0~30 步 0.5）、离场确认秒（0.5~60 步 0.5）；提示文案说明容器标签行建议步骤设置里关闭启用。
 > - `views/Project/index.vue`（+25 行）：`custom_cycle_owner`/`container_gate_label`/`container_gate_appear_seconds`/`container_gate_gone_seconds` 四字段三处对齐——水合（~L1228，从 pipeline_config 读默认 steps/''/1.0/3.0）、同步回 pipeline_config（~L1802，owner!='container' 时 label 清空）、保存 payload（~L2015）。改键名时三处+后端 apply 一起动。

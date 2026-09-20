@@ -33,6 +33,9 @@ _update_step_stats 入口检查 logic_mode == 'per_item' → 进入本 mixin
         stability_iou_threshold: 0.7,          # 同位置 box 跨帧 IoU 阈值
         item_timeout_seconds: 3.0,             # 个体超时清理时间 (Q4)
         lock_count_on_start: true,             # 周期开始时锁定个体数 (Q5)
+        board_rereg_enabled: false,            # v3.57 整板拖动重配准 (默认关): 滚筒线/可滑动
+                                               #   工装现场开启; 关联大面积崩溃时质心+mini-ICP
+                                               #   重配准整板, 固定工装现场保持关
         finish_label: "翻面",                  # 收尾标签 (出现即结算)
         # ── v3.56+ 新增 (默认全关/空 = 老项目零差异) ──
         absorb_new_items_sec: 0,               # >0: 周期开始后 N 秒内 auto 步骤无上限吸收新个体
@@ -48,6 +51,9 @@ _update_step_stats 入口检查 logic_mode == 'per_item' → 进入本 mixin
         item_tracking_iou: 0.3,                # 个体跨帧 IoU 阈值
         coverage_iou: 0.3,                     # 工序与个体的覆盖 IoU 阈值
         sustain_frames: 5,                     # 持续 N 帧重叠才算覆盖
+        coverage_margin: 0,                    # v3.57 动作框扩边救援 (0=关): 原判定没盖到任何
+                                               #   未覆盖个体时, 动作框按比例扩边, 只计最近一个
+                                               #   未覆盖个体 (治动作框系统性偏移永远盖不到)
         completion: "all_covered",             # 完成判定 (本版仅实现 all_covered)
         min_item_count: "auto",                # 最低个体数 ("auto" 或固定数字)
         # ── v3.56+ 单件超时未覆盖警告 (默认 0=关) ──
@@ -212,10 +218,13 @@ class _PerItemStep:
         'item_label', 'action_label',
         'item_tracking_iou', 'coverage_iou', 'sustain_frames',
         'coverage_use_center',             # v3.12+: 小物件场景启用"中心点判定" (替代 IoU)
+        'coverage_margin',                 # v3.57: 动作框扩边救援 (0=关, 老项目零差异)
         'completion', 'min_item_count',
         'expected_count',                  # v3.9+: 已知固定个体数 (0=未配置, 走 auto 路径)
         'items', 'next_item_id', 'locked_count', 'completed',
         'completed_count_in_session',
+        # v3.57: 整板快速拖动重配准兜底 — 关联大面积崩溃的连续帧计数
+        '_rereg_lost_streak',
         # ── 单件超时未覆盖警告 (v3.56+, 默认 0=关): 个体出现 N 秒仍未被本步骤动作
         #    覆盖 → 借 warn_event_id 事件的响应面报一次警 (不结周期不落账, 覆盖后自然恢复) ──
         'warn_uncovered_after_sec', 'warn_event_id',
@@ -255,6 +264,14 @@ class _PerItemStep:
         # 的场景. 启用后, 覆盖判定改为"物件中心点是否落在动作 box 内", 不再用 IoU.
         # 默认 False, 维持 IoU > coverage_iou 的老逻辑.
         self.coverage_use_center = bool(per.get('coverage_use_center', False))
+        # v3.57 "动作框扩边救援": 动作检测框相对物件系统性偏移 (如电枪"已完成"框
+        # 标注在枪头、偏离螺丝中心半个框宽) 时, 原判定永远盖不到. >0 时: 本帧原始
+        # 判定没盖到任何"未覆盖"个体 → 把动作框按比例扩边, 只把"最近的一个未覆盖
+        # 个体"计入覆盖 (一枪绝不同时绿两颗)。0=关, 老项目零差异。
+        try:
+            self.coverage_margin = max(0.0, min(2.0, float(per.get('coverage_margin', 0) or 0)))
+        except (TypeError, ValueError):
+            self.coverage_margin = 0.0
 
         self.completion = per.get('completion', 'all_covered')
         self.min_item_count = per.get('min_item_count', 'auto')
@@ -289,6 +306,7 @@ class _PerItemStep:
         self.locked_count = 0
         self.completed = False
         self.completed_count_in_session = 0      # 本 session 内完成次数
+        self._rereg_lost_streak = 0              # v3.57 重配准兜底计数
 
     # ──── 锁定个体表 ────
     def lock_items_from_boxes(self, boxes, frame_id: int, ts: float):
@@ -308,6 +326,7 @@ class _PerItemStep:
         self.next_item_id = 1
         self.locked_count = 0
         self.completed = False
+        self._rereg_lost_streak = 0
 
     def tracking_displacements(self, boxes):
         """返回本步骤可靠 IoU 配对产生的中心位移候选。"""
@@ -322,6 +341,93 @@ class _PerItemStep:
                 max(self.items[iid].bbox[2], self.items[iid].bbox[3]),
             ))
         return displacements
+
+    # ──── 整板快速拖动重配准兜底 (v3.57) ────
+    # 背景: 整板位移校准 (_estimate_board_translation) 依赖相邻帧 IoU 配对, 只能
+    # 跟住"慢漂移" (单帧位移 ≲ 半个 box). 现场滚筒线上工人拖动工装时, 单帧位移可达
+    # box 尺寸的数倍 → IoU 配对全断 → 校准失效 → 全部逻辑框滞留原地成幽灵, 之后
+    # 整盘永远红 (2026-09 六和螺丝锁付现场实测: 一次拖动后 32 槽位全灭)。
+    # 兜底: 关联大面积崩溃且检测数量仍在 → 用质心平移做初值 + 两轮最近邻中位位移
+    # 细化 (mini-ICP), 一对一验证 ≥60% 槽位能重新对上才提交刚性平移。验证不过
+    # 不动任何状态, 纯失败路径救援, 正常周期零行为差异。
+
+    def _rereg_nn_pairs(self, boxes, dx, dy):
+        """按候选平移 (dx,dy) 做一对一最近邻配对, 返回 [(iid, box_index), ...]。
+
+        距离门与 update_item_positions 锁定路径同口径: 1.5×box 尺寸容差。
+        """
+        candidates = []
+        for iid, state in self.items.items():
+            scx, scy = _bbox_center(state.bbox)
+            scx += dx
+            scy += dy
+            for box_index, bbox in enumerate(boxes):
+                bcx, bcy = _bbox_center(bbox)
+                x_tol = max(0.006, 1.5 * max(state.bbox[2], bbox[2]))
+                y_tol = max(0.006, 1.5 * max(state.bbox[3], bbox[3]))
+                distance = math.hypot((bcx - scx) / x_tol, (bcy - scy) / y_tol)
+                if distance <= 1.0:
+                    candidates.append((distance, iid, box_index))
+        candidates.sort()
+        used_ids, used_boxes, pairs = set(), set(), []
+        for _d, iid, box_index in candidates:
+            if iid in used_ids or box_index in used_boxes:
+                continue
+            used_ids.add(iid)
+            used_boxes.add(box_index)
+            pairs.append((iid, box_index))
+        return pairs
+
+    def maybe_rereg_after_drag(self, boxes, frame_id: int) -> bool:
+        """关联大面积崩溃 N 帧后尝试整板重配准。返回是否成功提交。
+
+        触发条件 (全部满足才计崩溃帧):
+          - 已锁定个体表非空
+          - 本帧关联成功数 < 50% 槽位 (校准正常时几乎不可能)
+          - 本帧 item 检测数 ≥ 50% 槽位 (排除"工件被拿走/大遮挡"——那不是拖动)
+        连续 4 帧崩溃 → 尝试; 验证不过不动状态, 归零重新累计。
+        """
+        if not self.items:
+            return False
+        associated_n = sum(1 for st in self.items.values() if st.associated)
+        if (associated_n < 0.5 * len(self.items)
+                and len(boxes) >= 0.5 * len(self.items)):
+            self._rereg_lost_streak += 1
+        else:
+            self._rereg_lost_streak = 0
+            return False
+        if self._rereg_lost_streak < 4:
+            return False
+        self._rereg_lost_streak = 0
+
+        # 1. 质心平移初值
+        n = len(self.items)
+        scx = sum(_bbox_center(st.bbox)[0] for st in self.items.values()) / n
+        scy = sum(_bbox_center(st.bbox)[1] for st in self.items.values()) / n
+        dcx = sum(b[0] + b[2] / 2.0 for b in boxes) / len(boxes)
+        dcy = sum(b[1] + b[3] / 2.0 for b in boxes) / len(boxes)
+        dx, dy = dcx - scx, dcy - scy
+        if abs(dx) > 0.4 or abs(dy) > 0.4:
+            return False
+        # 2. 两轮最近邻中位位移细化 (质心受重复框/漏检偏置, 中位数稳)
+        for _ in range(2):
+            pairs = self._rereg_nn_pairs(boxes, dx, dy)
+            if len(pairs) < 3:
+                return False
+            dx = median(boxes[bi][0] + boxes[bi][2] / 2.0
+                        - _bbox_center(self.items[iid].bbox)[0]
+                        for iid, bi in pairs)
+            dy = median(boxes[bi][1] + boxes[bi][3] / 2.0
+                        - _bbox_center(self.items[iid].bbox)[1]
+                        for iid, bi in pairs)
+        # 3. 一对一验证: ≥60% 槽位重新对上才提交
+        pairs = self._rereg_nn_pairs(boxes, dx, dy)
+        if len(pairs) < 0.6 * min(len(self.items), len(boxes)):
+            return False
+        for state in self.items.values():
+            state.bbox = _translate_bbox(state.bbox, dx, dy)
+            state.last_aligned_frame = frame_id
+        return True
 
     # ──── 更新个体位置(跨帧匹配) ────
     def update_item_positions(self, boxes, frame_id: int, ts: float,
@@ -454,6 +560,34 @@ class _PerItemStep:
                         best_iid = iid
                 if best_iid is not None:
                     overlapping_ids.add(best_iid)
+
+        # 1b. 动作框扩边救援 (v3.57, coverage_margin>0 才启用):
+        # 动作框相对物件系统性偏移时, 原判定一帧都盖不到 → 该个体永远红、整周期
+        # 误 NG (2026-09 六和现场: 电枪"已完成"框标注在枪头, 偏离螺丝中心 1~2 个
+        # 框宽)。救援门槛: 本帧原始判定没有盖到任何"未覆盖"个体 (原判定已在正常
+        # 进账时绝不插手); 救援语义: 每个动作框扩边后只把"最近的一个未覆盖且有
+        # 资格"的个体计入 —— 一枪绝不同时绿两颗, 已覆盖个体不重复计 (dup_detect
+        # 的抬枪证据链只认原始判定, 不受救援影响)。
+        if (self.coverage_margin > 0 and action_boxes
+                and not any(not self.items[iid].covered for iid in overlapping_ids)):
+            m = self.coverage_margin
+            for abox in action_boxes:
+                ax, ay, aw, ah = abox
+                ex0, ey0 = ax - m * aw, ay - m * ah
+                ex1, ey1 = ax + aw * (1 + m), ay + ah * (1 + m)
+                acx, acy = ax + aw / 2.0, ay + ah / 2.0
+                best = None
+                for iid in eligible_ids:
+                    st = self.items[iid]
+                    if st.covered:
+                        continue
+                    cx, cy = _bbox_center(st.bbox)
+                    if ex0 <= cx <= ex1 and ey0 <= cy <= ey1:
+                        d = math.hypot(cx - acx, cy - acy)
+                        if best is None or d < best[0]:
+                            best = (d, iid)
+                if best is not None:
+                    overlapping_ids.add(best[1])
 
         # direct 集合只用于取得“电枪确实去了另一颗”的抬枪正证据。返回原目标时，
         # 电枪通常会遮住螺丝本体，因此在 released 已由正证据确认后，可使用由
@@ -727,6 +861,12 @@ class PerItemMixin:
         # False : (默认) 老行为, 只看 finish_label 是否连续出现, 不管桌面是否还有工件
         finish_requires_no_items = bool(per_item_cfg.get('finish_requires_no_items', False))
 
+        # v3.57 整板拖动重配准开关 (默认 False = 关, 老项目零差异)
+        # True : 滚筒线/可滑动工装现场开启 — 关联大面积崩溃时用质心+mini-ICP 把整套
+        #        逻辑框拉回真实位置 (详见 _PerItemStep.maybe_rereg_after_drag)
+        # False: 工装真正固定不动的现场保持关闭, 杜绝极端漏检形态下的误重配准
+        board_rereg = bool(per_item_cfg.get('board_rereg_enabled', False))
+
         # ── 工件离场快照判定 + 待补/待确认态 (打螺丝漏打场景, 默认全关 = 老项目零差异) ──
         # judge_on_workpiece_leave=True 时:
         #   - 判定时机从"停手/收尾标签/全完成保持"改为"工件标签持续消失 (离场)"
@@ -834,6 +974,7 @@ class PerItemMixin:
             'finish_requires_no_items': finish_requires_no_items,
             'item_timeout_seconds': max(0.0, item_timeout),
             'lock_count_on_start': lock_on_start,
+            'board_rereg_enabled': board_rereg,
             'finish_label': finish_label,
             'finish_sustain_frames': max(1, finish_sustain),
             'settle_after_all_done_sec': max(0.0, settle_after_all_done),
@@ -1007,6 +1148,16 @@ class PerItemMixin:
                 cfg['lock_count_on_start'],
                 global_translation=board_translation,
             )
+            # 3a''. 整板快速拖动重配准兜底 (v3.57, board_rereg_enabled 默认关):
+            # 拖动太快时 IoU 配对全断, 位移校准失效 → 关联大面积崩溃。质心+mini-ICP
+            # 重配准把整套逻辑框拉回真实位置, 验证不过不动状态 (详见
+            # maybe_rereg_after_drag)。工装固定不动的现场保持关闭。
+            if cfg['board_rereg_enabled'] and cfg['lock_count_on_start'] and item_boxes:
+                if step.maybe_rereg_after_drag(item_boxes, sess.frame_id):
+                    print(
+                        f"[per_item] 步骤 [{step.step_label}] 整板拖动重配准成功 "
+                        f"(t={current_time:.2f}, 槽位 {len(step.items)})"
+                    )
             if item_boxes:
                 # 3a'. 补锁定窗口 (v3.9+): 配了 expected_count + 当前锁定数 < expected_count
                 # + 仍在 lookahead 窗口内 → 吸收"新位置"的 box

@@ -1,7 +1,7 @@
 # Project 配置字段字典
 
 > **类型**：reference（生成物勿手改）
-> **生成命令**：`python scripts/docgen/gen_config_dict.py`（2026-09-17）
+> **生成命令**：`python scripts/docgen/gen_config_dict.py`（2026-09-19）
 > **单一事实源**：`Project` ORM 七 JSON 字段 + `logic_mode` 列；语义详解见 `modify-project-config` skill。
 > **应用链**：前端 Project 页 → POST /projects → DB → activate → `source_project_config_apply.apply_project_config` → VSM
 
@@ -43,10 +43,12 @@
 | `tracking_*` | tracking 模式：tracking_cycle_strategy, tracking_container_label, container_* , tracking_roi, counting_expected_items 等 |
 | `rod_companion_filter` | 误判过滤：伴生标签 IOU |
 | `rod_session_gate` | 误判过滤：session 门控 |
-| `per_item` | {require_exact_count, disable_auto_settle, leave_judgement, ...} |
+| `per_item` | {require_exact_count, disable_auto_settle, leave_judgement, ...}；v3.60 +board_rereg_enabled 整板拖动重配准（默认关：关联<50%且检出≥50%连续4帧触发，质心初值+两轮中位数精配+≥60%一一对应验证后整板迁移，独立/混合逐件同源） |
 | `ng_remediation` | v3.23 通用 NG 补做策略 |
 | `weighing` | v3.31 称重投料专用（logic_mode=weighing） |
 | `custom_mixed_with` | v3.19 custom 混合 per_item|tracking |
+| `custom_mix_per_item_virtual_step` | v3.60 混合逐件虚拟步骤开关（默认关：全部逐件行完成瞬间注入顺序步骤，与 v3.49 容器虚拟步骤全对称，支持 扫码→逐件→扫码 编排） |
+| `custom_mix_per_item_virtual_step_label` | v3.60 虚拟步骤名称（如 锁付完成；不得与已有检测标签重名，前端步骤设置卡自动生成/移除 per_item_virtual 行） |
 | `label_splits` | v3.32 同标签区域拆分 [{id,enabled,source_label,mode(fixed|anchor),anchor_label,anchor_ref,anchor_hold_seconds,unmatched(drop|keep|map),unmatched_label,regions:[{name,polygon,color}],rounds:{enabled,trigger_label,count,prefixes,trigger_gap_seconds,region_overrides}}]，区域名=steps_config 虚拟步骤(split_origin)；rounds 启用时虚拟步骤=前缀+区域名，切换标签重新出现即切下一轮(满轮回绕，周期结算+离场归零)，当前轮次经 /detection/results.label_split_rounds 透出；region_overrides={"轮次":[{name,polygon,color}]} 给某轮换一批独立区域(翻面后位置不重叠场景)，缺省轮沿用共享 regions |
 | `placement_guide` | v3.32 工件就位提示 {enabled,anchor_label,polygon,mode(hint),display(always|fade_on_ready|hide_on_ready)}，display=就位后引导框显示策略(常驻/淡化/隐藏，未就位永远完整显示)，运行态经 /detection/results.placement_guide 透出 |
 | `strict_order_violation_event_id` | v3.32 严格顺序违序即时事件 id（null=关）：严格步骤在错误时机出现→照旧拦截不计入，同时当场触发所配事件（同一标签+周期进度 5s 节流；last_first 模式无效因严格顺序被强制清空） |

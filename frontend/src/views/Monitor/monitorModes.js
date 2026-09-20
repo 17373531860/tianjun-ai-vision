@@ -122,7 +122,11 @@ export function resolveStepsToShow(projectLike) {
     }
   }
 
-  return stepsToShow.filter(s => !s.backup_for);
+  // v3.59.0a: 统一剔除"已停用"步骤 — sequence/detection/custom 勾选列表里
+  // 残留停用步骤 id 时（现场高发：步骤设置关了启用、逻辑设置勾选没同步去掉），
+  // 不能再出现在 SOP/步骤表。多工位建卡处原本就有 enabled 过滤，单工位
+  // (index.vue watch) 直接消费本函数返回值, 此前漏过滤 → 两路口径在此收敛。
+  return stepsToShow.filter(s => !s.backup_for && s.enabled !== false);
 }
 
 /**
@@ -331,6 +335,13 @@ export function buildChannelStepViews(d, fallbackProject, chState) {
 
   const _logicMode = resolveLogicMode(d.project_config, fallback);
   const _isRegionEvents = _logicMode === 'region_events';
+  // v3.59.0a 容器定界周期: 后端结算无序 + 重复宽容 (缺步才 NG), 前端不做
+  // 重复/乱序推断标红。信号: 本通道 results 载荷 container_gate (配置了
+  // custom_cycle_owner='container' 才透出), poll 配置侧兜底。
+  const _isContainerOwner = !!d.container_gate
+    || (_logicMode === 'custom'
+        && (d.project_config?.pipeline_config?.custom_cycle_owner === 'container'
+            || fallback?.pipeline_config?.custom_cycle_owner === 'container'));
   const _projectLike = projectLikeForChannelSteps(d.project_config, fallback);
   const _stepsConf = resolveStepsToShow(_projectLike);
   // detection 仅固定首/末步骤，中间步骤明确无序；只有 sequential 及其
@@ -441,7 +452,8 @@ export function buildChannelStepViews(d, fallbackProject, chState) {
     );
 
     let cycleResult = null;
-    if (_isRegionEvents) {
+    if (_isRegionEvents || _isContainerOwner) {
+      // 区域事件/容器定界: 完成即绿, 重复/乱序/漏做交给后端结算判, 前端不推断标红
       cycleResult = positionDone ? 'ok' : null;
     } else if (cycleCount > expectedCount && positionDone) {
       cycleResult = 'ng';

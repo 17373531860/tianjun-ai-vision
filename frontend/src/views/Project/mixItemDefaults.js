@@ -18,6 +18,7 @@ export function ensureMixItemDefaults(project, step) {
         item_tracking_iou: 0.3,
         coverage_iou: 0.3,
         coverage_use_center: false,
+        coverage_margin: 0,
         sustain_frames: 5,
         expected_count: 0,
         completion: 'all_covered',

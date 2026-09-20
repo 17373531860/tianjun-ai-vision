@@ -1,0 +1,94 @@
+{
+  "version": "3.60.0",
+  "date": "2026-09-19",
+  "previous_version": "3.59.0",
+  "theme": "六和二工位锁付整改批次：整板拖动重配准 + 动作框扩边救援 + 混合逐件虚拟步骤（默认关零配置差异）；随版收编 v3.59.0a 东莞群光现场补丁",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "整板拖动重配准 board_rereg_enabled（逐件覆盖，默认关）",
+      "symptom": "工装板周期中被工人整体拖动后锁定槽位留在旧位置，覆盖脱靶 31/32 永不合格",
+      "root_cause": "逐件槽位锁定后只跟踪可靠关联个体的小位移，整板大幅拖动后关联全断，槽位无法迁移",
+      "fix": "pipeline_config.per_item.board_rereg_enabled 开关（默认关，部分现场工装真固定）：关联<50%且检出≥50%连续4帧触发，质心平移初值+两轮最近邻中位数精配+≥60%一一对应验证后整板迁移；独立/混合逐件同源生效",
+      "files": ["backend/api/source_per_item_mixin.py", "backend/api/source_custom_mix.py", "frontend/src/views/Project/LogicConfigTab.vue", "frontend/src/views/Project/index.vue"],
+      "keywords": ["整板拖动", "重配准", "board_rereg", "槽位脱靶", "per_item", "逐件覆盖", "六和", "锁螺丝", "工装板移动", "re-registration"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "动作框扩边救援 coverage_margin（步骤级，默认0）",
+      "symptom": "模型已完成框标注偏离螺丝中心，个别槽位永远盖不到，31/32 误 NG",
+      "root_cause": "动作框与槽位覆盖判定按原框几何，标注系统性偏心时物理上永不相交",
+      "fix": "步骤级 per_item.coverage_margin (0~2倍) 扩边后仅当恰有一个最近未覆盖合格槽位时就近记账",
+      "files": ["backend/api/source_per_item_mixin.py", "frontend/src/views/Project/LogicConfigTab.vue", "frontend/src/views/Project/StepsConfigTab.vue", "frontend/src/views/Project/mixItemDefaults.js"],
+      "keywords": ["coverage_margin", "扩边救援", "覆盖不到", "标注偏移", "per_item", "螺丝盖不到", "动作框扩边"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "混合逐件虚拟步骤 custom_mix_per_item_virtual_step（默认关）",
+      "symptom": "工艺要求开头扫码→逐件锁付→结尾扫码，扫码不计次数但首尾必须各确认；序列[扫码,扫码]连续重复被 disappear_delay 强制清零守门拦住无法合并连扫",
+      "root_cause": "混合逐件缺少与 v3.49 容器虚拟步骤对称的能力，逐件覆盖过程无法作为一个可排序的顺序步骤参与序列编排",
+      "fix": "custom_mix_per_item_virtual_step + _label 两键：全部逐件行完成瞬间把虚拟标签注入稳定标签流走常规序列状态机；统一 virtual_step_complete/virtual_step_activity 口径按混合类型分发（tracking=整箱达标/per_item=全行完成）与容器虚拟步骤共用同一条通路；前端步骤设置卡自动生成/移除 per_item_virtual 行",
+      "files": ["backend/api/source_custom_mix.py", "backend/api/source_step_stats_mixin.py", "backend/api/source_settlement_mixin.py", "frontend/src/views/Project/StepsConfigTab.vue", "frontend/src/views/Project/index.vue"],
+      "keywords": ["虚拟步骤", "virtual_step", "混合逐件", "custom_mix", "扫码", "首尾扫码", "锁付完成", "disappear_delay", "合并连扫", "sy8", "容器虚拟步骤对称"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "物品侧活动脉冲豁免空闲超时（混合逐件自动生效）",
+      "symptom": "逐件作业几分钟期间步骤序列零推进，步骤侧空闲超时把干活中的周期强杀成 NG",
+      "root_cause": "空闲超时锚点只看步骤入周期时刻，感知不到物品侧覆盖账面推进",
+      "fix": "_PerItemMixEngine.last_progress_time 记录覆盖总数向前推进时刻，步骤侧空闲判定前顺推锚点；跟踪混合无脉冲返回0零差异",
+      "files": ["backend/api/source_custom_mix.py", "backend/api/source_step_stats_mixin.py"],
+      "keywords": ["空闲超时", "idle_timeout", "活动脉冲", "item_progress", "逐件强杀", "last_progress_time"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "期望序列含重复步骤时 NG 原因空列表",
+      "symptom": "缺第二次扫码结算 NG 时原因打出 缺少:[] 现场无法解读",
+      "root_cause": "缺步计算 set 口径，重复步骤只入 set 一次算不出第二次没做",
+      "fix": "_check_events 缺步为空时按多重集补齐，展示带 扫码(第2次) 注记；_container_virtual_label 更名 _mix_virtual_label 泛化",
+      "files": ["backend/api/source_settlement_mixin.py"],
+      "keywords": ["缺少空列表", "多重集", "重复步骤", "NG原因", "第2次", "multiset"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "v3.59.0a 东莞群光现场补丁收编（随版）",
+      "symptom": "勾选残留停用步骤/容器标签每周期必缺步NG；容器定界标签闪断被前端刷红；换模型步骤id撞车",
+      "root_cause": "custom_detection_steps 必做清单不过滤 enabled 与容器标签；前端重复/乱序推断不知容器定界在跑；旧版重编id与保留拆分虚拟步骤冲突",
+      "fix": "结算必做清单剔除停用步骤与容器标签；前端SOP统一剔除停用步骤+container_gate豁免推断；加载时id冲突自愈重编",
+      "files": ["backend/api/source_settlement_mixin.py", "frontend/src/views/Monitor/monitorModes.js", "frontend/src/views/Monitor/index.vue", "frontend/src/views/Project/labelSplit.js", "frontend/src/views/Project/index.vue", "tests/test_container_cycle_gate.py"],
+      "keywords": ["东莞群光", "v3.59.0a", "容器定界", "停用步骤", "勾选残留", "id冲突", "dedupeStepIds", "container_gate"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-per-item", "modify-project-config"],
+  "files_changed": [
+    "backend/api/source_per_item_mixin.py",
+    "backend/api/source_custom_mix.py",
+    "backend/api/source_step_stats_mixin.py",
+    "backend/api/source_settlement_mixin.py",
+    "frontend/src/views/Project/LogicConfigTab.vue",
+    "frontend/src/views/Project/StepsConfigTab.vue",
+    "frontend/src/views/Project/index.vue",
+    "frontend/src/views/Project/mixItemDefaults.js",
+    "frontend/src/views/Project/labelSplit.js",
+    "frontend/src/views/Monitor/monitorModes.js",
+    "frontend/src/views/Monitor/index.vue",
+    "tests/test_custom_mix_pi_virtual_step.py",
+    "tests/test_per_item_coverage_margin.py",
+    "tests/test_per_item_drag_rereg.py",
+    "tests/test_container_cycle_gate.py",
+    "tests/e2e_browser/test_coverage_margin_field.py",
+    "tests/e2e_browser/test_pi_virtual_step_field.py"
+  ]
+}

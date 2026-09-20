@@ -224,7 +224,7 @@ import ProjectListPanel from './ProjectListPanel.vue';
 import LogicModeContextPanel from './LogicModeContextPanel.vue';
 import CountersContextPanel from './CountersContextPanel.vue';
 import BasicSettingsTab from './BasicSettingsTab.vue';
-import { createDefaultSplitRule, validateSplitRules, syncSplitVirtualSteps } from './labelSplit';
+import { createDefaultSplitRule, validateSplitRules, syncSplitVirtualSteps, dedupeStepIds } from './labelSplit';
 import { getFormatDisplayName } from './modelFormats';
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
 import { Plus, EditPen, FolderAdd, Check } from '@element-plus/icons-vue';
@@ -1062,6 +1062,20 @@ const initProjectDefaults = (project) => {
   // 来源: 老版本 removeExtraModel 只 splice slot 不清 steps_config, 留下"幽灵标签".
   // 后果: 步骤详情显示已删除的副模型 label, 还可能因为 sequence_order 残留引用导致
   // "压墨"被误标结算步骤等. 反序列化时自愈一次.
+  // v3.59.0a 自愈: 步骤 id 冲突（旧版换模型把主步骤重编 1..N, 与保留的
+  // 拆分虚拟步骤旧 id 撞车 → checkbox 联动/显示错行/前后端各认一行）。
+  // 后来者重编 id, 老 id 归数组序在前的主步骤; 提示用户重查勾选并保存。
+  const _dupRenamed = dedupeStepIds(project);
+  if (_dupRenamed.length) {
+    const _names = _dupRenamed.map(r => `「${r.label}」(id ${r.oldId}→${r.newId})`).join('、');
+    console.warn(`[Project] 步骤 id 冲突已自动修复: ${_names}`);
+    ElMessage.warning(
+      `检测到步骤 id 冲突, 已自动修复: ${_names}。` +
+      '请到「逻辑设置」重新确认 检测配置勾选/序列 后点"保存配置"落库',
+      // 现场要看清楚是哪几行, 停久一点
+    );
+  }
+
   const _extraSlotNames = new Set(
     Array.isArray(project.extra_models)
       ? project.extra_models.map(m => m && m.name).filter(Boolean)
@@ -1339,6 +1353,13 @@ const initProjectDefaults = (project) => {
   if (project.custom_mix_container_virtual_step_label === undefined) {
     project.custom_mix_container_virtual_step_label = pipelineConfig.custom_mix_container_virtual_step_label || '';
   }
+  // v3.57 逐件虚拟步骤 (与容器虚拟步骤对称)
+  if (project.custom_mix_per_item_virtual_step === undefined) {
+    project.custom_mix_per_item_virtual_step = pipelineConfig.custom_mix_per_item_virtual_step === true;
+  }
+  if (project.custom_mix_per_item_virtual_step_label === undefined) {
+    project.custom_mix_per_item_virtual_step_label = pipelineConfig.custom_mix_per_item_virtual_step_label || '';
+  }
   // 物品行原生字段兜底：老数据/手改 JSON 可能缺字段，表C输入框依赖它们存在
   (project.steps_config || []).forEach(s => {
     if (s.detect_role !== 'item') return;
@@ -1351,7 +1372,7 @@ const initProjectDefaults = (project) => {
       s.per_item = {
         item_label: s.label || '', action_label: '',
         item_tracking_iou: 0.3, coverage_iou: 0.3, coverage_use_center: false,
-        sustain_frames: 5, expected_count: 0, completion: 'all_covered',
+        coverage_margin: 0, sustain_frames: 5, expected_count: 0, completion: 'all_covered',
       };
     }
   });
@@ -1534,6 +1555,8 @@ const initProjectDefaults = (project) => {
   if (piCfg.stability_iou_threshold === undefined) piCfg.stability_iou_threshold = 0.6;
   if (piCfg.item_timeout_seconds === undefined) piCfg.item_timeout_seconds = 0;  // 0=不限
   if (piCfg.lock_count_on_start === undefined) piCfg.lock_count_on_start = true;
+  // v3.57 整板拖动重配准 (默认 false = 关, 固定工装现场零差异)
+  if (piCfg.board_rereg_enabled === undefined) piCfg.board_rereg_enabled = false;
   if (piCfg.finish_label === undefined) piCfg.finish_label = '';
   if (piCfg.finish_sustain_frames === undefined) piCfg.finish_sustain_frames = 3;
   if (piCfg.finish_requires_no_items === undefined) piCfg.finish_requires_no_items = false;
@@ -1852,6 +1875,9 @@ const initProjectDefaults = (project) => {
   project.pipeline_config.custom_mix_container_stable_pick = project.custom_mix_container_stable_pick === 'latest' ? 'latest' : 'max';
   project.pipeline_config.custom_mix_container_virtual_step = project.custom_mix_container_virtual_step === true;
   project.pipeline_config.custom_mix_container_virtual_step_label = (project.custom_mix_container_virtual_step_label || '').trim();
+  // v3.57 逐件虚拟步骤
+  project.pipeline_config.custom_mix_per_item_virtual_step = project.custom_mix_per_item_virtual_step === true;
+  project.pipeline_config.custom_mix_per_item_virtual_step_label = (project.custom_mix_per_item_virtual_step_label || '').trim();
   project.pipeline_config.custom_sequence_order = project.custom_sequence_order;
   project.pipeline_config.custom_detection_steps = project.custom_detection_steps;
   project.pipeline_config.accumulate_repeats = project.accumulate_repeats;
@@ -2076,6 +2102,9 @@ const handleSaveProject = async () => {
         custom_mix_container_stable_pick: activeProject.value.custom_mix_container_stable_pick === 'latest' ? 'latest' : 'max',
         custom_mix_container_virtual_step: activeProject.value.custom_mix_container_virtual_step === true,
         custom_mix_container_virtual_step_label: (activeProject.value.custom_mix_container_virtual_step_label || '').trim(),
+        // v3.57 逐件虚拟步骤 (与容器虚拟步骤对称)
+        custom_mix_per_item_virtual_step: activeProject.value.custom_mix_per_item_virtual_step === true,
+        custom_mix_per_item_virtual_step_label: (activeProject.value.custom_mix_per_item_virtual_step_label || '').trim(),
         custom_sequence_order: activeProject.value.custom_sequence_order,
         custom_detection_steps: activeProject.value.custom_detection_steps,
         accumulate_repeats: activeProject.value.accumulate_repeats,
@@ -2416,6 +2445,8 @@ const handleSaveProject = async () => {
             stability_iou_threshold: Math.max(0.1, Math.min(0.99, Number(src.stability_iou_threshold) || 0.6)),
             item_timeout_seconds: Math.max(0, Number(src.item_timeout_seconds) || 0),
             lock_count_on_start: src.lock_count_on_start !== false,
+            // v3.57 整板拖动重配准 (默认关; 滚筒线/可滑动工装现场开启)
+            board_rereg_enabled: src.board_rereg_enabled === true,
             finish_label: finishLabel,
             _finish_label_choice: _labelChoice,    // UI 记忆: 切到"全部完成"模式时不丢标签
             finish_sustain_frames: Math.max(1, Math.floor(Number(src.finish_sustain_frames) || 3)),
@@ -2844,8 +2875,18 @@ const selectModel = (model) => {
     const extraSteps = (activeProject.value.steps_config || []).filter(
       s => s && ((s.from_model && s.from_model !== 'main') || s.split_origin)
     );
-    const mainSteps = labels.map((label, idx) => ({
-      id: idx + 1,
+    // v3.59.0a: 主步骤 id 不得与保留的拆分/副模型步骤撞车（东莞群光现场:
+    // 旧模型 3 标签时拆分虚拟步骤分到 id=4, 换 4 标签新模型后第 4 个主步骤
+    // 也拿 id=4 → 检测配置 checkbox 同值联动、前后端 id→label 各认一行）。
+    // 主步骤仍从 1 顺次分配, 只跳过被保留步骤占用的 id; 无保留步骤时零差异。
+    const _extraIds = new Set(extraSteps.map(s => Number(s.id) || 0));
+    let _mid = 1;
+    const _nextMainId = () => {
+      while (_extraIds.has(_mid)) _mid += 1;
+      return _mid++;
+    };
+    const mainSteps = labels.map((label) => ({
+      id: _nextMainId(),
       label: label,
       displayLabel: label,
       enabled: true,

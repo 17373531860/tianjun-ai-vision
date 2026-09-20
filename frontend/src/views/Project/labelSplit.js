@@ -236,6 +236,39 @@ export function syncSplitVirtualSteps(project) {
   return { added, removed };
 }
 
+/**
+ * v3.59.0a 步骤 id 冲突自愈（东莞群光现场）。
+ *
+ * 来源: 旧版换主模型时主步骤按标签序重建 id=1..N, 而保留的拆分虚拟步骤/
+ * 副模型步骤带着旧 id — 旧模型标签少时虚拟步骤分到的 id 会与新模型的
+ * 主步骤撞车（如 3 标签时代建的 拿取大电池=4, 换 4 标签模型后 包装盒 也是 4）。
+ * 症状: 检测配置 checkbox 同值联动（勾/取消一个另一个跟着动）、SOP/步骤表
+ * 按 find 首命中渲染成另一行、后端 id→label dict 后者覆盖 — 前后端各认一个。
+ *
+ * 策略: 数组序在前的保住原 id（主步骤在前）, 在后的重编到 max+1 之后。
+ * 旧 id 的既有引用(勾选/序列)从此只指向主步骤, 语义唯一; 重编步骤的引用
+ * 需要用户重新勾选 — 返回改名清单由调用方提示。无冲突时零差异。
+ */
+export function dedupeStepIds(project) {
+  const steps = Array.isArray(project?.steps_config) ? project.steps_config : [];
+  const seen = new Set();
+  let nextId = steps.reduce((m, s) => Math.max(m, Number(s?.id) || 0), 0) + 1;
+  const renamed = [];
+  for (const s of steps) {
+    const id = Number(s?.id);
+    if (!Number.isFinite(id)) continue;
+    if (seen.has(id)) {
+      renamed.push({ label: s.label, oldId: id, newId: nextId });
+      s.id = nextId;
+      seen.add(nextId);
+      nextId += 1;
+    } else {
+      seen.add(id);
+    }
+  }
+  return renamed;
+}
+
 /** 删除一条规则并级联清理它生成的虚拟步骤（调用方负责确认交互）。 */
 export function removeSplitRule(project, ruleId) {
   const list = project?.pipeline_config?.label_splits;
