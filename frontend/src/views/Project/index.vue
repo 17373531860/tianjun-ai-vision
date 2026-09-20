@@ -224,7 +224,7 @@ import ProjectListPanel from './ProjectListPanel.vue';
 import LogicModeContextPanel from './LogicModeContextPanel.vue';
 import CountersContextPanel from './CountersContextPanel.vue';
 import BasicSettingsTab from './BasicSettingsTab.vue';
-import { createDefaultSplitRule, validateSplitRules, syncSplitVirtualSteps } from './labelSplit';
+import { createDefaultSplitRule, validateSplitRules, syncSplitVirtualSteps, dedupeStepIds } from './labelSplit';
 import { getFormatDisplayName } from './modelFormats';
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
 import { Plus, EditPen, FolderAdd, Check } from '@element-plus/icons-vue';
@@ -1062,6 +1062,20 @@ const initProjectDefaults = (project) => {
   // 来源: 老版本 removeExtraModel 只 splice slot 不清 steps_config, 留下"幽灵标签".
   // 后果: 步骤详情显示已删除的副模型 label, 还可能因为 sequence_order 残留引用导致
   // "压墨"被误标结算步骤等. 反序列化时自愈一次.
+  // v3.59.0a 自愈: 步骤 id 冲突（旧版换模型把主步骤重编 1..N, 与保留的
+  // 拆分虚拟步骤旧 id 撞车 → checkbox 联动/显示错行/前后端各认一行）。
+  // 后来者重编 id, 老 id 归数组序在前的主步骤; 提示用户重查勾选并保存。
+  const _dupRenamed = dedupeStepIds(project);
+  if (_dupRenamed.length) {
+    const _names = _dupRenamed.map(r => `「${r.label}」(id ${r.oldId}→${r.newId})`).join('、');
+    console.warn(`[Project] 步骤 id 冲突已自动修复: ${_names}`);
+    ElMessage.warning(
+      `检测到步骤 id 冲突, 已自动修复: ${_names}。` +
+      '请到「逻辑设置」重新确认 检测配置勾选/序列 后点"保存配置"落库',
+      // 现场要看清楚是哪几行, 停久一点
+    );
+  }
+
   const _extraSlotNames = new Set(
     Array.isArray(project.extra_models)
       ? project.extra_models.map(m => m && m.name).filter(Boolean)
@@ -2861,8 +2875,18 @@ const selectModel = (model) => {
     const extraSteps = (activeProject.value.steps_config || []).filter(
       s => s && ((s.from_model && s.from_model !== 'main') || s.split_origin)
     );
-    const mainSteps = labels.map((label, idx) => ({
-      id: idx + 1,
+    // v3.59.0a: 主步骤 id 不得与保留的拆分/副模型步骤撞车（东莞群光现场:
+    // 旧模型 3 标签时拆分虚拟步骤分到 id=4, 换 4 标签新模型后第 4 个主步骤
+    // 也拿 id=4 → 检测配置 checkbox 同值联动、前后端 id→label 各认一行）。
+    // 主步骤仍从 1 顺次分配, 只跳过被保留步骤占用的 id; 无保留步骤时零差异。
+    const _extraIds = new Set(extraSteps.map(s => Number(s.id) || 0));
+    let _mid = 1;
+    const _nextMainId = () => {
+      while (_extraIds.has(_mid)) _mid += 1;
+      return _mid++;
+    };
+    const mainSteps = labels.map((label) => ({
+      id: _nextMainId(),
       label: label,
       displayLabel: label,
       enabled: true,

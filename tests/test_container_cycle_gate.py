@@ -242,6 +242,41 @@ class TestSettleDetectionBased:
         vsm._settle_container_cycle()
         assert vsm._test_events == [(1, '检测完成')]
 
+    # ---- v3.59.0a 防呆 (东莞群光现场): 勾选残留不误伤 ----
+
+    def test_stale_disabled_and_gate_label_in_det_ids_ignored(self):
+        # 勾选列表残留"已停用的容器步骤 id"(BOX, enabled=False) — 容器标签
+        # 由定界门独占消费永远不入账, 不剔除就每周期必"缺少步骤: BOX" NG
+        vsm = _make_vsm(pipeline_extra={'custom_detection_steps': [1, 2, 3]})
+        vsm.current_cycle_steps = ['A', 'B']
+        vsm._settle_container_cycle()
+        assert vsm._test_events == [(1, '检测完成')]
+
+    def test_enabled_gate_label_in_det_ids_still_ignored(self):
+        # 容器标签行即使误开着"启用", 也不得进必做清单
+        steps = [
+            {'id': 1, 'label': 'A', 'enabled': True, 'min_frames': 1},
+            {'id': 2, 'label': 'B', 'enabled': True, 'min_frames': 1},
+            {'id': 3, 'label': 'BOX', 'enabled': True},
+        ]
+        vsm = _make_vsm(steps=steps,
+                        pipeline_extra={'custom_detection_steps': [1, 2, 3]})
+        vsm.current_cycle_steps = ['A', 'B']
+        vsm._settle_container_cycle()
+        assert vsm._test_events == [(1, '检测完成')]
+
+    def test_default_required_excludes_enabled_gate_label(self):
+        # 缺省清单(不勾选)同样剔除容器标签 (即使误开启用)
+        steps = [
+            {'id': 1, 'label': 'A', 'enabled': True, 'min_frames': 1},
+            {'id': 2, 'label': 'B', 'enabled': True, 'min_frames': 1},
+            {'id': 3, 'label': 'BOX', 'enabled': True},
+        ]
+        vsm = _make_vsm(steps=steps)
+        vsm.current_cycle_steps = ['A', 'B']
+        vsm._settle_container_cycle()
+        assert vsm._test_events == [(1, '检测完成')]
+
 
 # ============================================================
 # 5. _settle_container_cycle 纯 custom 分支
