@@ -34,7 +34,7 @@
       "type": "string"
      },
      "scope": {
-      "description": "允许: * / cluster / mes.receive / license.cache / hub",
+      "description": "允许: * / cluster / mes.receive / license.cache",
       "title": "Scope",
       "type": "string"
      }
@@ -28277,7 +28277,7 @@
   },
   "/api/v1/projects/{project_id}/activate": {
    "post": {
-    "description": "激活项目（设为当前运行项目）\n\nRFC 15 M0: 检测中拒绝激活 (409) —— 此前只有前端锁页拦截, 远程化 (Web 枢纽\n转发本端点) 后必须后端守门: 激活会重载模型/同步配置/清 MES pending, 检测中\n切换会打断在制周期。守门只加在本 HTTP 端点, 不进 activate_project_core ——\nmes_inbound 开工切项目与触发中心 switch_project 的既有语义不受影响。\n对本机 UI 零影响: 前端检测中本来就锁页不放行本操作。",
+    "description": "激活项目（设为当前运行项目）",
     "operationId": "activate_project_api_v1_projects__project_id__activate_post",
     "parameters": [
      {
