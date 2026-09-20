@@ -62,8 +62,13 @@ jobs:
       - name: Install system deps (opencv runtime + electron-builder deb 工具链)
         run: |
           sudo apt-get update
+          # ruby/fpm: electron-builder 自带的 fpm 只有 x86 二进制 (arm 上 Exec format
+          # error), arm64 必须走系统 fpm (下方 build 步骤 USE_SYSTEM_FPM=true)
           sudo apt-get install -y --no-install-recommends \
-            libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 fakeroot patchelf
+            libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 fakeroot patchelf \
+            ruby ruby-dev build-essential
+          sudo gem install fpm --no-document
+          fpm --version
 
       - name: Setup Miniconda (aarch64)
         uses: conda-incubator/setup-miniconda@v3
@@ -286,7 +291,7 @@ jobs:
           fi
           cd electron
           npm ci
-          npx electron-builder --linux deb --arm64
+          USE_SYSTEM_FPM=true npx electron-builder --linux deb --arm64
           echo "=== dist ==="
           ls -la dist/ | grep -v unpacked || true
           DEB=$(ls dist/TianJun-AI-Vision-*-linux-*.deb 2>/dev/null | head -1)
