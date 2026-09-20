@@ -83,8 +83,11 @@ jobs:
           python --version
           python -c "import platform; m=platform.machine(); assert m == 'aarch64', f'FATAL: 期望 aarch64 runner, 实际 {m}'"
 
-          echo "Installing PyTorch (CPU, aarch64 默认 index)..."
-          pip install --retries 5 --timeout 60 torch torchvision torchaudio
+          # 默认 index 的 aarch64 轮子 2026 起默认带 cu130 (GB200 生态, 单 torch 3GB+
+          # 且非本包定位) — 必须钉 CPU 专用 index, 同 test-gate 治爆盘的思路
+          echo "Installing PyTorch (CPU, aarch64)..."
+          pip install --retries 5 --timeout 60 torch torchvision torchaudio \
+            --index-url https://download.pytorch.org/whl/cpu
 
           echo "Installing backend dependencies..."
           pip install --retries 5 --timeout 60 -r backend/requirements.txt
