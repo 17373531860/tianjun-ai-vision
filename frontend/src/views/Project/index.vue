@@ -3318,7 +3318,13 @@ const isSettlementStep = (step) => {
 };
 
 watch(() => activeProject.value?.logic_mode, (mode) => {
-  if (!activeProject.value?.steps_config) return;
+  if (!activeProject.value) return;
+  // v3.60.1: 检测模式结算方式只支持 first_step / last_step —
+  // 从顺序模式带过来的 last_first 无对应语义, 重置回默认
+  if (mode === 'detection' && activeProject.value.settlement_mode === 'last_first') {
+    activeProject.value.settlement_mode = 'first_step';
+  }
+  if (!activeProject.value.steps_config) return;
   if (mode === 'detection') {
     for (const step of activeProject.value.steps_config) {
       step.accept_once = true;

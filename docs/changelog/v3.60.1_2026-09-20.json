@@ -4,6 +4,17 @@
   "previous_version": "3.60.0",
   "changes": [
     {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "检测模式露出「结算方式」选择器（首步重现结算 / 末步完成结算）",
+      "symptom": "检测模式本件结果要等下一件首步重现才结算（滞后一件）；后端末步结算分支（settlement_mode != 'first_step' 时末步完成即结算）一直存在，但前端结算方式卡只对顺序模式渲染，检测模式无入口永远落默认 first_step",
+      "root_cause": "LogicConfigTab.vue 结算方式卡 v-if 仅 sequential/custom-sequential；六和芯子装配需要'模具盖板确认后当场出结果'（与扫收尾码时序对齐）无从配置",
+      "fix": "结算方式卡对 detection 渲染，仅露 first_step（默认）/ last_step 两档（last_first 为顺序模式专属不露出），带检测模式语义文案；切 detection 时残留 last_first 重置。保存/加载复用既有 pipeline_config.settlement_mode，后端零改动，默认 first_step 零差异",
+      "files": ["frontend/src/views/Project/LogicConfigTab.vue", "frontend/src/views/Project/index.vue"],
+      "keywords": ["结算方式", "settlement_mode", "last_step", "末步完成结算", "首步重现结算", "检测模式", "结果滞后一件", "本件完成即出结果", "LogicConfigTab", "六和", "芯子装配", "模具盖板"],
+      "breaking": false
+    },
+    {
       "type": "bugfix",
       "id": "BUG-001",
       "title": "检测模式首步重现结算无视「消失等待不被打断」——扫码抬离回位被切成新周期",
@@ -27,11 +38,20 @@
     }
   ],
   "skills_updated": ["debug-source", "debug-scan-collect"],
+  "field_notes": {
+    "customer": "六和芯子装配（焊接组装工位一）",
+    "verdict_baseline": "现场录像（半中间开始、一个半周期）回放真值 = 1NG + 1OK：视觉落库 1 周期 OK（第二件 9 步全齐）+ 多码采集组1 少扫 NG（挂起→人工放行）+ 组2 码齐 OK",
+    "final_params": "视觉：settlement_mode=last_step + 下层母排 5s 不被打断 + 全步骤单次接受 + 模具盖板 min_frames=2/消失2s + 空闲超时 0；扫码：多码采集现场原值 + vision_gate 关（末步消失结算晚于扫收尾码，gate 只能消费上一件视觉结果，上件 NG 连坐本件误判 ng_vision——真视频实测复现）",
+    "manual": "docs/customers/六和芯子装配/现场整改指引_重复检测与误弹未绑码_v3.60.1.pdf"
+  },
   "files_changed": [
     "backend/api/source_settlement_mixin.py",
     "backend/api/source_event_trigger_mixin.py",
+    "frontend/src/views/Project/LogicConfigTab.vue",
+    "frontend/src/views/Project/index.vue",
     "tests/test_detection_first_step_reappear_uninterruptible.py",
     "tests/test_scan_collect_no_barcode_warn.py",
+    "tests/e2e_browser/test_logic_config_tab.py",
     "tests/uat/uat_20260919_liuhe_first_step_rescan.py"
   ]
 }
