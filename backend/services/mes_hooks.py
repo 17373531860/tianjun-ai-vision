@@ -1873,12 +1873,17 @@ class MESHookManager:
 
         # v3.56.1 视觉双重验证: 视觉周期判定喂给多码采集引擎缓存
         # (纯内存单 dict 写, 仅 vision_gate 开启的项目在扫码结算时消费)
+        # v3.60.1c: 本钩子不再做随视觉周期收口 — 收口唯一路径在视觉结算点
+        # (_settle_detection_cycle → _close_scan_group_async, 带组归属锚)。
+        # 钩子路径无锚会误收下一件刚开的组 (2026-09-21 六和现场事故), 且
+        # 现场开「须先扫码才开始周期」时周期行不建、本钩子根本不触发。
         try:
             from backend.services.scan_collect import get_scan_collect_engine
             get_scan_collect_engine().on_vision_cycle(
                 channel_id, is_good, result_reason or event_name or "")
         except Exception:
-            pass
+            print(f"[MESHook] 多码采集视觉判定回喂失败(隔离):\n{traceback.format_exc()}",
+                  flush=True)
         # v3.4.2 hotfix-2: ScanPair 模式下, settle_for_scan_pair 触发 end_cycle
         # 是同步链, 但本方法被丢进 worker queue 异步跑. 等 worker 拿到 _inspecting
         # 时, _handle_scan_pair_event 已经 promote 把 _inspecting 改成"新码 wp"

@@ -164,6 +164,12 @@
           <el-switch v-model="form.ng_pending" data-testid="sc-ng-pending" />
         </div>
         <div class="flex items-center justify-between">
+          <el-tooltip content="开启后：视觉最后一步结算的瞬间对本件扫码组一刀切——码够本周期 OK、不够直接 NG（原因带缺了什么码），组无条件翻篇。收尾码/码齐/超时/少扫挂起都不再自行结算，下一件的码不会被旧组拒收。要求现场「先扫完码、再做视觉末步」（如先扫工装码再盖模具盖板）。关闭=扫码组只按自身收尾码/扫满/超时结算（默认）" placement="top">
+            <span class="text-sm text-gray-400 border-b border-dotted border-gray-600">随视觉周期结算</span>
+          </el-tooltip>
+          <el-switch v-model="form.settle_on_vision_cycle" data-testid="sc-settle-on-vision" />
+        </div>
+        <div class="flex items-center justify-between">
           <el-tooltip content="组开着且超过 N 秒没有新码就报警催扫（借 NG 事件的灯/蜂鸣/提示，不计数），每 N 秒重复催，直到扫码/结算/清空。适合码序不固定、用「扫满结算」的现场——少扫停留会被及时发现。0 = 关闭" placement="top">
             <span class="text-sm text-gray-400 border-b border-dotted border-gray-600">催扫提醒（秒）</span>
           </el-tooltip>
@@ -244,6 +250,7 @@ const emptyForm = () => ({
   idle_remind_sec: 0,
   standby_silent: false,
   count_on_settle: true,
+  settle_on_vision_cycle: false,
 });
 const form = ref(emptyForm());
 
@@ -288,6 +295,9 @@ function fillExample() {
   // 2026-09-07 现场反馈"一个工件结算两次": 本工位视觉 SOP 也在跑并计数,
   // 扫码结算再借同一对事件会把计数动作重复执行 → 扫码侧不计数
   form.value.count_on_settle = false;
+  // 2026-09-20 现场反馈"视觉结算 OK 后少扫组挂着不翻篇": 视觉末步结算
+  // 即强制收口 — 缺码本周期判 NG, 扫码数据随周期翻篇
+  form.value.settle_on_vision_cycle = true;
 }
 
 async function loadConfig() {

@@ -582,3 +582,18 @@ mgr._per_item_last_ng_detail = {
 - **结算缺步多重集**: 期望序列含重复步骤时 NG 原因按多重集补齐，报"扫码(第2次)"（`source_settlement_mixin.py`；`_container_virtual_label` 已更名 `_mix_virtual_label`）
 
 **调试线索**: 虚拟步骤不注入 → 逐件行真的全完成了吗（固定数量行必须锁满 expected_count）+ 标签是否与检测标签重名被守门忽略（看启动日志）；扫码被合并不结算 → 末步重复配额守门（期望 2 次只到 1 次不结算，是特性不是 bug）；干活中被空闲强杀 → 确认走的是混合逐件（脉冲只在逐件引擎产生）。单测 `tests/test_custom_mix_pi_virtual_step.py`（11 用例），e2e `tests/e2e_browser/test_pi_virtual_step_field.py`，真实视频回放剧本见 v3.60 changelog。
+
+### 12.4 混合逐件「开始判定」开账闸门（v3.60.2，默认全关）
+
+**位置**: `pipeline_config.per_item.start_by_stability` + `start_labels` + `start_sustain_frames`(默认3) + `start_conf`(默认0.5)；稳定窗口三件套复用独立逐件同名字段 `stability_window_frames/stability_count_ratio/stability_count_tolerance`
+
+**场景**: 六和二工位——摆螺丝阶段模型误报"已完成"把账本假盖章灌满致假 OK、手挡半盘时锁进幽灵位置。混合逐件周期主权归步骤侧，引擎从周期第 1 帧就锁账；本闸门是中捷独立逐件"稳定窗口才开周期"语义的混合版补位。
+
+**机制**（`_PerItemMixEngine`，`source_custom_mix.py`）:
+- 判定通过前 `feed()` 早退：不锁账/不记覆盖/不产活动脉冲；通过即 `started=True` 闩锁到周期结束，`reset_host_state` 随周期复位
+- 条件1 稳定窗口：每个固定数量行本帧位置检出数 ≥ `max(1, min(exp, exp×ratio, exp-tolerance))`（与独立逐件 `_per_item_try_start_cycle` 路径 A 同公式）连续 N 帧，断帧清零；没有固定数量行=条件视为满足
+- 条件2 开始标签：逐标签独立连续计帧（≥start_conf）闩锁，**不要求同帧齐**（单框闪断），全部到位过即成立；支持区域拆分虚拟标签（就位-左上 等四角）
+- **独占消费**: start_labels 进 `watch_labels` → 随 `item_labels` 从步骤侧剥离（对齐 v3.59 容器标签）；与启用步骤同名时不剥离并打印警告（建议停用同名行）；runner `_get_enabled_labels` 豁免放行
+- 未通过被超时结算：`verdict()` 返回「逐件未开始(等待: 稳定窗口(x/N帧)、标签…)」；`get_state()` 透出 `start_gate:{started,missing}`（未配置不加键），PerItemPanel 亮「等待开始（缺…）」琥珀徽标
+
+**调试线索**: 永不开始 → 开始标签出现率低的旧模型别用（会空闲超时 NG，原因里看缺谁）；开始晚 1~2 秒 → 稳定窗口帧数 ÷ 帧率的固有代价；开始标签把序列搅乱 → 确认同名步骤行已停用（独占消费只对非步骤标签生效）。单测 `tests/test_custom_mix_start_gate.py`（14 场景），e2e `tests/e2e_browser/test_mix_start_gate_field.py`（5 用例），现场回放证据见 v3.60.2 changelog。

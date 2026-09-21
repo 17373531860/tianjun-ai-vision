@@ -34,6 +34,7 @@
 """
 import argparse
 import json
+import os
 import sqlite3
 import sys
 import threading
@@ -48,7 +49,8 @@ VIDEO = str(ASSET_DIR / "liuhe_ws1.mp4")
 # 现场相机帧流不断不存在此事; 补 8s 静止尾帧模拟画面延续, 让末步结算自然发生。
 VIDEO_PADDED = str(ASSET_DIR / "liuhe_ws1_pad.mp4")
 MODEL = str(ASSET_DIR / "liuhe_best9.pt")
-DB_PATH = "/tmp/uat_liuhe/data/sql_app.db"
+# 直读后端落库: 必须与被测后端的 TIANJUN_DATA_DIR 一致 (可用环境变量覆盖)
+DB_PATH = os.environ.get("UAT_LIUHE_DB", "/tmp/uat_liuhe/data/sql_app.db")
 RUN_LOG = ASSET_DIR / "run.log"
 CH = 0
 VIDEO_LEN_S = 77

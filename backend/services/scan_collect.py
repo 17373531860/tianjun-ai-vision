@@ -64,6 +64,15 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     #   同时跳过人工确认定格), 计数交给视觉周期 — 一件一次 (现场答复 5)。
     #   默认 True = 存量行为零差异 (纯扫码无视觉的工位靠它计数)。
     "count_on_settle": True,
+    # v3.60.2 六和现场反馈: 视觉末步 (盖模具盖板) 结算为 OK 后, 少扫组还挂在
+    # 面板上不翻篇 (收尾码没扫 → closing 结算永远不来)。开启后视觉周期结算
+    # 即强制收口扫码组:
+    #   - 缺码 → 本视觉周期直接判 NG (缺码原因并入周期 NG reason, 一件一账),
+    #     扫码组按 ng_missing 落库导出关组 (跳过挂起, 不借事件面避免双报)
+    #   - 码齐 → 组按 OK 收口 (常规时序下收尾码已提前结组, 此分支仅兜底)
+    # 默认 False = 存量行为零差异。流程约束: 开启后收尾码必须在视觉末步
+    # 完成前扫 (先扫码后盖盖板), 盖完才扫会被判少扫。
+    "settle_on_vision_cycle": False,
 }
 
 # 槽位级可覆盖键 (值 "inherit"/缺省 = 用全局): dedup_cross_group / on_overflow
@@ -251,7 +260,15 @@ class ScanCollectEngine:
             # ---- 结算判定 ----
             is_closing = (slot.get("role") == "closing")
             settle_on = cfg.get("settle_on", "closing")
-            if state.pending_ng:
+            if cfg.get("settle_on_vision_cycle"):
+                # v3.60.1c: 结算主权归视觉周期 — 收尾码/码齐/超时都不自行
+                # 触发结算, 码只进组, 组一直开到视觉末步结算收口(码够 OK/
+                # 不够 NG, 无条件翻篇)。挂起/超时结算全部让位。
+                # 现场事故复盘(2026-09-21 六和): closing 触发的 NG 挂起把组
+                # 占住 → 下一件母排码被"超出应扫数量"拒收 → 码从此对应不上
+                # 工件, 级联混码; 催扫提醒(_arm_remind)保留不受影响。
+                pass
+            elif state.pending_ng:
                 # NG 挂起中的补扫: 缺码补齐即转 OK 结算 (收尾码此前已扫)
                 if self._all_filled(cfg, state):
                     self._settle(db, channel_id, cfg, state, trigger="closing")
@@ -386,10 +403,13 @@ class ScanCollectEngine:
     # ============================================================
 
     def _settle(self, db: Session, channel_id: int, cfg: Dict,
-                state: _GroupState, *, trigger: str, allow_pending: bool = True):
+                state: _GroupState, *, trigger: str, allow_pending: bool = True,
+                fire_events: bool = True):
         """收尾结算（调用方已持锁）。trigger: closing / all_filled / timeout
+        / manual / vision_cycle (v3.60.2 随视觉周期收口)
 
-        allow_pending=False 用于人工"按NG放行": 跳过挂起分支强制出结果。
+        allow_pending=False 用于人工"按NG放行"与视觉周期收口: 跳过挂起强制出结果。
+        fire_events=False 用于视觉周期收口: 计数/灯/语音已由视觉周期事件承担。
         """
         missing = self._missing_detail(cfg, state)
         # v3.56.1b 待机静默: 待机时结算不借事件面(不计数不亮灯)、不派发导出
@@ -424,7 +444,8 @@ class ScanCollectEngine:
             verdict, result_key = False, "ng_missing"
             miss_txt = "、".join(f"{m['label']}缺{m['expected'] - m['got']}"
                                  for m in missing)
-            reason = f"少扫判 NG：{miss_txt}"
+            reason = (f"随视觉周期收口，少扫判 NG：{miss_txt}"
+                      if trigger == "vision_cycle" else f"少扫判 NG：{miss_txt}")
         else:
             verdict, result_key = True, "ok"
             reason = f"多码采集完成，共 {len(state.codes)} 码"
@@ -432,8 +453,12 @@ class ScanCollectEngine:
                 reason = f"补扫齐全转 OK，共 {len(state.codes)} 码"
 
         # ---- v3.56.1 视觉双重验证 (默认关): 扫码 OK 还要视觉侧也 OK ----
+        # v3.60.1c: 随视觉周期收口时跳过 — _vision_last 由 _handle_cycle_end
+        # 异步回喂, 收口线程跑在钩子之前, 窗口里还是上一件的判定, 开着会把
+        # 上件 NG 连坐本件 (或上件 OK 把本件少扫漏过去)。视觉对扫码的影响
+        # 已经由 peek_vision_settle_gate 并入周期事件, 组结果只反映扫码齐缺。
         vision_info = None
-        if cfg.get("vision_gate"):
+        if cfg.get("vision_gate") and trigger != "vision_cycle":
             vision_info, verdict, result_key, reason = self._apply_vision_gate(
                 cfg, channel_id, verdict, result_key, reason)
 
@@ -480,7 +505,7 @@ class ScanCollectEngine:
         # 挂起进入的报警是 remind_only 提醒档不计数 (v3.56.1b)。待机静默跳过。
         # count_on_settle=False: 只借灯/语音/Toast 不计数 (视觉周期已计过,
         # 否则视觉+扫码同借事件 1/2 → 一件计两次, 2026-09-07 六和现场)。
-        if not standby:
+        if not standby and fire_events:
             event_id = cfg.get("event_ok_id", 1) if verdict else cfg.get("event_ng_id", 2)
             self._fire_event(channel_id, event_id, reason,
                              remind_only=not cfg.get("count_on_settle", True))
@@ -532,6 +557,94 @@ class ScanCollectEngine:
                 "is_good": bool(is_good), "reason": reason or "",
                 "ts": datetime.now(),
             }
+
+    # ============================================================
+    # v3.60.2 随视觉周期结算 (settle_on_vision_cycle, 默认关)
+    # ============================================================
+
+    def peek_vision_settle_gate(self, channel_id: int,
+                                cycle_anchor_ts: Optional[datetime] = None,
+                                ) -> Optional[str]:
+        """推理线程探针: 视觉周期结算瞬间查扫码组缺码状态。
+
+        返回缺码文案 (并入周期 NG reason) 或 None (无组/码齐/未开启)。
+        ⚠ 推理线程调用 — 必须零阻塞: try-lock 拿不到 (恰逢扫码线程持锁结算,
+        说明组正在关) 即返回 None; 配置只读 _cfg_cache 纯内存 (组存在则扫码
+        路径必然已灌缓存), 绝不碰 DB。
+
+        cycle_anchor_ts (v3.60.1c 组归属锚): 本视觉周期末步(如模具盖板)首次
+        出现时间。开于锚点之后的组是下一件的码组(上一件末步消失确认的空档里
+        操作员已在扫下一件母排码), 不参与本周期判定 — v3.60.1a 现场事故:
+        无锚探针拿下一件的缺码把本件视觉 OK 翻成 NG。
+        """
+        if not self._lock.acquire(blocking=False):
+            return None
+        try:
+            state = self._groups.get(channel_id)
+            if state is None or not state.codes:
+                return None
+            if cycle_anchor_ts is not None and state.started_at > cycle_anchor_ts:
+                return None   # 锚点之后才开的组 = 下一件的, 不碰
+            cached = self._cfg_cache.get(state.project_id)
+            if not cached or not cached.get("enabled"):
+                return None
+            cfg = cached.get("config") or {}
+            if not cfg.get("settle_on_vision_cycle"):
+                return None
+            missing = self._missing_detail(cfg, state)
+            if not missing:
+                return None
+            miss_txt = "、".join(f"{m['label']}缺{m['expected'] - m['got']}"
+                                 for m in missing)
+            return f"少扫码: {miss_txt}"
+        finally:
+            self._lock.release()
+
+    def has_group_for_vision_settle(self, channel_id: int) -> bool:
+        """纯内存零阻塞守门: 当前是否有开着"随视觉周期结算"的码组。
+
+        视觉结算点起收口线程前的开销守门 (开关默认关的项目不起线程不碰 DB)。
+        try-lock 拿不到 → 组态不明, 返回 True 让幂等的收口线程自行判空。
+        """
+        if not self._lock.acquire(blocking=False):
+            return True
+        try:
+            state = self._groups.get(channel_id)
+            if state is None or not state.codes:
+                return False
+            cached = self._cfg_cache.get(state.project_id)
+            if not cached or not cached.get("enabled"):
+                return False
+            return bool((cached.get("config") or {})
+                        .get("settle_on_vision_cycle"))
+        finally:
+            self._lock.release()
+
+    def settle_by_vision_cycle(self, db: Session, channel_id: int,
+                               cycle_anchor_ts: Optional[datetime] = None,
+                               ) -> bool:
+        """视觉周期结算瞬间收口扫码组 (视觉结算侧后台线程调用)。
+
+        码够 → ok; 不够 → ng_missing 落库导出, 无条件关组翻篇 (跳过挂起,
+        下一件的码永不被旧组拒收)。
+        不借事件面 (fire_events=False): 计数/灯/语音已由视觉周期事件承担,
+        这里再报一次 = 一件双报 (v3.56.1b count_on_settle 同款教训)。
+        未开启 settle_on_vision_cycle / 无组 / 组开于锚点之后(下一件的,
+        见 peek_vision_settle_gate) 时零操作。
+        """
+        with self._lock:
+            state = self._groups.get(channel_id)
+            if state is None or not state.codes:
+                return False
+            if cycle_anchor_ts is not None and state.started_at > cycle_anchor_ts:
+                return False   # 下一件的组, 留给下个周期收口
+            cfg = self.get_config(db, state.project_id)
+            if cfg is None or not cfg.get("settle_on_vision_cycle"):
+                return False
+            self._settle(db, channel_id, cfg, state,
+                         trigger="vision_cycle", allow_pending=False,
+                         fire_events=False)
+            return True
 
     def _apply_vision_gate(self, cfg: Dict, channel_id: int, verdict: bool,
                            result_key: str, reason: str):
@@ -846,3 +959,6 @@ def get_scan_collect_engine() -> ScanCollectEngine:
             if _engine is None:
                 _engine = ScanCollectEngine()
     return _engine
+
+
+# PATCHED_V3601C

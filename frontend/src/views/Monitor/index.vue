@@ -2283,6 +2283,8 @@ const customMixPerItemState = computed(() => {
     config: null,
     steps: s.steps || [],
     last_ng_detail: s.last_ng_detail || null,
+    // v3.60.2 开始判定状态 (未配置时后端不透出该键 = null, 徽标自动隐藏)
+    start_gate: s.start_gate || null,
   };
 });
 

@@ -837,4 +837,16 @@ pipeline_config 内, 不拍平到顶层**, 因此不动 ORM / Pydantic schema / 
 | `steps_config[i].per_item.coverage_margin` | 步骤级 float 0~2（默认 0） | 动作框扩边救援：扩边后仅当恰有一个最近未覆盖合格槽位时就近记账。前端独立角色卡 `coverage-margin-input` / 混合配对卡 `mix-coverage-margin-input` |
 | `pipeline_config.custom_mix_per_item_virtual_step` (+`_label`) | 项目级 bool + str（默认关/空） | 混合逐件虚拟步骤：全部逐件行完成瞬间把 `_label` 注入稳定标签流走常规序列状态机（与 v3.49 容器虚拟步骤全对称）；前端 StepsConfigTab `syncPerItemVirtualStepRow` 自动生成/移除 `per_item_virtual: true` 步骤行——**该行勿手工编辑**；标签与检测标签重名会被 `build_custom_mix` 守门忽略 |
 
-⚠️ 前端 `Project/index.vue` 的 per_item 白名单 normalize 块登记了 `board_rereg_enabled`；新加 per_item 键必须同步登记否则保存即丢（e2e 已踩过）。全链路详见 `debug-per-item` skill §十二。
+## v3.60.2 混合逐件「开始判定」四键（2026-09-21，六和二工位批次）
+
+| 键 | 层级 | 说明 |
+|---|---|---|
+| `pipeline_config.per_item.start_by_stability` | 项目级 bool（默认 false） | 开账条件1·稳定窗口：固定数量行位置检出数连续 N 帧达开周期门槛才开始锁账记覆盖；门槛/帧数复用独立逐件同名键 `stability_window_frames/stability_count_ratio/stability_count_tolerance` |
+| `pipeline_config.per_item.start_labels` | 项目级 string[]（默认 []） | 开账条件2·开始标签：逐标签独立确认到位过即闩锁（不要求同帧齐），全部到位过才通过；支持区域拆分虚拟标签（就位-左上 等）；**闸门独占消费**不进步骤序列（同名启用步骤行不剥离并打警告） |
+| `pipeline_config.per_item.start_sustain_frames` | 项目级 int（默认 3） | 开始标签逐标签连续确认帧数 |
+| `pipeline_config.per_item.start_conf` | 项目级 float 0~1（默认 0.5） | 开始标签置信度门槛 |
+
+- 后端消费：`build_custom_mix` 组装 `start_cfg`（两条件都关 → None，引擎恒 started 零差异）→ `_PerItemMixEngine._start_gate_tick`；runner `_get_enabled_labels` 已放行 start_labels。
+- 前端：StepsConfigTab 配对卡「开始判定」区块（`mix-start-*` testid）；index.vue 水合默认值 + 保存 payload **两条件都关时写 `{}`**（存量逐字节零差异守门，e2e `test_都不动保存_零差异` 盯着）。
+
+⚠️ 前端 `Project/index.vue` 的 per_item 白名单 normalize 块登记了 `board_rereg_enabled` 与 v3.60.2 start_* 四键；新加 per_item 键必须同步登记否则保存即丢（e2e 已踩过）。全链路详见 `debug-per-item` skill §十二。

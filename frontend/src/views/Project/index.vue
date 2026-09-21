@@ -1563,6 +1563,11 @@ const initProjectDefaults = (project) => {
   // v3.9+ 新增字段默认值
   if (piCfg.stability_count_tolerance === undefined) piCfg.stability_count_tolerance = 0;
   if (piCfg.stability_count_ratio === undefined) piCfg.stability_count_ratio = 0.85;
+  // v3.60.2 混合逐件「开始判定」(默认全关 = 零配置差异; 稳定窗口三件套复用上方同名字段)
+  if (piCfg.start_by_stability === undefined) piCfg.start_by_stability = false;
+  if (!Array.isArray(piCfg.start_labels)) piCfg.start_labels = [];
+  if (piCfg.start_sustain_frames === undefined) piCfg.start_sustain_frames = 3;
+  if (piCfg.start_conf === undefined) piCfg.start_conf = 0.5;
   if (piCfg.settle_after_all_done_sec === undefined) piCfg.settle_after_all_done_sec = 0;
   if (piCfg.lock_lookahead_seconds === undefined) piCfg.lock_lookahead_seconds = 5;
   // v3.10.2+ 严格等量触发开关 (默认 false = 走宽松路径, 保持向后兼容)
@@ -2491,7 +2496,25 @@ const handleSaveProject = async () => {
             judge_label_frames: Math.max(1, Math.floor(Number(src.judge_label_frames) || 3)),
             judge_ok_event_id: Math.max(0, Math.floor(Number(src.judge_ok_event_id) || 0)),
           };
-        })() : {},
+        })() : (activeProject.value.logic_mode === 'custom'
+                && activeProject.value.custom_mixed_with === 'per_item' ? (() => {
+          // v3.60.2 混合逐件「开始判定」: 仅在配置了任一条件时写出最小字段集,
+          // 两条件都关 → 保持 {} 与历史行为逐字节一致 (零配置差异)
+          const src = activeProject.value.pipeline_config?.per_item || {};
+          const startLabels = Array.isArray(src.start_labels)
+            ? src.start_labels.map(v => String(v).trim()).filter(Boolean) : [];
+          if (src.start_by_stability !== true && startLabels.length === 0) return {};
+          return {
+            start_by_stability: src.start_by_stability === true,
+            start_labels: startLabels,
+            start_sustain_frames: Math.max(1, Math.floor(Number(src.start_sustain_frames) || 3)),
+            start_conf: Math.max(0, Math.min(1, Number(src.start_conf) || 0.5)),
+            // 稳定窗口三件套 (与独立逐件同名同义同默认)
+            stability_window_frames: Math.max(1, Math.floor(Number(src.stability_window_frames) || 10)),
+            stability_count_ratio: Math.max(0.1, Math.min(1.0, Number(src.stability_count_ratio) || 0.85)),
+            stability_count_tolerance: Math.max(0, Math.floor(Number(src.stability_count_tolerance) || 0)),
+          };
+        })() : {}),
         periodic_actions: (activeProject.value.periodic_actions || []).map(rule => ({
           id: rule.id,
           name: rule.name || '',
