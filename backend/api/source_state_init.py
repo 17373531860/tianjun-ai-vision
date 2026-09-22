@@ -464,6 +464,8 @@ def _init_recording_state(h):
     h._step_writers_lock = threading.Lock()
     h._writer_lock = threading.Lock()
     h._recording_queue = queue.Queue(maxsize=30)  # ~1s 缓冲 @30fps
+    # 控制命令(开周期录像等)独立无界队列: 绝不能被帧队列满丢弃, 也不在推理线程执行
+    h._recording_ctrl = queue.Queue()
     h._recording_thread = None
     h._recording_running = False
     h._recording_drop_count = 0

@@ -304,6 +304,49 @@ def _find_camera_index_conflict(device_index: int, self_channel_id: int):
     return None
 
 
+def bench_unique_camera_fps(cap, n=10, timeout=5.0):
+    """实测相机"唯一帧率"（每秒不重复画面数），带超时防慢摄像头阻塞。
+
+    v3.61: 只数内容不同的帧, 不数 read() 返回次数 —— Windows MSMF 自带
+    帧率转换 (FRC), 会把 10fps 的传感器流复制填充到请求的 30fps: read
+    返回率被骗成 27-30fps, DSHOW/MSMF 选优误选 MSMF, 采集/推理指标全
+    "正常"但真实画面 10fps (现场表现: 画面恒定 100ms 一跳, 体感延迟
+    ≥100ms, 检出闪断; 2026-09 雷鸟现场 YUY2@720p 相机实锤)。
+
+    复制帧是逐位相同的, 降采样切片精确比对即可识别; 真实相邻帧带传感器
+    噪声, 不会逐位相同。极端反例是完全盖住镜头的纯黑画面 (逐帧可能真的
+    逐位相同), 后果只是被当低帧率进入后端选优多花 1-2s, 无功能损失。
+    """
+    try:
+        cap.read()  # 预热丢一帧
+        t0 = time.time()
+        reads = 0
+        unique = 0
+        prev_sig = None
+        for _ in range(n):
+            if time.time() - t0 > timeout:
+                break
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                continue
+            reads += 1
+            # 降采样签名必须 copy: OpenCV 可能复用返回缓冲, 留 view 会被下一帧改写
+            sig = frame[::16, ::16].copy()
+            if (prev_sig is None or sig.shape != prev_sig.shape
+                    or not np.array_equal(sig, prev_sig)):
+                unique += 1
+            prev_sig = sig
+        elapsed = max(time.time() - t0, 0.001)
+        uniq_fps = unique / elapsed
+        if reads > unique:
+            print(f"[Camera] 帧率实测: read={reads / elapsed:.0f}fps "
+                  f"唯一帧={uniq_fps:.0f}fps (发现 {reads - unique} 个复制帧, "
+                  f"疑似后端FRC填充, 以唯一帧率为准)")
+        return uniq_fps
+    except Exception:
+        return 0
+
+
 class CameraStartMixin:
     @property
     def _source_lifecycle_lock(self):
@@ -356,21 +399,9 @@ class CameraStartMixin:
 
         # v2.7.15 (A+B): _bench_fps 提到外层, 所有路径共享, 且打开后立即 bench 一次,
         # 避免"DirectShow 谎报 MJPG 但实际走 YUYV 10fps"的坑
-        def _bench_fps(cap, n=10, timeout=5.0):
-            """快速实测帧率，带超时防止慢摄像头阻塞过久"""
-            try:
-                cap.read()
-                t0 = time.time()
-                ok = 0
-                for _ in range(n):
-                    if time.time() - t0 > timeout:
-                        break
-                    if cap.read()[0]:
-                        ok += 1
-                elapsed = max(time.time() - t0, 0.001)
-                return ok / elapsed
-            except Exception:
-                return 0
+        # v3.61: 改测"唯一帧率", 防 MSMF FRC 复制帧把 10fps 相机骗成 30fps
+        # (实现与理由见模块级 bench_unique_camera_fps)
+        _bench_fps = bench_unique_camera_fps
 
         # Strategy 1: Set FOURCC before resolution (standard approach)
         self.capture.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)

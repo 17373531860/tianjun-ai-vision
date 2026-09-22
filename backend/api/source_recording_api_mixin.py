@@ -274,97 +274,164 @@ class RecordingApiMixin:
         self._persist.submit(f"session_seg#{video_uuid[:8]}", _persist_new_segment)
     
     def start_cycle_recording(self):
-        """开始周期视频录制（使用 FFmpeg 进程）"""
+        """开始周期视频录制（使用 FFmpeg 进程）。
+
+        推理线程只准备路径/元数据并投递开录命令: Popen ffmpeg 可能要几百毫秒,
+        旧 writer.release() 更可能等到 10 秒, 堵在 start_cycle 里会让框/步骤顿,
+        工人已经做到下一步 → 缺步/违序/提前出现误 NG。
+        录制线程已在跑 → 异步开录; 测试/未开检测 → 同步开录保持旧契约。
+        """
         if not self.export_settings or not self.export_settings.get('record_cycle_video'):
             return
-        
+
         with self._writer_lock:
-            if self.cycle_video_writer:
-                try:
-                    self.cycle_video_writer.release()
-                except Exception:
-                    pass
-                self.cycle_video_writer = None
-        
+            old = self.cycle_video_writer
+            self.cycle_video_writer = None
+        if old:
+            self._schedule_cycle_writer_drain(old)
+
         try:
             filename = f"cycle_{self.current_cycle_uuid}_{datetime.now().strftime('%H%M%S')}.mp4"
             filepath = os.path.join(_ensure_dated_dir(get_video_dirs()["cycles"]), filename)
-            
             fps = min(self.export_settings.get('video_fps', 30), 25)
-            
             width = self.width if self.width > 0 else 1280
             height = self.height if self.height > 0 else 720
-            
-            writer = FFmpegRecorder(filepath, width, height, fps)
-            if not writer.open():
-                print("[Recording/Warn] failed to create cycle video recorder")
-                self._append_recording_failure(
-                    "cycle",
-                    "open_failed",
-                    writer=writer,
-                    error=getattr(writer, "last_error", "open_failed"),
-                )
-                return
-            with self._writer_lock:
-                self.cycle_video_writer = writer
-            print(f"[Recording] cycle video started: {filename}")
-            
-            # 记录到数据库 (完整 uuid 防唯一约束撞号)。
-            # v3.38 RFC: 元数据写库进本通道落库线程 — 周期行由 cycle_start 作业建,
-            # FIFO 保证本作业执行时行已存在; 行定位用 cycle_uuid (id 可能未回填)。
-            video_uuid = uuid.uuid4().hex
-            _cycle_uuid = getattr(self, 'current_cycle_uuid', None)
-            _start_dt = datetime.now()
-
-            # v3.53 录像归档: 把周期身份钉在 writer 上, 停止时的延迟释放线程
-            # 在 release() 成功后凭它入队归档任务 (那时 self.current_cycle_uuid
-            # 可能已经翻到下一个周期, 不能现取)。
-            writer._archive_meta = {
-                'cycle_uuid': _cycle_uuid,
-                'channel_id': getattr(self, 'channel_id', 0),
+            spec = {
+                "filename": filename,
+                "filepath": filepath,
+                "fps": fps,
+                "width": width,
+                "height": height,
+                "video_uuid": uuid.uuid4().hex,
+                "cycle_uuid": getattr(self, "current_cycle_uuid", None),
+                "start_dt": datetime.now(),
+                "enable_boxes": bool(self.export_settings.get("record_boxes_data")),
+                "channel_id": getattr(self, "channel_id", 0),
             }
-
-            # 2026-09 检测框 sidecar: 开启「记录检测框数据」时挂收集器,
-            # 录制线程写帧成功后按帧号喂框, 停录 release 后落盘成对 JSON。
-            # 默认关: 不挂收集器 + _boxes_sidecar_active=False, 零开销。
-            try:
-                if self.export_settings.get('record_boxes_data'):
-                    from backend.services.detection_boxes_sidecar import (
-                        BoxesSidecarCollector)
-                    writer._boxes_collector = BoxesSidecarCollector(
-                        filepath, fps)
-                    self._boxes_sidecar_active = True
-            except Exception as _be:
-                print(f"[Recording] 检测框收集器初始化失败(不影响录像): {_be}")
-
-            def _persist_cycle_video_meta():
-                from backend.db.database import SessionLocal
-                db = SessionLocal()
-                try:
-                    cycle = db.query(DetectionCycle).filter(
-                        DetectionCycle.cycle_uuid == _cycle_uuid).first() if _cycle_uuid else None
-                    video = VideoClip(
-                        video_uuid=video_uuid,
-                        clip_type='cycle',
-                        related_id=cycle.id if cycle else None,
-                        file_path=filepath,
-                        file_name=filename,
-                        start_time=_start_dt
-                    )
-                    db.add(video)
-                    # 更新周期的视频ID
-                    if cycle:
-                        cycle.video_id = video_uuid
-                        cycle.video_path = filepath
-                    db.commit()
-                finally:
-                    db.close()
-
-            self._persist.submit(f"cycle_video#{video_uuid[:8]}", _persist_cycle_video_meta)
+            # 仅当录制线程本来就在跑(检测中)才异步开录。
+            # 本调用里刚拉起 RecThread 仍走同步: 单测契约
+            # `start_cycle_recording()` 返回后 writer 已就绪。
+            rec_was_alive = (
+                self._recording_thread is not None
+                and self._recording_thread.is_alive()
+            )
+            self._start_recording_thread()
+            if rec_was_alive:
+                self._recording_ctrl.put(("open_cycle", spec))
+                print(f"[Recording] cycle video open queued: {filename}")
+            else:
+                self._apply_open_cycle_recorder(spec)
         except Exception as e:
             print(f"[Recording] start cycle recording failed: {e}")
             self._append_recording_failure("cycle", "open_exception", error=str(e))
-    
+
+    def _apply_open_cycle_recorder(self, spec: dict):
+        """真正 Popen ffmpeg 并挂上 cycle writer。仅录制线程或无 RecThread 的测试路径调用。"""
+        filepath = spec["filepath"]
+        filename = spec["filename"]
+        fps = spec["fps"]
+        writer = FFmpegRecorder(filepath, spec["width"], spec["height"], fps)
+        if not writer.open():
+            print("[Recording/Warn] failed to create cycle video recorder")
+            self._append_recording_failure(
+                "cycle",
+                "open_failed",
+                writer=writer,
+                error=getattr(writer, "last_error", "open_failed"),
+            )
+            return
+        writer._archive_meta = {
+            "cycle_uuid": spec.get("cycle_uuid"),
+            "channel_id": spec.get("channel_id", 0),
+        }
+        if spec.get("enable_boxes"):
+            try:
+                from backend.services.detection_boxes_sidecar import (
+                    BoxesSidecarCollector)
+                writer._boxes_collector = BoxesSidecarCollector(filepath, fps)
+                self._boxes_sidecar_active = True
+            except Exception as _be:
+                print(f"[Recording] 检测框收集器初始化失败(不影响录像): {_be}")
+        with self._writer_lock:
+            self.cycle_video_writer = writer
+        print(f"[Recording] cycle video started: {filename}")
+
+        video_uuid = spec["video_uuid"]
+        _cycle_uuid = spec.get("cycle_uuid")
+        _start_dt = spec.get("start_dt") or datetime.now()
+
+        def _persist_cycle_video_meta():
+            from backend.db.database import SessionLocal
+            db = SessionLocal()
+            try:
+                cycle = db.query(DetectionCycle).filter(
+                    DetectionCycle.cycle_uuid == _cycle_uuid).first() if _cycle_uuid else None
+                video = VideoClip(
+                    video_uuid=video_uuid,
+                    clip_type="cycle",
+                    related_id=cycle.id if cycle else None,
+                    file_path=filepath,
+                    file_name=filename,
+                    start_time=_start_dt,
+                )
+                db.add(video)
+                if cycle:
+                    cycle.video_id = video_uuid
+                    cycle.video_path = filepath
+                db.commit()
+            finally:
+                db.close()
+
+        self._persist.submit(f"cycle_video#{video_uuid[:8]}", _persist_cycle_video_meta)
+
+    def _schedule_cycle_writer_drain(self, writer):
+        """把旧周期 writer 交给延迟释放线程, 调用方绝不 wait ffmpeg。"""
+        if writer is None:
+            return
+        with self._writer_lock:
+            self._draining_cycle_writer = writer
+            self._draining_release_count = getattr(
+                self, "_draining_release_count", 0) + 1
+            _draining_n = self._draining_release_count
+        if _draining_n > 5:
+            print(f"[Recording/Monitor] cycle recording delayed-release backlog {_draining_n} "
+                  f"(fast-cadence cycles may pile up FFmpeg subprocesses, channel "
+                  f"{getattr(self, 'channel_id', '?')})", flush=True)
+
+        def _delayed_release(w):
+            time.sleep(1.5)
+            with self._writer_lock:
+                if getattr(self, "_draining_cycle_writer", None) is w:
+                    self._draining_cycle_writer = None
+            try:
+                w.release()
+                print("[Recording] cycle video stopped (drained)")
+                _collector = getattr(w, "_boxes_collector", None)
+                if _collector is not None:
+                    try:
+                        _collector.flush()
+                    except Exception as _se:
+                        print(f"[Recording] 检测框数据落盘失败(不影响录像): {_se}")
+                try:
+                    meta = getattr(w, "_archive_meta", None)
+                    if meta and meta.get("cycle_uuid"):
+                        from backend.services.video_archive import (
+                            notify_cycle_video_ready)
+                        notify_cycle_video_ready(
+                            meta.get("channel_id", 0),
+                            meta["cycle_uuid"], w.filepath)
+                except Exception as _ae:
+                    print(f"[VideoArchive] 归档任务入队失败(不影响录像): {_ae}")
+            except Exception as e:
+                print(f"[Recording] stop cycle recording failed: {e}")
+            finally:
+                with self._writer_lock:
+                    self._draining_release_count = max(
+                        0, getattr(self, "_draining_release_count", 1) - 1)
+
+        import threading
+        threading.Thread(target=_delayed_release, args=(writer,), daemon=True).start()
+
     def stop_cycle_recording(self):
         """停止周期视频录制 - delayed release to flush queued frames"""
         # 2026-09: 停录即停检测框快照 (排空期的帧属于下一周期语境, 不再记框)
@@ -372,60 +439,8 @@ class RecordingApiMixin:
         with self._writer_lock:
             writer = self.cycle_video_writer
             self.cycle_video_writer = None
-            if writer:
-                self._draining_cycle_writer = writer
-
         if writer:
-            def _delayed_release(w):
-                time.sleep(1.5)
-                with self._writer_lock:
-                    if getattr(self, '_draining_cycle_writer', None) is w:
-                        self._draining_cycle_writer = None
-                try:
-                    w.release()
-                    print("[Recording] cycle video stopped (drained)")
-                    # 2026-09 检测框 sidecar 落盘: 必须在归档 notify 之前
-                    # (归档 worker 的带框渲染按约定路径找 sidecar)
-                    _collector = getattr(w, '_boxes_collector', None)
-                    if _collector is not None:
-                        try:
-                            _collector.flush()
-                        except Exception as _se:
-                            print(f"[Recording] 检测框数据落盘失败(不影响录像): {_se}")
-                    # v3.53 录像归档: release 返回 = FFmpeg 子进程已退出,
-                    # 这是"文件完整可搬运"的唯一可靠信号点。只投递不阻塞
-                    # (无启用规则时 notify 内部直接短路, 零开销)。
-                    try:
-                        meta = getattr(w, '_archive_meta', None)
-                        if meta and meta.get('cycle_uuid'):
-                            from backend.services.video_archive import (
-                                notify_cycle_video_ready)
-                            notify_cycle_video_ready(
-                                meta.get('channel_id', 0),
-                                meta['cycle_uuid'], w.filepath)
-                    except Exception as _ae:
-                        print(f"[VideoArchive] 归档任务入队失败(不影响录像): {_ae}")
-                except Exception as e:
-                    print(f"[Recording] stop cycle recording failed: {e}")
-                finally:
-                    # C6 监控: 释放完成, 存活延迟释放计数 -1
-                    with self._writer_lock:
-                        self._draining_release_count = max(
-                            0, getattr(self, '_draining_release_count', 1) - 1)
-
-            import threading
-            # C6 监控版(零风险, 不改释放逻辑): 统计同时存活的延迟释放线程,
-            # 每个都持着一个 cv2/FFmpeg writer 子进程, 快节拍周期会叠加。
-            # 只在叠加超阈值时告警, 帮现场定位"多个 FFmpeg 子进程堆积"。
-            with self._writer_lock:
-                self._draining_release_count = getattr(
-                    self, '_draining_release_count', 0) + 1
-                _draining_n = self._draining_release_count
-            if _draining_n > 5:
-                print(f"[Recording/Monitor] cycle recording delayed-release backlog {_draining_n} "
-                      f"(fast-cadence cycles may pile up FFmpeg subprocesses, channel "
-                      f"{getattr(self, 'channel_id', '?')})", flush=True)
-            threading.Thread(target=_delayed_release, args=(writer,), daemon=True).start()
+            self._schedule_cycle_writer_drain(writer)
     
     def start_step_recording(self, step_label: str):
         """开始步骤视频录制（使用 FFmpeg 进程）"""

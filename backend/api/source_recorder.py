@@ -144,13 +144,26 @@ class FFmpegRecorder:
                 self.filepath
             ]
 
-            self.process = subprocess.Popen(
-                cmd,
+            # 编码优先级低于检测: 开录像时 x264 与 YOLO 抢同一颗工控机 CPU,
+            # 会把推理 FPS 打下去 → 框/步骤顿 → 缺步/违序误 NG。子进程降到
+            # below-normal / nice+10, 检测饿不死, 录像最多少几帧。
+            popen_kw = dict(
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
-                bufsize=10**6
+                bufsize=10**6,
             )
+            if os.name == "nt":
+                popen_kw["creationflags"] = getattr(
+                    subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0x00004000)
+            else:
+                def _lower_priority():
+                    try:
+                        os.nice(10)
+                    except Exception:
+                        pass
+                popen_kw["preexec_fn"] = _lower_priority
+            self.process = subprocess.Popen(cmd, **popen_kw)
             self._is_open = True
             self._frame_count = 0
             self.last_error = ""

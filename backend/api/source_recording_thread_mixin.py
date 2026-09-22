@@ -96,6 +96,13 @@ class RecordingThreadMixin:
                 dropped += 1
             except Exception:
                 break
+        ctrl_q = getattr(self, "_recording_ctrl", None)
+        if ctrl_q is not None:
+            while not ctrl_q.empty():
+                try:
+                    ctrl_q.get_nowait()
+                except Exception:
+                    break
         
         if dropped > 0:
             print(f"[RecThread] cleared {dropped} leftover frames in queue")
@@ -115,7 +122,10 @@ class RecordingThreadMixin:
         last_log_time = time.time()
         last_heartbeat_time = time.time()
         
-        while self._recording_running or not self._recording_queue.empty():
+        ctrl_q = getattr(self, "_recording_ctrl", None)
+        while (self._recording_running
+               or not self._recording_queue.empty()
+               or (ctrl_q is not None and not ctrl_q.empty())):
             try:
                 current_time = time.time()
                 
@@ -126,6 +136,17 @@ class RecordingThreadMixin:
                         step_count = len(self.step_video_writers)
                     print(f"[RecThread/Heartbeat] frames={frame_count}, queue={queue_size}, step_rec={step_count}, dropped={self._recording_drop_count}")
                     last_heartbeat_time = current_time
+
+                # 控制命令优先: 开周期录像(Popen ffmpeg)必须在录制线程做,
+                # 不能堵推理线程, 否则框/步骤顿一拍就会缺步/违序误 NG.
+                if ctrl_q is not None:
+                    try:
+                        cmd = ctrl_q.get_nowait()
+                    except queue.Empty:
+                        cmd = None
+                    if cmd is not None:
+                        self._handle_recording_ctrl(cmd)
+                        continue
                 
                 # 从队列取帧（带超时，避免阻塞）
                 try:
@@ -161,6 +182,26 @@ class RecordingThreadMixin:
                 time.sleep(0.01)
         
         print(f"[RecThread] run loop ended, {frame_count} frames written total")
+
+    def _handle_recording_ctrl(self, cmd):
+        """录制线程消费控制命令。推理/周期状态机只负责投递, 不在这里等 ffmpeg。"""
+        if not cmd:
+            return
+        try:
+            op, payload = cmd[0], cmd[1] if len(cmd) > 1 else None
+        except Exception:
+            return
+        if op == "open_cycle":
+            # 线程已在收尾(停止/待机)时丢弃积压的开录命令:
+            # 此刻开 ffmpeg 只会立刻又被 _close_all_writers 关掉, 纯浪费
+            if not self._recording_running:
+                print("[RecThread] open_cycle discarded (thread stopping)")
+                return
+            try:
+                self._apply_open_cycle_recorder(payload or {})
+            except Exception as e:
+                print(f"[RecThread] open_cycle failed: {e}")
+                traceback.print_exc()
     
     def _enqueue_frame_for_recording(self, frame):
         """
