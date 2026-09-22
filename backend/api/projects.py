@@ -556,7 +556,14 @@ def activate_project(project_id: int, db: Session = Depends(get_db)):
     切换会打断在制周期。守门只加在本 HTTP 端点, 不进 activate_project_core ——
     mes_inbound 开工切项目与触发中心 switch_project 的既有语义不受影响。
     对本机 UI 零影响: 前端检测中本来就锁页不放行本操作。
+
+    校验顺序: 先项目存在性 (404), 再检测中守门 (409) —— 无效 id 不论检测
+    与否都该 404 (v3.61.0 发版 CI 抓出: BDD 前序场景检测未停时, 无效 id
+    误撞 409)。
     """
+    if not db.query(Project.id).filter(Project.id == project_id).first():
+        raise HTTPException(status_code=404, detail="Project not found")
+
     from backend.api.channel_manager import channel_manager
     detecting = [
         ch_id for ch_id, m in channel_manager.channels.items()
