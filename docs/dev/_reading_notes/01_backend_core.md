@@ -10,6 +10,14 @@
 > - `services/mes_hooks.py`：`_handle_cycle_end` 拆除随视觉周期收口（无锚误收下一件刚开的组 + 「须先扫码才开始周期」下周期行不建钩子不触发）；回喂失败从 pass 改打印 traceback（隔离不打断）。
 > - `services/scan_collect.py`（+128 行）：`settle_on_vision_cycle` 配置键（DEFAULTS 默认 False）+ 开启时 closing/all_filled/timeout/ng_pending 挂起全部让位不自行结算 + 探针/收口接口（供结算点调用）。
 >
+> **v3.61 补账（2026-09-22，相机延迟四疗法：只取最新帧/录像异步化/FFmpeg 降优先级/唯一帧率选优）**：
+> - `source_capture_loop_mixin.py`（dev-qing）：新增 `_camera_grab_latest_frame`——USB 相机「只取最新帧」：连续 `grab()` 抽掉驱动/MSMF 内部队列积压旧帧（瞬时返回=旧帧），单次 grab 耗时 ≥`_CAMERA_STALE_GRAB_MS`(8ms) 视为阻塞等到传感器新帧即 `retrieve()`（上限 `_CAMERA_MAX_DRAIN`=30 张，全程瞬时 sleep 5ms 防空转）；`_capture_loop` 相机分支改走它并**跳过末尾 target_interval sleep**（配置 FPS 不再节流相机采集），丢弃旧帧 10s 节流打 `stale frames dropped=N`。视频/RTSP/海康/synthetic 原路径不动。回归 `tests/test_camera_grab_latest_v3602.py`。
+> - `source_recording_api_mixin.py`：`start_cycle_recording` 异步化——RecThread 已活时把 `("open_cycle", spec)` 投递到 `_recording_ctrl` 无界控制队列由录制线程执行，推理线程不再被 ffmpeg `Popen`/旧 writer `release()`（最长 10s）卡住（治周期边界 1~11s 冻结）；线程未活时同步走 `_apply_open_cycle_recorder`（新 helper，封装原开录逻辑）。
+> - `source_recording_thread_mixin.py`：`_recording_loop` 每轮先消费 `_recording_ctrl`（`_handle_recording_ctrl`——`open_cycle` 在 `_recording_running=False` 收尾态直接丢弃防白开）；循环存续条件补 ctrl 队列非空。
+> - `source_state_init.py`：`_init_recording_state` 新增 `h._recording_ctrl = queue.Queue()`（无界：控制命令绝不能被帧队列 maxsize=30 满丢弃）。
+> - `source_recorder.py`：`FFmpegRecorder.open` 以低优先级启动 ffmpeg 子进程——Windows `BELOW_NORMAL_PRIORITY_CLASS` / Unix `preexec_fn os.nice(10)`，x264 编码不与 YOLO 推理抢核。回归 `tests/test_cycle_recording_nonblocking.py`。
+> - `source_camera_start_mixin.py`：新增模块级 `bench_unique_camera_fps`——帧率实测改数**唯一帧**（降采样签名 `frame[::16,::16]` 逐位比对，复制帧不计）：Windows MSMF 帧率转换(FRC)把 10fps 传感器流复制填充成 27-30fps，老 `_bench_fps` 数 read() 返回率被骗致 DSHOW/MSMF 选优误选 MSMF（雷鸟现场 YUY2@720p 实锤，画面恒定 100ms 一跳但采集/推理指标全"正常"）；发现复制帧打诊断行 `帧率实测: read=Xfps 唯一帧=Yfps`。嵌套 `_bench_fps` 变别名，四个调用点（DSHOW 首测/MSMF 对比/CAP_ANY/降分辨率）同口径。回归 `tests/test_camera_bench_unique_fps.py`。
+>
 > **v3.60 补账（2026-09-19，六和二工位逐件批次：整板重配准/扩边救援/混合逐件虚拟步骤）**：
 > - `source_per_item_mixin.py`：①`_attempt_board_rereg`——整板拖动重配准（`per_item.board_rereg_enabled` 默认关）：可靠关联<50%且检出≥50%连续4帧触发（`_board_rereg_pending_frames` 计数），质心平移初值+两轮最近邻中位数精配+≥60%一一对应验证通过才整板迁移并刷新 `last_aligned_frame`，验证不过静默放弃；②覆盖判定尾部扩边救援——步骤级 `per_item.coverage_margin`（0~2），常规判定失败后动作框扩边、**恰有一个**最近未覆盖合格槽位才就近记账（多候选=歧义不救）。
 > - `source_custom_mix.py`：`_PerItemMixEngine` 三扩充——①`feed` 汇总跨步骤可靠位移做整板平移（与独立模式 board_rereg 同源语义）；②`all_items_complete()`（粘性 completed 口径，固定数量行须锁满）/`items_activity()`（任一行有覆盖）供虚拟步骤消费；③`last_progress_time` 物品侧活动脉冲（覆盖总数向前推进才刷新，`_progress_snapshot` 回落只降基线；`reset_host_state` 随周期清零）。`CustomMixMachine` 新增统一分发口 `virtual_step_complete()/virtual_step_activity()/item_progress_time()`（tracking=整箱达标/per_item=全行完成；`build_custom_mix` per_item 分支解析 `custom_mix_per_item_virtual_step`+`_label`，标签与 `machine._engine.watch_labels` 撞名守门忽略）。

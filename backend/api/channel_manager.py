@@ -1137,7 +1137,18 @@ class HandsAuxRequest(BaseModel):
     enabled: bool = Field(False, description="True=该工位开手部裁切副屏 (会为这一路开 MediaPipe 手部)")
 
 
-@router.get("/hands-aux", summary="读各工位手部裁切副屏开关")
+class HandsAuxConfigResponse(BaseModel):
+    """手部裁切副屏开关表：工位号(str)→是否开启。"""
+    channels: Dict[str, bool] = Field(..., description="工位号(零基, str)→手部副屏开关")
+
+
+class HandsAuxUpdateResponse(HandsAuxConfigResponse):
+    """PUT /hands-aux 响应：写入后的全量开关表。"""
+    status: str = Field("success", description="固定 success, 失败走 HTTPException")
+
+
+@router.get("/hands-aux", summary="读各工位手部裁切副屏开关",
+            response_model=HandsAuxConfigResponse)
 def get_hands_aux_config():
     """逐工位返回手部裁切副屏开关（默认全关）。
 
@@ -1148,6 +1159,7 @@ def get_hands_aux_config():
 
 
 @router.put("/hands-aux", summary="设置某工位手部裁切副屏开关",
+            response_model=HandsAuxUpdateResponse,
             dependencies=[Depends(require_perm("settings.edit"))])
 def set_hands_aux_config(req: HandsAuxRequest):
     """开/关某一工位的手部裁切副屏；立即对运行态生效并落盘。

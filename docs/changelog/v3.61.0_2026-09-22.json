@@ -1,0 +1,67 @@
+{
+  "version": "3.61.0",
+  "date": "2026-09-22",
+  "previous_version": "3.60.2",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "Web 集中管控枢纽 Fleet Hub（RFC 15）M1~M5 全量落地",
+      "symptom": "多台工控机分散车间，管理者无处集中看全部工位状态/告警/统计",
+      "root_cause": "此前只有单机监控页，无跨机聚合层",
+      "fix": "独立部署 hub/ Web 应用（FastAPI+Vue3：节点注册/轮询采集/数字孪生/电视墙/工位运维+锁管理/告警事件/用户体系/统计分析/审计）+ 主程序边缘接入面 /api/v1/hub/*（握手/能力档案/健康摘要，API Key scope=hub），hub_access.enabled 默认关零差异",
+      "files": ["hub/", "backend/api/hub_access.py", "backend/api/api_keys.py", "backend/api/projects.py", "backend/api/router_manifest.py", "frontend/src/views/Settings/AuthPanel.vue"],
+      "keywords": ["hub", "fleet", "集中管控", "电视墙", "驾驶舱", "多边缘", "RFC15", "数字孪生", "wall", "边缘接入", "scope=hub", "hub_access"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "局域网工位屏批次（dev-qing）：一拖多推理 + 网页工位 + 吉田手部副屏 + 工位屏扫码权限",
+      "symptom": "一台主机拖多工位时操作工只能挤总控屏看",
+      "root_cause": "无按工位分发的网页工位形态",
+      "fix": "一拖多工作站推理 + 一体机网页工位（静态托管/同源/工位权限）+ 吉田手部裁切副屏按工位独立开关（默认关）+ 工位屏 USB 扫码走本工位权限通道",
+      "files": ["backend/api/lan_station 相关", "frontend 工位屏配置卡"],
+      "keywords": ["局域网工位屏", "lan-station", "一拖多", "网页工位", "kiosk", "手部副屏", "吉田", "USB扫码权限"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "USB 摄像头采集「只取最新帧」消除画面排队延迟",
+      "symptom": "画面稳定落后于手上动作，帧率与推理都正常",
+      "root_cause": "_capture_loop 每轮 read() 队头最旧帧后按配置 fps sleep，MSMF 忽略 BUFFERSIZE=1，驱动队列积压多深画面晚多少",
+      "fix": "相机源改连续 grab() 抽旧帧、≥8ms 阻塞视为新帧 retrieve，跳过相机分支末尾 sleep；视频/RTSP/海康/synthetic 原路径不动",
+      "files": ["backend/api/source_capture_loop_mixin.py", "tests/test_camera_grab_latest_v3602.py"],
+      "keywords": ["排队延迟", "grab", "retrieve", "只取最新帧", "BUFFERSIZE", "MSMF", "画面落后", "latency", "queue"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "周期录像开/关卡推理线程致周期边界秒级冻结",
+      "symptom": "开录像后检测掉帧/框卡顿，NG 多为缺步/违序/提前出现；周期边界 1~11 秒画面冻结",
+      "root_cause": "start_cycle_recording 在推理线程同步 Popen 开 FFmpeg + 旧 writer release 最长等 10s",
+      "fix": "_recording_ctrl 无界控制队列异步开录（RecThread 消费，收尾丢弃积压命令）+ FFmpeg 子进程降优先级（BELOW_NORMAL/nice+10）",
+      "files": ["backend/api/source_recording_api_mixin.py", "backend/api/source_recording_thread_mixin.py", "backend/api/source_state_init.py", "backend/api/source_recorder.py", "tests/test_cycle_recording_nonblocking.py"],
+      "keywords": ["录像掉帧", "周期录像", "推理线程阻塞", "Popen", "release", "冻结", "recording", "ffmpeg优先级", "nonblocking"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "相机选优被 MSMF FRC 复制帧欺骗——唯一帧率实测",
+      "symptom": "实测画面延迟 ≥100ms 恒定 100ms 一跳，但采集/推理/推流指标全正常",
+      "root_cause": "YUY2@720p 相机固件仅 10 真帧/秒，MSMF 帧率转换复制填充成 27fps，_bench_fps 数 read 返回率被骗误选 MSMF",
+      "fix": "bench_unique_camera_fps 降采样签名逐位比对只数唯一帧，复制帧现形打诊断日志，选优按真实信息率；现场处置降 640x480 或换 MJPG 相机",
+      "files": ["backend/api/source_camera_start_mixin.py", "tests/test_camera_bench_unique_fps.py"],
+      "keywords": ["MSMF", "FRC", "复制帧", "唯一帧率", "YUY2", "10fps", "帧率欺骗", "bench_unique_camera_fps", "雷鸟", "100ms延迟", "duplicate frames"],
+      "breaking": false
+    }
+  ],
+  "known_issues": [
+    "只取最新帧跳过相机 fps sleep 后，FPS 下拉选 10/15 的存量配置不再节流采集，录像编码负载按传感器帧率上浮；如现场反馈再在录像入队处按配置抽帧"
+  ],
+  "skills_updated": ["api-sync", "build-release", "debug-video", "debug-hub"],
+  "files_changed": ["hub/", "backend/api/hub_access.py", "backend/api/api_keys.py", "backend/api/projects.py", "backend/api/router_manifest.py", "backend/api/source_camera_start_mixin.py", "backend/api/source_capture_loop_mixin.py", "backend/api/source_recorder.py", "backend/api/source_recording_api_mixin.py", "backend/api/source_recording_thread_mixin.py", "backend/api/source_state_init.py", "frontend/src/views/Settings/AuthPanel.vue", "tests/hub/", "tests/test_camera_bench_unique_fps.py", "tests/test_cycle_recording_nonblocking.py", "tests/test_camera_grab_latest_v3602.py"]
+}

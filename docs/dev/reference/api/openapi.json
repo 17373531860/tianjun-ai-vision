@@ -34,7 +34,7 @@
       "type": "string"
      },
      "scope": {
-      "description": "允许: * / cluster / mes.receive / license.cache",
+      "description": "允许: * / cluster / mes.receive / license.cache / hub",
       "title": "Scope",
       "type": "string"
      }
@@ -1210,6 +1210,51 @@
      }
     },
     "title": "ChannelGroupUpdate",
+    "type": "object"
+   },
+   "ChannelStreamViewers": {
+    "description": "单工位的直播订阅槽状态。",
+    "properties": {
+     "error": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "该通道查询异常时的错误文本",
+      "title": "Error"
+     },
+     "legacy": {
+      "default": false,
+      "description": "旧版无 viewer 参数连接是否在看",
+      "title": "Legacy",
+      "type": "boolean"
+     },
+     "main": {
+      "default": false,
+      "description": "工作站总览槽是否在看",
+      "title": "Main",
+      "type": "boolean"
+     },
+     "station": {
+      "default": false,
+      "description": "一体机工位屏槽是否在看",
+      "title": "Station",
+      "type": "boolean"
+     },
+     "viewers": {
+      "description": "在看的 viewer 槽名列表",
+      "items": {
+       "type": "string"
+      },
+      "title": "Viewers",
+      "type": "array"
+     }
+    },
+    "title": "ChannelStreamViewers",
     "type": "object"
    },
    "CleanupSettingsUpdate": {
@@ -4340,6 +4385,24 @@
     "title": "HTTPValidationError",
     "type": "object"
    },
+   "HandsAuxConfigResponse": {
+    "description": "手部裁切副屏开关表：工位号(str)→是否开启。",
+    "properties": {
+     "channels": {
+      "additionalProperties": {
+       "type": "boolean"
+      },
+      "description": "工位号(零基, str)→手部副屏开关",
+      "title": "Channels",
+      "type": "object"
+     }
+    },
+    "required": [
+     "channels"
+    ],
+    "title": "HandsAuxConfigResponse",
+    "type": "object"
+   },
    "HandsAuxRequest": {
     "properties": {
      "channel_id": {
@@ -4359,6 +4422,30 @@
      "channel_id"
     ],
     "title": "HandsAuxRequest",
+    "type": "object"
+   },
+   "HandsAuxUpdateResponse": {
+    "description": "PUT /hands-aux 响应：写入后的全量开关表。",
+    "properties": {
+     "channels": {
+      "additionalProperties": {
+       "type": "boolean"
+      },
+      "description": "工位号(零基, str)→手部副屏开关",
+      "title": "Channels",
+      "type": "object"
+     },
+     "status": {
+      "default": "success",
+      "description": "固定 success, 失败走 HTTPException",
+      "title": "Status",
+      "type": "string"
+     }
+    },
+    "required": [
+     "channels"
+    ],
+    "title": "HandsAuxUpdateResponse",
     "type": "object"
    },
    "HikvisionStartRequest": {
@@ -4385,6 +4472,224 @@
      }
     },
     "title": "HikvisionStartRequest",
+    "type": "object"
+   },
+   "HubConfigPayload": {
+    "properties": {
+     "enabled": {
+      "title": "Enabled",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "enabled"
+    ],
+    "title": "HubConfigPayload",
+    "type": "object"
+   },
+   "HubConfigResponse": {
+    "properties": {
+     "enabled": {
+      "title": "Enabled",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "enabled"
+    ],
+    "title": "HubConfigResponse",
+    "type": "object"
+   },
+   "HubEventsResponse": {
+    "properties": {
+     "events": {
+      "items": {},
+      "title": "Events",
+      "type": "array"
+     },
+     "next_cursor": {
+      "title": "Next Cursor",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "events",
+     "next_cursor"
+    ],
+    "title": "HubEventsResponse",
+    "type": "object"
+   },
+   "HubHandshakeResponse": {
+    "properties": {
+     "identity": {
+      "additionalProperties": true,
+      "title": "Identity",
+      "type": "object"
+     },
+     "profile_hash": {
+      "title": "Profile Hash",
+      "type": "string"
+     },
+     "station_count": {
+      "title": "Station Count",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "identity",
+     "profile_hash",
+     "station_count"
+    ],
+    "title": "HubHandshakeResponse",
+    "type": "object"
+   },
+   "HubHealthSummaryResponse": {
+    "properties": {
+     "active_project_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Active Project Id"
+     },
+     "detecting_stations": {
+      "title": "Detecting Stations",
+      "type": "integer"
+     },
+     "node_id": {
+      "title": "Node Id",
+      "type": "string"
+     },
+     "resources": {
+      "additionalProperties": true,
+      "title": "Resources",
+      "type": "object"
+     },
+     "stations": {
+      "items": {},
+      "title": "Stations",
+      "type": "array"
+     }
+    },
+    "required": [
+     "node_id",
+     "active_project_id",
+     "stations",
+     "resources",
+     "detecting_stations"
+    ],
+    "title": "HubHealthSummaryResponse",
+    "type": "object"
+   },
+   "HubOpsPayload": {
+    "properties": {
+     "action": {
+      "title": "Action",
+      "type": "string"
+     },
+     "channel": {
+      "default": 0,
+      "title": "Channel",
+      "type": "integer"
+     },
+     "project_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Project Id"
+     }
+    },
+    "required": [
+     "action"
+    ],
+    "title": "HubOpsPayload",
+    "type": "object"
+   },
+   "HubOpsResponse": {
+    "properties": {
+     "action": {
+      "title": "Action",
+      "type": "string"
+     },
+     "channel": {
+      "title": "Channel",
+      "type": "integer"
+     },
+     "message": {
+      "title": "Message",
+      "type": "string"
+     },
+     "ok": {
+      "title": "Ok",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "ok",
+     "action",
+     "channel",
+     "message"
+    ],
+    "title": "HubOpsResponse",
+    "type": "object"
+   },
+   "HubProfileResponse": {
+    "properties": {
+     "identity": {
+      "additionalProperties": true,
+      "title": "Identity",
+      "type": "object"
+     },
+     "node_actions": {
+      "items": {},
+      "title": "Node Actions",
+      "type": "array"
+     },
+     "profile_hash": {
+      "title": "Profile Hash",
+      "type": "string"
+     },
+     "profile_schema": {
+      "title": "Profile Schema",
+      "type": "integer"
+     },
+     "stations": {
+      "items": {},
+      "title": "Stations",
+      "type": "array"
+     }
+    },
+    "required": [
+     "profile_schema",
+     "identity",
+     "stations",
+     "node_actions",
+     "profile_hash"
+    ],
+    "title": "HubProfileResponse",
+    "type": "object"
+   },
+   "HubProjectsResponse": {
+    "properties": {
+     "items": {
+      "items": {},
+      "title": "Items",
+      "type": "array"
+     }
+    },
+    "required": [
+     "items"
+    ],
+    "title": "HubProjectsResponse",
     "type": "object"
    },
    "ImageSetRequest": {
@@ -13136,6 +13441,23 @@
      }
     },
     "title": "StreamConfigRequest",
+    "type": "object"
+   },
+   "StreamViewersResponse": {
+    "description": "GET /stream/viewers 响应：工位号(str)→订阅槽状态。",
+    "properties": {
+     "channels": {
+      "additionalProperties": {
+       "$ref": "#/components/schemas/ChannelStreamViewers"
+      },
+      "title": "Channels",
+      "type": "object"
+     }
+    },
+    "required": [
+     "channels"
+    ],
+    "title": "StreamViewersResponse",
     "type": "object"
    },
    "SupplementInput": {
@@ -22315,6 +22637,274 @@
     ]
    }
   },
+  "/api/v1/hub/config": {
+   "get": {
+    "description": "读 hub 接入开关 (边缘设置页 / 纳管向导用)",
+    "operationId": "get_hub_config_api_v1_hub_config_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HubConfigResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "读 Hub 接入开关",
+    "tags": [
+     "hub"
+    ]
+   },
+   "put": {
+    "description": "写 hub 接入开关。开启后 /hub/handshake 等端点才可见。",
+    "operationId": "put_hub_config_api_v1_hub_config_put",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/HubConfigPayload"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HubConfigResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "写 Hub 接入开关",
+    "tags": [
+     "hub"
+    ]
+   }
+  },
+  "/api/v1/hub/events": {
+   "get": {
+    "description": "事件通道真相源: 已结算周期按 DetectionCycle.id 自增游标增量拉取。\n\n设计 (RFC 15 §9.1):\n  - 事实源直接用周期表 —— 零 hook 侵入, 边缘崩溃重启不丢事件,\n    游标天然断点续传 (对账真相源; WS 推送只是加速器, P1 再加)。\n  - cursor 未传 (首次纳管): 不翻历史帐, 回最近 limit 条 + 当前最大 id,\n    \"从现在开始订阅\"。cursor>=0: 严格增量 (id > cursor)。\n  - result=ng: 只回 NG 周期 (枢纽报警中心默认只拉 NG, 省流量省库)。",
+    "operationId": "hub_events_api_v1_hub_events_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "cursor",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Cursor"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 100,
+       "title": "Limit",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "result",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Result"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HubEventsResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "周期结算事件增量拉取 (游标断点续传, RFC 15 P0-10)",
+    "tags": [
+     "hub"
+    ]
+   }
+  },
+  "/api/v1/hub/handshake": {
+   "get": {
+    "description": "纳管前探测: 身份 + License 状态 + 档案 hash。\n\n无 API Key 要求 (只回身份事实, 不含业务数据); 是否纳管由枢纽判定\n(license.state != 'valid' 时枢纽应拒绝, RFC 15 §3.4)。",
+    "operationId": "hub_handshake_api_v1_hub_handshake_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HubHandshakeResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "纳管前握手探测 (身份/License 状态/档案 hash)",
+    "tags": [
+     "hub"
+    ]
+   }
+  },
+  "/api/v1/hub/health-summary": {
+   "get": {
+    "description": "高频轮询摘要: 一次拉齐工位状态 + 资源指标, 避免枢纽打散装端点。",
+    "operationId": "hub_health_summary_api_v1_hub_health_summary_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HubHealthSummaryResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "健康摘要 (工位状态 + 资源指标, 枢纽高频轮询)",
+    "tags": [
+     "hub"
+    ]
+   }
+  },
+  "/api/v1/hub/ops": {
+   "post": {
+    "description": "枢纽的唯一写操作入口。\n\n为什么不让枢纽直接转发 /source/detection/start 等本机端点:\n  1. 鉴权体系不同 —— 本机端点挂 require_perm (用户 token 体系), 枢纽持有的\n     是 M2M API Key; 边缘开启鉴权后转发必撞权限墙。\n  2. /detection/start 的请求体承载了前端 Monitor 拼装的模型/阈值 payload,\n     空 body 会把 conf/iou 静默重置成默认值 (0.25/0.45), 覆盖客户调好的参数。\n因此这里对齐的是后端侧既有先例:\n  - start: mes_inbound._auto_start_detection 的门槛语义 (源已配置/模型就绪/\n    未在检测), 用通道上已加载模型, 不碰 conf/iou; 成功后按 HTTP /detection/start\n    同款开 session (数据页有会话记录)。\n  - stop: 对齐 POST /detection/stop (end_session + stop_detection)。\n  - activate_project: 对齐 POST /projects/{id}/activate 的\"检测中 409\"守门 +\n    activate_project_core (与手动激活/开工切项目同一核心)。\n  - ack_alarm (M4): 对齐 POST /alarm/stop (alarm_router.stop_alarm, 幂等)。\n幂等语义: start 时已在检测 / stop 时已停止 → ok=True 原样返回, 不报错\n(枢纽收敛循环可能重放意图)。",
+    "operationId": "hub_ops_api_v1_hub_ops_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/HubOpsPayload"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HubOpsResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "枢纽写操作入口 (启停检测/切项目, RFC 15 M3)",
+    "tags": [
+     "hub"
+    ]
+   }
+  },
+  "/api/v1/hub/profile": {
+   "get": {
+    "description": "完整能力档案 (RFC 15 §4.1/§9.4)。枢纽仅在 handshake hash 变化时拉全量。",
+    "operationId": "hub_profile_api_v1_hub_profile_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HubProfileResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "完整能力档案 (RFC 15 §9.4 三元组)",
+    "tags": [
+     "hub"
+    ]
+   }
+  },
+  "/api/v1/hub/projects": {
+   "get": {
+    "description": "给枢纽的项目下拉数据: 只回 id/name/is_active, 不带 7 个 JSON 配置大字段。\n\n不复用 GET /projects: 那是本机用户端点 (完整配置载荷 + 用户鉴权体系),\n枢纽只需要\"切到哪个\"的最小事实, 且鉴权走 API Key 体系保持 /hub/* 内闭环。",
+    "operationId": "hub_projects_api_v1_hub_projects_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HubProjectsResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "精简项目列表 (枢纽切项目下拉, RFC 15 M3)",
+    "tags": [
+     "hub"
+    ]
+   }
+  },
   "/api/v1/interconnect/config": {
    "get": {
     "operationId": "get_interconnect_config_api_v1_interconnect_config_get",
@@ -28398,7 +28988,7 @@
   },
   "/api/v1/projects/{project_id}/activate": {
    "post": {
-    "description": "激活项目（设为当前运行项目）",
+    "description": "激活项目（设为当前运行项目）\n\nRFC 15 M0: 检测中拒绝激活 (409) —— 此前只有前端锁页拦截, 远程化 (Web 枢纽\n转发本端点) 后必须后端守门: 激活会重载模型/同步配置/清 MES pending, 检测中\n切换会打断在制周期。守门只加在本 HTTP 端点, 不进 activate_project_core ——\nmes_inbound 开工切项目与触发中心 switch_project 的既有语义不受影响。\n对本机 UI 零影响: 前端检测中本来就锁页不放行本操作。",
     "operationId": "activate_project_api_v1_projects__project_id__activate_post",
     "parameters": [
      {
@@ -34412,7 +35002,9 @@
      "200": {
       "content": {
        "application/json": {
-        "schema": {}
+        "schema": {
+         "$ref": "#/components/schemas/StreamViewersResponse"
+        }
        }
       },
       "description": "Successful Response"
@@ -37766,7 +38358,9 @@
      "200": {
       "content": {
        "application/json": {
-        "schema": {}
+        "schema": {
+         "$ref": "#/components/schemas/HandsAuxConfigResponse"
+        }
        }
       },
       "description": "Successful Response"
@@ -37795,7 +38389,9 @@
      "200": {
       "content": {
        "application/json": {
-        "schema": {}
+        "schema": {
+         "$ref": "#/components/schemas/HandsAuxUpdateResponse"
+        }
        }
       },
       "description": "Successful Response"

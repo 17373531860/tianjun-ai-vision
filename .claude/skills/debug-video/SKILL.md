@@ -250,3 +250,16 @@ class FFmpegRecorder:  # backend/api/source_recorder.py
 1. **ffmpeg 枚举回退不再静默**：`_list_dshow_devices_ffmpeg` 解析为空时打印 stderr 头部 8 行；`_detect_cameras_windows` 走老试开法兜底时明示（设备名"摄像头 N"式=在走兜底，搜 `[Camera]` 前缀即知走的哪条路）。
 2. **启动直载转换引擎**：`main.py` `_resolve_startup_model_path` 按 `project.model_format` 解析 ModelConversion 表的转换引擎（GPU 架构匹配才用），`_load_channel_model_with_fallback` 引擎失败回退 `.pt`——治启动先载 .pt 再重载 TRT 的双重加载慢启动。
 3. **自动恢复用户否决**：`_restore_detection_pass` 记录自动拉起通道的 capture 线程 id，下轮检测停了而线程未变=用户手动停，记 `user_vetoed` 不再拉起；线程换了（源真重启）照常恢复。单测 `tests/test_boot_restore_v3515.py`。
+
+## v3.61.0 补充：相机延迟诊断三层模型（雷鸟现场定案）
+
+> 客户说"画面延迟 100ms 以上/画面落后于手上动作"，但日志采集 30fps/推理 27fps/推帧 20fps 全"正常"时，按下面三层排查。案例全程：8.5 分钟录屏逐帧差分定案，见 changelog v3.61.0。
+
+1. **相机真实唯一帧率（最底层，先查这个）**：
+   - Windows MSMF 自带帧率转换(FRC)会把低帧率传感器流**复制填充**到请求帧率——`read()` 返回率 27-30fps 但内容 10fps，全链路指标被骗"正常"，画面恒定 100ms 一跳。
+   - v3.61 起 `bench_unique_camera_fps`（`source_camera_start_mixin.py` 模块级）开机实测唯一帧率并打日志：`帧率实测: read=27fps 唯一帧=10fps (发现 N 个复制帧...)`。搜 `[Camera] 首次实测` / `帧率实测` 即知真相。
+   - 典型根因：相机 YUY2 未压缩格式在 720p+ 只有 10fps 固件档（USB 带宽/格式表限制），**与插 USB2/USB3 口无关**。处置：分辨率降 640x480（YUY2 也满 30fps）或换支持 MJPG@720p30 的相机。同一相机"以前正常"= 那些开机 MJPG 协商赢了（ToDesk 占用/句柄未释放/USB 枚举状态都会影响协商结果，`_LAST_OK_CAMERA_BACKEND` 记忆还会延续上次的后端选择）。
+2. **驱动队列排队延迟（恒定滞后）**：老采集循环 read() 队头最旧帧+按配置 fps sleep，MSMF 忽略 BUFFERSIZE=1，队列积多深画面晚多少。v3.61（dev-qing）相机源改「只取最新帧」：连续 grab() 抽旧帧，≥8ms 阻塞 grab 视为传感器新帧才 retrieve，跳过相机分支末尾 sleep。日志 `[Camera] stale frames dropped=N`（10s 节流）= 正在抽积压。**注意副作用**：相机采集不再受 FPS 配置节流，录像编码负载按传感器帧率上浮。
+3. **周期边界秒级冻结（间歇卡死）**：v3.61 前 `start_cycle_recording` 在推理线程同步 Popen 开 FFmpeg + 旧 writer `release()` 最长等 10s。v3.61 起经 `_recording_ctrl` 无界控制队列由 RecThread 异步执行（`_handle_recording_ctrl`，收尾丢弃积压 open_cycle），FFmpeg 子进程降优先级（BELOW_NORMAL/nice+10）。回归：`tests/test_cycle_recording_nonblocking.py`。
+
+**逐帧分析录屏工具链**（用户只给录屏没给机器时）：ffmpeg `freezedetect` 扫冻结段 → numpy 差分量画面实际刷新中位间隔（中位恰 100ms=10fps 限流/低唯一帧率特征；抖动大=CPU 挤兑特征）→ 高阈值强变化差分验证录屏工具本身是不是 30fps（防远程桌面/录屏工具背锅）。

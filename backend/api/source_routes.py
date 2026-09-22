@@ -665,7 +665,22 @@ def set_device(req: DeviceConfigRequest):
 # ============================================================
 # /stream/* + /transform/* + /kalman/*
 # ============================================================
-@router.get("/stream/viewers", summary="各工位当前的直播订阅槽")
+class ChannelStreamViewers(BaseModel):
+    """单工位的直播订阅槽状态。"""
+    viewers: List[str] = Field(default_factory=list, description="在看的 viewer 槽名列表")
+    station: bool = Field(False, description="一体机工位屏槽是否在看")
+    main: bool = Field(False, description="工作站总览槽是否在看")
+    legacy: bool = Field(False, description="旧版无 viewer 参数连接是否在看")
+    error: Optional[str] = Field(None, description="该通道查询异常时的错误文本")
+
+
+class StreamViewersResponse(BaseModel):
+    """GET /stream/viewers 响应：工位号(str)→订阅槽状态。"""
+    channels: Dict[str, ChannelStreamViewers]
+
+
+@router.get("/stream/viewers", summary="各工位当前的直播订阅槽",
+            response_model=StreamViewersResponse)
 def get_stream_viewers():
     """逐工位列出正在真看 MJPEG 直播的 viewer 槽（main / station / legacy）。
 
