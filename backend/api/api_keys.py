@@ -40,12 +40,12 @@ router = APIRouter(
 # Schema
 # ============================================================
 
-ALLOWED_SCOPES = {"*", "cluster", "mes.receive", "license.cache"}
+ALLOWED_SCOPES = {"*", "cluster", "mes.receive", "license.cache", "hub"}
 
 
 class APIKeyCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
-    scope: str = Field(..., description="允许: * / cluster / mes.receive / license.cache")
+    scope: str = Field(..., description="允许: * / cluster / mes.receive / license.cache / hub")
     description: Optional[str] = Field(None, max_length=255)
     expires_at: Optional[datetime] = None
 

@@ -420,6 +420,47 @@
     </el-card>
 
     <!-- ============================================================ -->
+    <!-- 卡片 5: Web 集中管控枢纽接入 (RFC 15, 需 settings.edit 权限)   -->
+    <!-- ============================================================ -->
+    <el-card
+      v-if="authStore.hasPermission('settings.edit')"
+      shadow="never"
+      class="bg-slate-800 border-slate-700"
+      data-test="hub-access-card"
+    >
+      <template #header>
+        <div class="flex items-center gap-2">
+          <el-icon class="text-tech-blue"><Connection /></el-icon>
+          <span class="font-bold text-white">集中管控枢纽接入</span>
+          <el-tooltip
+            effect="dark"
+            content="允许厂区的 Web 集中管控枢纽 (Fleet Hub) 纳管本机: 监控墙看板 + 远程启停/切项目/消警. 关闭时相关接口全部隐藏, 对本机检测零影响."
+            placement="right"
+          >
+            <el-icon class="text-slate-500 cursor-help"><InfoFilled /></el-icon>
+          </el-tooltip>
+        </div>
+      </template>
+
+      <div class="flex items-center justify-between">
+        <div class="text-sm text-slate-400 leading-6">
+          <p>开启后, 在枢纽端「纳管节点」填本机地址即可接入（需在上方创建 scope 为
+            <code class="text-cyan-300">hub</code> 的 API Key 作为纳管凭证）。</p>
+          <p class="text-slate-500 text-xs">
+            边缘自治: 枢纽下线不影响本机生产; 本机操作永远优先。
+          </p>
+        </div>
+        <el-switch
+          v-model="hubAccessEnabled"
+          :loading="hubAccessLoading"
+          data-test="hub-access-switch"
+          @change="onToggleHubAccess"
+        />
+      </div>
+      <div v-if="hubAccessError" class="mt-2 text-red-400 text-xs">{{ hubAccessError }}</div>
+    </el-card>
+
+    <!-- ============================================================ -->
     <!-- 对话框: 启用引导 (创建首个管理员)                              -->
     <!-- ============================================================ -->
     <el-dialog v-model="showEnableDialog" title="启用账号鉴权" width="480px" destroy-on-close>
@@ -833,7 +874,9 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   Lock, Unlock, User, UserFilled, Avatar, Key, Refresh, SwitchButton,
   SuccessFilled, WarningFilled, Plus, EditPen, CopyDocument, InfoFilled,
+  Connection,
 } from '@element-plus/icons-vue';
+import api from '@/api/index';
 import { useAuthStore } from '@/store/useAuthStore';
 import {
   enableAuth, disableAuth, changePassword,
@@ -927,14 +970,46 @@ async function refreshPermCatalog() {
   }
 }
 
+// ---------- 枢纽接入开关 (RFC 15) ----------
+const hubAccessEnabled = ref(false);
+const hubAccessLoading = ref(false);
+const hubAccessError = ref('');
+
+async function refreshHubAccess() {
+  if (!authStore.hasPermission('settings.edit')) return;
+  try {
+    const res = await api.get('/hub/config');
+    hubAccessEnabled.value = !!res.data?.enabled;
+    hubAccessError.value = '';
+  } catch (e) {
+    hubAccessError.value = e?.response?.data?.detail || e?.message || '读取枢纽接入状态失败';
+  }
+}
+
+async function onToggleHubAccess(val) {
+  hubAccessLoading.value = true;
+  hubAccessError.value = '';
+  try {
+    await api.put('/hub/config', { enabled: val });
+    ElMessage.success(val ? '枢纽接入已开启, 可在枢纽端纳管本机' : '枢纽接入已关闭');
+  } catch (e) {
+    hubAccessEnabled.value = !val; // 失败回滚开关
+    hubAccessError.value = e?.response?.data?.detail || e?.message || '保存失败';
+  } finally {
+    hubAccessLoading.value = false;
+  }
+}
+
 async function refreshAll() {
   await authStore.init(true);
-  await Promise.all([refreshUsers(), refreshRoles(), refreshApiKeys(), refreshPermCatalog()]);
+  await Promise.all([refreshUsers(), refreshRoles(), refreshApiKeys(),
+    refreshPermCatalog(), refreshHubAccess()]);
 }
 
 onMounted(async () => {
   await authStore.init();
-  await Promise.all([refreshUsers(), refreshRoles(), refreshApiKeys(), refreshPermCatalog()]);
+  await Promise.all([refreshUsers(), refreshRoles(), refreshApiKeys(),
+    refreshPermCatalog(), refreshHubAccess()]);
 });
 
 // ---------- 启用引导 ----------

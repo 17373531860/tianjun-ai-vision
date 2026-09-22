@@ -250,3 +250,8 @@ backend/hcnetsdk/lib/*.so
 backend/hcnetsdk/lib/*.so.*
 backend/hcnetsdk/lib/HCNetSDKCom/*.so
 backend/hcnetsdk/lib/HCNetSDKCom/*.so.*
+
+# Fleet Hub (RFC 15) 本地数据目录
+hub/data/
+hub/frontend/dist/
+hub/frontend/node_modules/

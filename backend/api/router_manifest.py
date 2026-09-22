@@ -44,6 +44,7 @@ def mount_all_routers(app: FastAPI) -> None:
     from backend.api import vlm               # 2026-09 VLM 坐诊 (按需问答, 默认关)
     from backend.api import orientation       # 2026-09 朝向估计试用 (facing_dwell 推理侧探针)
     from backend.api import lightguide        # 投影光引导 (feat/light-sensor)
+    from backend.api import hub_access        # RFC 15 Web 集中管控枢纽·边缘接入 (默认关)
 
     app.include_router(projects.router, prefix=f"{v1}/projects", tags=["projects"])
     app.include_router(models.router, prefix=f"{v1}/models", tags=["models"])
@@ -73,6 +74,7 @@ def mount_all_routers(app: FastAPI) -> None:
     app.include_router(vlm.router, prefix=f"{v1}/vlm", tags=["vlm"])
     app.include_router(orientation.router, prefix=f"{v1}/orientation", tags=["orientation"])
     app.include_router(lightguide.router, prefix=f"{v1}/lightguide", tags=["lightguide"])
+    app.include_router(hub_access.router, prefix=f"{v1}/hub", tags=["hub"])
 
     # -------- 核心/重量级路由（原 main.py 直挂段，保持原注册顺序） --------
     from backend.api.source import router as source_router          # 视频源 + 检测核心

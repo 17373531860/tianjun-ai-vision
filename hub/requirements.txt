@@ -1,0 +1,9 @@
+# Fleet Hub 独立部署依赖 (RFC 15 §11.1: 禁止 import 主程序 backend.*,
+# 因此无 cv2/torch 依赖链 —— 任何能跑 Python 3.10+ 的服务器都能装)
+# 安装: pip install -r hub/requirements.txt
+fastapi>=0.110
+uvicorn[standard]>=0.29
+sqlalchemy>=2.0
+httpx>=0.27
+cryptography>=42.0
+pydantic>=2.5

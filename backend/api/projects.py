@@ -549,7 +549,26 @@ def activate_project_core(db: Session, project_id: int):
 @router.post("/{project_id}/activate", response_model=ProjectResponse,
               dependencies=[Depends(require_perm("project.activate"))])
 def activate_project(project_id: int, db: Session = Depends(get_db)):
-    """激活项目（设为当前运行项目）"""
+    """激活项目（设为当前运行项目）
+
+    RFC 15 M0: 检测中拒绝激活 (409) —— 此前只有前端锁页拦截, 远程化 (Web 枢纽
+    转发本端点) 后必须后端守门: 激活会重载模型/同步配置/清 MES pending, 检测中
+    切换会打断在制周期。守门只加在本 HTTP 端点, 不进 activate_project_core ——
+    mes_inbound 开工切项目与触发中心 switch_project 的既有语义不受影响。
+    对本机 UI 零影响: 前端检测中本来就锁页不放行本操作。
+    """
+    from backend.api.channel_manager import channel_manager
+    detecting = [
+        ch_id for ch_id, m in channel_manager.channels.items()
+        if getattr(m, "is_detecting", False)
+    ]
+    if detecting:
+        raise HTTPException(
+            status_code=409,
+            detail=f"有工位正在检测中 (通道: {sorted(detecting)}), "
+                   f"请先停止检测再切换项目",
+        )
+
     db_project, model_name, model_version, model_labels = activate_project_core(db, project_id)
 
     return ProjectResponse(

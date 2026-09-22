@@ -76,7 +76,8 @@ allowed-tools: "Read, Grep, Glob, Bash, Agent, mcp__context7"
 | `/anomaly/*` | `anomaly.py` | `aitools.js` | ★ 2026-09 异常检测：合格品记忆库 banks CRUD/阈值 + score 上传评分 + score-frame 通道评分（模型仓库「试一试」抽屉管理记忆库 + anomaly 逻辑模式共用引擎） |
 | `/vlm/*` | `vlm.py` | `aitools.js` | ★ 2026-09 VLM 坐诊：config/status + ask 传图问答 + ask-frame 通道问答（默认关，OpenAI 兼容本地端点） |
 | `/orientation/*` | `orientation.py` | `aitools.js` | ★ 2026-09 朝向估计试用：status 三层后端探针（yolo11_pose/mediapipe_pose/headpose_onnx）+ estimate 上传估计 + estimate-frame 通道估计（facing_dwell 朝向驻留的推理侧试用/装机标定入口；生产路径走 person_orientation 单例不经此 API）；v3.58 加 GET/PUT `/config`（headpose_full_range 全角度头姿开关，KV 落库+推理侧即时刷新，PUT 挂 settings.edit） |
-| `/debug/*` | `debug.py` | 无封装（手测用） | 通道诊断 + 调试日志中心 |
+| `/lightguide/*` | `lightguide.py` | `lightguide.js` | ★ v3.57 投影光引导：ArUco 标定/亮度采样/参数 KV（默认关） |
+| `/hub/*` | `hub_access.py` | —（枢纽服务消费，非本机前端） | ★ RFC 15 Web 集中管控枢纽·边缘接入（M0）：`config` 开关 GET/PUT（settings.edit）+ `handshake` 纳管探测（无鉴权，身份/License 状态/档案 hash）+ `profile` 能力档案 + `health-summary` 工位状态与资源摘要（后两者 X-API-Key scope=hub）；`hub_access.enabled` KV 默认关 → 业务端点 404 零差异 |
 | `/test/synthetic/*` | `test_runtime_routes.py` | —（测试专用） | 仅 `RUNTIME_MODE=test` 挂载：虚拟剧本源 |
 
 > 注 1：`source.py` 自身只声明 `router = APIRouter()`，端点在 `source_routes.py` 里挂载。对外仍是 `/api/v1/source/*`。

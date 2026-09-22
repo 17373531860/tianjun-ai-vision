@@ -249,6 +249,7 @@
 | `/vlm/*` | `vlm.py` | 2026-09 VLM 坐诊看图问答（默认关） |
 | `/orientation/*` | `orientation.py` | 2026-09 朝向估计试用/装机标定（facing_dwell 推理侧探针，三层后端） |
 | `/lightguide/*` | `lightguide.py` | v3.57 投影光引导（ArUco 标定/亮度采样/参数 KV，默认关） |
+| `/hub/*` | `hub_access.py` | RFC 15 Web 集中管控枢纽·边缘接入（握手/能力档案/健康摘要 + API Key scope=hub，`hub_access.enabled` 默认关零差异） |
 | `/debug/*` | `debug.py` | 通道诊断 + 调试日志中心 |
 
 > **常见误解**：路径前缀是 **`/api/v1/`** 不是 `/api/`；旧手册写的 `/api/detection/*` 已删，等价端点在 `/api/v1/source/detection/*`。

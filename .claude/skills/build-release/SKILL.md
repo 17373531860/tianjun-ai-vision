@@ -191,6 +191,7 @@ spawn(pythonPath, ['-m', 'uvicorn', 'backend.main:app',
 - 所有 push 都跑（main / tag / workflow_dispatch）
 - 30 天自动清理；`continue-on-error: true` → 配额满不阻塞 Release 上传
 - 适用：开发机、内部测试、临时分发
+- ⚠️ **重跑部分 job 后 artifact "消失"的假象（v3.59.0 实踩）**：对某个 run 执行 `gh run rerun --failed`（如只补 release-upload-nonwin）后，run 摘要页**默认展示最新一次 attempt**，而完整安装包 artifact 是第 1 次 attempt 传的——页面上 Artifacts 区看起来是空的，但 artifact 并没有丢。两个取回口：① run 页面右上角 attempt 切换器切回 attempt #1；② API 按 run 查不分 attempt：`gh api repos/<repo>/actions/runs/<id>/artifacts`。别误判成"构建没产物"而重新构建 4 小时
 
 ### 通道 B — GitHub Release（外部/客户副机，只在 tag 时跑）
 - 主仓库 `17373531860/tianjun-ai-vision` 是 **PRIVATE**
