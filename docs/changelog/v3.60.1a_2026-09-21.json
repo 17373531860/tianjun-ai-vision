@@ -1,0 +1,60 @@
+{
+  "version": "3.60.1a",
+  "date": "2026-09-21",
+  "previous_version": "3.60.1",
+  "type": "hotfix",
+  "changes": [
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "少扫码时视觉周期仍报 OK、扫码组永不收口（多码采集面板挂着不翻篇）",
+      "symptom": "六和芯子装配工位一：少扫码（芯子 7/8、未扫工装收尾码）盖模具盖板后，视觉 9 步齐照样报合格；多码采集面板该组码一直挂着不结算，与下一件混码",
+      "root_cause": "扫码组只有 closing（扫收尾码）/all_filled/timeout 三个收口点，收尾码不来组永远开着；ng_pending 挂起只报提醒不翻转视觉侧判定，视觉结算与扫码结算互不知晓",
+      "fix": "新增 settle_on_vision_cycle（默认关）：peek_vision_settle_gate 推理线程零阻塞探针把缺码文案并入视觉周期 NG reason（本件当场 NG 一件一账）+ settle_by_vision_cycle 在 _handle_cycle_end 异步收口（缺码 ng_missing 关组跳过挂起 fire_events=False 防双报，码齐 OK 收口）+ 配置卡「随视觉周期结算」开关；现场补丁形态：hotfix.py 猴子补丁包装编译件 _settle_detection_cycle/_handle_cycle_end + 整文件替换 scan_collect 两 py + 强制开（出厂前端无开关）",
+      "files": [
+        "backend/services/scan_collect.py",
+        "backend/services/mes_hooks.py",
+        "backend/api/source_settlement_mixin.py",
+        "backend/api/scan_collect.py",
+        "frontend/src/views/MES/ScanCollectConfigCard.vue",
+        "patches/v3.60.1a/hotfix.py",
+        "patches/v3.60.1a/patch_v3.60.1a.bat"
+      ],
+      "keywords": ["随视觉周期结算", "settle_on_vision_cycle", "少扫码", "视觉OK扫码挂着", "面板不翻篇", "混码", "peek_vision_settle_gate", "settle_by_vision_cycle", "ng_missing", "多码采集", "scan collect", "六和", "芯子装配", "模具盖板", "工装收尾码", "热补丁", "hotfix", "猴子补丁", "PATCHED_V3601A", "一件一账", "fire_events"],
+      "breaking": false
+    }
+  ,
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "v3.60.1b 修订：扫码组收口不生效——scan_required 挡掉周期行导致 on_cycle_end 钩子从不触发",
+      "symptom": "a 版现场实测：视觉末步 OK→NG 翻转生效，但扫码组不关（面板挂着继续催扫）；该工位数据页一条周期记录都不落",
+      "root_cause": "收口挂在 MESHookManager._handle_cycle_end 上；现场扫码器开「须先扫码才开始周期」(scan_required)，多码采集独占消费扫码不写单码绑定 _pending_workpiece → start_cycle 恒被 'requires scan first, skip cycle start' 跳过 → 周期行不建 → on_cycle_end 从不触发 → 收口死代码",
+      "fix": "收口改由视觉结算侧自兜底：_settle_detection_cycle 探针命中时后台线程自开 DB 会话调 settle_by_vision_cycle 关组（source_settlement_mixin._close_scan_group_async，开关默认关零开销）；_handle_cycle_end 路径保留双保险（收口幂等不双报）。现场配套建议：该工位扫码器关闭「须先扫码才开始周期」恢复周期记录落库",
+      "files": ["backend/api/source_settlement_mixin.py", "patches/v3.60.1b/hotfix.py"],
+      "keywords": ["scan_required", "须先扫码", "skip cycle start", "requires scan first", "周期记录不落库", "on_cycle_end 不触发", "收口死代码", "面板挂着", "催扫不停", "_close_scan_group_async", "自兜底收口", "后台线程", "v3.60.1b", "六和"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "v3.60.1c：a 包打上后一件两账/下一件码被拒收——结算主权未收回 + 无组归属锚",
+      "symptom": "工程师反馈打 a 包后重复结算复发；日志见 NG 挂起、下一件母排「超出应扫数量（挂起处理中）」、补扫转 OK 再出一账、催扫不停、本件被下一件缺码翻 NG",
+      "root_cause": "a/b 只翻视觉 NG、扫码侧 closing+ng_pending 仍自行挂起占组；收口挂从不触发的 on_cycle_end；探针/收口无末步出现时间锚，空档里下一件的码被当成本件",
+      "fix": "settle_on_vision_cycle 开启后 closing/挂起/超时让位；收口唯一路径视觉结算点后台线程+组归属锚（码齐也收）；拆除 _handle_cycle_end 关组；vision_cycle 跳过 vision_gate。补丁包 patches/v3.60.1c 覆盖 a/b",
+      "files": [
+        "backend/services/scan_collect.py",
+        "backend/api/source_settlement_mixin.py",
+        "backend/services/mes_hooks.py",
+        "backend/api/scan_collect.py",
+        "frontend/src/views/MES/ScanCollectConfigCard.vue",
+        "patches/v3.60.1c/hotfix.py",
+        "patches/v3.60.1c/patch_v3.60.1c.bat"
+      ],
+      "keywords": ["重复结算", "NG挂起", "超出应扫数量", "挂起处理中", "补扫转OK", "一件两账", "组归属锚", "cycle_anchor_ts", "settle_on_vision_cycle", "v3.60.1c", "六和", "a包"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-scan-collect"],
+  "notes": "补丁仅适用 v3.60.1，c 版覆盖 a/b；强制开启随视觉周期结算；主线开关默认关零配置差异；流程约束：收尾码必须在视觉末步完成前扫；现场须核对下层母排 5s+不被打断、末步完成结算。下个完整包界面露出开关后删补丁改走配置。"
+}

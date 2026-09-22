@@ -275,6 +275,8 @@ def test_config_put_get_roundtrip(client, project_id):
     assert g["enabled"] is True
     assert len(g["slots"]) == 4
     assert g["slots"][3]["role"] == "closing"
+    # v3.60.2 存量 PUT 不带新键 → 默认关零差异
+    assert g["settle_on_vision_cycle"] is False
 
 
 def test_config_validation(client, project_id):
@@ -714,6 +716,7 @@ def test_config_roundtrip_v3561b_fields(client, project_id):
         "idle_remind_sec": 30,
         "standby_silent": True,
         "count_on_settle": False,
+        "settle_on_vision_cycle": True,
     }
     r = client.put(f"/api/v1/scan-collect/config?project_id={project_id}",
                    json=payload)
@@ -723,6 +726,7 @@ def test_config_roundtrip_v3561b_fields(client, project_id):
     assert got["idle_remind_sec"] == 30
     assert got["standby_silent"] is True
     assert got["count_on_settle"] is False
+    assert got["settle_on_vision_cycle"] is True
     # 手动结算: 当前没有码组 → 409
     r = client.post("/api/v1/scan-collect/settle-now", json={"channel_id": 77})
     assert r.status_code == 409

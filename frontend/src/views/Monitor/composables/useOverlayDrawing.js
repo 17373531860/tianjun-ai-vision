@@ -13,6 +13,7 @@ import { ref } from 'vue';
 import { getTriggers } from '@/api/triggers';
 import { dbg } from '@/utils/debug';
 import { normalizePolygons, pointInAnyPolygon } from '@/utils/polygons';
+import { collectOverlayDrawLabels } from '../overlayDrawLabels';
 
 export function useOverlayDrawing(ctx) {
   const {
@@ -496,13 +497,10 @@ export function useOverlayDrawing(ctx) {
 
     if (!detections || detections.length === 0) return;
   
-    // 获取启用的步骤标签列表
+    // 画框标签 = 启用步骤行 ∪ 逐件配对引用的物品/动作标签
+    // (动作标签行常被停用以免进 SOP, 不停用则框被跳过, 见 overlayDrawLabels.js)
     const stepsConfig = currentProject.value?.steps_config || [];
-    const enabledLabels = new Set(
-      stepsConfig
-        .filter(s => s.enabled !== false)  // 默认启用
-        .map(s => s.label)
-    );
+    const enabledLabels = collectOverlayDrawLabels(stepsConfig);
     // v2.7.4: 项目配置中标记 hide_in_view=true 的标签，画面上不画框（仅视觉隐藏）
     const hiddenLabels = new Set(
       stepsConfig.filter(s => s && s.hide_in_view && s.label).map(s => s.label)

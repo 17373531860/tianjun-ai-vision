@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import re
 import time
 import uuid
 
@@ -68,14 +69,22 @@ def _state(api_url, channel):
         timeout=5).json()
 
 
-def _configure_via_ui(page, base_url, proj_name):
-    """MES→扫码器→多码采集: 填示例(芯子改2) + 启用 + 保存。"""
+def _configure_via_ui(page, base_url, proj_name, vision_settle=None):
+    """MES→扫码器→多码采集: 填示例(芯子改2) + 启用 + 保存。
+
+    vision_settle: None=保持示例预设(开); False=关掉「随视觉周期结算」
+    （验证传统 closing/挂起结算路径的用例必须传 False——v3.60.1c 起
+    开关开着时扫收尾码不再自行结算, 组要等视觉末步结算收口）。
+    """
     page.goto(f"{base_url}/#/mes", wait_until="domcontentloaded")
     page.get_by_role("button", name="扫码器").click()
     page.get_by_role("tab", name="多码采集").click()
     sel = page.get_by_test_id("sc-project-select")
     expect(sel).to_be_visible(timeout=8000)
     expect(sel).to_contain_text(proj_name, timeout=8000)
+    # 等首次 GET config 结束, 避免 loadConfig 回来把「填入示例」覆盖掉
+    expect(page.get_by_role("button", name="填入示例")).to_be_visible(timeout=8000)
+    page.wait_for_timeout(400)
 
     page.get_by_role("button", name="填入示例").click()
     rows = page.locator(".el-table__body tr")
@@ -84,7 +93,17 @@ def _configure_via_ui(page, base_url, proj_name):
     chip_count = rows.nth(1).locator(".el-input-number input")
     chip_count.fill("2")
     chip_count.press("Enter")
-    page.get_by_test_id("sc-enabled-switch").click()
+    sw = page.get_by_test_id("sc-enabled-switch")
+    if "is-checked" not in (sw.get_attribute("class") or ""):
+        sw.locator(".el-switch__core").click()
+    expect(sw).to_have_class(re.compile(r"\bis-checked\b"), timeout=3000)
+    if vision_settle is False:
+        vsw = page.get_by_test_id("sc-settle-on-vision")
+        expect(vsw).to_be_visible(timeout=5000)
+        if "is-checked" in (vsw.get_attribute("class") or ""):
+            vsw.locator(".el-switch__core").click()
+        expect(vsw).not_to_have_class(re.compile(r"\bis-checked\b"),
+                                      timeout=3000)
     page.get_by_test_id("sc-save-btn").click()
     expect(page.locator(".el-message--success").last).to_be_visible(timeout=5000)
 
@@ -116,10 +135,40 @@ def test_配置UI保存落库(page, base_url, api_url, sc_project):
     assert cfg["standby_silent"] is True
     # 2026-09-07 六和"一件结算两次": 视觉工位扫码结算不计数 (计数以视觉为准)
     assert cfg["count_on_settle"] is False
+    # 2026-09-20 六和"视觉 OK 后少扫组挂着不翻篇": 填入示例预置随视觉周期结算
+    assert cfg["settle_on_vision_cycle"] is True
+
+
+def test_随视觉周期结算开关_关闭后落库回显(page, base_url, api_url, sc_project):
+    """v3.60.2: 填入示例默认开「随视觉周期结算」；关掉保存后 GET False，刷新回显关。"""
+    _configure_via_ui(page, base_url, sc_project["name"])
+    cfg = requests.get(
+        f"{api_url}/api/v1/scan-collect/config?project_id={sc_project['id']}",
+        timeout=5).json()
+    assert cfg["enabled"] is True
+    assert cfg["settle_on_vision_cycle"] is True
+
+    sw = page.get_by_test_id("sc-settle-on-vision")
+    expect(sw).to_be_visible(timeout=5000)
+    sw.click()
+    page.get_by_test_id("sc-save-btn").click()
+    expect(page.locator(".el-message--success").last).to_be_visible(timeout=5000)
+    cfg = requests.get(
+        f"{api_url}/api/v1/scan-collect/config?project_id={sc_project['id']}",
+        timeout=5).json()
+    assert cfg["settle_on_vision_cycle"] is False
+
+    page.reload(wait_until="domcontentloaded")
+    page.get_by_role("button", name="扫码器").click()
+    page.get_by_role("tab", name="多码采集").click()
+    expect(page.get_by_test_id("sc-settle-on-vision")).to_be_visible(timeout=8000)
+    expect(page.get_by_test_id("sc-settle-on-vision")).not_to_have_class(
+        re.compile(r"\bis-checked\b"))
 
 
 def test_监控面板_扫码_纠错_结算(page, base_url, api_url, sc_project):
-    _configure_via_ui(page, base_url, sc_project["name"])
+    # 本用例验证传统「收尾码结算」路径, 需关掉随视觉周期结算
+    _configure_via_ui(page, base_url, sc_project["name"], vision_settle=False)
 
     page.goto(f"{base_url}/#/monitor", wait_until="domcontentloaded")
     panel, ch = _find_panel_channel(page)
@@ -168,14 +217,6 @@ def test_监控面板_扫码_纠错_结算(page, base_url, api_url, sc_project):
         timeout=5).json()
     assert len(with_deleted) == 5  # 纠错删掉的芯子码审计留痕
 
-    # 确认单 7.4: 结算后上组码列表保留显示 (完整面板形态, 借 kiosk 单工位视图验证)
-    page.goto(f"{base_url}/#/monitor?kiosk=1&channel={ch}",
-              wait_until="domcontentloaded")
-    expect(page.get_by_test_id("scan-last-settled")).to_be_visible(timeout=15000)
-    retained = page.get_by_test_id("scan-last-codes")
-    expect(retained).to_be_visible(timeout=8000)
-    assert "H-C035-527-5" in retained.inner_text()
-
     # 确认单 7.5: MES 工件追溯详情反查组件码
     page.goto(f"{base_url}/#/mes", wait_until="domcontentloaded")
     page.get_by_role("button", name="工件追溯").click()
@@ -192,11 +233,22 @@ def test_监控面板_扫码_纠错_结算(page, base_url, api_url, sc_project):
         assert code in text, f"组件码 {code} 未出现在追溯详情"
     assert "9260000145631" not in text  # 纠错删掉的码不进追溯
 
+    # 确认单 7.4: 结算后上组码列表保留显示 (借 kiosk 单工位视图验证)。
+    # 注意: kiosk 窗口有防逃逸路由守卫 (进了 kiosk 就不能再导航去别页),
+    # 所以这段必须放在测试最后。
+    page.goto(f"{base_url}/#/monitor?kiosk=1&channel={ch}",
+              wait_until="domcontentloaded")
+    expect(page.get_by_test_id("scan-last-settled")).to_be_visible(timeout=15000)
+    retained = page.get_by_test_id("scan-last-codes")
+    expect(retained).to_be_visible(timeout=8000)
+    assert "H-C035-527-5" in retained.inner_text()
+
 
 def test_本件扫完_少扫挂起_补扫转OK(page, base_url, api_url, sc_project):
     """v3.56.1b 六和现场反馈: 码序不固定少扫无自然收口 → 面板「本件扫完」
-    人工收口 → 挂起报警 → 补扫缺码自动转 OK (答复 3c + 4)。"""
-    _configure_via_ui(page, base_url, sc_project["name"])
+    人工收口 → 挂起报警 → 补扫缺码自动转 OK (答复 3c + 4)。
+    验证传统挂起/补扫结算路径, 需关掉随视觉周期结算。"""
+    _configure_via_ui(page, base_url, sc_project["name"], vision_settle=False)
     page.goto(f"{base_url}/#/monitor", wait_until="domcontentloaded")
     panel, ch = _find_panel_channel(page)
     total = panel.get_by_test_id("scan-total")

@@ -1698,7 +1698,8 @@ class _PerItemMixEngine:
         item_timeout 清理), 与独立模式的两种哲学一一对应。
     """
 
-    def __init__(self, item_cfgs: list, item_timeout_seconds: float):
+    def __init__(self, item_cfgs: list, item_timeout_seconds: float,
+                 start_cfg: dict = None):
         # 延迟导入避免环 (per_item mixin 不依赖本模块)
         from backend.api.source_per_item_mixin import _PerItemStep
         self.steps = []
@@ -1709,7 +1710,31 @@ class _PerItemMixEngine:
         # 逐件作业动辄几分钟, 步骤序列在此期间零推进, 不该按"空闲"强杀周期)
         self.last_progress_time: float = 0.0
         self._progress_snapshot: int = -1
-        # 引擎监听的标签全集 (行标签 + 个体标签 + 动作标签)
+        # v3.60.2 账面个体数推进也是活动: 摆件阶段 (个体陆续入账、覆盖零推进)
+        # 动辄超过空闲超时 — 扫码后摆 32 颗螺丝被判"空闲"NG (六和二工位现场)
+        self._items_snapshot: int = -1
+        # ── v3.60.2 开始判定 (中捷独立逐件"稳定窗口才开周期"语义的混合版) ──
+        # 两个条件可任选可叠加, 都不启用 = 无门 (存量零差异):
+        #   稳定窗口: 固定数量行位置检出数 ≥ 期望折算门槛、连续 N 帧
+        #             (参数复用 per_item.stability_window_frames/ratio/tolerance)
+        #   开始标签: start_labels 各自独立确认 (连续 start_sustain_frames 帧
+        #             ≥ start_conf) 各自闩锁, 全部到位过即通过 (不要求同帧齐)
+        # 判定未通过期间不锁账/不记覆盖/不产活动脉冲; 通过即闩锁到周期结束。
+        cfg = start_cfg or {}
+        self.start_by_stability = bool(cfg.get('start_by_stability', False))
+        self.start_labels = tuple(cfg.get('start_labels') or ())
+        self.start_sustain_frames = max(1, int(cfg.get('start_sustain_frames', 3) or 3))
+        self.start_conf = max(0.0, float(cfg.get('start_conf', 0.5) or 0.0))
+        self.stability_window_frames = max(1, int(cfg.get('stability_window_frames', 10) or 10))
+        self.stability_count_ratio = float(cfg.get('stability_count_ratio', 0.85) or 0.85)
+        self.stability_count_tolerance = max(0, int(cfg.get('stability_count_tolerance', 0) or 0))
+        self.start_gate_enabled = self.start_by_stability or bool(self.start_labels)
+        self.started = not self.start_gate_enabled   # 无门 = 恒已开始
+        self._start_stable_streak = 0                # 稳定窗口连续达标帧数
+        self._start_stable_ok = not self.start_by_stability
+        self._start_label_streaks = {}               # label -> 连续在场帧数
+        self._start_labels_latched = set()           # 已闩锁的开始标签
+        # 引擎监听的标签全集 (行标签 + 个体标签 + 动作标签 + 开始标签)
         watch = set()
         for s in self.steps:
             if s.step_label:
@@ -1717,6 +1742,7 @@ class _PerItemMixEngine:
             watch.update(s.item_label)
             # v3.56+: action_label 与 item_label 同为 tuple (多标签 OR)
             watch.update(s.action_label)
+        watch.update(self.start_labels)
         self.watch_labels = frozenset(watch)
         self._frame_id = 0
         self.last_ng_detail = None
@@ -1726,6 +1752,13 @@ class _PerItemMixEngine:
             step.reset_for_new_cycle()
         self.last_progress_time = 0.0
         self._progress_snapshot = -1
+        self._items_snapshot = -1
+        # 开始判定随周期复位 (闩锁只在本周期内有效)
+        self.started = not self.start_gate_enabled
+        self._start_stable_streak = 0
+        self._start_stable_ok = not self.start_by_stability
+        self._start_label_streaks = {}
+        self._start_labels_latched = set()
 
     def feed(self, host, detections: list, current_time: float, original_frame=None):
         from backend.api.source_per_item_mixin import PerItemMixin
@@ -1752,6 +1785,13 @@ class _PerItemMixEngine:
             if bbox[2] <= 0 or bbox[3] <= 0:
                 continue
             boxes_by_label.setdefault(label, []).append(bbox)
+
+        # ── v3.60.2 开始判定: 未通过前不锁账/不记覆盖/不产脉冲 ──
+        # (摆料期模型误报"已完成"一分不记; 锁盘必然发生在判定通过的干净帧)
+        if not self.started:
+            self._start_gate_tick(detections, boxes_by_label)
+            if not self.started:
+                return
 
         # v3.57 整板位移校准 (与独立模式同一套机械, 见 PerItemMixin tick 3a):
         # 固定数量行先跨步骤汇总本帧可靠关联个体的共同位移, 把整板平移同步给
@@ -1801,9 +1841,118 @@ class _PerItemMixEngine:
         elif total_cov < self._progress_snapshot:
             self._progress_snapshot = total_cov   # 回落只降基线, 再推进重新计
 
+        # v3.60.2 摆件脉冲: 账面个体数向前推进同样算活动 — 摆 32 颗螺丝的
+        # 阶段覆盖零推进但人在干活, 不该被步骤侧空闲超时判 NG。同样只认推进。
+        total_items = sum(len(s.items) for s in self.steps)
+        if total_items > self._items_snapshot:
+            if self._items_snapshot >= 0:         # 首帧建立基线不算活动
+                self.last_progress_time = current_time
+            self._items_snapshot = total_items
+        elif total_items < self._items_snapshot:
+            self._items_snapshot = total_items    # 回落只降基线
+
+    def _start_gate_tick(self, detections, boxes_by_label):
+        """开始判定逐帧推进 (仅未通过时调用)。
+
+        稳定窗口: 每个固定数量行本帧检出数都 ≥ 折算门槛
+        (max(1, min(expected, expected×ratio, expected-tolerance)),
+        与独立逐件 _per_item_try_start_cycle 路径 A 同一公式) → 连续计帧,
+        断一帧清零; 攒满 stability_window_frames 帧闩锁。
+        开始标签: 各自独立连续计帧 (≥start_conf), 攒满 start_sustain_frames
+        闩锁; 全部闩锁过即条件成立 — 不要求同帧齐 (单框会闪断)。
+        """
+        from backend.api.source_per_item_mixin import PerItemMixin
+        # 条件1: 稳定窗口 (位置数齐)
+        if self.start_by_stability and not self._start_stable_ok:
+            ok_frame = True
+            has_fixed = False
+            for step in self.steps:
+                if step.expected_count <= 0:
+                    continue
+                has_fixed = True
+                exp = step.expected_count
+                required = max(1, min(
+                    exp,
+                    int(exp * self.stability_count_ratio),
+                    exp - self.stability_count_tolerance))
+                boxes = PerItemMixin._collect_item_boxes(boxes_by_label, step.item_label)
+                if len(boxes) < required:
+                    ok_frame = False
+                    break
+            if not has_fixed:
+                # 没有任何固定数量行 → 稳定窗口无判据, 视为满足 (配置指南要求
+                # 用本条件时物品行必须填期望数量)
+                self._start_stable_ok = True
+            elif ok_frame:
+                self._start_stable_streak += 1
+                if self._start_stable_streak >= self.stability_window_frames:
+                    self._start_stable_ok = True
+                    print(f"[CustomMix] 开始判定·稳定窗口通过 "
+                          f"(连续{self._start_stable_streak}帧位置数达标)")
+            else:
+                self._start_stable_streak = 0
+        # 条件2: 开始标签 (逐标签独立闩锁)
+        if self.start_labels:
+            seen = {}
+            for det in detections or []:
+                lbl = det.get('label', '')
+                if lbl in self.start_labels and lbl not in self._start_labels_latched:
+                    conf = float(det.get('confidence', 0) or 0)
+                    if conf >= self.start_conf:
+                        seen[lbl] = True
+            for lbl in self.start_labels:
+                if lbl in self._start_labels_latched:
+                    continue
+                if seen.get(lbl):
+                    streak = self._start_label_streaks.get(lbl, 0) + 1
+                    self._start_label_streaks[lbl] = streak
+                    if streak >= self.start_sustain_frames:
+                        self._start_labels_latched.add(lbl)
+                        print(f"[CustomMix] 开始判定·标签[{lbl}]确认 "
+                              f"({len(self._start_labels_latched)}/{len(self.start_labels)})")
+                else:
+                    self._start_label_streaks[lbl] = 0
+        # 合成: 启用的条件全部成立 → 通过并闩锁
+        labels_ok = (not self.start_labels
+                     or len(self._start_labels_latched) == len(self.start_labels))
+        if self._start_stable_ok and labels_ok:
+            self.started = True
+            print(f"[CustomMix] 开始判定通过 → 逐件记账开始 (frame={self._frame_id})")
+
+    def start_gate_missing(self) -> list:
+        """未通过时缺什么 (verdict NG 原因 / 前端徽标共用口径)。"""
+        missing = []
+        if self.start_by_stability and not self._start_stable_ok:
+            missing.append(
+                f"稳定窗口({self._start_stable_streak}/{self.stability_window_frames}帧)")
+        for lbl in self.start_labels:
+            if lbl not in self._start_labels_latched:
+                missing.append(lbl)
+        return missing
+
     def verdict(self, host):
         reasons = []
         ng_details = []
+        # v3.60.2 开始判定未通过就被结算 (空闲/周期超时): 原因明示"未开始",
+        # 与"缺少锁付完成"区分 — 现场一眼可辨是门没过而不是漏锁
+        if self.start_gate_enabled and not self.started:
+            waiting = '、'.join(self.start_gate_missing()) or '开始条件'
+            reason = f'逐件未开始(等待: {waiting})'
+            self.last_ng_detail = {
+                'reason_summary': reason,
+                'settled_at': time.time(),
+                'missing_total': sum(
+                    max(s.expected_count, len(s.items)) for s in self.steps),
+                'steps_failed': [{
+                    'step_label': s.step_label,
+                    'display_label': s.display_label,
+                    'covered_count': 0,
+                    'total': len(s.items),
+                    'expected_count': s.expected_count,
+                    'missing_item_ids': [],
+                } for s in self.steps],
+            }
+            return False, [reason]
         for step in self.steps:
             # 与独立模式结算同语义: 读粘性完成标志 (feed 中翻转, 永不回滚);
             # 兜底再查一次完成判定 (结算与最后一帧之间的竞态)
@@ -1870,12 +2019,19 @@ class _PerItemMixEngine:
                 'total': st['total'],
                 'completed': st['completed'],
             })
-        return {
+        state = {
             'mix_type': 'per_item',
             'items': items,
             'steps': steps_state,
             'last_ng_detail': self.last_ng_detail,
         }
+        # v3.60.2 开始判定透出 (未配置不加键 = 前端零差异)
+        if self.start_gate_enabled:
+            state['start_gate'] = {
+                'started': self.started,
+                'missing': [] if self.started else self.start_gate_missing(),
+            }
+        return state
 
 
 class CustomMixMachine:
@@ -1883,7 +2039,7 @@ class CustomMixMachine:
 
     def __init__(self, mix_type: str, item_cfgs: list, *,
                  item_timeout_seconds: float = 3.0, step_labels=(),
-                 extra_item_labels=(), container_cfg=None):
+                 extra_item_labels=(), container_cfg=None, start_cfg=None):
         self.mix_type = mix_type
         self._cycle_token = '__init__'
         self._host = None
@@ -1895,11 +2051,14 @@ class CustomMixMachine:
             # 跟踪混合: 物品行标签全部由本组件独占消费
             self.item_labels = self._engine.item_labels
         else:
-            self._engine = _PerItemMixEngine(item_cfgs, item_timeout_seconds)
+            self._engine = _PerItemMixEngine(item_cfgs, item_timeout_seconds,
+                                             start_cfg=start_cfg)
             # 逐件混合: 个体/动作标签被独占消费, 但与步骤行同名的标签除外
             # (动作标签可同时推动序列 — 两边共享, 不剥离)。
             # extra_item_labels: 配置不完整被跳过的物品行标签 — 仍要剥离,
             # 不允许半配置的物品流进步骤侧状态机。
+            # v3.60.2 开始标签同在 watch_labels 内 → 一并剥离 (独占消费, 对齐
+            # v3.59 容器定界的容器标签: 不打断消失确认/不刷空闲活动/不触发违序)
             self.item_labels = frozenset(
                 (self._engine.watch_labels | set(extra_item_labels or ()))
                 - set(step_labels or ()))
@@ -2069,6 +2228,39 @@ def build_custom_mix(config: dict):
         return None
     item_timeout = float(((pipeline.get('per_item') or {}).get('item_timeout_seconds', 3.0)) or 0.0)
 
+    # v3.60.2 开始判定 (仅逐件混合): 中捷独立逐件"稳定窗口才开周期"语义的混合版。
+    # 两条件都不启用 (存量项目缺键即此态) → start_cfg=None, 引擎恒 started 零差异。
+    start_cfg = None
+    if mix_type == 'per_item':
+        per_pl = pipeline.get('per_item') or {}
+        _by_stab = bool(per_pl.get('start_by_stability', False))
+        _raw_labels = per_pl.get('start_labels') or []
+        if isinstance(_raw_labels, str):
+            _raw_labels = [_raw_labels]
+        _labels = tuple(str(x).strip() for x in _raw_labels if str(x).strip())
+        if _by_stab or _labels:
+            start_cfg = {
+                'start_by_stability': _by_stab,
+                'start_labels': _labels,
+                'start_sustain_frames': per_pl.get('start_sustain_frames', 3),
+                'start_conf': per_pl.get('start_conf', 0.5),
+                # 稳定窗口三件套直接复用独立逐件同名字段 (同义同默认)
+                'stability_window_frames': per_pl.get('stability_window_frames', 10),
+                'stability_count_ratio': per_pl.get('stability_count_ratio', 0.85),
+                'stability_count_tolerance': per_pl.get('stability_count_tolerance', 0),
+            }
+            _shared = set(_labels) & step_labels
+            if _shared:
+                print(f"[CustomMix] ⚠️ 开始标签 {sorted(_shared)} 与启用步骤同名 — "
+                      f"标签会同时推动序列 (不剥离), 建议停用同名步骤行实现独占消费")
+            desc = []
+            if _by_stab:
+                desc.append(f"稳定窗口(连续{start_cfg['stability_window_frames']}帧位置数齐)")
+            if _labels:
+                desc.append(f"开始标签{list(_labels)}(连续{start_cfg['start_sustain_frames']}帧"
+                            f"/conf≥{start_cfg['start_conf']})")
+            print(f"[CustomMix] 逐件开始判定=开: {' + '.join(desc)} — 通过前不锁账不记覆盖")
+
     # 托盘容器累加器配置 (仅 tracking 混合 + 配了容器标签才启用; 否则 None = 零差异)
     container_cfg = None
     if mix_type == 'tracking':
@@ -2198,7 +2390,8 @@ def build_custom_mix(config: dict):
                                item_timeout_seconds=item_timeout,
                                step_labels=step_labels,
                                extra_item_labels=skipped_item_labels,
-                               container_cfg=container_cfg)
+                               container_cfg=container_cfg,
+                               start_cfg=start_cfg)
     # v3.49 容器虚拟步骤: 把整箱装托盘/滑块过程合并为一个可排序的顺序步骤。
     # 整箱达标 (booked ≥ 目标) 瞬间, 该标签注入步骤侧稳定标签流, 走常规步骤机 —
     # 严格顺序 / 单次接受 / 缺步提前发现 / 结算期望全部自然生效, 零特殊分支。

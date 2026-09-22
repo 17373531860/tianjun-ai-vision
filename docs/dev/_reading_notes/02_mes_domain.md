@@ -5,6 +5,11 @@
 >
 > **完成度：全部完成（2026-07-05）**：services 层（mes_hooks / scanner / mes_gateway / mes_inbound / mes_puller / cluster_collector / packaging_flow_coordinator / workpiece_flow_coordinator / wmax 目录 7 文件 / external_device 族 5 文件 + external_alarm）与 api 层 10 个 MES 路由全部精读落盘，并附「二、MES 域综合」与「三、疑点清单」（15 条）。深潜正文 `internals/mes-hook-pipeline.md` 与 `internals/cluster-collector.md` 已从源码直接撰写，不依赖本笔记全文。
 >
+> **v3.60.2 补账（2026-09-21，多码采集「随视觉周期结算」收编 v3.60.1a/b/c 热补丁）**：
+> - `services/scan_collect.py`：配置新键 `settle_on_vision_cycle`（DEFAULTS 默认 False）。开启后本件扫码组结算主权移交视觉末步：收尾码 closing / 扫满 all_filled / 超时 timeout / 少扫挂起 ng_pending 全部让位不自行结算、码只进组不拒收；探针接口零阻塞纯内存（try-lock + 缓存不碰 DB）报缺码；收口由视觉结算点驱动（见 01 笔记 `_close_scan_group_async`），码齐组同样随周期收口翻篇（探针只报缺码不是收口条件）。组归属锚语义：锚=本周期末步首次出现时间，开于锚点之后的组（下一件的）一律不碰——治上一件消失确认空档里下一件已开扫的跨件竞态（2026-09-21 六和现场事故复盘：一件两账/组不翻篇/下一件母排码被拒三连）。
+> - `services/mes_hooks.py`：`_handle_cycle_end` 不再收口扫码组（v3.60.1c 拆除——现场开「须先扫码才开始周期」时周期行不建、钩子是死代码，且钩子路径无锚会误收下一件刚开的组）；`on_vision_cycle` 回喂保留、失败打印 traceback 隔离。
+> - `api/scan_collect.py`：config schema/序列化透出 `settle_on_vision_cycle`。前端 `ScanCollectConfigCard.vue` 新增「随视觉周期结算」开关（`sc-settle-on-vision`），填入示例含 2026-09-20 现场定案注释。
+>
 > **v3.57 补账（2026-09-15，v3.56.0a 六和现场补丁收编）**：
 > - `services/scan_collect.py`：①催扫提醒——「数量凑齐即结算」下少扫超 N 秒（默认 30）走 `remind_only` 语音/Toast 不误结算；②挂起单计数——挂起时只提醒，**最终结算才完整响一次**并计数（治一件计两次）；③`count_on_settle` 开关（默认存量）——关掉后扫码结算只借灯/语音/Toast 响应不入产量计数（治视觉+扫码双计数）；④`standby_silent`（默认关）——待机扫码不计数不落 txt；⑤txt 补扫码带 `[补扫]` 标记 + 转 OK 备注行。回归 `tests/test_scan_collect_unit.py`。
 > - `api/scan_collect.py`：新增 `POST /scan-collect/settle-now`（监控面板「本件扫完」按钮——扫不齐时立即对本件收尾结算）。

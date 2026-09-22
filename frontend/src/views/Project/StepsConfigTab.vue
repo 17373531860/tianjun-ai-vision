@@ -1151,6 +1151,59 @@
                 名称不能与个体/动作等已有标签同名。
               </p>
             </div>
+
+            <!-- v3.60.2 开始判定: 独立逐件"稳定窗口才开周期"语义的混合版 (与「结算触发方式」同款双条件) -->
+            <div v-if="mixItemRows.length > 0" class="px-3 py-2 bg-slate-900/60 border border-slate-700 rounded">
+              <div class="text-[12px] font-bold text-cyan-300 mb-2">开始判定
+                <span class="text-gray-500 font-normal text-[10px]">— 通过前不锁定目标、不记覆盖; 下方两项可单选或都选 = 双条件; 都不勾 = 周期一开就记账 (老行为)</span>
+              </div>
+              <div class="flex flex-col gap-2">
+                <!-- 条件1: 稳定窗口 (位置数齐) -->
+                <div class="flex items-center gap-2 flex-wrap">
+                  <el-checkbox
+                    v-model="project.pipeline_config.per_item.start_by_stability"
+                    data-testid="mix-start-stability-checkbox">稳定窗口</el-checkbox>
+                  <span class="text-[11px] text-gray-400">连续</span>
+                  <el-input-number
+                    v-model="project.pipeline_config.per_item.stability_window_frames"
+                    size="small" :min="1" :step="1" :precision="0" class="!w-24"
+                    data-testid="mix-start-stability-frames-input"
+                    :disabled="!project.pipeline_config.per_item.start_by_stability" />
+                  <span class="text-[11px] text-gray-400">帧目标位置检出数达开周期门槛才开始记账 (需物品行填「已知件数」; 门槛沿用逐件的"最低检出比例/允许漏检几件")</span>
+                </div>
+                <!-- 条件2: 开始标签 (各自独立确认, 全部到位过即通过) -->
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span class="text-[13px]"
+                        :class="(project.pipeline_config.per_item.start_labels || []).length > 0 ? 'text-white' : 'text-gray-400'">开始标签</span>
+                  <el-select
+                    v-model="project.pipeline_config.per_item.start_labels"
+                    multiple filterable allow-create default-first-option collapse-tags
+                    size="small" class="!w-64" placeholder="留空 = 不启用此条件"
+                    data-testid="mix-start-labels-select">
+                    <el-option
+                      v-for="lbl in (project.model_labels || [])"
+                      :key="lbl" :label="lbl" :value="lbl" />
+                  </el-select>
+                  <span class="text-[11px] text-gray-400">各连续</span>
+                  <el-input-number
+                    v-model="project.pipeline_config.per_item.start_sustain_frames"
+                    size="small" :min="1" :step="1" :precision="0" class="!w-24"
+                    data-testid="mix-start-sustain-input"
+                    :disabled="(project.pipeline_config.per_item.start_labels || []).length === 0" />
+                  <span class="text-[11px] text-gray-400">帧确认, 置信度 ≥</span>
+                  <el-input-number
+                    v-model="project.pipeline_config.per_item.start_conf"
+                    size="small" :min="0" :max="1" :step="0.05" :precision="2" class="!w-24"
+                    data-testid="mix-start-conf-input"
+                    :disabled="(project.pipeline_config.per_item.start_labels || []).length === 0" />
+                </div>
+              </div>
+              <p class="text-[10px] text-gray-500 mt-1 mb-0">
+                多个开始标签<span class="text-amber-300">各自独立确认、到位过即闩锁</span>（不要求同一帧全齐），全部到位过才算通过；通过后本周期内不再回看。
+                标签可选模型类别，也可手输「同标签区域拆分」生成的虚拟步骤名（如 就位-左上）；开始标签由本判定独占消费，不参与上方步骤序列（同名步骤行请保持停用）。
+                通过前被超时结算时，NG 原因会明示「逐件未开始(等待: …)」。
+              </p>
+            </div>
           </div>
         </div>
       </div>
