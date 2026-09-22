@@ -536,9 +536,16 @@ const trueWordOptions = ['1', 'true', 'yes', 'y', 't', '是', '完工', 'complet
 
 const form = reactive(emptyForm())
 
-// 接收地址 (展示用)
-const apiBase = computed(() =>
-  (import.meta.env.VITE_API_BASE_URL || 'http://<本机IP>:8001/api/v1').replace(/\/+$/, ''))
+// 接收地址 (展示用 — 要给客户 IT 抄去配他们的 MES, 必须是对方能打通的绝对地址)
+// 浏览器打开本页时直接用当前 origin (局域网里那就是工作站的真实地址);
+// Electron 出厂壳里页面是 file://, 没有可抄的 origin, 退回占位提示填本机 IP。
+const apiBase = computed(() => {
+  const envBase = import.meta.env.VITE_API_BASE_URL || ''
+  if (envBase) return envBase.replace(/\/+$/, '')
+  const origin = (typeof window !== 'undefined' && window.location?.origin) || ''
+  if (origin && origin.startsWith('http')) return `${origin}/api/v1`
+  return 'http://<本机IP>:8001/api/v1'
+})
 const endpointUrl = computed(() => `${apiBase.value}/mes/inbound/task`)
 const alarmClearUrl = computed(() => `${apiBase.value}/mes/inbound/alarm/clear`)
 

@@ -33,7 +33,7 @@
           </el-select>
           <button 
             @click="handleNavToProject"
-            :disabled="store.isDetecting || displayReadonly"
+            :disabled="store.isDetecting || managementReadonly"
             class="text-xs bg-cyan-700 hover:bg-cyan-600 disabled:bg-gray-600 disabled:cursor-not-allowed px-2 py-0.5 rounded ml-2 cursor-pointer"
           >
             {{ $t('navbar.select') }}
@@ -124,10 +124,10 @@
       <!-- Icon Actions -->
       <div class="flex items-center gap-3">
         <!-- Settings Dropdown -->
-        <el-dropdown trigger="click" @command="handleCommand" :disabled="store.isDetecting || displayReadonly">
+        <el-dropdown trigger="click" @command="handleCommand" :disabled="store.isDetecting || managementReadonly">
           <el-icon 
             class="transition-colors text-[1.75rem]" 
-            :class="store.isDetecting || displayReadonly ? 'cursor-not-allowed text-gray-600' : 'cursor-pointer text-gray-300 hover:text-cyan-400'"
+            :class="store.isDetecting || managementReadonly ? 'cursor-not-allowed text-gray-600' : 'cursor-pointer text-gray-300 hover:text-cyan-400'"
           ><Setting /></el-icon>
           <template #dropdown>
             <el-dropdown-menu class="bg-slate-800 border-slate-700">
@@ -191,7 +191,7 @@ const pluginTheme = usePluginThemeStore();
 const authStore = useAuthStore();
 const router = useRouter();
 const { locale, t } = useI18n();
-const { station, readonly: displayReadonly, channel: windowChannel } = useDisplayWindow();
+const { station, readonly: displayReadonly, managementReadonly, channel: windowChannel } = useDisplayWindow();
 
 // 项目列表和选择
 const projectList = ref([]);
@@ -347,7 +347,7 @@ const loadProjects = async () => {
 
 // 导航到项目管理页面
 const handleNavToProject = () => {
-  if (displayReadonly.value) return;
+  if (managementReadonly.value) return;
   if (store.isDetecting) {
     ElMessage.warning('检测运行中，请先停止检测再切换页面');
     return;
@@ -547,7 +547,7 @@ const handleMinimizeWindow = async () => {
 };
 
 const handleCommand = (command) => {
-  if (displayReadonly.value) return;
+  if (managementReadonly.value) return;
   switch (command) {
     case 'auto_save':
       toggleAutoSave();

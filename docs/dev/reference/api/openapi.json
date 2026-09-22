@@ -4340,6 +4340,27 @@
     "title": "HTTPValidationError",
     "type": "object"
    },
+   "HandsAuxRequest": {
+    "properties": {
+     "channel_id": {
+      "description": "工位号 (零基)",
+      "minimum": 0.0,
+      "title": "Channel Id",
+      "type": "integer"
+     },
+     "enabled": {
+      "default": false,
+      "description": "True=该工位开手部裁切副屏 (会为这一路开 MediaPipe 手部)",
+      "title": "Enabled",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "channel_id"
+    ],
+    "title": "HandsAuxRequest",
+    "type": "object"
+   },
    "HikvisionStartRequest": {
     "properties": {
      "device_index": {
@@ -13995,12 +14016,93 @@
     "title": "UsbDeviceBindRequest",
     "type": "object"
    },
+   "UsbScanRequest": {
+    "properties": {
+     "barcode": {
+      "description": "USB 键盘扫码枪输入的条码",
+      "minLength": 1,
+      "title": "Barcode",
+      "type": "string"
+     },
+     "channel_id": {
+      "description": "工位屏绑定的通道编号，从 0 开始",
+      "minimum": 0.0,
+      "title": "Channel Id",
+      "type": "integer"
+     },
+     "device_id": {
+      "description": "本工位已启用的 USB 扫码设备 ID",
+      "minimum": 1.0,
+      "title": "Device Id",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "barcode",
+     "device_id",
+     "channel_id"
+    ],
+    "title": "UsbScanRequest",
+    "type": "object"
+   },
+   "UsbScanResponse": {
+    "properties": {
+     "barcode": {
+      "description": "原始扫码内容",
+      "title": "Barcode",
+      "type": "string"
+     },
+     "channel_id": {
+      "description": "实际接收扫码的通道编号",
+      "title": "Channel Id",
+      "type": "integer"
+     },
+     "device_id": {
+      "description": "实际使用的 USB 设备 ID",
+      "title": "Device Id",
+      "type": "integer"
+     },
+     "serial_no": {
+      "description": "解析后的工件码",
+      "title": "Serial No",
+      "type": "string"
+     },
+     "success": {
+      "description": "条码解析是否成功",
+      "title": "Success",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "success",
+     "device_id",
+     "channel_id",
+     "barcode",
+     "serial_no"
+    ],
+    "title": "UsbScanResponse",
+    "type": "object"
+   },
    "UserCreate": {
     "properties": {
      "active": {
       "default": true,
       "title": "Active",
       "type": "boolean"
+     },
+     "allowed_channels": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Allowed Channels"
      },
      "display_name": {
       "anyOf": [
@@ -14057,6 +14159,20 @@
        }
       ],
       "title": "Active"
+     },
+     "allowed_channels": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Allowed Channels"
      },
      "display_name": {
       "anyOf": [
@@ -30429,6 +30545,49 @@
     ]
    }
   },
+  "/api/v1/scanner/usb-scan": {
+   "post": {
+    "description": "[内部端点] 接收操作屏 USB 扫码，复用设备解析、去重及 MES/插件扫码链路。\n\n- 空白条码返回 400；账号无本工位操作权限返回 403。\n- 设备不存在、未启用、非 USB 或未绑定本工位返回 404。\n- 广播跨工位或仅外部配对的设备返回 403，须由管理端配置独立工位设备。\n- 设备配置尚未加载或正在变更返回 409，不使用调试虚拟设备兜底。",
+    "operationId": "receive_usb_scan_api_v1_scanner_usb_scan_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/UsbScanRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/UsbScanResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "接收工位USB扫码",
+    "tags": [
+     "Scanner",
+     "Scanner"
+    ]
+   }
+  },
   "/api/v1/scanner/wmax/auto-discover": {
    "post": {
     "description": "自动发现并连接所有 WMax 设备（跟启动时相同逻辑）",
@@ -34245,6 +34404,26 @@
     ]
    }
   },
+  "/api/v1/source/stream/viewers": {
+   "get": {
+    "description": "逐工位列出正在真看 MJPEG 直播的 viewer 槽（main / station / legacy）。\n\n一拖多用途：一体机工位屏走 ``viewer=station``，工作站总览走 ``viewer=main``。\n总览拿到本结果后，把已有一体机在看的工位降成 snapshot 轮询，同一路画面就\n不会被编码/发送两遍（8~16 工位时这是实打实的带宽与 CPU）。\n\n判活靠推帧心跳而不是连接表，Chrome keep-alive 留下的僵尸 generator 不会\n被误判成\"一体机还在看\"。",
+    "operationId": "get_stream_viewers_api_v1_source_stream_viewers_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "各工位当前的直播订阅槽",
+    "tags": [
+     "source"
+    ]
+   }
+  },
   "/api/v1/source/transform/config": {
    "get": {
     "description": "获取指定通道的画面旋转/镜像配置",
@@ -37573,6 +37752,66 @@
      }
     },
     "summary": "Get Gpu Allocation",
+    "tags": [
+     "workstations",
+     "workstations"
+    ]
+   }
+  },
+  "/api/v1/workstations/hands-aux": {
+   "get": {
+    "description": "逐工位返回手部裁切副屏开关（默认全关）。\n\n开了的工位才会算 MediaPipe 手部几何，供\n``GET /snapshot?channel=N&view=hands`` 取裁切画面；其它工位一帧都不算。",
+    "operationId": "get_hands_aux_config_api_v1_workstations_hands_aux_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "读各工位手部裁切副屏开关",
+    "tags": [
+     "workstations",
+     "workstations"
+    ]
+   },
+   "put": {
+    "description": "开/关某一工位的手部裁切副屏；立即对运行态生效并落盘。\n\n关掉且该工位没开全局 MediaPipe 时会释放它的 MediaPipe 资源。",
+    "operationId": "set_hands_aux_config_api_v1_workstations_hands_aux_put",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/HandsAuxRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "设置某工位手部裁切副屏开关",
     "tags": [
      "workstations",
      "workstations"

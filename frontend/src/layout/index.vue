@@ -16,31 +16,31 @@
         </div>
         
         <nav class="flex-1 mt-4">
-          <router-link v-if="canShow('/monitor')" to="/monitor" class="nav-item" @click="sidebarOpen = false">
+          <router-link v-if="canShow('/monitor')" to="/monitor" class="nav-item" :class="{ 'nav-disabled': managementReadonly }" :aria-disabled="managementReadonly" @click.capture="handleMonitorNav">
             <el-icon class="mr-2"><Monitor /></el-icon> {{ $t('menu.monitor') }}
           </router-link>
-          <router-link v-if="canShow('/project')" to="/project" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+          <router-link v-if="canShow('/project')" to="/project" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting || managementReadonly }" :aria-disabled="systemStore.isDetecting || managementReadonly" @click.capture="handleNav">
             <el-icon class="mr-2"><Folder /></el-icon> {{ $t('menu.project') }}
           </router-link>
-          <router-link v-if="canShow('/model')" to="/model" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+          <router-link v-if="canShow('/model')" to="/model" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting || managementReadonly }" :aria-disabled="systemStore.isDetecting || managementReadonly" @click.capture="handleNav">
             <el-icon class="mr-2"><Cpu /></el-icon> {{ $t('menu.model') }}
           </router-link>
-          <router-link v-if="canShow('/source')" to="/source" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+          <router-link v-if="canShow('/source')" to="/source" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting || managementReadonly }" :aria-disabled="systemStore.isDetecting || managementReadonly" @click.capture="handleNav">
             <el-icon class="mr-2"><VideoCamera /></el-icon> 工位与输入源
           </router-link>
-          <router-link v-if="canShow('/data')" to="/data" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+          <router-link v-if="canShow('/data')" to="/data" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting || managementReadonly }" :aria-disabled="systemStore.isDetecting || managementReadonly" @click.capture="handleNav">
             <el-icon class="mr-2"><DataLine /></el-icon> {{ $t('menu.data') }}
           </router-link>
-          <router-link v-if="canShow('/mes')" to="/mes" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+          <router-link v-if="canShow('/mes')" to="/mes" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting || managementReadonly }" :aria-disabled="systemStore.isDetecting || managementReadonly" @click.capture="handleNav">
             <el-icon class="mr-2"><Tickets /></el-icon> MES 管理
           </router-link>
-          <router-link v-if="canShow('/alarm')" to="/alarm" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+          <router-link v-if="canShow('/alarm')" to="/alarm" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting || managementReadonly }" :aria-disabled="systemStore.isDetecting || managementReadonly" @click.capture="handleNav">
             <el-icon class="mr-2"><Bell /></el-icon> 报警设置
           </router-link>
-          <router-link v-if="canShow('/interconnect')" to="/interconnect" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+          <router-link v-if="canShow('/interconnect')" to="/interconnect" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting || managementReadonly }" :aria-disabled="systemStore.isDetecting || managementReadonly" @click.capture="handleNav">
             <el-icon class="mr-2"><Connection /></el-icon> 训练平台互连
           </router-link>
-          <router-link v-if="canShow('/settings')" to="/settings" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting }" @click.capture="handleNav">
+          <router-link v-if="canShow('/settings')" to="/settings" class="nav-item" :class="{ 'nav-disabled': systemStore.isDetecting || managementReadonly }" :aria-disabled="systemStore.isDetecting || managementReadonly" @click.capture="handleNav">
             <el-icon class="mr-2"><Setting /></el-icon> {{ $t('menu.settings') }}
           </router-link>
 
@@ -50,7 +50,8 @@
             :key="m.path"
             :to="m.path"
             class="nav-item plugin-nav-item"
-            :class="{ 'nav-disabled': systemStore.isDetecting }"
+            :class="{ 'nav-disabled': systemStore.isDetecting || managementReadonly }"
+            :aria-disabled="systemStore.isDetecting || managementReadonly"
             @click.capture="handleNav"
           >
             <el-icon class="mr-2"><DataAnalysis /></el-icon> {{ m.label }}
@@ -74,6 +75,7 @@
 
       <section
         class="flex-1 bg-[#0f172a]"
+        :inert="managementReadonly && route.path !== '/monitor'"
         :class="handsOnly ? 'overflow-hidden p-0' : 'overflow-auto px-4 pt-4 pb-0'"
       >
         <router-view />
@@ -102,31 +104,34 @@ const pluginTheme = usePluginThemeStore();
 const authStore = useAuthStore();
 const sidebarOpen = ref(false);
 const route = useRoute();
-const { handsOnly, readonly: displayReadonly } = useDisplayWindow();
-// 独立工位窗不重复接管 USB 扫码枪；可操作的总控复用窗口保留原监听。
-const scanGunDisabled = computed(() => route.query.kiosk === '1' || displayReadonly.value);
+const { handsOnly, readonly: displayReadonly, managementReadonly, channel } = useDisplayWindow();
+// 同机 Electron 子窗避免重复捕获；局域网操作屏使用插在一体机上的本工位扫码枪。
+const scanGunDisabled = computed(() => displayReadonly.value
+  || (route.query.kiosk === '1' && !!window.electronAPI?.isElectron));
+const syncScanGun = () => {
+  stopScanGun();
+  if (!scanGunDisabled.value) {
+    startScanGun({ channelId: route.query.kiosk === '1' ? channel.value : null });
+  }
+};
 
 // USB 扫码枪: 全局挂键盘监听, 这样在任何页面 (含全屏检测页) 扫码都能按用途处理
 // (拉工单/绑工件)。关/开与用途由 扫码器→USB 扫码枪 Tab 控制 (本监听内部实时读配置)。
-onMounted(() => {
-  if (!scanGunDisabled.value) startScanGun();
-});
-watch(scanGunDisabled, (readonly) => {
-  if (readonly) {
-    sidebarOpen.value = false;
-    stopScanGun();
-  } else startScanGun();
+onMounted(syncScanGun);
+watch([scanGunDisabled, channel, () => route.query.kiosk], () => {
+  if (scanGunDisabled.value) sidebarOpen.value = false;
+  syncScanGun();
 });
 onUnmounted(stopScanGun);
 
-// 菜单可见 = 插件主题未隐藏 AND 当前账号有路由权限.
-// 两层门各自独立: 插件主题是客户定制层 (按 brand 隐藏), 权限层是账号层 (按角色隐藏).
+// 工位屏保留禁用的菜单外观；管理窗口按账号权限显示，二者都遵循插件主题。
 const canShow = (path) => {
-  return !pluginTheme.isMenuHidden(path) && authStore.canAccessRoute(path);
+  return !pluginTheme.isMenuHidden(path)
+    && (route.query.kiosk === '1' || authStore.canAccessRoute(path));
 };
 
 const handleNav = (e) => {
-  if (displayReadonly.value) {
+  if (managementReadonly.value) {
     e.preventDefault();
     e.stopPropagation();
     return;
@@ -138,6 +143,13 @@ const handleNav = (e) => {
   } else {
     sidebarOpen.value = false;
   }
+};
+
+const handleMonitorNav = (e) => {
+  if (managementReadonly.value) {
+    e.preventDefault();
+    e.stopPropagation();
+  } else sidebarOpen.value = false;
 };
 </script>
 

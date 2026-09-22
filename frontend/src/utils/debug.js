@@ -9,6 +9,9 @@
 
 import { ref } from 'vue';
 
+// backendTarget 是纯函数模块 (不 import axios/api), 引它不会引回循环依赖。
+import { resolveApiBaseURL } from '@/api/backendTarget';
+
 // ---- 类别目录: key -> { label, group } (调试设置页开关矩阵据此渲染) ----
 export const FRONTEND_CATEGORIES = {
   'page.nav':           { label: '页面切换 (进入/离开每个页面)', group: '全局' },
@@ -57,8 +60,16 @@ const _buffer = [];
 let _seq = 0;
 export const bufferVersion = ref(0);
 
-// ---- 回传后端 (与 api/index.js 同源的 baseURL 计算, 不依赖 axios) ----
-const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8001/api/v1').replace(/\/+$/, '');
+// ---- 回传后端 (与 api/index.js 同一套判据, 但不依赖 axios) ----
+// 不能写死 localhost: 一体机浏览器上那是它自己, 调试日志会全部丢在本地 (v3.57)
+const API_BASE = resolveApiBaseURL({
+  envBase: import.meta.env.VITE_API_BASE_URL || '',
+  href: (typeof window !== 'undefined' && window.location?.href) || '',
+  protocol: (typeof window !== 'undefined' && window.location?.protocol) || 'http:',
+  hostname: (typeof window !== 'undefined' && window.location?.hostname) || 'localhost',
+  userAgent: (typeof navigator !== 'undefined' && navigator.userAgent) || '',
+  isDev: Boolean(import.meta.env?.DEV),
+}).replace(/\/+$/, '');
 
 function postToBackend(entry) {
   try {

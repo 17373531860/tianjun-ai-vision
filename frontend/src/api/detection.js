@@ -62,6 +62,10 @@ export const inferOnce = (channel = 0) => api.post(`/source/detection/infer-once
 
 export const getSourceStatus = (channel = 0) => api.get(`/source/status?channel=${channel}`);
 
+// 一拖多局域网工位屏: 逐工位查"谁在看直播"(main=工作站主窗 / station=一体机工位屏)。
+// 工作站总览据此把已有一体机在看的工位降成快照轮询, 不跟一体机抢同一路 MJPEG。
+export const getStreamViewers = () => api.get('/source/stream/viewers');
+
 export const setProjectConfig = (projectConfig, channel = 0) => {
   return api.post(`/source/detection/set-project?channel=${channel}`, projectConfig);
 };
@@ -107,6 +111,12 @@ export const getGpuAllocation = () => api.get('/workstations/gpu-allocation');
 
 // 一期多屏工位显示：配置由后端按 workstation_config.json 顶层分段持久化。
 export const getMultiMonitorConfig = () => api.get('/workstations/multi-monitor');
+
+// 一拖多「手部裁切副屏」按工位开关（默认全关；开了的工位才算 MediaPipe 手部）
+export const getHandsAuxConfig = () => api.get('/workstations/hands-aux');
+
+export const setHandsAuxEnabled = (channelId, enabled) =>
+  api.put('/workstations/hands-aux', { channel_id: channelId, enabled });
 
 export const setMultiMonitorConfig = (config) => api.put('/workstations/multi-monitor', config);
 

@@ -26,6 +26,16 @@ from backend.api.source_sdk_loader import debug_log
 from backend.core import debug_center
 
 
+# ── v3.60.2 USB 摄像头「只取最新帧」参数 ──
+# _CAMERA_STALE_GRAB_MS: 单次 grab() 耗时低于此值视为"队头旧帧"(驱动/MSMF 内部
+#   队列里积压的旧帧, 瞬时返回, 只是移动指针); 达到或超过视为"这次阻塞等了传感器
+#   出新帧"(队列已空, 这张就是最新)。8ms 明显低于 30fps 的 ~33ms 帧间隔, 又高于
+#   纯指针移动的 0~3ms, 是"旧帧 vs 新帧"的稳健分界。
+# _CAMERA_MAX_DRAIN: 单轮最多连抓多少张, 防驱动从不阻塞时死循环空转。
+_CAMERA_STALE_GRAB_MS = 8.0
+_CAMERA_MAX_DRAIN = 30
+
+
 class CaptureLoopMixin:
     def _video_playback_held(self) -> bool:
         """v3.44.2 视频源播放是否应冻结 (True = 本轮不读帧, 位置保持不动)。
@@ -40,6 +50,57 @@ class CaptureLoopMixin:
         if getattr(self, '_video_hold', False):
             return True
         return bool(self.is_detecting and getattr(self, '_pending_ack', False))
+
+    def _camera_grab_latest_frame(self):
+        """USB 摄像头「只取最新帧」(v3.60.2)。
+
+        连续 grab() 抽掉驱动 / MSMF 内部队列里积压的旧帧, 只 retrieve() 出最新
+        的那一张, 消除"画面稳定落后于手上动作"的排队延迟 (不是帧率不稳, 也不是
+        推理慢——Windows 上 BUFFERSIZE=1 常被 MSMF 忽略, 内部队列没缩小, 每轮
+        read() 读到的都是队头最旧帧)。
+
+        仅供 source_type == 'camera' 使用 (视频文件 / RTSP / 海康 / synthetic 各走
+        原路径, 不能抽帧)。返回 (ret, frame, dropped):
+          ret / frame —— 与 cv2.VideoCapture.read() 同语义 (最新可用帧);
+          dropped     —— 本轮丢弃的旧帧数 (供采集循环节流打日志)。
+
+        算法:
+          1. grab() 一张。耗时 >= _CAMERA_STALE_GRAB_MS 说明这次阻塞等了传感器,
+             队列是空的、这张就是最新帧 → retrieve() 用它, 绝不再 grab
+             (空缓冲再 grab 会去等下一帧, 把帧率打成一半)。
+          2. 瞬时返回说明队列里还有旧帧 → 继续 grab(), 直到某次 >= 阈值 (取到新帧,
+             用它) 或 grab 失败 (retrieve 上一张成功的)。上限 _CAMERA_MAX_DRAIN 张。
+          3. 连抓到上限仍每次瞬时返回 (驱动从不阻塞) → retrieve 最后一张后 sleep
+             5ms 退出, 防空转占满 CPU。
+        """
+        cap = self.capture
+        if cap is None:
+            return False, None, 0
+
+        dropped = 0
+        grabbed_any = False
+        for _ in range(_CAMERA_MAX_DRAIN):
+            t0 = time.time()
+            ok = cap.grab()
+            grab_ms = (time.time() - t0) * 1000.0
+            if not ok:
+                # 队列抽干: 用上一次成功 grab 的帧; 一张都没抓到则读帧失败。
+                if grabbed_any:
+                    ret, frame = cap.retrieve()
+                    return ret, frame, dropped
+                return False, None, dropped
+            if grabbed_any:
+                # 这次 grab 顶掉了上一张 → 上一张是被丢弃的旧帧。
+                dropped += 1
+            grabbed_any = True
+            if grab_ms >= _CAMERA_STALE_GRAB_MS:
+                ret, frame = cap.retrieve()
+                return ret, frame, dropped
+
+        # 到上限仍每次瞬时: 驱动从不阻塞, 用最后抓到的这张并小睡防空转。
+        ret, frame = cap.retrieve()
+        time.sleep(0.005)
+        return ret, frame, dropped
 
     def _capture_loop(self):
         """
@@ -62,6 +123,9 @@ class CaptureLoopMixin:
         cap_frames = 0           # 本窗口成功采集帧数
         cap_read_total = 0.0     # 读帧累计耗时 (ms), 仅开关开时累计
         cap_read_n = 0
+        # v3.60.2 摄像头「只取最新帧」丢弃旧帧节流日志累计 (每 10s 汇总一条)
+        stale_dropped_total = 0
+        last_stale_log = time.time()
         
         # 如果正在检测且模型已加载，启动推理线程
         if self.is_detecting and (self.model is not None or getattr(self, 'source_type', None) == 'synthetic'):
@@ -136,8 +200,34 @@ class CaptureLoopMixin:
                     hik_time = (t_hik_end - t_hik_start) * 1000
                     if hik_time > 200:
                         debug_log(f"!!! 海康帧获取慢: {hik_time:.1f}ms, ret={ret}", "CAPTURE")
+                elif self.source_type == 'camera':
+                    # v3.60.2: USB 摄像头「只取最新帧」——抽掉驱动 / MSMF 内部队列
+                    # 里积压的旧帧, 只用最新那张。之前每轮只 read() 队头最旧帧、处理
+                    # 完再按 self.fps sleep, 睡眠期间新帧继续进队, 队列有多深画面就
+                    # 晚多少 (工人反映"画面稳定落后于手上动作")。
+                    try:
+                        t_read_start = time.time()
+                        ret, frame, _stale = self._camera_grab_latest_frame()
+                        t_read_end = time.time()
+                        read_time = (t_read_end - t_read_start) * 1000
+                        if read_time > 200:
+                            debug_log(f"!!! 帧读取慢: {read_time:.1f}ms", "CAPTURE")
+                        if debug_center.is_on("backend.capture"):
+                            cap_read_total += read_time
+                            cap_read_n += 1
+                        # 丢弃旧帧节流日志: 每 10s 汇总一条, 不每帧刷屏。
+                        if _stale:
+                            stale_dropped_total += _stale
+                            if time.time() - last_stale_log >= 10.0:
+                                print(f"[Camera] stale frames dropped={stale_dropped_total}")
+                                last_stale_log = time.time()
+                                stale_dropped_total = 0
+                    except Exception as e:
+                        debug_log(f"帧读取异常: {e}", "CAPTURE")
+                        ret = False
                 else:
-                    # 普通摄像头或视频文件
+                    # 视频文件 / RTSP / 图片等 (凡持有 self.capture 的非相机源):
+                    # 保持原 read() 路径不变, 不能"只取最新帧"抽帧。
                     # 对于视频输入源，如果倍速大于1，通过跳帧实现
                     if self.source_type == 'video' and speed > 1:
                         # 跳过一些帧来实现倍速
@@ -322,11 +412,16 @@ class CaptureLoopMixin:
                         time.sleep(0.01)
                 
                 # 计算帧处理耗时，动态调整 sleep 时间
-                frame_elapsed = time.time() - frame_start_time
-                target_interval = 1.0 / max(self.fps * speed, 1)
-                sleep_time = max(0, target_interval - frame_elapsed)
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
+                # v3.60.2: 摄像头走「只取最新帧」——grab() 已在等传感器时自然按帧率
+                # 阻塞, 末尾再按 target_interval sleep 只会把刚取到的新帧重新压回
+                # 排队延迟。仅相机跳过这段 sleep; 视频文件 / RTSP / 海康 / synthetic
+                # 仍按 self.fps(× speed) 控制回放节奏 (含 video 的 speed>1 跳帧)。
+                if self.source_type != 'camera':
+                    frame_elapsed = time.time() - frame_start_time
+                    target_interval = 1.0 / max(self.fps * speed, 1)
+                    sleep_time = max(0, target_interval - frame_elapsed)
+                    if sleep_time > 0:
+                        time.sleep(sleep_time)
                 frame_start_time = time.time()
                 
                 # 重置连续错误计数（成功处理一帧）

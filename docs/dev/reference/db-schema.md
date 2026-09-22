@@ -1100,6 +1100,7 @@ ORM 类 `User`，定义于 `backend/models/auth_models.py`。
 | `active` | BOOLEAN | INDEX NOT NULL | True |
 | `must_change_password` | BOOLEAN | NOT NULL | False |
 | `last_login_at` | DATETIME |  |  |
+| `allowed_channels` | JSON |  |  |
 | `created_at` | DATETIME | NOT NULL | server |
 | `updated_at` | DATETIME | NOT NULL | server |
 

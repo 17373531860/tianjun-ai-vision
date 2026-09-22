@@ -630,6 +630,13 @@
         </div>
       </el-tab-pane>
 
+      <!-- 一拖多：工作站推理 + 一体机网页工位 -->
+      <el-tab-pane label="局域网工位屏" lazy>
+        <div class="p-4">
+          <LanStationPanel />
+        </div>
+      </el-tab-pane>
+
       <!-- 工位组互通（RFC 10，原系统设置 Tab） -->
       <el-tab-pane label="工位组互通" lazy>
         <ChannelGroupPanel />
@@ -662,6 +669,7 @@ import { getProjects } from '@/api/project';
 import { dbg, dbgErr } from '@/utils/debug';
 import MultiMonitorPanel from './MultiMonitorPanel.vue';
 import LightGuidePanel from './LightGuidePanel.vue';
+import LanStationPanel from './LanStationPanel.vue';
 import ChannelGroupPanel from './ChannelGroupPanel.vue';
 import WorkpieceFlowPanel from './WorkpieceFlowPanel.vue';
 

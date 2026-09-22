@@ -225,6 +225,16 @@
             <span v-else class="text-slate-500 text-xs">未分配</span>
           </template>
         </el-table-column>
+        <el-table-column label="可操作工位" min-width="110">
+          <template #default="{ row }">
+            <span
+              v-if="(row.allowed_channels || []).length"
+              class="text-xs text-tech-blue"
+              :data-testid="`auth-user-channels-${row.id}`"
+            >{{ (row.allowed_channels || []).join(', ') }} 号</span>
+            <span v-else class="text-slate-500 text-xs">不限</span>
+          </template>
+        </el-table-column>
         <el-table-column label="启用" width="70">
           <template #default="{ row }">
             <el-tag size="small" :type="row.active ? 'success' : 'info'">
@@ -714,6 +724,17 @@
           </el-select>
           <div class="text-xs text-slate-500 mt-1">
             一人一身份. 想要更细的权限, 先去「角色列表」自定义角色, 再回来这里选.
+          </div>
+        </el-form-item>
+        <el-form-item label="可操作工位">
+          <el-input
+            v-model="createUserForm.allowed_channels"
+            placeholder="留空 = 不限工位; 一拖多工位屏填本工位号, 例如 0"
+            data-testid="auth-create-user-channels"
+          />
+          <div class="text-xs text-slate-500 mt-1">
+            一拖多场景: 每台一体机配一个工位账号, 这里填它绑定的工位号 (多个用逗号隔开).
+            填了之后该账号只能启停这几路检测, 改 URL 也动不了隔壁工位.
           </div>
         </el-form-item>
         <el-form-item label="启用">
@@ -1427,7 +1448,19 @@ const createUserForm = reactive({
   // v3.10+ 阶段 7+ 修正: 单角色, 一人一身份, 更贴近工厂场景认知
   role_code: 'operator',
   active: true,
+  // 一拖多工位屏: 逗号分隔的工位号; 留空 = 不限工位
+  allowed_channels: '',
 });
+
+// "0, 1" / "0，1"（中文逗号）/ 空格分隔都收; 非数字与负数丢掉, 留空 = 不限工位
+function parseChannelList(text) {
+  return [...new Set(
+    String(text || '')
+      .split(/[,，\s]+/)
+      .map((s) => Number.parseInt(s, 10))
+      .filter((n) => Number.isInteger(n) && n >= 0)
+  )].sort((a, b) => a - b);
+}
 const createUserRules = {
   username: [
     { required: true, message: '请输入用户名 (工号)', trigger: 'blur' },
@@ -1454,6 +1487,7 @@ function openCreateUserDialog() {
   createUserForm.display_name = '';
   createUserForm.role_code = 'operator';
   createUserForm.active = true;
+  createUserForm.allowed_channels = '';
   showCreateUserDialog.value = true;
 }
 
@@ -1469,6 +1503,7 @@ async function onCreateUserSubmit() {
       // 后端接受 role_codes 数组, 我们这里只传单个
       role_codes: [createUserForm.role_code],
       active: createUserForm.active,
+      allowed_channels: parseChannelList(createUserForm.allowed_channels),
     });
     ElMessage.success(`账号 ${createUserForm.username} 已创建`);
     showCreateUserDialog.value = false;
