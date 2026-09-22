@@ -181,13 +181,24 @@ class EventTriggerMixin:
                              or self.channel_id in self._mes_hook._pending_workpiece)
 
         # v3.5.2: 后端权威判定"是否该弹未绑码 toast", 前端直接读, 不再做客户端守门.
-        # 三种情况静默: (1) 事件已绑工件 (2) 该工位已禁用扫码 (3) 系统中根本没扫码器.
+        # 四种情况静默: (1) 事件已绑工件 (2) 该工位已禁用扫码 (3) 系统中根本没扫码器
+        # (4) v3.60.1: 项目启用了多码采集 — 码由槽位状态机独占消费 (mes_hooks 互斥
+        #     return, 永远不走单码 pending_workpiece 绑定), 视觉周期天然无绑定工件,
+        #     未绑码警告属误报 (六和焊接组装工位 2026-09-19 反馈: 每次结算合格必弹)。
+        #     get_config 走引擎配置缓存, db=None 不开会话, 热路径零开销。
         should_warn_no_barcode = False
         try:
             if self._mes_hook is not None and not had_workpiece:
                 scan_disabled = self._mes_hook.is_channel_scan_disabled(self.channel_id)
                 has_scanner = self._mes_hook.has_any_scanner_present()
                 should_warn_no_barcode = bool(has_scanner and not scan_disabled)
+            if should_warn_no_barcode:
+                from backend.services.scan_collect import get_scan_collect_engine
+                _sc_pid = (self.project_config or {}).get('id')
+                if (_sc_pid
+                        and get_scan_collect_engine().get_config(None, _sc_pid)
+                        is not None):
+                    should_warn_no_barcode = False
         except Exception:
             should_warn_no_barcode = False
 

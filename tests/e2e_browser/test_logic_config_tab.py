@@ -90,6 +90,41 @@ def test_检测模式超时结算_可见可配_保存落库(page, base_url, api_
         f"周期超时应落库 300, 实际 {pc.get('cycle_max_duration')}"
 
 
+def test_检测模式结算方式_露出两档_选末步结算落库回显(page, base_url, api_url):
+    """v3.60.1 六和芯子装配现场缺口回归: 后端 events_check 的检测模式末步结算分支
+    (settlement_mode != 'first_step' 时末步完成即结算) 一直存在, 但「结算方式」卡
+    此前只对顺序模式渲染 → 检测模式永远落默认 first_step, 只能靠下一件首步重现
+    结算 (结果滞后一件)。检测模式必须露出 first_step/last_step 两档 (不含 last_first),
+    选「末步完成结算」→ 保存 → pipeline_config.settlement_mode 落库 → 重进回显。"""
+    pid, name = _mk_project(api_url, "detection", steps=[
+        {"id": 1, "label": "区A", "name": "区域A", "enabled": True},
+        {"id": 2, "label": "收尾", "name": "收尾", "enabled": True},
+    ])
+    body = _open_logic_tab(page, base_url, name)
+    assert "结算方式" in body, "检测模式应渲染「结算方式」卡"
+    card = page.locator(".el-card:has-text('结算方式')").first
+    txt = card.inner_text()
+    assert "首步重现结算" in txt and "末步完成结算" in txt, f"两档应露出, 实际 {txt[:200]}"
+    assert "末步结算 + 首步开周期" not in txt, "检测模式不应露出 last_first 档"
+    # 默认选中 first_step
+    assert card.locator(".el-radio.is-checked:has-text('首步重现结算')").count() >= 1, \
+        "检测模式默认应选中首步重现结算"
+    card.locator(".el-radio:has-text('末步完成结算')").click()
+    time.sleep(0.4)
+    assert "末步完成结算（检测模式）" in card.inner_text(), "选中后应展开说明块"
+    page.locator("button:has-text('保存配置')").click()
+    time.sleep(2.0)
+    pc = (requests.get(f"{api_url}/api/v1/projects/{pid}", timeout=5).json()
+          .get("pipeline_config") or {})
+    assert pc.get("settlement_mode") == "last_step", \
+        f"settlement_mode 应落库 last_step, 实际 {pc.get('settlement_mode')}"
+    # 重进回显
+    _open_logic_tab(page, base_url, name)
+    card = page.locator(".el-card:has-text('结算方式')").first
+    assert card.locator(".el-radio.is-checked:has-text('末步完成结算')").count() >= 1, \
+        "重进应回显末步完成结算"
+
+
 def test_纯custom超时中断事件_选择清空与关闭均落库(page, base_url, api_url):
     pid, name = _mk_project(api_url, "custom", steps=[
         {"id": 1, "label": "A", "name": "步骤A", "enabled": True},

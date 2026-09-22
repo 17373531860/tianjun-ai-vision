@@ -1089,6 +1089,33 @@ class VideoSourceManager(TrackingMixin, InferenceLoopMixin, StepStatsMixin, Capt
                 _cg_lbl = str(pipeline.get('container_gate_label') or '').strip()
                 if _cg_lbl:
                     labels.add(_cg_lbl)
+            # v3.60.2 逐件配对的个体/动作标签是配对引擎的数据源, 与"步骤行启用
+            # 与否"无关: 现场常给动作标签单开一行并停用 (避免它进步骤序列刷噪音),
+            # 不豁免的话 runner 出口直接丢弃 → 覆盖记账永远 0/N、虚拟步骤永不注入
+            # (六和二工位 2026-09-20 现场复盘)。与上方容器标签豁免同构。
+            for step in self.project_config.get('steps_config', []):
+                per = step.get('per_item')
+                if not isinstance(per, dict):
+                    continue
+                for key in ('item_label', 'action_label'):
+                    val = per.get(key)
+                    if isinstance(val, str) and val.strip():
+                        labels.add(val.strip())
+                    elif isinstance(val, (list, tuple)):
+                        for v in val:
+                            if isinstance(v, str) and v.strip():
+                                labels.add(v.strip())
+            # v3.60.2 逐件混合开始判定的开始标签: 不是步骤 (裸标签直配场景, 如
+            # 整框「工件就位」), 但闸门要在引擎侧收到它 — 与上方容器/配对标签
+            # 豁免同构。拆分虚拟标签场景 (就位-左上 等) 在拆分层产出, 此处
+            # 冗余无害。
+            _pl_per = pipeline.get('per_item') or {}
+            _start_lbls = _pl_per.get('start_labels') or []
+            if isinstance(_start_lbls, str):
+                _start_lbls = [_start_lbls]
+            for v in _start_lbls:
+                if isinstance(v, str) and v.strip():
+                    labels.add(v.strip())
         return labels
     
     def _emergency_gpu_reset(self):

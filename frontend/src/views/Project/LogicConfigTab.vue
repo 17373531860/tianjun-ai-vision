@@ -2,11 +2,26 @@
   <!-- ==================== 逻辑设置 Tab（2026-07 拆分批次 P-4 自 index.vue 外置） ==================== -->
     <div class="h-full overflow-y-auto p-4 pb-32 custom-scrollbar space-y-6">
 
-      <!-- Settlement Mode (sequential / custom-sequential) -->
-      <el-card v-if="project.logic_mode === 'sequential' || (project.logic_mode === 'custom' && project.custom_based_on === 'sequential')" shadow="never" class="bg-slate-800 border-slate-700">
+      <!-- Settlement Mode (sequential / custom-sequential / detection)
+           v3.60.1: 检测模式露出本卡 (仅 first_step/last_step 两项)。
+           后端 events_check 对 detection 的末步结算分支 (settlement_mode != 'first_step'
+           时末步完成即结算) 一直存在, 但前端此前无入口 → 检测模式永远落默认
+           first_step (只能靠下一件首步重现结算, 结算滞后一件)。六和芯子装配
+           现场需要"最后一步检出确认后立即出结果" → last_step 需可配。 -->
+      <el-card v-if="project.logic_mode === 'sequential' || (project.logic_mode === 'custom' && project.custom_based_on === 'sequential') || project.logic_mode === 'detection'" shadow="never" class="bg-slate-800 border-slate-700">
         <template #header><span class="font-bold text-white">结算方式</span></template>
         <div class="space-y-4 text-sm text-gray-300">
-          <el-radio-group v-model="project.settlement_mode">
+          <el-radio-group v-if="project.logic_mode === 'detection'" v-model="project.settlement_mode">
+            <el-radio value="first_step">
+              <span class="text-gray-300">首步重现结算（默认）</span>
+              <span class="text-xs text-gray-500 ml-1">— 下一件的第一步再次出现时结算上一周期（结果滞后到下件开始）</span>
+            </el-radio>
+            <el-radio value="last_step">
+              <span class="text-gray-300">末步完成结算</span>
+              <span class="text-xs text-gray-500 ml-1">— 最后一个步骤检出并确认消失后立即结算本周期（本件完成即出结果）</span>
+            </el-radio>
+          </el-radio-group>
+          <el-radio-group v-else v-model="project.settlement_mode">
             <el-radio value="first_step">
               <span class="text-gray-300">第一步结算</span>
               <span class="text-xs text-gray-500 ml-1">— 新周期的第一步出现时结算上一周期</span>
@@ -20,6 +35,13 @@
               <span class="text-xs text-gray-500 ml-1">— 末步出现立即结算上周期，首步开新周期；缺步骤自动判 NG（v3.9.0+）</span>
             </el-radio>
           </el-radio-group>
+          <!-- 检测模式 last_step 说明 -->
+          <div v-if="project.logic_mode === 'detection' && project.settlement_mode === 'last_step'" class="bg-slate-900 rounded p-3 text-xs text-gray-400 border border-sky-700/50">
+            <p class="text-sky-400 font-bold mb-1">末步完成结算（检测模式）</p>
+            <p class="mb-1">• 「需检测的步骤」列表中<b>最后一个勾选步骤</b>为结算步：它检出并走完消失等待后，立即结算本周期（全部检测到 → 合格；缺步骤 → NG）</p>
+            <p class="mb-1">• 适合"最后一步完成后马上要结果"的场景（如完成后随即扫收尾码、下线）；首步重现结算兜底仍然生效</p>
+            <p>• 建议给结算步设置"最少帧数 ≥ 2"和适当"消失等待时间"防误触发</p>
+          </div>
           <!-- last_first 模式说明 -->
           <div v-if="project.settlement_mode === 'last_first'" class="bg-slate-900 rounded p-3 text-xs text-gray-400 border border-amber-700/50">
             <p class="text-amber-400 font-bold mb-1">末步结算 + 首步开周期模式约束</p>

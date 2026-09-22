@@ -945,6 +945,26 @@ def apply_project_config(h, config: dict):
     except Exception as e:
         h._custom_mix = None
         print(f"[CustomMix] 构建混合子状态机失败: {e}")
+    # v3.60.2 停用行阈值回填 (仅混合逐件): 配对引用的标签即使步骤行停用,
+    # 检测仍被 runner 豁免放行 (见 _get_enabled_labels) — 但 _apply_steps_config
+    # 只收启用行, 停用行自己的阈值随停用一起消失, 置信度守门整个退化到模型
+    # 0.25 下限, 弱误报直灌覆盖记账 (六和二工位 2026-09-20 摆件误 OK 放大器)。
+    # 回填该行显式配置的阈值, 引擎/画框同一份守门。启用行/其他模式零差异。
+    try:
+        if h._custom_mix is not None and h._custom_mix.mix_type == 'per_item':
+            _watch = getattr(h._custom_mix._engine, 'watch_labels', frozenset())
+            for _step in (config.get('steps_config') or []):
+                _lbl = _step.get('label', '')
+                if (_lbl and _lbl in _watch
+                        and _lbl not in h.step_conf_thresholds
+                        and not _step.get('enabled', True)):
+                    _thr = _step.get('threshold', 50)
+                    if _thr > 1:
+                        _thr = _thr / 100.0
+                    h.step_conf_thresholds[_lbl] = _thr
+                    print(f"[CustomMix] 停用行阈值回填: {_lbl} -> {_thr:g}")
+    except Exception as e:
+        print(f"[CustomMix] 停用行阈值回填失败 (忽略): {e}")
     # 混合跟踪: 周期主权归步骤侧, 真跟踪机械的自动开周期被此标志守门跳过。
     # 独立 tracking 项目恒为 False — 行为零差异。
     h._tracking_external_cycle = bool(

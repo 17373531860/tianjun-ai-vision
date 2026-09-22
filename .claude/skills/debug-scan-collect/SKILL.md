@@ -16,8 +16,9 @@ description: "诊断 v3.56 周期多码采集（一工件多码分类/槽位状�
     ├─ ★ ScanCollectEngine.on_scan（项目启用多码采集 → 互斥 return）
     │     分类入槽（正则优先/顺序兜底）→ 去重（组内/跨组，槽级可豁免）
     │     → 数量门（溢出按槽级策略）→ 收尾码结算 ok/ng_missing
-    │     → [ng_pending 开] 少扫挂起等补扫/人工放行
-    │     → [vision_gate 开] 视觉周期判定融合（两边都 OK 才 OK）
+    │     → [settle_on_vision_cycle 开] 不在此结算, 等视觉末步一刀切
+    │     → [ng_pending 开 且视觉结算关] 少扫挂起等补扫/人工放行
+    │     → [vision_gate 开 且非视觉收口] 视觉周期判定融合
     │     → fire_external_event_response（灯/Toast/语音/计数器，不动检测周期）
     │     → 注册 Workpiece（收尾码为身份）→ scan_group_end 实时导出 txt
     └─ 单码 scan_pair / pending_workpiece（未启用多码采集才走）
@@ -30,7 +31,7 @@ description: "诊断 v3.56 周期多码采集（一工件多码分类/槽位状�
 | `backend/services/scan_collect.py` | 引擎单例：槽位状态机/去重/结算/挂起/视觉门/纠错/超时 |
 | `backend/models/scan_collect_models.py` | `scan_collect_configs`（按项目）+ `scan_collect_records`（逐码） |
 | `backend/api/scan_collect.py` | `/api/v1/scan-collect/*`：config / state / remove-code / clear / resolve-ng / settle-now / records |
-| `backend/services/mes_hooks.py` | `_handle_scan` 优先路径接入 + `_handle_cycle_end` 喂 `on_vision_cycle` |
+| `backend/services/mes_hooks.py` | `_handle_scan` 优先路径接入 + `_handle_cycle_end` 喂 `on_vision_cycle`（v3.60.1c 起钩子不再收口扫码组） |
 | `backend/services/export_realtime.py` | `dispatch_scan_group_export`（trigger_event=`scan_group_end`） |
 | `backend/services/export_seed.py` | 内置模板 `builtin_scan_group_txt`（一工件一 txt，UTF-8 BOM + CRLF） |
 | `frontend/src/views/MES/ScanCollectConfigCard.vue` | MES→扫码器→「多码采集」配置卡（填入示例=现场三类真实码预设） |
@@ -48,6 +49,7 @@ description: "诊断 v3.56 周期多码采集（一工件多码分类/槽位状�
 - `idle_remind_sec`（v3.56.1b，0=关）：组开着且 N 秒无新码 → 借 NG 事件 remind_only 催扫（灯/蜂鸣/Toast 不计数），每 N 秒重复；与 `timeout_sec`（超时直接判 NG 结组）独立可同开。适合码序不固定 + `settle_on=all_filled` 的现场（六和答复 3b）
 - `standby_silent`（v3.56.1b，默认关）：通道未检测（`is_detecting=False`）时结算 → 面板/records/追溯照常，但不发事件（不计数不亮灯）不落 txt，`last_settled.standby=true`（六和答复 6b）
 - `count_on_settle`（v3.56.1b，默认 True=存量）：扫码结算是否执行事件上的计数动作。视觉 SOP 同工位时必须 False——否则视觉结算计一次、扫码结算借同一对事件又计一次，一件 +2；False 时结算事件走 remind_only 档（灯/语音/Toast 照常，跳过计数与人工确认定格），计数以视觉周期为准。纯扫码（无视觉）工位保持 True（六和答复 5，配置卡「扫码结算计数」）
+- `settle_on_vision_cycle`（v3.60.2 / v3.60.1c 修订，默认关）：视觉末步结算瞬间对本件扫码组一刀切。码够 → 周期 OK + 组 OK 收口；不够 → 周期 NG（`peek_vision_settle_gate` 把缺码文案并入 reason）+ 组 `ng_missing` 关组翻篇。开启后 closing / all_filled / timeout / `ng_pending` 挂起全部让位（码只进组，等视觉收口），避免挂起组把下一件码「超出应扫数量」拒收。组归属锚 = 本周期末步首次出现时间，开于锚点之后的组是下一件的、不碰（无锚探针会拿下一件缺码把本件视觉 OK 翻 NG）。收口唯一路径：`_settle_detection_cycle` → `_close_scan_group_async`（后台线程，不依赖 `on_cycle_end`；现场 `scan_required` 时周期行不建、钩子不触发）。`vision_gate` 在 `trigger=vision_cycle` 时跳过（`_vision_last` 还是上一件）。配置卡「随视觉周期结算」；填入示例预置 True。流程约束：收尾码必须在视觉末步完成前扫。
 - `POST /scan-collect/settle-now`（v3.56.1b）= 面板「本件扫完」：立即按已扫码结算；缺码 → `ng_pending` 开则挂起、关则判 NG；挂起中调用返回 409 指路（六和答复 3c）
 - 补救留痕（六和答复 7）：挂起期间补扫的码 `codes[].remedied=true`，摘要 `was_pending`；内置 txt 模板补扫码带 `[补扫]` 后缀、转 OK 加备注行
 - 现场范式（填入示例预置）：母排 `^M.{29,32}$` ×1；芯子 `^\d{13}$` ×6 且 `on_overflow=ng_alarm`（多扫直接 NG）；工装 `^H-C` ×1 `role=closing` 且 `dedup_cross_group=off`（循环治具豁免）；`ng_pending=true`；`vision_gate=true + vision_missing=ignore`；`idle_remind_sec=30`；`standby_silent=true`；`count_on_settle=false`（视觉已计）
@@ -60,7 +62,8 @@ description: "诊断 v3.56 周期多码采集（一工件多码分类/槽位状�
 | state 接口一直空 | **参数名是 `channel` 不是 `channel_id`**（`GET /scan-collect/state?channel=2`）——传错参 FastAPI 静默用默认 0（2026-09-01 排障实录） |
 | 码归错类 | 正则多槽命中取第一个未满槽；正则全不中才顺序兜底（有正则的槽只吃匹配码）。坏正则按不匹配处理不报错 |
 | 工装码被拒"历史重复" | 该槽 `dedup_cross_group` 必须为 `off`（循环治具跨工件必然重复） |
-| 少扫没报 NG | `settle_on=closing` 时只有扫到 `role=closing` 的码才结算；`all_filled` 时缺码组永远开着不判——开 `idle_remind_sec` 催扫 + 面板「本件扫完」人工收口（v3.56.1b，六和现场正解），或 timeout_sec 兜底。⚠️ 排查前先确认截图/配置来自**生产项目**——六和曾把演示项目配置当生产配置发回（2026-09-06 实录） |
+| 打了「随视觉周期」补丁后一件两账 / 下一件码进不去 | a 包症状：看日志有没有 `NG挂起` + `超出应扫数量` + `补扫齐全转 OK` 叠在同件上。升 v3.60.1c：视觉末步是唯一收口点，挂起让位。另查下层母排是否仍是 5s+不被打断（补丁不改步骤时间） |
+| 少扫没报 NG | 开了 `settle_on_vision_cycle` 应在视觉末步当场 NG 并翻篇；未开时 `settle_on=closing` 只有扫到收尾码才结算。⚠️ 排查前确认截图来自**生产项目** |
 | 检测次数比实际产量多 | ① 视觉周期与扫码结算各计一次 → `count_on_settle=false`（v3.56.1b 正解，配置卡「扫码结算计数=不计数」；旧办法给扫码配独立事件 ID 仍可用但不必） ② v3.56.0 挂起完整响 NG + 转 OK 再计一次（升 v3.56.1b 修）③ 待机扫码也计数 → 开 `standby_silent` |
 | 补扫没转 OK | 挂起态只在 `ng_pending=true` 且缺码补齐后**自动**结算转 OK；组内重复码补扫会被去重拦掉 |
 | 视觉门误 NG | `vision_missing=ng` 且窗口内无视觉周期 → `ng_vision_missing`；相机侧没跑检测就把 vision_missing 设回 ignore |

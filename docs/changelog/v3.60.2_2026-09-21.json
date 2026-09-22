@@ -1,0 +1,107 @@
+{
+  "version": "3.60.2",
+  "date": "2026-09-21",
+  "previous_version": "3.60.1",
+  "theme": "六和双工位整改合并发版：混合逐件「开始判定」开账闸门 + 停用配对行三连修复 + 多码采集「随视觉周期结算」（收编 v3.60.1a/b/c 热补丁）+ Linux arm64 deb 跑道",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "混合逐件「开始判定」开账闸门（稳定窗口 + 开始标签双条件，默认全关）",
+      "symptom": "摆螺丝阶段模型误报已完成把逐件账本假盖章灌满致假OK；手挡半盘时锁进幽灵位置；混合模式缺独立逐件的稳定窗口才开周期语义",
+      "root_cause": "混合逐件周期主权归步骤侧，_PerItemMixEngine 从周期第1帧就开始锁账记覆盖，无开账前置条件",
+      "fix": "引擎新增点火闸门：判定通过前不锁账/不记覆盖/不产活动脉冲，通过即闩锁到周期结束。条件1稳定窗口 start_by_stability 复用独立逐件 stability_window_frames/ratio/tolerance；条件2开始标签 start_labels 逐标签独立确认（start_sustain_frames 帧 × start_conf）到位过即闩锁，支持区域拆分四角虚拟标签；开始标签独占消费不进步骤序列 + runner _get_enabled_labels 豁免；未通过被结算 NG 原因明示逐件未开始；get_state 透出 start_gate 前端亮等待开始徽标；两项都不勾保存 per_item:{} 零配置差异",
+      "files": ["backend/api/source_custom_mix.py", "backend/api/source.py", "frontend/src/views/Project/StepsConfigTab.vue", "frontend/src/views/Project/index.vue", "frontend/src/views/Monitor/PerItemPanel.vue"],
+      "keywords": ["开始判定", "开账闸门", "start gate", "start_by_stability", "start_labels", "start_sustain_frames", "start_conf", "稳定窗口", "工件就位", "四角", "就位-左上", "混合逐件", "custom_mix", "per_item", "假OK", "摆件误报", "独占消费", "六和二工位", "中捷", "arming"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "多码采集「随视觉周期结算」settle_on_vision_cycle（默认关，收编 v3.60.1a/b/c）",
+      "symptom": "先扫码后做视觉末步的现场：少扫时视觉末步照样报OK、扫码组挂着不翻篇、下一件母排码被旧组以超出应扫数量拒收（一件两账）",
+      "root_cause": "扫码组只按自身收尾码/扫满/超时结算，与视觉周期无联动；v3.60.1a 钩子路径收口在现场「须先扫码才开始周期」下是死代码；无组归属锚时探针拿下一件缺码翻本件NG",
+      "fix": "视觉末步结算瞬间对本件扫码组一刀切：码够OK/不够NG（缺码并入周期reason）组无条件翻篇；closing/all_filled/timeout/ng_pending 挂起全部让位；收口唯一路径 _settle_detection_cycle → _close_scan_group_async 后台线程（拆除 _handle_cycle_end 钩子关组）；组归属锚=本周期末步首次出现时间，锚后开的组不碰；视觉周期收口跳过 vision_gate；码齐组同样收口",
+      "files": ["backend/services/scan_collect.py", "backend/api/scan_collect.py", "backend/api/source_settlement_mixin.py", "backend/services/mes_hooks.py", "frontend/src/views/MES/ScanCollectConfigCard.vue"],
+      "keywords": ["随视觉周期结算", "settle_on_vision_cycle", "多码采集", "scan_collect", "少扫", "挂起拒收", "重复结算", "组归属锚", "cycle_anchor", "_close_scan_group_async", "收口", "翻篇", "六和芯子装配", "母排码", "工装码", "模具盖板"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "混合逐件配对标签的步骤行停用时检测被 runner 丢弃（覆盖永远 0/N）",
+      "symptom": "动作标签单开一行并停用后逐件覆盖全程 0/32、虚拟步骤永不注入",
+      "root_cause": "_get_enabled_labels 只收启用步骤行标签，配对引擎数据源 item_label/action_label 被 runner 出口过滤",
+      "fix": "配对个体/动作标签与步骤行启停解耦一律豁免放行（与容器标签豁免同构），开始标签同样豁免",
+      "files": ["backend/api/source.py"],
+      "keywords": ["_get_enabled_labels", "停用步骤", "标签豁免", "item_label", "action_label", "0/32", "覆盖不涨", "runner 过滤"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-002",
+      "title": "停用配对行的置信度阈值消失，弱误报直灌覆盖记账",
+      "symptom": "豁免放行后停用行阈值不生效，0.25 下限弱误报填满账本致假OK",
+      "root_cause": "_apply_steps_config 只收启用行阈值进 step_conf_thresholds",
+      "fix": "apply_project_config 末尾对混合逐件 watch_labels 内的停用行回填显式配置阈值",
+      "files": ["backend/api/source_project_config_apply.py"],
+      "keywords": ["停用行阈值回填", "step_conf_thresholds", "置信度守门", "弱误报", "假OK"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-003",
+      "title": "混合逐件摆件阶段被空闲超时误判 NG",
+      "symptom": "扫码后摆 32 颗螺丝超过空闲超时，覆盖零推进被判空闲强杀周期",
+      "root_cause": "活动脉冲只认覆盖数推进，账面个体入账不算活动",
+      "fix": "feed 增加摆件脉冲：账面个体总数向前推进同样刷新 last_progress_time（只认推进回落只降基线）",
+      "files": ["backend/api/source_custom_mix.py"],
+      "keywords": ["摆件脉冲", "空闲超时", "idle_timeout", "last_progress_time", "_items_snapshot", "摆螺丝NG"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-004",
+      "title": "监控页不画停用配对行的检测框",
+      "symptom": "覆盖计数在涨但画面无检测框，现场无法确认模型在工作",
+      "root_cause": "前端 overlay enabledLabels 只收 enabled!==false 的步骤标签",
+      "fix": "新增 collectOverlayDrawLabels：配对 item/action 标签无论步骤启停一律纳入绘制集（热补丁 MJPEG 烧框为过渡方案，主线走前端绘制）",
+      "files": ["frontend/src/views/Monitor/composables/useOverlayDrawing.js", "frontend/src/views/Monitor/overlayDrawLabels.js"],
+      "keywords": ["检测框不显示", "overlay", "enabledLabels", "collectOverlayDrawLabels", "螺丝已锁付不上屏", "MJPEG 烧框"],
+      "breaking": false
+    },
+    {
+      "type": "config",
+      "id": "CI-001",
+      "title": "Linux arm64 deb 独立打包跑道",
+      "symptom": "arm64 设备无 deb 安装包；electron-builder 自带 fpm 仅 x86 报 Exec format error",
+      "root_cause": "打包链 x86 假设",
+      "fix": "系统 fpm 打 deb + torch 钉 CPU 专用 index + test-gate runner 清盘保底",
+      "files": [".github/workflows/build.yml"],
+      "keywords": ["arm64", "deb", "fpm", "Exec format error", "torch cpu index"],
+      "breaking": false
+    }
+  ],
+  "skills_updated": ["debug-scan-collect", "debug-per-item", "modify-project-config"],
+  "files_changed": [
+    "backend/api/source.py",
+    "backend/api/source_custom_mix.py",
+    "backend/api/source_project_config_apply.py",
+    "backend/api/source_settlement_mixin.py",
+    "backend/api/scan_collect.py",
+    "backend/services/scan_collect.py",
+    "backend/services/mes_hooks.py",
+    "frontend/src/views/Project/StepsConfigTab.vue",
+    "frontend/src/views/Project/index.vue",
+    "frontend/src/views/Monitor/PerItemPanel.vue",
+    "frontend/src/views/Monitor/composables/useOverlayDrawing.js",
+    "frontend/src/views/Monitor/overlayDrawLabels.js",
+    "frontend/src/views/MES/ScanCollectConfigCard.vue",
+    "tests/test_custom_mix_start_gate.py",
+    "tests/test_per_item_label_exemption.py",
+    "tests/e2e_browser/test_mix_start_gate_field.py",
+    "tests/test_scan_collect_vision_settle.py",
+    "tests/test_scan_collect_vision_settle_e2e.py",
+    "docs/软件操作手册.md"
+  ]
+}

@@ -17,9 +17,15 @@
               title="自动 OK / 周期超时 NG / 空闲超时 NG / 收尾标签触发, 全部禁用. 周期结算只能靠手动按钮.">
           🖐 手动结算模式
         </span>
-        <span v-if="overallDisplayTotal > 0 && state?.cycle_active"
+        <!-- v3.60.2 混合逐件「开始判定」: 通过前亮等待徽标 (沿用独立逐件"等待稳定"文案家族) -->
+        <span v-if="startGateWaiting"
+              class="bg-amber-500/20 text-amber-300 text-[0.625rem] px-1.5 py-0.5 rounded font-mono animate-pulse"
+              :title="'开始判定未通过, 未开始锁定/记账. 缺: ' + startGateMissingText">
+          等待开始{{ startGateMissingText ? `（缺 ${startGateMissingText}）` : '' }}
+        </span>
+        <span v-else-if="overallDisplayTotal > 0 && state?.cycle_active"
               class="bg-green-500/20 text-green-400 text-[0.625rem] px-1.5 py-0.5 rounded font-mono">
-          周期中 · {{ overallCovered }}/{{ overallDisplayTotal }}
+          周期中 · {{ overallCovered }}/{{ overallDisplayTotal }}<template v-if="state?.start_gate?.started"> · 已开始</template>
         </span>
         <span v-else-if="overallDisplayTotal > 0"
               class="bg-slate-700 text-cyan-300 text-[0.625rem] px-1.5 py-0.5 rounded font-mono">
@@ -198,6 +204,9 @@
                 <div v-if="!step.item_label || !step.action_label" class="text-amber-400">
                   ⚠ 未配置物件/动作标签
                 </div>
+                <div v-else-if="startGateWaiting" class="text-amber-400">
+                  等待开始判定通过（缺 {{ startGateMissingText || '开始条件' }}）
+                </div>
                 <div v-else-if="state?.cycle_active">
                   识别 {{ step.item_label }} 中…
                 </div>
@@ -297,6 +306,14 @@ const handleControl = async (action) => {
 
 // ──── 头部展示 ────
 const stabilityWindow = computed(() => props.state?.config?.stability_window_frames ?? '?')
+
+// ──── v3.60.2 混合逐件「开始判定」徽标 (state.start_gate 仅在后端配置了条件时透出) ────
+const startGateWaiting = computed(() =>
+  !!(props.state?.cycle_active && props.state?.start_gate && !props.state.start_gate.started))
+const startGateMissingText = computed(() => {
+  const missing = props.state?.start_gate?.missing
+  return Array.isArray(missing) ? missing.join('、') : ''
+})
 
 // ──── 全局进度 ────
 // v3.10.2+ display_total 优先: expected_count > 0 时, 即便锁定不足也按目标显示

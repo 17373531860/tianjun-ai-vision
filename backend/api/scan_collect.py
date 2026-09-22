@@ -67,6 +67,9 @@ class ConfigPayload(BaseModel):
     idle_remind_sec: float = Field(0, ge=0, le=86400)  # 催扫提醒(秒), 0=关
     standby_silent: bool = False      # 待机结算不计数不落txt
     count_on_settle: bool = True      # 结算执行事件计数动作; 关=只借灯/语音不计数
+    # v3.60.2 (默认关 = 存量行为): 视觉周期结算即强制收口扫码组 —
+    # 缺码则本视觉周期判 NG (缺码原因并入周期 reason), 码齐组按 OK 收口
+    settle_on_vision_cycle: bool = False
 
 
 class RemoveCodeRequest(BaseModel):
@@ -148,6 +151,7 @@ def put_config(payload: ConfigPayload,
         "idle_remind_sec": payload.idle_remind_sec,
         "standby_silent": payload.standby_silent,
         "count_on_settle": payload.count_on_settle,
+        "settle_on_vision_cycle": payload.settle_on_vision_cycle,
     }
 
     row = (db.query(ScanCollectConfig)
@@ -254,3 +258,6 @@ def list_records(workpiece_id: Optional[int] = Query(None),
         "scanned_at": r.scanned_at.isoformat() if r.scanned_at else None,
         "settled_at": r.settled_at.isoformat() if r.settled_at else None,
     } for r in rows]
+
+
+# PATCHED_V3601C

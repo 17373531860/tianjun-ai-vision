@@ -15,6 +15,7 @@
           step_first_seen_time / sequential_states / cycle_start_time / boxes / 等
   - 方法: _trigger_event / _add_step_record / _broadcast_* / _rebuild_checklist / 等
 """
+import threading
 import time
 import traceback
 import cv2
@@ -427,6 +428,46 @@ class SettlementMixin:
             ng_reasons.append(f'缺少步骤: {missing}')
         if duplicated:
             ng_reasons.append(f'重复步骤: {duplicated}')
+
+        # v3.60.1c 多码采集随周期结算 (settle_on_vision_cycle, 默认关):
+        # 视觉末步结算瞬间对本件扫码组一刀切 — 码够 OK / 不够 NG (缺码原因
+        # 并入周期 reason), 组无条件收口翻篇。探针零阻塞纯内存 (try-lock +
+        # 缓存, 不碰 DB); 收口由本结算点后台线程全权驱动 (v3.60.1b: 现场开
+        # 「须先扫码才开始周期」时周期行不建、on_cycle_end 不触发, 钩子路径
+        # 收口是死代码; v3.60.1c 起钩子路径已拆除, 这里是唯一收口点)。
+        #
+        # 组归属锚 (v3.60.1a 现场事故复盘, 2026-09-21 六和): 锚 = 本周期末步
+        # (如模具盖板)首次出现时间。上一件末步消失确认的几秒空档里操作员已在
+        # 扫下一件母排码 → 无锚时探针拿下一件的缺码把本件视觉 OK 翻成 NG、
+        # 收口把下一件刚开的组误判 NG 关掉。开于锚点之后的组一律不碰。
+        # 末步没出现的结算 (空闲超时等) 拿不到锚 → 本次不翻不收, 组留给
+        # 下个周期或面板「本件扫完」人工出口。
+        _sc_anchor = None
+        try:
+            _last_lbl = detection_labels[-1]
+            _raw = (getattr(self, '_step_raw_start', {}).get(_last_lbl)
+                    or self.step_start_time.get(_last_lbl))
+            if _raw:
+                from datetime import datetime as _dt
+                _sc_anchor = _dt.fromtimestamp(_raw)
+        except Exception:
+            _sc_anchor = None
+        if _sc_anchor is not None:
+            try:
+                from backend.services.scan_collect import (
+                    get_scan_collect_engine,
+                )
+                _sc_eng = get_scan_collect_engine()
+                _scan_gate = _sc_eng.peek_vision_settle_gate(
+                    self.channel_id, _sc_anchor)
+                if _scan_gate:
+                    ng_reasons.append(_scan_gate)
+                # 码齐的组同样要随周期收口翻篇 (探针只报缺码, 不能只在
+                # 命中时收 — v3.60.1b 的缺口: 码齐组永远挂着不落库)
+                if _sc_eng.has_group_for_vision_settle(self.channel_id):
+                    self._close_scan_group_async(_sc_anchor)
+            except Exception:
+                pass
         
         print(f"[Settle/Detection] required={detection_labels}, this_cycle={self.current_cycle_steps}, missing={missing}, duplicated={duplicated}")
         if debug_center.is_on("backend.settlement"):
@@ -474,6 +515,40 @@ class SettlementMixin:
         if hasattr(self, '_step_raw_start'):
             self._step_raw_start.clear()
         self.last_step_completed_time = None
+
+    def _close_scan_group_async(self, cycle_anchor_ts=None):
+        """v3.60.1c: 视觉结算点收口扫码组 (后台线程, 自开 DB 会话) — 唯一收口点。
+
+        仅在 has_group_for_vision_settle 命中(开关开+有组)时被调 — 开关默认关
+        零开销。settle_by_vision_cycle 幂等且带组归属锚: 组空/组开于锚点之后
+        (下一件的码组)直接返回 False, 不误收不双报 (fire_events=False)。
+        """
+        channel_id = self.channel_id
+
+        def _run():
+            db = None
+            try:
+                from backend.db.database import SessionLocal
+                from backend.services.scan_collect import (
+                    get_scan_collect_engine,
+                )
+                db = SessionLocal()
+                if get_scan_collect_engine().settle_by_vision_cycle(
+                        db, channel_id, cycle_anchor_ts):
+                    print(f"[ScanCollect] 扫码组随视觉周期收口 ch{channel_id}",
+                          flush=True)
+            except Exception as e:
+                print(f"[ScanCollect] 视觉结算侧收口失败(隔离) "
+                      f"ch{channel_id}: {e}", flush=True)
+            finally:
+                try:
+                    if db is not None:
+                        db.close()
+                except Exception:
+                    pass
+
+        threading.Thread(target=_run, name=f"sc-vision-close-{channel_id}",
+                         daemon=True).start()
 
     def _settle_container_cycle(self):
         """v3.59 容器定界周期结算 (custom_cycle_owner='container')。
@@ -2281,7 +2356,12 @@ class SettlementMixin:
         elif (not is_seq_like
               and self.last_added_step is not None
               and self.last_added_step != label):
-            is_new_appearance = True
+            # v3.60.1: 步骤开了"消失等待不被打断"且等待桥接中 (old_last_seen
+            # 非 None 才会走到本分支) → 闪断回位不算"交替新出现", 否则拿起
+            # 扫码/短暂遮挡后回位会重复入账。与首步重现豁免同源, 默认 False
+            # 零差异。
+            is_new_appearance = not self.step_time_config.get(
+                label, {}).get('disappear_uninterruptible')
         else:
             is_new_appearance = False
 
@@ -2432,7 +2512,18 @@ class SettlementMixin:
         if logic_mode == 'detection' and len(self.current_cycle_steps) > 1 \
                 and label not in _combo_lbls:
             first_det_label = self._get_first_detection_step_label()
-            if first_det_label and label == first_det_label and label in self.current_cycle_steps:
+            # v3.60.1: 与顺序模式 first_step 结算 (v3.34) 对齐 — 首步开了
+            # "消失等待不被打断"且上一次出现尚未走完消失结算 (old_last_seen 非
+            # None, 等待桥接中) 时, 本次出现是同一次放置的闪断回位 (拿起扫码/
+            # 短暂遮挡), 不是新周期信号 → 不触发首步重现结算。真正走完消失
+            # 结算后的再次出现 (old_last_seen 为 None) 才切周期。
+            # 开关默认 False → _held_visible_det 恒 False, 老项目行为零差异。
+            _held_visible_det = (
+                old_last_seen is not None
+                and self.step_time_config.get(label, {}).get('disappear_uninterruptible')
+            )
+            if (first_det_label and label == first_det_label
+                    and label in self.current_cycle_steps and not _held_visible_det):
                 first_start = self.step_start_time.get(label) or getattr(self, '_step_raw_start', {}).get(label)
                 first_min_dur = (self.step_time_config.get(label, {}).get('min_duration')) or 0
                 first_duration = (current_time - first_start) if first_start else 0
