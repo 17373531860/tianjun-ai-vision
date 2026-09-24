@@ -39,6 +39,37 @@ describe('regionEventRuleSteps', () => {
     expect(regionEventRuleSteps({})).toEqual([]);
     expect(regionEventRuleSteps(undefined)).toEqual([]);
   });
+
+  // 2026-09 展示序列: display_order 非空且顺序校验开启时逐位建卡 (可重复)
+  it('display_order 生效: 逐位建卡且允许重复标签', () => {
+    const steps = regionEventRuleSteps({
+      region_events: {
+        rules: [{ id: 1, name: '拿料5号' }, { id: 2, name: '检查' }, { id: 3, name: '放入' }],
+        sequence_check: {
+          enabled: true,
+          display_order: ['拿料5号', '检查', '放入', '检查', '放入'],
+        },
+      },
+    });
+    expect(steps.map(s => s.label)).toEqual(['拿料5号', '检查', '放入', '检查', '放入']);
+    expect(new Set(steps.map(s => s.id)).size).toBe(5); // 重复标签 id 仍唯一
+  });
+
+  it('display_order 未知名剔除; 全剔空/顺序校验关/未配置 → 回退规则表顺序', () => {
+    const rules = [{ id: 1, name: 'A' }, { id: 2, name: 'B' }];
+    expect(regionEventRuleSteps({
+      region_events: { rules, sequence_check: { enabled: true, display_order: ['B', '改名前旧名', 'A'] } },
+    }).map(s => s.label)).toEqual(['B', 'A']);
+    expect(regionEventRuleSteps({
+      region_events: { rules, sequence_check: { enabled: true, display_order: ['改名前旧名'] } },
+    }).map(s => s.label)).toEqual(['A', 'B']);
+    expect(regionEventRuleSteps({
+      region_events: { rules, sequence_check: { enabled: false, display_order: ['B', 'A'] } },
+    }).map(s => s.label)).toEqual(['A', 'B']);
+    expect(regionEventRuleSteps({
+      region_events: { rules, sequence_check: { enabled: true } },
+    }).map(s => s.label)).toEqual(['A', 'B']);
+  });
 });
 
 describe('resolveLogicMode', () => {

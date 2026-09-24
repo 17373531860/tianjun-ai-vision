@@ -101,6 +101,22 @@ def test_alarm_center_and_user_management(page, stack):
     page.click('[data-test="enroll-submit"]')
     page.wait_for_selector('[data-test^="station-tile-"]', timeout=10000)
 
+    # ---- 等事件通道首拉订阅完成再注入 (否则事件被"从现在订阅"吞掉) ----
+    # 竞态实录: 全量套跑机器负载高时, poller 首拉可能晚于下面的注入,
+    # 首拉只落游标不回填历史 → id=1 永远拉不到 → 徽标 15s 超时。
+    import httpx as _httpx
+    tok = _httpx.post(f"{hub_url}/api/v1/auth/login", json={
+        "username": "admin", "password": "admin123"}).json()["token"]
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        st = _httpx.get(f"{hub_url}/api/v1/nodes/1/status",
+                        headers={"Authorization": f"Bearer {tok}"}).json()
+        if (st.get("runtime") or {}).get("last_event_pull"):
+            break
+        time.sleep(0.3)
+    else:
+        pytest.fail("事件通道首拉 10s 未完成")
+
     # ---- 注入 NG 事件 (poller EVENT_PULL_INTERVAL_S=4s 内会拉到) ----
     edge["app"].state.edge["cycle_events"].append({
         "id": 1, "kind": "cycle", "channel_id": 0, "result": "NG",

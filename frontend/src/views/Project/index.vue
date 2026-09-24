@@ -785,15 +785,37 @@ const _sanitizeRegionEvents = (re) => {
   });
   const ruleNames = new Set(rules.map(r => r.name));
   const seqSrc = src.sequence_check || {};
-  const order = (Array.isArray(seqSrc.order) ? seqSrc.order : []).filter(n => ruleNames.has(n));
-  // 结算判定: 顺序即优先级; 引用了不存在事件名/缺触发事件的行直接剔除
+  // 无序组 (2026-09): 成员须是已配的非结算/非监控动作规则、跨组去重; 空组丢弃。
+  // 组成员与期望顺序互斥 (后端解析硬拒), 组优先——order 侧剔除已入组的名字
+  const _monitorTypes = ['region_count', 'region_empty', 'proximity', 'cross_count', 'facing_dwell'];
+  const _ruleByName = new Map(rules.map(r => [r.name, r]));
+  const _seenMembers = new Set();
+  const groups = (Array.isArray(seqSrc.groups) ? seqSrc.groups : [])
+    .map((g, gi) => ({
+      name: String(g?.name || '').trim() || `组${gi + 1}`,
+      members: (Array.isArray(g?.members) ? g.members : []).filter(m => {
+        const rule = _ruleByName.get(m);
+        if (!rule || rule.settle || _monitorTypes.includes(rule.type) || _seenMembers.has(m)) return false;
+        _seenMembers.add(m);
+        return true;
+      }),
+      count: Math.max(1, Math.floor(Number(g?.count) || 1)),
+      ordered: !!g?.ordered,
+    }))
+    .filter(g => g.members.length > 0);
+  const order = (Array.isArray(seqSrc.order) ? seqSrc.order : [])
+    .filter(n => ruleNames.has(n) && !_seenMembers.has(n));
+  const seqEnabled = !!seqSrc.enabled && order.length > 0;
+  // 结算判定: 顺序即优先级; 引用了不存在事件名/缺触发事件的行直接剔除;
+  // complete 依附期望模板 (后端解析硬拒无模板的 complete), 模板不可用时剔除
   const settlement_rules = (Array.isArray(src.settlement_rules) ? src.settlement_rules : [])
-    .filter(sr => sr && ['exact', 'missing', 'repeated', 'always'].includes(sr.match) && sr.event_id != null)
+    .filter(sr => sr && ['exact', 'missing', 'repeated', 'complete', 'always'].includes(sr.match) && sr.event_id != null)
     .map(sr => {
       if (sr.match === 'exact') {
         const sequence = (Array.isArray(sr.sequence) ? sr.sequence : []).filter(n => ruleNames.has(n));
         return sequence.length ? { match: 'exact', sequence, event_id: sr.event_id } : null;
       }
+      if (sr.match === 'complete') return seqEnabled ? { match: 'complete', event_id: sr.event_id } : null;
       if (sr.match === 'always') return { match: 'always', event_id: sr.event_id };
       const target = String(sr.target || '').trim();
       if (!ruleNames.has(target)) return null;
@@ -810,9 +832,15 @@ const _sanitizeRegionEvents = (re) => {
     rules,
     settlement_rules,
     sequence_check: {
-      enabled: !!seqSrc.enabled && order.length > 0,
+      enabled: seqEnabled,
       order,
       event_id: seqSrc.event_id ?? null,
+      strict: !!seqSrc.strict,
+      groups,
+      // 展示序列 (2026-09): 纯监控页展示模板, 可重复、可含组成员, 引擎不消费;
+      // 只留已配规则名 (改名后残留剔除)
+      display_order: (Array.isArray(seqSrc.display_order) ? seqSrc.display_order : [])
+        .filter(n => ruleNames.has(n)),
     },
   };
 };
@@ -1011,7 +1039,7 @@ const ensureRegionEventsDefaults = (project) => {
       gap_tolerance_frames: 3,
       dedup_consecutive: true,
       rules: [],
-      sequence_check: { enabled: false, order: [], event_id: null },
+      sequence_check: { enabled: false, order: [], event_id: null, strict: false, groups: [], display_order: [] },
       settlement_rules: [],
     };
     return;
@@ -1030,11 +1058,15 @@ const ensureRegionEventsDefaults = (project) => {
     }
   });
   if (!re.sequence_check || typeof re.sequence_check !== 'object') {
-    re.sequence_check = { enabled: false, order: [], event_id: null };
+    re.sequence_check = { enabled: false, order: [], event_id: null, strict: false, groups: [], display_order: [] };
   } else {
     if (re.sequence_check.enabled === undefined) re.sequence_check.enabled = false;
     if (!Array.isArray(re.sequence_check.order)) re.sequence_check.order = [];
     if (re.sequence_check.event_id === undefined) re.sequence_check.event_id = null;
+    if (re.sequence_check.strict === undefined) re.sequence_check.strict = false;
+    if (!Array.isArray(re.sequence_check.groups)) re.sequence_check.groups = [];
+    if (!Array.isArray(re.sequence_check.display_order)) re.sequence_check.display_order = [];
+    re.sequence_check.groups.forEach(g => { if (g && g.ordered === undefined) g.ordered = false; });
   }
   if (!Array.isArray(re.settlement_rules)) re.settlement_rules = [];
 };

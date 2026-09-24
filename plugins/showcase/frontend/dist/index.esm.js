@@ -61,7 +61,9 @@ export function register(ctx) {
         } catch (e) { /* 静默 */ }
         return;
       }
-      if (d.action !== "api" && d.action !== "upload" && d.action !== "download") return;
+      if (d.action !== "api" && d.action !== "upload" && d.action !== "download" &&
+          d.action !== "auth-set-token" && d.action !== "auth-clear-token" && d.action !== "auth-token-state" &&
+          d.action !== "host-display-get" && d.action !== "host-display-set") return;
       const id = d.id;
       const p = d.payload || {};
       const reply = (ok, data, error, status) => {
@@ -71,6 +73,85 @@ export function register(ctx) {
           );
         } catch (e) { /* iframe 已卸载等情况静默 */ }
       };
+      // ==================== 鉴权写穿 (v1.5.1) ====================
+      // 现场事故 (2026-09-22): 鉴权启用 + 宿主进访客态后, 插件内登录只存 iframe 内存
+      // token, 宿主拦截器读不到 (host.api 逐请求读 localStorage 'tianjun:auth_token'),
+      // 数据泵/后续桥请求仍以访客身份发出 → 权限全挂、连禁用插件都做不到。
+      // 修法: 插件登录后把 token 写穿宿主存储 —— host.api / 数据泵 / MJPEG 全部
+      // 换用新身份, 插件即主程序; 登出/关鉴权/改密同样清穿。
+      const TJ_TOKEN_KEY = "tianjun:auth_token";
+      if (d.action === "auth-set-token") {
+        try {
+          const t = (p && p.token) || "";
+          const persist = p && p.persist !== false;
+          if (t) {
+            // 对齐宿主 useAuthStore.writeTokenToStorage:
+            // persist=true → localStorage; persist=false → sessionStorage.
+            // host.api 拦截器优先 sessionStorage 再 localStorage。
+            if (persist) {
+              localStorage.setItem(TJ_TOKEN_KEY, t);
+              try { sessionStorage.removeItem(TJ_TOKEN_KEY); } catch (e) {}
+            } else {
+              try { sessionStorage.setItem(TJ_TOKEN_KEY, t); } catch (e) {}
+              localStorage.removeItem(TJ_TOKEN_KEY);
+            }
+          }
+          reply(true, { ok: !!t, persist: persist });
+        } catch (e) { reply(false, null, "token 写入宿主失败: " + (e && e.message)); }
+        return;
+      }
+      if (d.action === "auth-clear-token") {
+        try {
+          localStorage.removeItem(TJ_TOKEN_KEY);
+          try { sessionStorage.removeItem(TJ_TOKEN_KEY); } catch (e) {}
+          reply(true, { ok: true });
+        } catch (e) { reply(false, null, "token 清除失败: " + (e && e.message)); }
+        return;
+      }
+      if (d.action === "auth-token-state") {
+        try {
+          let t = "";
+          try { t = sessionStorage.getItem(TJ_TOKEN_KEY) || ""; } catch (e) {}
+          if (!t) t = localStorage.getItem(TJ_TOKEN_KEY) || "";
+          reply(true, { token: t || null });
+        } catch (e) { reply(true, { token: null }); }
+        return;
+      }
+      // ==================== 显示设置写穿 (v1.5.1) ====================
+      // 插件内可直接编辑检测页面板显隐/默认计数器 (此前只能"主程序配好再套插件")。
+      // 与宿主 useSystemStore 同源: localStorage 'display_settings' 深合并后回写,
+      // 数据泵下一拍原样注入 iframe, 主程序设置页与插件互认同一份配置。
+      if (d.action === "host-display-get") {
+        try {
+          const raw = localStorage.getItem("display_settings");
+          reply(true, { settings: raw ? JSON.parse(raw) : null });
+        } catch (e) { reply(true, { settings: null }); }
+        return;
+      }
+      if (d.action === "host-display-set") {
+        try {
+          let cur = {};
+          try { cur = JSON.parse(localStorage.getItem("display_settings") || "{}") || {}; } catch (e) { cur = {}; }
+          const patch = (p && p.settings) || {};
+          const merged = { ...cur, ...patch };
+          // monitor / navbar 两段深合并 (与宿主 loadSettings 合并语义一致), 其余段浅覆盖
+          if (patch.monitor || cur.monitor) {
+            merged.monitor = { ...(cur.monitor || {}), ...(patch.monitor || {}) };
+            const dcCur = (cur.monitor || {}).defaultCounters || {};
+            const dcPatch = (patch.monitor || {}).defaultCounters;
+            if (dcPatch) merged.monitor.defaultCounters = { ...dcCur, ...dcPatch };
+            const stCur = (cur.monitor || {}).stepTableColumns || {};
+            const stPatch = (patch.monitor || {}).stepTableColumns;
+            if (stPatch) merged.monitor.stepTableColumns = { ...stCur, ...stPatch };
+          }
+          if (patch.navbar || cur.navbar) {
+            merged.navbar = { ...(cur.navbar || {}), ...(patch.navbar || {}) };
+          }
+          localStorage.setItem("display_settings", JSON.stringify(merged));
+          reply(true, { ok: true, settings: merged });
+        } catch (e) { reply(false, null, "显示设置写入失败: " + (e && e.message)); }
+        return;
+      }
       // ==================== 文件上传分支 ====================
       // iframe 把 File 对象 (postMessage 结构化克隆可传) 发上来, 父层包成
       // FormData 走 multipart; JSON 桥传不了文件, 故单列。超时放大到 5 分钟。

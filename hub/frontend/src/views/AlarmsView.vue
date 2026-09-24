@@ -2,7 +2,7 @@
   <div class="alarms-page">
     <header class="hub-topbar">
       <button class="hub-back" data-test="back-wall" @click="router.push({ name: 'wall' })">
-        ← 监控墙
+        ← 检测集群
       </button>
       <h1>报警中心</h1>
       <span v-if="data" class="counts tabular" data-test="alarm-counts">
@@ -67,6 +67,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../api'
 import { authState } from '../auth'
+import { useWsHint } from '../composables/useWsHint'
 
 const router = useRouter()
 const canAck = computed(() => ['engineer', 'director', 'admin'].includes(authState.user?.role))
@@ -111,6 +112,8 @@ async function onAck(ev) {
 }
 
 watch(unackedOnly, refresh)
+// M8 WS 加速: 新 NG 事件到达立即刷新列表 (3s 轮询兜底不变)
+useWsHint((topic) => { if (topic === 'events') refresh() })
 onMounted(() => {
   refresh()
   timer = setInterval(refresh, 3000)

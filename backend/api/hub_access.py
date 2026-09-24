@@ -145,6 +145,9 @@ _STATION_PROPERTIES = [
     {"id": "detecting", "access": ["read", "write", "notify"], "format": "bool"},
     {"id": "active_project_id", "access": ["read", "write", "notify"], "format": "int"},
     {"id": "logic_mode", "access": ["read"], "format": "str"},
+    # M7: health-summary 早就带这两项, 档案补声明让枢纽 UI 自动渲染 (差距 B1)
+    {"id": "source_type", "access": ["read"], "format": "str"},
+    {"id": "fps_inference", "access": ["read"], "format": "float"},
 ]
 _STATION_ACTIONS: list = [
     # M3: 启停检测 (POST /hub/ops action=start_detection/stop_detection)。
@@ -255,6 +258,22 @@ class HubProjectsResponse(BaseModel):
 class HubEventsResponse(BaseModel):
     events: list
     next_cursor: int
+
+
+class HubLiveResponse(BaseModel):
+    """工位实时投影 (M7.5): 值班读面白名单字段, 大载荷已剥离。"""
+    channel_id: int
+    is_detecting: bool
+    is_running: bool
+    logic_mode: Optional[str] = None
+    project_id: Optional[int] = None
+    project_name: Optional[str] = None
+    fps_inference: Optional[float] = None
+    counters: Dict[str, Any] = {}
+    steps: list = []
+    cycle: Dict[str, Any] = {}
+    tracking: Optional[Dict[str, Any]] = None
+    recent_events: list = []
 
 
 @router.get("/config", response_model=HubConfigResponse,
@@ -544,3 +563,67 @@ def hub_projects(db: Session = Depends(get_db)):
     return {"items": [
         {"id": r[0], "name": r[1], "is_active": bool(r[2])} for r in rows
     ]}
+
+
+@router.get("/live", response_model=HubLiveResponse,
+            summary="工位实时投影 (值班读面, RFC 15 M7.5)",
+            dependencies=[Depends(require_api_key("hub"))])
+def hub_live(channel: int = 0, db: Session = Depends(get_db)):
+    """单工位运行实况的白名单裁剪投影。
+
+    - 复用 /source/detection/results 的聚合逻辑 (不重造状态机读面),
+      只透出值班读面小字段; 截图/检测框/配置 JSON 等大载荷全部剥掉。
+    - 按需调用: 枢纽只在有人打开该工位下钻页时 ~2s 轮询, 不进 poller
+      常规链路 —— 无人看就零开销。
+    """
+    _ensure_enabled(db)
+    from backend.api.source_routes import get_detection_results
+    full = get_detection_results(channel=channel, known_shots=None)
+
+    # 步骤读面: 配置顺序 + 完成计数 + 本周期是否已过 + in-flight 秒数
+    step_counts = full.get("step_counts") or {}
+    inflight = full.get("step_inflight_durations") or {}
+    cycle_steps = set(full.get("current_cycle_steps") or [])
+    steps = []
+    for s in (full.get("steps_config") or []):
+        label = s.get("label") or s.get("name") or ""
+        if not label:
+            continue
+        steps.append({
+            "label": label,
+            "enabled": bool(s.get("enabled", True)),
+            "count": int(step_counts.get(label, 0) or 0),
+            "in_cycle": label in cycle_steps,
+            "inflight_s": inflight.get(label),
+        })
+
+    recent = [{
+        "name": e.get("event_name") or "",
+        "kind": e.get("toast_id"),        # ok / ng / 提示类
+        "reason": e.get("reason"),
+        "ts": e.get("timestamp"),
+    } for e in (full.get("recent_events") or [])[-5:]]
+
+    trk = full.get("tracking") or {}
+    return {
+        "channel_id": channel,
+        "is_detecting": bool(full.get("is_detecting")),
+        "is_running": bool(full.get("is_running")),
+        "logic_mode": full.get("logic_mode"),
+        "project_id": full.get("project_id"),
+        "project_name": full.get("project_name"),
+        "fps_inference": full.get("fps_inference"),
+        "counters": full.get("counters") or {},
+        "steps": steps,
+        "cycle": {
+            "active": bool(cycle_steps) or bool(trk.get("cycle_active")),
+            "current_time": full.get("current_cycle_time"),
+            "average_time": full.get("average_cycle_time"),
+            "last_time": full.get("last_cycle_time"),
+        },
+        "tracking": {
+            "active_count": trk.get("active_count"),
+            "class_counters": trk.get("class_counters"),
+        } if full.get("logic_mode") in ("tracking", "custom_mix") else None,
+        "recent_events": recent,
+    }

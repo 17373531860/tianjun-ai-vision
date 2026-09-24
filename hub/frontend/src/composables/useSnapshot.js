@@ -12,9 +12,11 @@ export function useSnapshot(urlFn, intervalMs = 1000) {
 
   async function tick() {
     if (inFlight) return // 上一帧还没回来: 跳拍不排队
+    const url = urlFn()
+    if (!url) return // 调用方尚未定位目标 (如放大层未选中工位)
     inFlight = true
     try {
-      const r = await api.get(urlFn(), { responseType: 'blob' })
+      const r = await api.get(url, { responseType: 'blob' })
       const u = URL.createObjectURL(r.data)
       if (currentUrl) URL.revokeObjectURL(currentUrl)
       currentUrl = u

@@ -2,7 +2,7 @@
   <div class="station-page">
     <header class="hub-topbar">
       <router-link class="hub-back" :to="{ name: 'wall' }" data-test="back-to-wall">
-        ← 返回监控墙
+        ← 返回检测集群
       </router-link>
       <h1 v-if="detail">{{ detail.node_name }} · {{ stationName }}</h1>
       <span v-if="detail" class="node-state">
@@ -20,13 +20,74 @@
     </header>
 
     <main class="body" v-if="detail">
-      <div class="viewer" :class="{ dim: detail.status === 'offline' || broken || detail.stale }">
-        <img v-if="src" :src="src" alt="" data-test="station-live" />
-        <!-- 离线/滞后遮罩在场时不再画"加载中"占位, 避免文字重叠 -->
-        <div v-else-if="detail.status !== 'offline' && !detail.stale"
-             class="placeholder">画面加载中…</div>
-        <div v-if="detail.status === 'offline'" class="stale-mask">节点离线 — 保留最后画面</div>
-        <div v-else-if="detail.stale" class="stale-mask lag">数据滞后</div>
+      <div class="left-col">
+        <div class="viewer"
+             :class="{ dim: detail.status === 'offline' || broken || detail.stale }">
+          <img v-if="src" :src="src" alt="" data-test="station-live" />
+          <!-- 离线/滞后遮罩在场时不再画"加载中"占位, 避免文字重叠 -->
+          <div v-else-if="detail.status !== 'offline' && !detail.stale"
+               class="placeholder">画面加载中…</div>
+          <div v-if="detail.status === 'offline'" class="stale-mask">节点离线 — 保留最后画面</div>
+          <div v-else-if="detail.stale" class="stale-mask lag">数据滞后</div>
+        </div>
+
+        <!-- 生产实况 (M7.5 值班读面: 边缘 /hub/live 投影, 2s 轮询) -->
+        <section v-if="live" class="live-panel" data-test="live-panel">
+          <div class="live-kpis">
+            <div class="kpi"><i>合格 OK</i>
+              <b class="tabular" data-test="live-ok">{{ live.counters?.ok ?? '—' }}</b></div>
+            <div class="kpi"><i>不合格 NG</i>
+              <b class="tabular ng" data-test="live-ng">{{ live.counters?.ng ?? '—' }}</b></div>
+            <div class="kpi"><i>总数</i>
+              <b class="tabular">{{ live.counters?.total ?? '—' }}</b></div>
+            <div class="kpi"><i>当前周期</i>
+              <b class="tabular">{{ live.cycle?.active
+                ? fmtSec(live.cycle?.current_time) : '空闲' }}</b></div>
+            <div class="kpi"><i>平均周期</i>
+              <b class="tabular">{{ fmtSec(live.cycle?.average_time) }}</b></div>
+            <div class="kpi"><i>上周期</i>
+              <b class="tabular">{{ fmtSec(live.cycle?.last_time) }}</b></div>
+          </div>
+
+          <div class="live-cols">
+            <div v-if="live.steps?.length" class="live-steps" data-test="live-steps">
+              <h3>步骤进度</h3>
+              <ul>
+                <li v-for="s in live.steps.filter((x) => x.enabled)" :key="s.label"
+                    :class="{ done: s.in_cycle, doing: s.inflight_s != null }">
+                  <span class="st-dot" />
+                  <span class="st-label">{{ s.label }}</span>
+                  <span v-if="s.inflight_s != null" class="st-state tabular">
+                    进行中 {{ s.inflight_s }}s</span>
+                  <span v-else-if="s.in_cycle" class="st-state">本周期已完成</span>
+                  <span class="st-count tabular">×{{ s.count }}</span>
+                </li>
+              </ul>
+            </div>
+            <div v-if="live.tracking" class="live-steps" data-test="live-tracking">
+              <h3>清点实况</h3>
+              <ul>
+                <li><span class="st-label">画面内物品</span>
+                  <span class="st-count tabular">{{ live.tracking.active_count ?? 0 }}</span></li>
+                <li v-for="(n, cls) in live.tracking.class_counters || {}" :key="cls">
+                  <span class="st-label">{{ cls }}</span>
+                  <span class="st-count tabular">×{{ n }}</span></li>
+              </ul>
+            </div>
+            <div v-if="live.recent_events?.length" class="live-events"
+                 data-test="live-events">
+              <h3>最近事件</h3>
+              <ul>
+                <li v-for="(e, i) in [...live.recent_events].reverse()" :key="i"
+                    :class="e.kind === 'ng' ? 'ev-ng' : ''">
+                  <span class="ev-time tabular">{{ fmtEvTime(e.ts) }}</span>
+                  <span class="ev-name">{{ e.name }}</span>
+                  <span v-if="e.reason" class="ev-reason" :title="e.reason">{{ e.reason }}</span>
+                </li>
+              </ul>
+            </div>
+          </div>
+        </section>
       </div>
 
       <aside class="panel" data-test="station-panel">
@@ -124,6 +185,8 @@ const LABELS = {
   active_project_id: '激活项目',
   logic_mode: '逻辑模式',
   is_running: '源运行',
+  source_type: '视频源',
+  fps_inference: '推理帧率',
 }
 
 const route = useRoute()
@@ -167,11 +230,32 @@ const lockedByOther = computed(() =>
 const { src, broken } = useSnapshot(
   () => `/nodes/${nodeId}/stations/${channelId}/snapshot`, 500)
 
+// ---- 生产实况 (M7.5): 下钻页开着才轮询, 关页即停 —— 边缘零常驻开销 ----
+const live = ref(null)
+let liveTimer = null
+async function pollLive() {
+  try {
+    const r = await api.get(`/nodes/${nodeId}/stations/${channelId}/live`)
+    live.value = r.data
+  } catch { /* 离线/异常: 保留上一份读面, 遮罩已表达状态 */ }
+}
+function fmtSec(v) {
+  if (v == null || v === 0) return '—'
+  return `${Math.round(Number(v) * 10) / 10}s`
+}
+function fmtEvTime(ts) {
+  if (!ts) return ''
+  const d = new Date(ts * 1000)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes())
+    .padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
+}
+
 function propLabel(id) { return LABELS[id] || id }
 
 function formatProp(p, v) {
   if (v === undefined || v === null || v === '') return '—'
   if (p.id === 'detecting') return v ? '检测中' : '待机'
+  if (p.id === 'fps_inference') return `${Math.round(Number(v) * 10) / 10} fps`
   if (p.format === 'bool') return v ? '是' : '否'
   return String(v)
 }
@@ -243,8 +327,13 @@ async function refresh() {
 onMounted(() => {
   refresh()
   timer = setInterval(refresh, 2000)
+  pollLive()
+  liveTimer = setInterval(pollLive, 2000)
 })
-onBeforeUnmount(() => clearInterval(timer))
+onBeforeUnmount(() => {
+  clearInterval(timer)
+  clearInterval(liveTimer)
+})
 </script>
 
 <style scoped>
@@ -265,11 +354,59 @@ onBeforeUnmount(() => clearInterval(timer))
 }
 
 .body { display: flex; gap: 16px; padding: 16px 20px; flex: 1; }
+.left-col { flex: 1; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .viewer {
-  flex: 1; position: relative; background: #000;
+  position: relative; background: #000;
   border-radius: var(--hub-radius-lg); overflow: hidden;
   border: 1px solid var(--hub-border); min-height: 420px;
   display: flex; align-items: center; justify-content: center;
+}
+
+/* ---- 生产实况 (M7.5) ---- */
+.live-panel {
+  background: var(--hub-panel); border: 1px solid var(--hub-border);
+  border-radius: var(--hub-radius-lg); padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.live-kpis { display: flex; gap: 24px; flex-wrap: wrap; }
+.kpi { display: flex; flex-direction: column; gap: 2px; min-width: 72px; }
+.kpi i { font-style: normal; font-size: 12px; color: var(--hub-text-3); }
+.kpi b { font-size: 20px; font-weight: 600; color: var(--hub-text); }
+.kpi b.ng { color: var(--hub-ng); }
+.live-cols { display: flex; gap: 24px; flex-wrap: wrap; }
+.live-steps, .live-events { flex: 1; min-width: 220px; }
+.live-panel h3 {
+  font-size: 12px; font-weight: 600; color: var(--hub-text-3);
+  text-transform: none; margin-bottom: 6px;
+}
+.live-steps ul, .live-events ul { list-style: none; display: flex;
+  flex-direction: column; gap: 4px; }
+.live-steps li {
+  display: flex; align-items: center; gap: 8px; font-size: 13px;
+  color: var(--hub-text-2); padding: 3px 0;
+}
+.st-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: none;
+  background: var(--hub-border);
+}
+.live-steps li.done .st-dot { background: var(--hub-ok); }
+.live-steps li.doing .st-dot {
+  background: var(--hub-primary); animation: livePulse 1.2s infinite;
+}
+@keyframes livePulse { 50% { opacity: 0.4; } }
+.st-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-state { font-size: 12px; color: var(--hub-text-3); }
+.live-steps li.doing .st-state { color: var(--hub-primary); }
+.st-count { font-size: 12px; color: var(--hub-text-3); }
+.live-events li {
+  display: flex; gap: 8px; align-items: baseline; font-size: 13px;
+  color: var(--hub-text-2); padding: 3px 0;
+}
+.live-events li.ev-ng .ev-name { color: var(--hub-ng); }
+.ev-time { font-size: 12px; color: var(--hub-text-3); flex: none; }
+.ev-reason {
+  font-size: 12px; color: var(--hub-text-3); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; max-width: 45%;
 }
 .viewer img { width: 100%; height: 100%; object-fit: contain; }
 .viewer.dim img { filter: grayscale(1) brightness(0.55); }

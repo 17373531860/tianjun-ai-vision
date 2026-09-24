@@ -232,6 +232,34 @@ class HubRollupDirty(Base):
     marked_at = Column(DateTime, default=datetime.now)
 
 
+class HubNodeStatusEvent(Base):
+    """节点上下线切换史 (M7 运维告警链路)。
+
+    每次 online↔offline 切换一行; online 行的 duration_s = 结束的那段
+    离线时长 (首见/枢纽重启后的初始转换 duration 为 NULL 不计账)。
+    notified: 该行是否已走通知出口 (离线超阈值告警 / 恢复通知), 幂等标记。
+    """
+    __tablename__ = "hub_node_status_events"
+
+    id = Column(Integer, primary_key=True)
+    node_id = Column(Integer, ForeignKey("hub_nodes.id"), nullable=False,
+                     index=True)
+    status = Column(String(16), nullable=False)      # online / offline
+    ts = Column(DateTime, nullable=False, default=datetime.now, index=True)
+    duration_s = Column(Integer, nullable=True)      # online 行: 上一段离线秒数
+    error = Column(Text, nullable=True)              # offline 行: 判离线时错误
+    notified = Column(Boolean, nullable=False, default=False)
+
+
+class HubSetting(Base):
+    """枢纽通用 KV 配置 (M7 首用于通知出口 notify; JSON 值)"""
+    __tablename__ = "hub_settings"
+
+    key = Column(String(64), primary_key=True)
+    value = Column(JSON, nullable=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
 class HubAuditLog(Base):
     """审计 — 只增不改 (RFC 15 §4.3)"""
     __tablename__ = "hub_audit_logs"

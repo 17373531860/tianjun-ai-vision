@@ -1,0 +1,20 @@
+# TianJun Fleet Hub — docker compose 部署
+# 在 hub/ 目录下: docker compose -f deploy/docker-compose.yml up -d
+services:
+  hub:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: tianjun-hub
+    container_name: tianjun-hub
+    restart: unless-stopped
+    ports:
+      - "9100:9100"
+    environment:
+      # ⚠️ 首次启动播种 admin 口令 (仅首次生效, 上线必改默认值)
+      HUB_ADMIN_PASSWORD: "请改成强口令"
+    volumes:
+      - tianjun-hub-data:/data
+
+volumes:
+  tianjun-hub-data:

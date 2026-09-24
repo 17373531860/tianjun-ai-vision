@@ -444,7 +444,7 @@
           <span class="font-bold text-white">集中管控枢纽接入</span>
           <el-tooltip
             effect="dark"
-            content="允许厂区的 Web 集中管控枢纽 (Fleet Hub) 纳管本机: 监控墙看板 + 远程启停/切项目/消警. 关闭时相关接口全部隐藏, 对本机检测零影响."
+            content="允许厂区的 Web 集中管控枢纽 (Fleet Hub) 纳管本机: 检测集群看板 + 远程启停/切项目/消警. 关闭时相关接口全部隐藏, 对本机检测零影响."
             placement="right"
           >
             <el-icon class="text-slate-500 cursor-help"><InfoFilled /></el-icon>

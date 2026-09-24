@@ -17,16 +17,36 @@
  * - SOP 卡片"图永不空"：后端无新图时按 label 从上一轮继承缩略图。
  */
 
-/** 区域事件模式：按动作规则名建 SOP 步骤卡（v3.54.1） */
-export const regionEventRuleSteps = (pipelineConfig) =>
-  (pipelineConfig?.region_events?.rules || [])
-    .filter(r => r && r.name)
-    .map((r, i) => ({
-      id: `re_${r.id || i}`,
-      label: r.name,
-      displayLabel: r.name,
-      enabled: true,
-    }));
+/** 区域事件模式：按动作规则名建 SOP 步骤卡（v3.54.1）。
+ *
+ * 2026-09 展示序列: sequence_check.display_order（纯展示模板，可重复、可含
+ * 无序组成员）非空且顺序校验开启时，SOP 卡/步骤表按它逐位建卡——步骤机器
+ * 的 occurrence 位置分配本就支持重复标签（sequential 重复步骤同款），区域
+ * 事件"完成即绿、乱序交给结算判"的口径不变。未配置回退规则表顺序（零差异）。
+ * 名字须是已配规则名，未知名剔除（配置改名后残留不至于渲染幽灵卡）。 */
+export const regionEventRuleSteps = (pipelineConfig) => {
+  const re = pipelineConfig?.region_events || {};
+  const rules = (re.rules || []).filter(r => r && r.name);
+  const seq = re.sequence_check || {};
+  if (seq.enabled && Array.isArray(seq.display_order) && seq.display_order.length) {
+    const known = new Set(rules.map(r => r.name));
+    const disp = seq.display_order.filter(n => known.has(n));
+    if (disp.length) {
+      return disp.map((n, i) => ({
+        id: `re_disp_${i}`,
+        label: n,
+        displayLabel: n,
+        enabled: true,
+      }));
+    }
+  }
+  return rules.map((r, i) => ({
+    id: `re_${r.id || i}`,
+    label: r.name,
+    displayLabel: r.name,
+    enabled: true,
+  }));
+};
 
 /**
  * 从项目配置算出 SOP/步骤表应展示的步骤（单工位 watch 与多工位建卡同源）。

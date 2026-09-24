@@ -33,6 +33,12 @@ class NodeCreate(BaseModel):
     api_key: str             # 边缘签发的 scope=hub M2M key (只在本请求出现明文)
 
 
+class NodeUpdate(BaseModel):
+    name: Optional[str] = None
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None   # 换 Key (边缘重签发后) — 只在本请求出现明文
+
+
 class NodeResponse(BaseModel):
     id: int
     name: str
@@ -169,6 +175,65 @@ async def enroll_node(payload: NodeCreate, request: Request,
     return _serialize(node, "unknown")
 
 
+@router.put("/nodes/{node_id}", response_model=NodeResponse,
+            summary="修改节点 (改名 / 换地址 / 换 Key)")
+async def update_node(node_id: int, payload: NodeUpdate, request: Request,
+                      db: Session = Depends(get_db),
+                      user: HubUser = Depends(require_perm("node.manage"))):
+    """改名只动枢纽本地; 换地址/换 Key 先 handshake 验通再落库 (防写坏断连)。"""
+    node = db.query(HubNode).filter(HubNode.id == node_id).first()
+    if not node:
+        raise HTTPException(404, "节点不存在")
+    src = request.client.host if request.client else None
+    old = {"name": node.name, "base_url": node.base_url}
+
+    new_url = (payload.base_url or node.base_url).rstrip("/")
+    conn_changed = (new_url != node.base_url) or bool(payload.api_key)
+    if conn_changed:
+        dup = (db.query(HubNode)
+               .filter(HubNode.base_url == new_url, HubNode.id != node_id)
+               .first())
+        if dup:
+            raise HTTPException(409, f"该地址已被节点「{dup.name}」占用")
+        from hub.backend.security import decrypt_api_key
+        key = payload.api_key or (
+            decrypt_api_key(node.api_key_enc, get_data_dir())
+            if node.api_key_enc else None)
+        async with EdgeClient(new_url, api_key=key) as client:
+            try:
+                hs = await client.handshake()
+            except EdgeError as e:
+                write_audit(db, username=user.username, action="node.update",
+                            node_id=node_id, old_value=old,
+                            new_value={"base_url": new_url, "error": e.detail},
+                            source_ip=src, result="failed")
+                db.commit()
+                raise HTTPException(400, f"连接验证失败, 未保存: {e.detail}")
+        ident = hs.get("identity", {})
+        # 防呆: 换地址结果连到另一台机器 (node_uid 不同) 要明确拒绝
+        if (node.node_uid and ident.get("node_id")
+                and ident["node_id"] != node.node_uid):
+            raise HTTPException(
+                409, f"目标机器身份不符 (现 {ident['node_id']} ≠ "
+                     f"纳管时 {node.node_uid}), 如确为换机请删除后重新纳管")
+        node.base_url = new_url
+        if payload.api_key:
+            node.api_key_enc = encrypt_api_key(payload.api_key, get_data_dir())
+
+    if payload.name and payload.name.strip():
+        node.name = payload.name.strip()
+
+    write_audit(db, username=user.username, action="node.update",
+                node_id=node_id, old_value=old,
+                new_value={"name": node.name, "base_url": node.base_url,
+                           "key_rotated": bool(payload.api_key)},
+                source_ip=src, result="ok")
+    db.commit()
+    db.refresh(node)
+    rt = request.app.state.poller.runtime(node_id)
+    return _serialize(node, rt.status)
+
+
 @router.delete("/nodes/{node_id}", response_model=NodeDeleteResponse,
                summary="移除纳管节点")
 def remove_node(node_id: int, request: Request,
@@ -200,6 +265,46 @@ async def poll_now(node_id: int, request: Request,
         raise HTTPException(404, "节点不存在")
     rt = await request.app.state.poller.poll_node_once(node_id)
     return rt.snapshot()
+
+
+@router.get("/nodes/status-events", response_model=Dict[str, Any],
+            summary="节点上下线历史 + 7 日断连统计 (M7)",
+            dependencies=[Depends(require_perm("wall.view"))])
+def status_events(node_id: Optional[int] = None, limit: int = 50,
+                  offset: int = 0, db: Session = Depends(get_db)):
+    """时间倒序分页的切换史; 附每节点近 7 日断连次数与累计离线秒数。"""
+    from datetime import datetime, timedelta
+
+    from hub.backend.models import HubNodeStatusEvent
+
+    limit = max(1, min(int(limit), 500))
+    q = db.query(HubNodeStatusEvent)
+    if node_id is not None:
+        q = q.filter(HubNodeStatusEvent.node_id == node_id)
+    total = q.count()
+    rows = (q.order_by(HubNodeStatusEvent.id.desc())
+            .offset(offset).limit(limit).all())
+
+    week_ago = datetime.now() - timedelta(days=7)
+    stats: Dict[int, Dict[str, int]] = {}
+    for r in db.query(HubNodeStatusEvent).filter(
+            HubNodeStatusEvent.ts >= week_ago).all():
+        s = stats.setdefault(r.node_id, {"offline_count_7d": 0,
+                                         "offline_seconds_7d": 0})
+        if r.status == "offline":
+            s["offline_count_7d"] += 1
+        elif r.duration_s:
+            s["offline_seconds_7d"] += int(r.duration_s)
+
+    return {
+        "total": total,
+        "items": [{
+            "id": r.id, "node_id": r.node_id, "status": r.status,
+            "ts": r.ts.isoformat() if r.ts else None,
+            "duration_s": r.duration_s, "error": r.error,
+        } for r in rows],
+        "stats": stats,
+    }
 
 
 @router.get("/nodes/{node_id}/status", response_model=NodeStatusResponse,

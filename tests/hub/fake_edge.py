@@ -78,6 +78,8 @@ def create_fake_edge(node_id: str = "edge-fake01",
                 {"id": "active_project_id", "access": ["read", "write", "notify"],
                  "format": "int"},
                 {"id": "logic_mode", "access": ["read"], "format": "str"},
+                {"id": "source_type", "access": ["read"], "format": "str"},
+                {"id": "fps_inference", "access": ["read"], "format": "float"},
             ],
             "actions": [
                 {"id": "start_detection", "label": "开始检测", "confirm": "normal"},
@@ -122,9 +124,44 @@ def create_fake_edge(node_id: str = "edge-fake01",
                 "source_type": "synthetic",
                 "fps_inference": 25.0,
             } for ch in channels],
-            "resources": {"cpu": 12.0, "memory": 40.0, "disk": 55.0, "gpus": []},
+            # 结构对齐真边缘 _collect_cpu_mem_disk: 每项是 {percent: ...} 字典
+            "resources": {"cpu": {"percent": 12.0},
+                          "memory": {"percent": 40.0},
+                          "disk": {"percent": 55.0}, "gpus": []},
             "detecting_stations": sum(1 for ch in channels
                                       if state["detecting"][ch]),
+        }
+
+    @app.get("/api/v1/hub/live")
+    def live(channel: int = 0):
+        """工位实时投影 (M7.5): 与真边缘 hub_access.hub_live 同构的代表性载荷。"""
+        detecting = state["detecting"].get(channel, False)
+        return {
+            "channel_id": channel,
+            "is_detecting": detecting,
+            "is_running": True,
+            "logic_mode": "detection",
+            "project_id": state["active_project_id"],
+            "project_name": "演示项目A" if state["active_project_id"] == 1 else "演示项目B",
+            "fps_inference": 25.0,
+            "counters": {"ok": 128, "ng": 3, "total": 131},
+            "steps": [
+                {"label": "取料", "enabled": True, "count": 131,
+                 "in_cycle": detecting, "inflight_s": None},
+                {"label": "拧紧螺丝", "enabled": True, "count": 130,
+                 "in_cycle": False, "inflight_s": 1.6 if detecting else None},
+                {"label": "放回", "enabled": True, "count": 128,
+                 "in_cycle": False, "inflight_s": None},
+            ],
+            "cycle": {"active": detecting, "current_time": 12.4,
+                      "average_time": 45.2, "last_time": 43.8},
+            "tracking": None,
+            "recent_events": [
+                {"name": "NG事件", "kind": "ng",
+                 "reason": "步骤缺失: 拧紧螺丝", "ts": 1789999000.0},
+                {"name": "OK事件", "kind": "ok", "reason": None,
+                 "ts": 1789999060.0},
+            ],
         }
 
     @app.post("/api/v1/hub/ops")

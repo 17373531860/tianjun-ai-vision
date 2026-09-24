@@ -1028,3 +1028,425 @@ def test_cross_count_orthogonal_to_actions():
     assert by_name['测硬度']['in_progress'] is True
     assert by_name['测硬度']['hit_frames'] == 5
     assert snap['pending_sequence'] == []
+
+
+# ============================================================
+# 严格模式 (sequence_check.strict): 期望位置守门 + 非期望吸收
+# (2026-09 拿料装盘工位立项: "放入"类动作完成后条件残留恒真,
+#  互斥打断后残留重新累计产出假确认搅乱序列 → 严格档吸收错位确认)
+# ============================================================
+
+def _strict_engine(strict=True, **kw):
+    return build(
+        [hardness_rule(), scan_rule(), unload_rule()],
+        sequence_check={'enabled': True, 'order': ['测硬度', '扫码', '下工件'],
+                        'event_id': 9, 'strict': strict},
+        **kw,
+    )
+
+
+WORK = det('工件', 0.7, 0.7, w=0.2, h=0.2)
+GUN_ON_WORK = [det('扫码枪', 0.66, 0.6, w=0.08, h=0.08), WORK]
+
+
+def test_parse_strict_flag():
+    """strict 依附 enabled+order: 单独开 strict 静默忽略 (宽松不拒载)。"""
+    on = parse_region_events({'region_events': {
+        'enabled': True, 'rules': [hardness_rule(), scan_rule(), unload_rule()],
+        'sequence_check': {'enabled': True,
+                           'order': ['测硬度', '扫码', '下工件'], 'strict': True}}})
+    assert on.seq_strict is True
+    off = parse_region_events({'region_events': {
+        'enabled': True, 'rules': [hardness_rule()],
+        'sequence_check': {'enabled': False, 'strict': True}}})
+    assert off.seq_strict is False
+
+
+def test_strict_absorbs_out_of_position_confirm():
+    """期望首位是测硬度, 先来的扫码确认被吸收: 不进序列、只产出 absorbed。"""
+    eng = _strict_engine()
+    events = [e for _, e in feed(eng, [GUN_ON_WORK] * 12)]
+    assert all(e['action'] != 'confirmed' for e in events)
+    absorbed = [e for e in events if e['action'] == 'absorbed']
+    assert absorbed and absorbed[0]['rule_name'] == '扫码'
+    assert absorbed[0]['expected'] == '测硬度'
+    snap = eng.snapshot()
+    assert snap['pending_sequence'] == []
+    assert snap['strict'] == {'expected_next': '测硬度',
+                              'absorbed_total': len(absorbed)}
+
+
+def test_strict_absorb_no_side_effects_and_reconfirm():
+    """吸收零副作用 + 不闩锁: 一帧序列同时验证三条语义。
+
+    扫码/测硬度条件从头同时恒真:
+    ① 吸收不打断——扫码第 10 帧的错位确认被吸收后, 测硬度按原节奏
+       第 15 帧确认 (若吸收误触发互斥打断, 测硬度会推迟到第 25 帧);
+    ② 吸收不闩锁——扫码 episode 被重置后重新累计, 测硬度接纳后期望
+       推进到扫码, 第二次确认落在期望位置被接纳 (测硬度确认的互斥
+       打断发生在同帧, 扫码当帧即重新累计, 满 10 帧落在第 24 帧);
+    ③ 最终序列干净 [测硬度, 扫码]。
+    """
+    both = [det('测硬度笔', 0.7, 0.7, w=0.04, h=0.04), *GUN_ON_WORK]
+    eng = _strict_engine()
+    events = feed(eng, [both] * 35)
+    confirmed = [(i, e['rule_name']) for i, e in events
+                 if e['action'] == 'confirmed']
+    assert confirmed == [(14, '测硬度'), (23, '扫码')]
+    absorbed = [e for _, e in events if e['action'] == 'absorbed']
+    assert [e['rule_name'] for e in absorbed] == ['扫码']
+    assert eng.snapshot()['pending_sequence'] == ['测硬度', '扫码']
+
+
+def test_strict_settle_never_absorbed_missing_step_ng():
+    """结算规则不受守门: 期望位置未到照常收口; 真缺步由结算判定抓 NG。
+
+    剧本 = "拿了没放"的抽象版: 错位假扫码被吸收, 真扫码从未发生,
+    直接下工件 → 周期正常收口, exact 不匹配落兜底 NG。
+    """
+    pen = [det('测硬度笔', 0.7, 0.7, w=0.04, h=0.04), WORK]
+    frames = ([GUN_ON_WORK] * 12                       # 错位扫码 → 吸收
+              + [pen] * 15 + [[WORK]] * 5              # 测硬度 → 接纳
+              + [[det('工件', 0.92, 0.5, w=0.08, h=0.1)]] * 3 + [[]] * 8)  # 下工件
+    eng = build(
+        [hardness_rule(), scan_rule(), unload_rule()],
+        sequence_check={'enabled': True,
+                        'order': ['测硬度', '扫码', '下工件'], 'strict': True},
+        settlement_rules=[
+            {'match': 'exact', 'sequence': ['测硬度', '扫码', '下工件'],
+             'event_id': 1},
+            {'match': 'always', 'event_id': 2},
+        ])
+    events = [e for _, e in feed(eng, frames)]
+    act = _settle_action(events)
+    assert act['settle_event_id'] == 2  # 缺扫码 → 兜底 NG
+    confirmed = [e['rule_name'] for e in events if e['action'] == 'confirmed']
+    assert confirmed == ['测硬度', '下工件']
+
+
+def test_strict_rules_outside_order_unaffected():
+    """未列入期望序列的辅助动作不受守门 (照常确认进序列)。"""
+    eng = build([hardness_rule(), scan_rule(), unload_rule()],
+                sequence_check={'enabled': True,
+                                'order': ['测硬度', '下工件'], 'strict': True})
+    events = [e for _, e in feed(eng, [GUN_ON_WORK] * 12)]
+    assert [e['rule_name'] for e in events if e['action'] == 'confirmed'] \
+        == ['扫码']
+    assert all(e['action'] != 'absorbed' for e in events)
+
+
+def test_strict_monitoring_rules_not_gated():
+    """监控类规则不受守门 (本就不进序列, 告警不能被吸收吞掉)。"""
+    rules = [hardness_rule(),
+             {'id': 'm1', 'name': '聚集', 'type': 'region_count',
+              'subject_label': '工件', 'region': A_RECT,
+              'min_count': 1, 'min_frames': 5}]
+    eng = build(rules, sequence_check={'enabled': True,
+                                       'order': ['测硬度'], 'strict': True})
+    events = [e for _, e in feed(eng, [[WORK]] * 8)]
+    assert [e['rule_name'] for e in events if e['action'] == 'confirmed'] \
+        == ['聚集']
+    assert all(e['action'] != 'absorbed' for e in events)
+
+
+def test_strict_off_zero_diff():
+    """默认不开严格: 错位确认照常接纳 (存量行为零差异)。"""
+    eng = _strict_engine(strict=False)
+    events = [e for _, e in feed(eng, [GUN_ON_WORK] * 12)]
+    assert [e['rule_name'] for e in events if e['action'] == 'confirmed'] \
+        == ['扫码']
+    assert all(e['action'] != 'absorbed' for e in events)
+    assert 'strict' not in eng.snapshot()
+
+
+# ============================================================
+# 无序组 (sequence_check.groups) + complete 结算判定
+# (2026-09 四料盒拿料立项: 拿料顺序自由但每盒恰好一次;
+#  双手流水作业使拿料与上一件的检查/放入时间交错, 固定位置放不进 order)
+# ============================================================
+
+def _take_rule(rid, name, box_label, **kw):
+    base = {'id': rid, 'name': name, 'type': 'overlap', 'subject_label': '手',
+            'object_label': box_label, 'min_frames': 5}
+    base.update(kw)
+    return base
+
+
+def _check_rule(**kw):
+    base = {'id': 'rc', 'name': '检查', 'type': 'overlap', 'subject_label': '料',
+            'object_label': '手', 'min_frames': 5}
+    base.update(kw)
+    return base
+
+
+def _put_rule(**kw):
+    base = {'id': 'rp', 'name': '放入', 'type': 'overlap', 'subject_label': '料',
+            'object_label': '盘', 'min_frames': 5}
+    base.update(kw)
+    return base
+
+
+def _tray_exit_rule(**kw):
+    base = {'id': 'rt', 'name': '收盘', 'type': 'region_exit', 'subject_label': '盘',
+            'region': C_RECT, 'min_frames': 3, 'gone_frames': 8}
+    base.update(kw)
+    return base
+
+
+_GROUP_RULES = lambda: [_take_rule('ra', '拿A', 'A盒'), _take_rule('rb', '拿B', 'B盒'),
+                        _check_rule(), _put_rule(), _tray_exit_rule()]
+_GROUP_SEQ = {'enabled': True, 'order': ['检查', '放入', '检查', '放入', '收盘'],
+              'strict': True,
+              'groups': [{'name': '拿料', 'members': ['拿A', '拿B'], 'count': 1}]}
+_GROUP_SETTLE = [
+    {'match': 'complete', 'event_id': 1},
+    {'match': 'missing', 'target': '拿B', 'event_id': 3},
+    {'match': 'repeated', 'target': '拿A', 'min_count': 2, 'event_id': 4},
+    {'match': 'always', 'event_id': 2},
+]
+
+
+def _group_engine(seq=None):
+    return build(_GROUP_RULES(), sequence_check=seq or _GROUP_SEQ,
+                 settlement_rules=_GROUP_SETTLE)
+
+
+# 画面元素 (互斥构造: 每种动作帧只满足自己的规则条件)
+TAKE_A = [det('手', 0.3, 0.3), det('A盒', 0.3, 0.3, w=0.2, h=0.2)]
+TAKE_B = [det('手', 0.3, 0.3), det('B盒', 0.3, 0.3, w=0.2, h=0.2)]
+CHECK = [det('料', 0.3, 0.3), det('手', 0.3, 0.3)]
+PUT = [det('料', 0.5, 0.5), det('盘', 0.5, 0.5, w=0.3, h=0.3)]
+TRAY_IN_C = [det('盘', 0.92, 0.5, w=0.08, h=0.1)]
+
+
+def _unit(take):
+    """一件料的完整动作段: 拿 → 检查 → 放入 (各 6 帧, 靠帧内容互斥切换)。"""
+    return [take] * 6 + [CHECK] * 6 + [PUT] * 6
+
+
+def _close_tray():
+    return [TRAY_IN_C] * 4 + [[]] * 10
+
+
+def test_parse_groups_valid():
+    cfg = parse_region_events({'region_events': {
+        'enabled': True, 'rules': _GROUP_RULES(),
+        'sequence_check': _GROUP_SEQ, 'settlement_rules': _GROUP_SETTLE}})
+    assert len(cfg.seq_groups) == 1
+    g = cfg.seq_groups[0]
+    assert (g.name, g.members, g.count) == ('拿料', ['拿A', '拿B'], 1)
+    assert cfg.settlement_rules[0].match == 'complete'
+
+
+@pytest.mark.parametrize('bad_groups, msg', [
+    ([{'members': ['不存在']}], '未知'),
+    ([{'members': ['收盘']}], '结算规则'),
+    ([{'members': ['检查']}], '已在期望顺序'),
+    ([{'members': ['拿A']}, {'members': ['拿A']}], '重复'),
+    ([{'members': []}], '成员为空'),
+])
+def test_parse_groups_invalid(bad_groups, msg):
+    seq = dict(_GROUP_SEQ, groups=bad_groups)
+    with pytest.raises(ValueError, match=msg):
+        parse_region_events({'region_events': {
+            'enabled': True, 'rules': _GROUP_RULES(), 'sequence_check': seq}})
+
+
+def test_parse_groups_member_monitoring_rejected():
+    rules = _GROUP_RULES() + [{'id': 'm1', 'name': '聚集', 'type': 'region_count',
+                               'subject_label': '手', 'region': A_RECT}]
+    seq = dict(_GROUP_SEQ, groups=[{'members': ['聚集']}])
+    with pytest.raises(ValueError, match='监控类'):
+        parse_region_events({'region_events': {
+            'enabled': True, 'rules': rules, 'sequence_check': seq}})
+
+
+def test_parse_groups_ignored_without_enabled():
+    """无序组依附顺序校验: enabled=False 时静默忽略 (宽松不拒载)。"""
+    seq = dict(_GROUP_SEQ, enabled=False)
+    cfg = parse_region_events({'region_events': {
+        'enabled': True, 'rules': _GROUP_RULES(), 'sequence_check': seq}})
+    assert cfg.seq_groups == []
+
+
+def test_parse_complete_without_order_rejected():
+    """complete 依附期望模板: 没开顺序校验时硬拒 (配置错误早暴露)。"""
+    with pytest.raises(ValueError, match='complete'):
+        parse_region_events({'region_events': {
+            'enabled': True, 'rules': _GROUP_RULES(),
+            'settlement_rules': [{'match': 'complete', 'event_id': 1}]}})
+
+
+@pytest.mark.parametrize('first, second', [(TAKE_A, TAKE_B), (TAKE_B, TAKE_A)])
+def test_group_order_free_complete_ok(first, second):
+    """拿料顺序自由: A先B后 / B先A后 都按 complete 判合格, 且无乱序记录。"""
+    eng = _group_engine()
+    events = [e for _, e in feed(eng, _unit(first) + _unit(second) + _close_tray())]
+    act = _settle_action(events)
+    assert act['settle_event_id'] == 1
+    assert '完整流程' in act['settle_reason']
+    assert all(e['action'] not in ('sequence_violation', 'absorbed', 'group_repeat')
+               for e in events)
+
+
+def test_group_missing_member_ng():
+    """少拿: 拿B 从未发生 → complete 不中, missing 拿B 命中指名缺哪盒。"""
+    frames = (_unit(TAKE_A) + [CHECK] * 6 + [PUT] * 6 + _close_tray())
+    eng = _group_engine()
+    events = [e for _, e in feed(eng, frames)]
+    act = _settle_action(events)
+    assert act['settle_event_id'] == 3
+    violations = [e for e in events if e['action'] == 'sequence_violation']
+    assert len(violations) == 1  # 组感知口径: 数量不完备也算乱序记录
+
+
+def test_group_repeat_member_ng():
+    """多拿: 拿A 第二次确认留痕 group_repeat, 结算 repeated 命中判 NG。
+
+    超额确认绝不静默吸收——多拿是真实缺陷, 吸收会把"盘里多放一件"洗成合格。
+    """
+    frames = (_unit(TAKE_A) + _unit(TAKE_B) + [TAKE_A] * 6 + _close_tray())
+    eng = _group_engine()
+    events = [e for _, e in feed(eng, frames)]
+    repeats = [e for e in events if e['action'] == 'group_repeat']
+    assert len(repeats) == 1
+    assert (repeats[0]['rule_name'], repeats[0]['group'],
+            repeats[0]['count'], repeats[0]['limit']) == ('拿A', '拿料', 2, 1)
+    act = _settle_action(events)
+    assert act['settle_event_id'] == 4  # repeated 拿A ≥2
+    confirmed = [e['rule_name'] for e in events if e['action'] == 'confirmed']
+    assert confirmed.count('拿A') == 2  # 超额照常进序列留痕
+
+
+def test_group_member_not_absorbed_and_not_interrupting():
+    """组成员是并行轨道: 严格档不吸收组成员, 组成员确认也不打断其他 episode。
+
+    拿A/检查条件从头同时恒真: 拿A 第 5 帧确认 (若被吸收则无 confirmed),
+    检查按原节奏第 10 帧确认 (若拿A 确认误触发互斥打断, 检查会推迟到第 15 帧)。
+    """
+    both = [det('手', 0.3, 0.3), det('A盒', 0.3, 0.3, w=0.2, h=0.2),
+            det('料', 0.3, 0.3)]
+    eng = build([_take_rule('ra', '拿A', 'A盒'), _take_rule('rb', '拿B', 'B盒'),
+                 _check_rule(min_frames=10), _put_rule(), _tray_exit_rule()],
+                sequence_check=_GROUP_SEQ)
+    events = feed(eng, [both] * 12)
+    confirmed = [(i, e['rule_name']) for i, e in events if e['action'] == 'confirmed']
+    assert confirmed == [(4, '拿A'), (9, '检查')]
+    assert all(e['action'] != 'absorbed' for _, e in events)
+
+
+def test_group_member_not_interrupted_by_order_rule():
+    """反向豁免: 期望序列动作确认时, 组成员进行中的 episode 不被切碎。
+
+    检查第 5 帧确认; 拿B (min_frames 12) 若被打断会推迟到第 17 帧,
+    豁免后按原节奏第 12 帧确认。
+    """
+    both = [det('手', 0.3, 0.3), det('B盒', 0.3, 0.3, w=0.2, h=0.2),
+            det('料', 0.3, 0.3)]
+    eng = build([_take_rule('ra', '拿A', 'A盒'),
+                 _take_rule('rb', '拿B', 'B盒', min_frames=12),
+                 _check_rule(), _put_rule(), _tray_exit_rule()],
+                sequence_check=_GROUP_SEQ)
+    events = feed(eng, [both] * 15)
+    confirmed = [(i, e['rule_name']) for i, e in events if e['action'] == 'confirmed']
+    assert confirmed == [(4, '检查'), (11, '拿B')]
+
+
+def test_group_confirm_not_advancing_strict_pointer():
+    """组成员确认进序列但不推期望位指针 (指针只认 order 命中)。"""
+    eng = _group_engine()
+    feed(eng, [TAKE_A] * 6)
+    snap = eng.snapshot()
+    assert snap['pending_sequence'] == ['拿A']
+    assert snap['strict']['expected_next'] == '检查'  # 指针未被拿A错移
+    assert snap['groups'] == [{'name': '拿料', 'count': 1, 'ordered': False,
+                               'counts': {'拿A': 1, '拿B': 0}}]
+
+
+def test_group_settle_resets_counts():
+    """结算后组消费计数随序列清零, 下一周期重新记账。"""
+    eng = _group_engine()
+    feed(eng, _unit(TAKE_A) + _unit(TAKE_B) + _close_tray())
+    snap = eng.snapshot()
+    assert snap['pending_sequence'] == []
+    assert snap['groups'][0]['counts'] == {'拿A': 0, '拿B': 0}
+    # 第二周期照常判 OK (跨周期无状态泄漏)
+    events = [e for _, e in feed(eng, _unit(TAKE_B) + _unit(TAKE_A) + _close_tray(),
+                                 t0=100.0)]
+    assert _settle_action(events)['settle_event_id'] == 1
+
+# ============================================================
+# 组内按序 (groups[].ordered, 2026-09-24 下午)
+# (立项升级: 四料盒拿料顺序被工艺定死 5→6→4→2, 但双手流水使拿料确认可早于
+#  上一件的查/放收口——写进 order 会被守门吸收后追不回 (真实回放周期3 早到
+#  5.3s 误 NG); ordered 组把顺序强制挪到 complete 结算对账, 交错免疫)
+# ============================================================
+
+_ORDERED_SEQ = {'enabled': True, 'order': ['检查', '放入', '检查', '放入', '收盘'],
+                'strict': True,
+                'groups': [{'name': '拿料', 'members': ['拿A', '拿B'],
+                            'count': 1, 'ordered': True}]}
+
+
+def _ordered_engine():
+    return build(_GROUP_RULES(), sequence_check=_ORDERED_SEQ,
+                 settlement_rules=_GROUP_SETTLE)
+
+
+def test_parse_group_ordered_flag():
+    """ordered 解析: 显式 true 生效, 缺省 False (存量无序组零差异)。"""
+    cfg = parse_region_events({'region_events': {
+        'enabled': True, 'rules': _GROUP_RULES(),
+        'sequence_check': _ORDERED_SEQ, 'settlement_rules': _GROUP_SETTLE}})
+    assert cfg.seq_groups[0].ordered is True
+    cfg2 = parse_region_events({'region_events': {
+        'enabled': True, 'rules': _GROUP_RULES(),
+        'sequence_check': _GROUP_SEQ, 'settlement_rules': _GROUP_SETTLE}})
+    assert cfg2.seq_groups[0].ordered is False
+
+
+def test_group_ordered_correct_order_ok():
+    """按成员表顺序 A→B 走完 → complete 判合格。"""
+    eng = _ordered_engine()
+    events = [e for _, e in feed(eng, _unit(TAKE_A) + _unit(TAKE_B) + _close_tray())]
+    act = _settle_action(events)
+    assert act['settle_event_id'] == 1
+    assert all(e['action'] != 'sequence_violation' for e in events)
+
+
+def test_group_ordered_wrong_order_ng():
+    """顺序违规 B→A: complete 不中落兜底 NG, 且留乱序记录。
+
+    数量各恰好一次 (missing/repeated 都不中), 唯一的不合格因子就是组内顺序。
+    """
+    eng = _ordered_engine()
+    events = [e for _, e in feed(eng, _unit(TAKE_B) + _unit(TAKE_A) + _close_tray())]
+    act = _settle_action(events)
+    assert act['settle_event_id'] == 2  # always 兜底
+    violations = [e for e in events if e['action'] == 'sequence_violation']
+    assert len(violations) == 1
+    assert violations[0]['actual'] == ['拿B', '检查', '放入', '拿A', '检查', '放入', '收盘']
+
+
+def test_group_ordered_early_interleaved_take_ok():
+    """立项核心场景: 拿B 早到 (上一件 A 还没放入) 仍判合格。
+
+    双手流水: 拿B 确认落在 A 的检查与放入之间——若拿料写在 order 里会被
+    守门吸收 (期望位是放入) 且手已离开追不回; ordered 组不吸收组成员,
+    结算时组子序列 [拿A,拿B] 仍按序 → complete 命中。
+    """
+    frames = ([TAKE_A] * 6 + [CHECK] * 6 + [TAKE_B] * 6 + [PUT] * 6
+              + [CHECK] * 6 + [PUT] * 6 + _close_tray())
+    eng = _ordered_engine()
+    events = [e for _, e in feed(eng, frames)]
+    act = _settle_action(events)
+    assert act['settle_event_id'] == 1, f"早到交错不该误伤: {act}"
+    assert all(e['action'] != 'absorbed' or e['rule_name'] not in ('拿A', '拿B')
+               for e in events)
+
+
+def test_group_ordered_snapshot_flag():
+    """快照透出 ordered 标记 (Monitor 侧'组内按序'徽标可用)。"""
+    eng = _ordered_engine()
+    snap = eng.snapshot()
+    assert snap['groups'][0]['ordered'] is True

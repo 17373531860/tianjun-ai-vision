@@ -1,0 +1,30 @@
+# TianJun Fleet Hub systemd unit
+# 由 install.sh 安装到 /etc/systemd/system/tianjun-hub.service
+# 配置改 /etc/tianjun-hub.env, 改完 systemctl restart tianjun-hub
+[Unit]
+Description=TianJun Fleet Hub (集中管控枢纽)
+Documentation=file:///opt/tianjun-hub/app/hub/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+EnvironmentFile=-/etc/tianjun-hub.env
+Environment=HUB_DATA_DIR=/var/lib/tianjun-hub
+WorkingDirectory=/opt/tianjun-hub/app
+ExecStart=/opt/tianjun-hub/venv/bin/python -m uvicorn \
+    hub.backend.main:create_app --factory --host 0.0.0.0 --port 9100
+Restart=on-failure
+RestartSec=3
+User=tianjun-hub
+Group=tianjun-hub
+
+# 安全收敛 (枢纽只需要读代码 + 写数据目录)
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/tianjun-hub
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

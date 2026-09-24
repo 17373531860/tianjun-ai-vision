@@ -4585,6 +4585,110 @@
     "title": "HubHealthSummaryResponse",
     "type": "object"
    },
+   "HubLiveResponse": {
+    "description": "工位实时投影 (M7.5): 值班读面白名单字段, 大载荷已剥离。",
+    "properties": {
+     "channel_id": {
+      "title": "Channel Id",
+      "type": "integer"
+     },
+     "counters": {
+      "additionalProperties": true,
+      "default": {},
+      "title": "Counters",
+      "type": "object"
+     },
+     "cycle": {
+      "additionalProperties": true,
+      "default": {},
+      "title": "Cycle",
+      "type": "object"
+     },
+     "fps_inference": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Fps Inference"
+     },
+     "is_detecting": {
+      "title": "Is Detecting",
+      "type": "boolean"
+     },
+     "is_running": {
+      "title": "Is Running",
+      "type": "boolean"
+     },
+     "logic_mode": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Logic Mode"
+     },
+     "project_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Project Id"
+     },
+     "project_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Project Name"
+     },
+     "recent_events": {
+      "default": [],
+      "items": {},
+      "title": "Recent Events",
+      "type": "array"
+     },
+     "steps": {
+      "default": [],
+      "items": {},
+      "title": "Steps",
+      "type": "array"
+     },
+     "tracking": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tracking"
+     }
+    },
+    "required": [
+     "channel_id",
+     "is_detecting",
+     "is_running"
+    ],
+    "title": "HubLiveResponse",
+    "type": "object"
+   },
    "HubOpsPayload": {
     "properties": {
      "action": {
@@ -22819,6 +22923,50 @@
     ]
    }
   },
+  "/api/v1/hub/live": {
+   "get": {
+    "description": "单工位运行实况的白名单裁剪投影。\n\n- 复用 /source/detection/results 的聚合逻辑 (不重造状态机读面),\n  只透出值班读面小字段; 截图/检测框/配置 JSON 等大载荷全部剥掉。\n- 按需调用: 枢纽只在有人打开该工位下钻页时 ~2s 轮询, 不进 poller\n  常规链路 —— 无人看就零开销。",
+    "operationId": "hub_live_api_v1_hub_live_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "channel",
+      "required": false,
+      "schema": {
+       "default": 0,
+       "title": "Channel",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HubLiveResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "工位实时投影 (值班读面, RFC 15 M7.5)",
+    "tags": [
+     "hub"
+    ]
+   }
+  },
   "/api/v1/hub/ops": {
    "post": {
     "description": "枢纽的唯一写操作入口。\n\n为什么不让枢纽直接转发 /source/detection/start 等本机端点:\n  1. 鉴权体系不同 —— 本机端点挂 require_perm (用户 token 体系), 枢纽持有的\n     是 M2M API Key; 边缘开启鉴权后转发必撞权限墙。\n  2. /detection/start 的请求体承载了前端 Monitor 拼装的模型/阈值 payload,\n     空 body 会把 conf/iou 静默重置成默认值 (0.25/0.45), 覆盖客户调好的参数。\n因此这里对齐的是后端侧既有先例:\n  - start: mes_inbound._auto_start_detection 的门槛语义 (源已配置/模型就绪/\n    未在检测), 用通道上已加载模型, 不碰 conf/iou; 成功后按 HTTP /detection/start\n    同款开 session (数据页有会话记录)。\n  - stop: 对齐 POST /detection/stop (end_session + stop_detection)。\n  - activate_project: 对齐 POST /projects/{id}/activate 的\"检测中 409\"守门 +\n    activate_project_core (与手动激活/开工切项目同一核心)。\n  - ack_alarm (M4): 对齐 POST /alarm/stop (alarm_router.stop_alarm, 幂等)。\n幂等语义: start 时已在检测 / stop 时已停止 → ok=True 原样返回, 不报错\n(枢纽收敛循环可能重放意图)。",
@@ -28988,7 +29136,7 @@
   },
   "/api/v1/projects/{project_id}/activate": {
    "post": {
-    "description": "激活项目（设为当前运行项目）\n\nRFC 15 M0: 检测中拒绝激活 (409) —— 此前只有前端锁页拦截, 远程化 (Web 枢纽\n转发本端点) 后必须后端守门: 激活会重载模型/同步配置/清 MES pending, 检测中\n切换会打断在制周期。守门只加在本 HTTP 端点, 不进 activate_project_core ——\nmes_inbound 开工切项目与触发中心 switch_project 的既有语义不受影响。\n对本机 UI 零影响: 前端检测中本来就锁页不放行本操作。",
+    "description": "激活项目（设为当前运行项目）\n\nRFC 15 M0: 检测中拒绝激活 (409) —— 此前只有前端锁页拦截, 远程化 (Web 枢纽\n转发本端点) 后必须后端守门: 激活会重载模型/同步配置/清 MES pending, 检测中\n切换会打断在制周期。守门只加在本 HTTP 端点, 不进 activate_project_core ——\nmes_inbound 开工切项目与触发中心 switch_project 的既有语义不受影响。\n对本机 UI 零影响: 前端检测中本来就锁页不放行本操作。\n\n校验顺序: 先项目存在性 (404), 再检测中守门 (409) —— 无效 id 不论检测\n与否都该 404 (v3.61.0 发版 CI 抓出: BDD 前序场景检测未停时, 无效 id\n误撞 409)。",
     "operationId": "activate_project_api_v1_projects__project_id__activate_post",
     "parameters": [
      {

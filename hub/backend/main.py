@@ -52,6 +52,12 @@ def create_app() -> FastAPI:
     )
     app.state.poller = poller
 
+    # M8: WS 推送加速器 (轮询真相源不变, WS 只发"有变化"提示帧)
+    from hub.backend.ws import WsHub
+    ws_hub = WsHub()
+    app.state.ws_hub = ws_hub
+    poller.ws_hub = ws_hub
+
     # 内网部署 + 前端独立包跨端口, M1 先全放; M4 交付前收紧到配置白名单
     app.add_middleware(
         CORSMiddleware, allow_origins=["*"],
@@ -62,6 +68,7 @@ def create_app() -> FastAPI:
     from hub.backend.events import router as events_router
     from hub.backend.lock_manager import router as locks_router
     from hub.backend.node_registry import router as nodes_router
+    from hub.backend.notify import router as notify_router
     from hub.backend.ops import router as ops_router
     from hub.backend.stats import router as stats_router
     from hub.backend.wall import router as wall_router
@@ -73,6 +80,9 @@ def create_app() -> FastAPI:
     app.include_router(events_router, prefix=HUB_API_PREFIX, tags=["hub-events"])
     app.include_router(stats_router, prefix=HUB_API_PREFIX, tags=["hub-stats"])
     app.include_router(audit_router, prefix=HUB_API_PREFIX, tags=["hub-audit"])
+    app.include_router(notify_router, prefix=HUB_API_PREFIX, tags=["hub-notify"])
+    from hub.backend.ws import router as ws_router
+    app.include_router(ws_router, prefix=HUB_API_PREFIX)   # WS: /api/v1/ws
 
     @app.get("/health", summary="枢纽自身健康检查")
     def health():

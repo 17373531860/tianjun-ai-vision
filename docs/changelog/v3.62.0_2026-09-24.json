@@ -1,0 +1,106 @@
+{
+  "version": "3.62.0",
+  "date": "2026-09-24",
+  "previous_version": "3.61.0",
+  "changes": [
+    {
+      "type": "feature",
+      "id": "FEAT-001",
+      "title": "区域事件「序列校验三件套」：严格模式吸收 / 无序组（组内按序）/ 监控页展示序列",
+      "symptom": "拿料装盘工位：放入类动作条件残留恒真产出假确认搅乱序列；四拿料双手流水交错完成写死顺序误 NG；监控页卡片顺序与物理工位不符",
+      "root_cause": "区域事件序列校验只有单一线性 order + exact/prefix 两档，无错位吸收与并行轨道语义",
+      "fix": "sequence_check.strict 严格模式（非期望位确认静默吸收不打断其他 episode，真缺步靠结算暴露）+ groups 无序组（成员并行轨道每周期恰好 count 次、超额 group_repeat 留痕、ordered 组内按序结算对账）+ complete 结算（抽组后子序列逐字节比对+逐组数量完备）+ display_order 纯展示模板引擎零消费；默认全关零差异",
+      "files": ["backend/api/source_region_events.py", "backend/api/source_region_events_mixin.py", "frontend/src/views/Project/LogicConfigTab.vue", "frontend/src/views/Project/index.vue", "frontend/src/views/Monitor/monitorModes.js"],
+      "keywords": ["区域事件", "严格模式", "strict", "无序组", "groups", "ordered", "组内按序", "display_order", "展示序列", "吸收", "absorbed", "group_repeat", "complete", "雷鸟", "拿料", "装盘", "sequence_check"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-002",
+      "title": "雷鸟拿料装盘：现场视频批量回放验证 + 配置指南 PDF 交付物",
+      "symptom": "新配置只在单段演示视频上验证过，现场 28-31fps 帧率与多批次视频未覆盖；现场工程师无带截图的配置文档",
+      "root_cause": "缺离线批量回放跑道与客户交付文档",
+      "fix": "5 段现场视频检测缓存回放 16 变体 × 帧率鲁棒矩阵，域内判定与业务真值一致、域外 SKU 红线入档；拿料4号 min_frames 4→3 修真实漏判；8 页带截图配置指南 PDF（docgen 脚本入仓）",
+      "files": ["scripts/docgen/gen_rayneo_packing_guide.py", "docs/customers/雷鸟包装/"],
+      "keywords": ["雷鸟", "批量回放", "配置指南", "PDF", "min_frames", "帧率鲁棒", "SKU", "detcache"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-003",
+      "title": "Fleet Hub M6：「检测集群」全景网格",
+      "symptom": "多节点各自一屏，电视墙无法一屏看全厂全部工位",
+      "root_cause": "M5 前电视墙按节点分组无跨机摊平形态",
+      "fix": "全节点工位摊平一张网格（2×2~9×9 翻页，保持节点原始顺序），视图模式/规格 localStorage 记忆；监控墙全线更名检测集群",
+      "files": ["hub/frontend/src/views/WallView.vue", "hub/backend/wall.py", "frontend/src/views/Settings/AuthPanel.vue"],
+      "keywords": ["hub", "检测集群", "全景网格", "grid", "电视墙", "翻页", "M6"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-004",
+      "title": "Fleet Hub M7：电视墙无人值守 + 节点管理与审计台账页",
+      "symptom": "电视墙无人值守时不翻页/息屏/NG 无提示；节点版本与资源无处看、断连历史无台账",
+      "root_cause": "M5 电视墙为交互态设计，节点信息只有在线状态一列",
+      "fix": "走秒时钟/自动轮巡/NG 置顶红条/一键电视墙模式（全屏+WakeLock+深链 tv=1）/单格点击放大/提示音默认关；NodesView 版本不一致高亮+资源列+连接历史 7 日统计（hub_node_status_events）+ 编辑节点 handshake 验 node_uid 防指错机器；审计台账独立页",
+      "files": ["hub/frontend/src/views/NodesView.vue", "hub/frontend/src/components/StationZoom.vue", "hub/backend/node_registry.py", "hub/backend/poller.py", "hub/backend/models.py"],
+      "keywords": ["hub", "电视墙", "无人值守", "轮巡", "WakeLock", "tv=1", "节点管理", "连接历史", "审计", "M7"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-005",
+      "title": "Fleet Hub M7.5：运维通知三通道 + 工位下钻生产实况（边缘新端点 /hub/live）",
+      "symptom": "节点失联/NG 长时间未确认无人知晓；工位下钻只有画面无生产数据",
+      "root_cause": "枢纽无外推通知链路；边缘接入面无实时生产数据投影端点",
+      "fix": "notify.py 节点失联(5min)/NG 升级(escalate_min=0 关+30min 冷却汇总) Webhook/钉钉/企业微信三通道默认关+逐通道试发；边缘 GET /api/v1/hub/live 白名单投影（HubLiveResponse 契约），枢纽按需转发 2s 轮询无人看零开销",
+      "files": ["hub/backend/notify.py", "hub/backend/main.py", "backend/api/hub_access.py", "hub/frontend/src/views/StationView.vue"],
+      "keywords": ["hub", "通知", "钉钉", "企业微信", "webhook", "失联", "NG升级", "hub/live", "生产实况", "M7.5"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-006",
+      "title": "Fleet Hub M8：WS 推送加速 + 部署整备（一键安装/Docker/在线备份）",
+      "symptom": "工位翻转/新 NG 靠轮询有秒级延迟；枢纽部署纯手工无备份方案",
+      "root_cause": "M5 只有轮询通道；deploy 资产缺位",
+      "fix": "ws.py WebSocket 提示帧（0.3s 节流/token 鉴权/断线自动回退轮询零功能损失，轮询仍是真相源）+ hub/deploy（install.sh 幂等升级/Dockerfile+compose/systemd/backup.sh SQLite 在线快照+Fernet 密钥+14 份轮转）",
+      "files": ["hub/backend/ws.py", "hub/frontend/src/composables/useWsHint.js", "hub/deploy/"],
+      "keywords": ["hub", "websocket", "ws", "推送", "部署", "install.sh", "docker", "backup", "备份", "M8"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-007",
+      "title": "Fleet Hub M9：跨节点批量操作",
+      "symptom": "几十个工位逐台启停/换型点到手酸",
+      "root_cause": "远程操作只有单工位粒度",
+      "fix": "BatchOpsDialog 批量启停/按项目名跨机切项目（project_id 空间独立故按名匹配，无同名不误切），逐台预览与失败原因可见",
+      "files": ["hub/frontend/src/components/BatchOpsDialog.vue", "hub/backend/main.py"],
+      "keywords": ["hub", "批量操作", "批量启停", "切项目", "batch", "M9"],
+      "breaking": false
+    },
+    {
+      "type": "feature",
+      "id": "FEAT-008",
+      "title": "showcase 全应用插件 v1.5.1：P0 鉴权闭环 + v3.56~v3.61 功能对齐",
+      "symptom": "主程序开启用户鉴权后插件独立 app 页面全 401",
+      "root_cause": "插件独立 app 形态与宿主登录态无桥接",
+      "fix": "auth-set-token 桥接宿主登录态（token 不写穿宿主存储）+ 功能面对齐 v3.56~v3.61 展示模块",
+      "files": ["plugins/showcase/", "plugins-examples/tianjun-showcase/"],
+      "keywords": ["showcase", "插件", "鉴权", "auth-set-token", "401", "v1.5.1"],
+      "breaking": false
+    },
+    {
+      "type": "bugfix",
+      "id": "BUG-001",
+      "title": "监控页 MJPEG 静默死流侦测与自动救援",
+      "symptom": "开发环境长时间挂机后监控画面冻结不再更新且无报错",
+      "root_cause": "vite dev 代理对 multipart 长流半开死流——TCP 活着但不再送帧，img 无 error 事件触发换流；客户现场 Electron 直连不受影响",
+      "fix": "帧看门狗快照哈希静止判定 + 指数退避强制换流重建连接 + tj_disable_stall_rescue 逃生开关",
+      "files": ["frontend/src/views/Monitor/index.vue"],
+      "keywords": ["MJPEG", "冻结", "死流", "看门狗", "vite", "代理", "stall", "换流"],
+      "breaking": false
+    }
+  ]
+}

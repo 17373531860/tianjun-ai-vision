@@ -12,6 +12,9 @@
                            走标准结算链 (end_cycle 写库 + 计数器 + 报警 + MES cycle_end)
     sequence_violation   → 借事件响应面产出"乱序"过程事件 (挂不挂报警由事件配置决定),
                            不影响周期结算结果
+    absorbed             → 严格模式吸收的非期望位置确认: 只记日志, 零副作用
+    group_repeat         → 无序组成员本周期超额确认: 只记日志 (伴随 confirmed 正常
+                           进序列留痕, 结算由 complete 不中/repeated 命中收账)
 
 一个工位循环 = 一个检测周期: 首个确认事件开周期, 结算规则 (如"下工件") 收口。
 """
@@ -63,6 +66,15 @@ class RegionEventsMixin:
                     self._region_on_closed(ev)
                 elif action == 'sequence_violation':
                     self._region_on_sequence_violation(ev)
+                elif action == 'absorbed':
+                    # 严格模式吸收 (纯日志, 无副作用): 排查"某动作没进序列"先看这行
+                    print(f"[RegionEvents] 严格模式吸收: {ev.get('rule_name')} "
+                          f"(期望下一步: {ev.get('expected') or '序列已完成'})")
+                elif action == 'group_repeat':
+                    # 无序组超额 (纯日志): confirmed 已正常进序列留痕, 结算收账
+                    print(f"[RegionEvents] 无序组超额: {ev.get('rule_name')} "
+                          f"第 {ev.get('count')} 次 (组 {ev.get('group')} "
+                          f"限 {ev.get('limit')} 次), 结算时按多做判定")
             except Exception as e:
                 print(f"[RegionEvents] 执行动作 {ev.get('action')} 失败 (已隔离): {e}")
                 import traceback

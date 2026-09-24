@@ -122,6 +122,8 @@ def test_m4_multi_edge_wall_and_ack(page, stack):
         '[data-test="group-card-边缘B"] [data-test^="station-tile-"]')
     assert tiles.count() == 1
     tiles.first.click()
+    page.wait_for_selector('[data-test="zoom-overlay"]', timeout=5000)
+    page.click('[data-test="zoom-enter"]')
     page.wait_for_selector('[data-test="station-panel"]', timeout=8000)
     page.wait_for_selector('[data-test="op-ack_alarm"]:not([disabled])',
                            timeout=10000)

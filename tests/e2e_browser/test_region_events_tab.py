@@ -44,12 +44,22 @@ def _open_logic_tab(page, base_url, name):
     page.reload(wait_until="domcontentloaded", timeout=15000)
     page.wait_for_selector("text=项目管理", timeout=10000)
     page.wait_for_load_state("networkidle", timeout=10000)
-    page.locator("input[placeholder*='搜索项目']").fill(name)
-    time.sleep(0.6)
-    page.locator(f"div.p-4:has-text('{name}')").first.click(timeout=5000)
-    time.sleep(0.8)
-    page.locator(".el-tabs__item:has-text('逻辑设置')").first.click()
-    time.sleep(0.8)
+    # 列表点选有过滤重渲染竞态 (搜索 fill 生效前点击会点到别的 __e2e_ 卡):
+    # 以逻辑设置出现区域事件规则卡为选中成功依据, 不中就重选 (本文件全是
+    # region_events 项目, 规则卡是可靠判据)
+    for _ in range(3):
+        search = page.locator("input[placeholder*='搜索项目']")
+        search.fill("")
+        time.sleep(0.3)
+        search.fill(name)
+        time.sleep(0.8)
+        page.locator(f"div.p-4:has-text('{name}')").first.click(timeout=5000)
+        time.sleep(0.8)
+        page.locator(".el-tabs__item:has-text('逻辑设置')").first.click()
+        time.sleep(0.8)
+        if _rules_card(page).count() == 1:
+            return
+    raise AssertionError(f"项目 {name} 未能选中 (列表点选竞态重试 3 次仍失败)")
 
 
 def _fill_creatable_select(page, scope, text):
@@ -165,6 +175,11 @@ def test_建两条规则_画区域_全结构落库(page, base_url, api_url):
     time.sleep(0.3)
     seq_block.locator("button:has-text('+下工件')").click()
     time.sleep(0.4)
+    # 严格模式 (期望位置守门, 2026-09): 开关渲染 + 开启落库
+    strict_row = seq_block.locator("div.flex.items-center.gap-3").filter(
+        has_text="严格模式").first
+    strict_row.locator(".el-switch").first.click()
+    time.sleep(0.4)
 
     page.locator("button:has-text('保存配置')").click()
     time.sleep(2.0)
@@ -187,6 +202,7 @@ def test_建两条规则_画区域_全结构落库(page, base_url, api_url):
     assert abs((re_cfg.get("class_conf") or {}).get("测硬度笔", 0) - 0.2) < 1e-6
     seq = re_cfg.get("sequence_check") or {}
     assert seq.get("enabled") is True and seq.get("order") == ["测硬度", "下工件"]
+    assert seq.get("strict") is True, f"严格模式开关应落库: {seq}"
 
     # 回显: 刷新后规则完整呈现
     _open_logic_tab(page, base_url, name)
@@ -341,6 +357,89 @@ def test_监控模板一键添加与落库(page, base_url, api_url):
     assert patrol["type"] == "region_empty" and patrol["event_id"] == 2
     assert abs(patrol.get("min_seconds", 0) - 360) < 1e-6, \
         f"巡检 360 秒应原样落库 (min_seconds 上限已放宽到 3600, 不得再被钳到 30): {patrol.get('min_seconds')}"
+
+
+def test_无序组与完整流程结算落库(page, base_url, api_url):
+    """2026-09 无序组增量: 顺序校验里建无序组 (点选成员) + 组成员从期望顺序
+    候选中消失 (二者互斥的 UI 守门) + 结算判定「完整流程」→ 全结构落库。"""
+    pid, name = _mk_project(api_url)
+    requests.put(f"{api_url}/api/v1/projects/{pid}", json={"events_config": [
+        {"id": 1, "name": "合格(OK)", "actions": []},
+        {"id": 2, "name": "不合格(NG)", "actions": []},
+    ]}, timeout=5).raise_for_status()
+    _open_logic_tab(page, base_url, name)
+    card = _rules_card(page)
+
+    _add_overlap_rule(page, card, "拿A", "手", "A盒")
+    _add_overlap_rule(page, card, "检查", "料", "手")
+
+    # 顺序校验开启 + 期望顺序 [检查]
+    seq_block = card.locator("div.bg-slate-900").filter(has_text="流程顺序校验").first
+    seq_block.locator(".el-switch").first.click()
+    time.sleep(0.5)
+    order_row = seq_block.locator("div.flex.items-center.gap-3").filter(
+        has_text="期望顺序").first
+    order_row.locator("button:has-text('+检查')").click()
+    time.sleep(0.3)
+
+    # 严格模式 + 建无序组: 成员点选 拿A
+    seq_block.locator("div.flex.items-center.gap-3").filter(
+        has_text="严格模式").first.locator(".el-switch").first.click()
+    time.sleep(0.4)
+    seq_block.locator("button:has-text('新增组')").click()
+    time.sleep(0.5)
+    grp_row = seq_block.locator("div.bg-slate-800").filter(
+        has=page.locator("input[placeholder='组名']")).first
+    grp_row.locator("input[placeholder='组名']").fill("拿料")
+    grp_row.locator("button:has-text('+拿A')").click()
+    time.sleep(0.4)
+    # 组内按序 (ordered, 2026-09): 开关渲染 + 开启落库
+    grp_row.locator(".el-switch").first.click()
+    time.sleep(0.3)
+    # UI 守门: 已在期望顺序的 检查 不出现在组候选; 已入组的 拿A 从顺序候选消失
+    assert grp_row.locator("button:has-text('+检查')").count() == 0, \
+        "期望顺序里的动作不该出现在组成员候选"
+    assert order_row.locator("button:has-text('+拿A')").count() == 0, \
+        "组成员不该再出现在期望顺序候选"
+
+    # 结算判定: 完整流程 → 合格(OK)
+    settle_block = card.locator("div.bg-slate-900").filter(has_text="结算判定").first
+    settle_block.locator("button:has-text('新增判定')").click()
+    time.sleep(0.6)
+    row = settle_block.locator("div.bg-slate-800").first
+    row.locator(".el-select").first.click()
+    time.sleep(0.5)
+    page.locator(".el-select-dropdown__item:has-text('完整流程')").last.click()
+    time.sleep(0.4)
+    row.locator(".el-select:has-text('选择事件')").first.click()
+    time.sleep(0.5)
+    page.locator(".el-select-dropdown__item:has-text('合格(OK)')").last.click()
+    time.sleep(0.4)
+
+    page.locator("button:has-text('保存配置')").click()
+    time.sleep(2.0)
+    detail = requests.get(f"{api_url}/api/v1/projects/{pid}", timeout=5).json()
+    re_cfg = (detail.get("pipeline_config") or {}).get("region_events") or {}
+    seq = re_cfg.get("sequence_check") or {}
+    assert seq.get("enabled") is True and seq.get("order") == ["检查"], f"顺序应落库: {seq}"
+    assert seq.get("strict") is True
+    assert seq.get("groups") == [{"name": "拿料", "members": ["拿A"], "count": 1,
+                                  "ordered": True}], \
+        f"无序组应落库 (含组内按序): {seq.get('groups')}"
+    assert (re_cfg.get("settlement_rules") or []) == [
+        {"match": "complete", "event_id": 1}], \
+        f"完整流程结算判定应落库: {re_cfg.get('settlement_rules')}"
+
+    # 回显: 刷新后组成员完整呈现 (组名/结算方式是 input/select 的 value,
+    # 不在 innerText 里, 必须读控件值断言)
+    _open_logic_tab(page, base_url, name)
+    assert "拿A" in page.evaluate("document.body.innerText"), "组成员 tag 应回显"
+    assert page.locator("input[placeholder='组名']").first.input_value() == "拿料", \
+        "组名应回显"
+    card2 = _rules_card(page)
+    settle_row = card2.locator("div.bg-slate-800").filter(has_text="判定 1").first
+    # 本版 Element Plus 的 select 选中值渲染成 span (不是 input value), 读行内文本
+    assert "完整流程" in settle_row.inner_text(), "结算判定应回显完整流程"
 
 
 def test_空名规则被保存守门剔除(page, base_url, api_url):

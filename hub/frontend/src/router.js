@@ -13,6 +13,7 @@ const routes = [
   { path: '/alarms', name: 'alarms', component: () => import('./views/AlarmsView.vue') },
   { path: '/data', name: 'data', component: () => import('./views/DataView.vue') },
   { path: '/users', name: 'users', component: () => import('./views/UsersView.vue') },
+  { path: '/nodes', name: 'nodes', component: () => import('./views/NodesView.vue') },
 ]
 
 const router = createRouter({ history: createWebHashHistory(), routes })

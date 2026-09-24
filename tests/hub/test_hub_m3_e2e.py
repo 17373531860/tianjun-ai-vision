@@ -105,9 +105,18 @@ def test_m3_full_ops_flow(page, stack):
     # 墙上出现工位 tile (纳管成功 + 轮询建 twin)
     page.wait_for_selector('[data-test^="station-tile-"]', timeout=10000)
 
-    # ---- 下钻工位操作台 ----
+    # ---- 下钻工位操作台 (点格先放大, 放大层内进入工位 —— 电视墙惯例) ----
     page.click('[data-test^="station-tile-"]')
+    page.wait_for_selector('[data-test="zoom-overlay"]', timeout=5000)
+    page.click('[data-test="zoom-enter"]')
     page.wait_for_selector('[data-test="station-panel"]', timeout=8000)
+
+    # ---- 生产实况面板 (M7.5): 计数/步骤/最近事件上屏 ----
+    page.wait_for_selector('[data-test="live-panel"]', timeout=8000)
+    assert page.inner_text('[data-test="live-ok"]') == "128"
+    assert "拧紧螺丝" in page.inner_text('[data-test="live-steps"]')
+    assert "步骤缺失" in page.inner_text('[data-test="live-events"]')
+
     # poller 0.5s 一轮, 等 status=online 后操作按钮解禁
     page.wait_for_selector(
         '[data-test="op-stop_detection"]:not([disabled])', timeout=10000)

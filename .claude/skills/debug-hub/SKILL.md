@@ -37,10 +37,25 @@ argument-hint: "[症状描述]"
 | 统计空白 | 周期通道 `HUB_CYCLE_INTERVAL`(5s) 拉取日志；rollup 脏桶重算；保留策略（明细 90 天/小时聚合 730 天） |
 | 登录/会话异常 | 改密/改状态/重置密码即时吊销全部会话是设计如此；默认口令 admin123 首日必改 |
 
+## 三.5、v3.62 增量（M6~M9）症状路由
+
+| 症状 | 先查 |
+|---|---|
+| 全景网格不翻页/顺序乱 | WallView 视图模式与 N×N 规格存 localStorage（电视墙重启记忆）；摊平**保持节点原始顺序不做异常置顶**是设计如此 |
+| 电视墙模式出不来/黑屏休眠 | 深链 `#/?tv=1` 直进墙态；Wake Lock 需 https 或 localhost；页面隐藏会重拿锁 |
+| 节点失联/NG 升级通知不发 | `hub/backend/notify.py`：通知默认关；失联阈值默认 5min；恢复补发仅当离线侧真发过；NG 升级 `alarm_escalate_min=0`=关、冷却窗 30min 内只发一条汇总；配置在 `hub_settings` KV（`GET/PUT /notify/config`，`POST /notify/test` 逐通道试发） |
+| 连接历史没记录 | `hub_node_status_events` 表：unknown→online 初始转换不记（防枢纽重启刷噪音） |
+| 工位下钻实况面板空 | 边缘 `GET /api/v1/hub/live`（按需转发 `GET /nodes/{id}/stations/{ch}/live`，2s 轮询只在下钻页开着时发）；边缘版本 < v3.62 无此端点 |
+| WS 不推/延迟大 | `hub/backend/ws.py`：**轮询是真相源，WS 只发提示帧**（断线自动回退轮询零功能损失）；token 查询参数鉴权，坏 token 4401；per-topic 0.3s 节流 |
+| 批量操作某台报"本机无同名项目" | 按项目名跨机匹配是设计如此（各边缘 project_id 空间独立）；该台不误切，逐行失败原因悬停可见 |
+| 改节点地址/换 Key 报 409 | `PUT /nodes/{id}` 先 handshake 验证目标机器 node_uid 一致才落库（防呆），409=指到了别的机器 |
+| 部署/备份 | `hub/deploy/install.sh`（幂等重跑=升级）+ `backup.sh`（SQLite backup API 在线快照+Fernet 密钥+14 份轮转） |
+
 ## 四、测试矩阵
 
 ```bash
-~/miniconda3/envs/tianjun/bin/python -m pytest tests/hub/ tests/test_hub_access.py -q   # 90+ 项, fake_edge 仿真多边缘
+~/miniconda3/envs/tianjun/bin/python -m pytest tests/hub/ tests/test_hub_access.py -q   # v3.62 起 84+ 项, fake_edge 仿真多边缘
+# M6~M9 专套: test_hub_m6_grid_e2e / m7_tvwall / m7_nodes / m7_opsalarm / m8_ws / m9_batch
 # e2e: tests/e2e_browser/test_hub_access_switch.py (边缘开关切换)
 # UAT: tests/uat/hub_m4/run_uat.py
 ```

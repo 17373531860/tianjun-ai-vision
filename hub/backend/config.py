@@ -35,6 +35,7 @@ CYCLE_KEEP_DAYS = int(os.environ.get("HUB_CYCLE_KEEP_DAYS", "90"))         # 明
 ROLLUP_INTERVAL_S = float(os.environ.get("HUB_ROLLUP_INTERVAL", "20"))     # 脏桶重算节奏
 ROLLUP_KEEP_DAYS = int(os.environ.get("HUB_ROLLUP_KEEP_DAYS", "730"))      # 小时桶保留天数
 RETENTION_INTERVAL_S = float(os.environ.get("HUB_RETENTION_INTERVAL", "3600"))  # 过期清理节奏
+NOTIFY_CHECK_INTERVAL_S = float(os.environ.get("HUB_NOTIFY_INTERVAL", "15"))    # M7 通知巡检节奏
 
 
 def get_data_dir() -> Path:

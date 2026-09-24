@@ -3208,6 +3208,76 @@ let lastSingleCycleId = null;
 // Periodic double-buffer swap to release Chromium native decoder memory
 let streamSwapCounter = 0;
 const STREAM_SWAP_INTERVAL = 600;
+
+// —— MJPEG 静默死流侦测 → 提前换流救活（2026-09）——
+// 根因 (对照实验定案, 详见当日溯源): 流量走"中间代理层"(如 vite dev proxy,
+// 未来也可能是客户自架 nginx/网关) 时, 90s 定期换流的瞬时双连接会让后端
+// "同槽后来者上位"踢掉旧 generator, 而代理层不向浏览器传递上游断开 →
+// 浏览器 img 拿着半开死流: 停在最后一帧、multipart 不触发 onload/onerror,
+// 应用无从感知, 一冻到下一次 90s 换流 (检测框是 overlay canvas 轮询画的,
+// 照常在动, 现象即"画面卡住但框在动")。直连后端 (Electron/同源托管) 断开
+// 正确传递, 不会触发——生产零复现, 属纵深防御。
+// 救法: 每 ~0.3s 把活流 img 采到 16x9 微型 canvas 取像素哈希, "后端在推帧 +
+// 人工确认未定格"而画面 1.2s 未变 → swapStream() 无缝换流 (新连接即活)。
+// 跨域流 (dev 直连) canvas 受污染时 try/catch 静默失效, 零副作用。
+// 90s 定期换流节拍不动 (不变量 7)。调试逃生口:
+// localStorage.setItem('tj_disable_stall_rescue','1') 可整体禁用本侦测。
+let stallProbeCanvas = null;
+let stallLastHash = null;
+let stallLastChangeTs = 0;
+let stallLastSwapTs = 0;
+let stallProbeTick = 0;
+// 连续救活退避: 若救活后画面很快又停 (如两个监控页同抢 main 槽互踢),
+// 连续第 3 次起冷却按 2^n 退避到最长 64s, 画面正常存活 >10s 即复位——单页
+// 真停更场景 (实测间隔 ~19s+) 必复位永远 4s 快速救活, 抢流互踢才会退避。
+let stallRescueStreak = 0;
+const STALL_PROBE_EVERY_TICKS = 2;      // 150ms × 2 ≈ 0.3s 采样一次 (16x9 采样开销可忽略)
+const STALL_THRESHOLD_MS = 1200;        // 后端活跃但画面未变的判定时长 (可见冻结压到 ~2s 内)
+const STALL_SWAP_COOLDOWN_MS = 4000;    // 救活换流最小间隔 (真静止画面误换流也无感, 双缓冲无缝)
+
+const probeStreamRenderStall = (nowMs, backendActive, ackFrozen) => {
+  stallProbeTick++;
+  if (stallProbeTick < STALL_PROBE_EVERY_TICKS) return;
+  stallProbeTick = 0;
+  if (!isStreaming.value || !backendActive || ackFrozen) {
+    // 未起流/后端停了/人工确认定格 (后端故意冻帧) —— 都不是解码器停更, 重置计时
+    stallLastHash = null;
+    stallLastChangeTs = nowMs;
+    return;
+  }
+  const img = activeStream.value === 0 ? streamImg0.value : streamImg1.value;
+  if (!img || !img.naturalWidth) return;
+  try {
+    if (!stallProbeCanvas) {
+      stallProbeCanvas = document.createElement('canvas');
+      stallProbeCanvas.width = 16;
+      stallProbeCanvas.height = 9;
+    }
+    const ctx = stallProbeCanvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0, 16, 9);
+    const d = ctx.getImageData(0, 0, 16, 9).data;
+    let h = 0;
+    for (let i = 0; i < d.length; i += 8) h = (h * 31 + d[i]) >>> 0;
+    if (h !== stallLastHash) {
+      stallLastHash = h;
+      stallLastChangeTs = nowMs;
+      if (stallRescueStreak > 0 && nowMs - stallLastSwapTs > 10000) stallRescueStreak = 0;
+      return;
+    }
+    const cooldown = STALL_SWAP_COOLDOWN_MS * (2 ** Math.min(Math.max(stallRescueStreak - 2, 0), 4));
+    if (nowMs - stallLastChangeTs > STALL_THRESHOLD_MS
+        && nowMs - stallLastSwapTs > cooldown) {
+      stallLastSwapTs = nowMs;
+      stallLastChangeTs = nowMs; // 重置计时, swap 后重新累计
+      stallRescueStreak++;
+      console.warn('[MJPEG] 静默死流侦测: 后端推帧中但画面未变, 提前换流救活');
+      dbg('monitor.video', '死流侦测提前换流', '半开死流, 双缓冲无缝救活');
+      swapStream();
+    }
+  } catch (e) {
+    // canvas 读取异常 (脏画布等) 不致命, 停更侦测静默失效即可
+  }
+};
 let lastScreenshotUpdate = 0;
 const SCREENSHOT_UPDATE_INTERVAL = 1000;
 let pollingInProgress = false; // 防止轮询重叠
@@ -3289,6 +3359,12 @@ const startPolling = () => {
       const _nowTs = Date.now();
       // 黑屏判定/重连逻辑归属 useSingleStream (阶段1③), 语义逐行一致
       trackBackendFpsMismatch(data.is_running && (data.fps || 0) > 0, _nowTs);
+      // 静默死流侦测 (2026-09): 半开死流 (有连接无帧) 与上面"没收到帧"互补
+      if (localStorage.getItem('tj_disable_stall_rescue') !== '1') probeStreamRenderStall(
+        _nowTs,
+        data.is_running && (data.fps || 0) > 0,
+        !!(data.pending_ack && data.pending_ack.active),
+      );
       // Step 8: 多模型快照 (单工位场景)
       modelStats.value = Array.isArray(data.models) ? data.models : [];
       // v3.8+: 逐件模式状态 (非 per_item 项目时后端返回 null, 这里原样转交 PerItemPanel)

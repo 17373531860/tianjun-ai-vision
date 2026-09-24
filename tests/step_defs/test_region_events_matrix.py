@@ -207,6 +207,74 @@ def _double_scan_scenario():
 
 
 # ============================================================
+# 无序组 + 严格模式 (2026-09 四料盒拿料): 拿料顺序自由但每盒恰好一次,
+# 期望模板只锁 (检查→放入)×2 交替 + 收盘, complete 一条规则收口多做/少做
+# ============================================================
+
+GRP_HAND = {"label": "手", "confidence": 0.9, "bbox": [0.25, 0.25, 0.1, 0.1]}
+GRP_BOX_A = {"label": "A盒", "confidence": 0.9, "bbox": [0.2, 0.2, 0.2, 0.2]}
+GRP_BOX_B = {"label": "B盒", "confidence": 0.9, "bbox": [0.2, 0.2, 0.2, 0.2]}
+GRP_MAT = {"label": "料", "confidence": 0.9, "bbox": [0.26, 0.26, 0.08, 0.08]}
+GRP_TRAY = {"label": "盘", "confidence": 0.9, "bbox": [0.4, 0.4, 0.3, 0.3]}
+# 放入形态: 料在盘内 (与检查位的料分开定义, 检查位料框与盘框不相交)
+GRP_MAT_IN_TRAY = {"label": "料", "confidence": 0.9, "bbox": [0.5, 0.5, 0.08, 0.08]}
+GRP_TRAY_IN_C = {"label": "盘", "confidence": 0.9, "bbox": [0.88, 0.44, 0.1, 0.12]}
+
+
+def _group_re():
+    return {
+        "enabled": True,
+        "class_conf": {},
+        "gap_tolerance_frames": 3,
+        "rules": [
+            {"id": "ra", "name": "拿A", "type": "overlap",
+             "subject_label": "手", "object_label": "A盒", "min_frames": 5},
+            {"id": "rb", "name": "拿B", "type": "overlap",
+             "subject_label": "手", "object_label": "B盒", "min_frames": 5},
+            {"id": "rc", "name": "检查", "type": "overlap",
+             "subject_label": "料", "object_label": "手", "min_frames": 5},
+            {"id": "rp", "name": "放入", "type": "overlap",
+             "subject_label": "料", "object_label": "盘", "min_frames": 5},
+            {"id": "rt", "name": "收盘", "type": "region_exit",
+             "subject_label": "盘", "region": C_RECT,
+             "min_frames": 3, "gone_frames": 8},
+        ],
+        "sequence_check": {
+            "enabled": True,
+            "order": ["检查", "放入", "检查", "放入", "收盘"],
+            "strict": True,
+            "groups": [{"name": "拿料", "members": ["拿A", "拿B"], "count": 1}],
+        },
+        "settlement_rules": [
+            {"match": "complete", "event_id": 1},
+            {"match": "missing", "target": "拿B", "event_id": 2},
+            {"match": "repeated", "target": "拿A", "min_count": 2, "event_id": 2},
+            {"match": "always", "event_id": 2},
+        ],
+    }
+
+
+def _grp_timeline(segments, seg_frames=30):
+    """按 30 帧一段拼时间轴 (min_frames=5 的 6 倍余量, 抗推理循环丢帧)。"""
+    tl, f = [], 0
+    for dets in segments:
+        tl.append({"from": f, "to": f + seg_frames - 1, "detections": dets})
+        f += seg_frames
+    tl.append({"from": f, "to": f + 900, "detections": []})
+    return tl
+
+
+def _grp_unit(box):
+    """一件料: 拿 (手∩盒) → 检查 (料∩手) → 放入 (料在盘内)。"""
+    return [[GRP_HAND, box], [GRP_MAT, GRP_HAND], [GRP_MAT_IN_TRAY, GRP_TRAY]]
+
+
+def _grp_scenario(name, segments):
+    return {"name": name, "fps": FPS,
+            "timeline": _grp_timeline(segments + [[GRP_TRAY_IN_C]])}
+
+
+# ============================================================
 # 运行时 helper
 # ============================================================
 
@@ -322,6 +390,20 @@ def given_enter_rule(ctx):
                               region_events=_standard_re(extra_rules=[enter]))
 
 
+@given("一个带无序组与严格模式的区域事件项目")
+def given_group_strict(ctx):
+    ctx["project"] = _project("__re_bdd_group__", region_events=_group_re())
+
+
+@given("一个带组内按序无序组的区域事件项目")
+def given_group_ordered(ctx):
+    # 与无序组同一份配置, 仅组加 ordered: 成员须按 [拿A, 拿B] 表序发生
+    # (同一份 B→A 注入剧本在无序组判合格、按序组判不良, 对照见 feature)
+    re_cfg = _group_re()
+    re_cfg["sequence_check"]["groups"][0]["ordered"] = True
+    ctx["project"] = _project("__re_bdd_group_ordered__", region_events=re_cfg)
+
+
 # ============================================================
 # When
 # ============================================================
@@ -369,6 +451,41 @@ def when_skip_hardness(client, ctx):
 @when("注入扫码两次的完整循环剧本并启动检测")
 def when_double_scan(client, ctx):
     _launch(client, ctx, _double_scan_scenario())
+
+
+@when("注入先拿B后拿A的完整两件剧本并启动检测")
+def when_group_order_free(client, ctx):
+    _launch(client, ctx, _grp_scenario(
+        "re_bdd_grp_ok", _grp_unit(GRP_BOX_B) + _grp_unit(GRP_BOX_A)))
+
+
+@when("注入先拿A后拿B的完整两件剧本并启动检测")
+def when_group_order_ab(client, ctx):
+    _launch(client, ctx, _grp_scenario(
+        "re_bdd_grp_ab", _grp_unit(GRP_BOX_A) + _grp_unit(GRP_BOX_B)))
+
+
+@when("注入漏拿B只做一件的剧本并启动检测")
+def when_group_missing(client, ctx):
+    # 拿A 一件 + 直接再检查/放入一件 (没拿B): 模板走完但组数量不完备
+    _launch(client, ctx, _grp_scenario(
+        "re_bdd_grp_missing",
+        _grp_unit(GRP_BOX_A) + [[GRP_MAT, GRP_HAND], [GRP_MAT_IN_TRAY, GRP_TRAY]]))
+
+
+@when("注入拿A两次的超额剧本并启动检测")
+def when_group_repeat(client, ctx):
+    _launch(client, ctx, _grp_scenario(
+        "re_bdd_grp_repeat",
+        _grp_unit(GRP_BOX_A) + _grp_unit(GRP_BOX_B) + [[GRP_HAND, GRP_BOX_A]]))
+
+
+@when("注入开头误触发放入的完整两件剧本并启动检测")
+def when_group_absorbed(client, ctx):
+    # 开头一段"料在盘内"(残料形态) 错位假放入: 严格档应吸收, 不开周期不计步骤
+    _launch(client, ctx, _grp_scenario(
+        "re_bdd_grp_absorb",
+        [[GRP_MAT_IN_TRAY, GRP_TRAY]] + _grp_unit(GRP_BOX_A) + _grp_unit(GRP_BOX_B)))
 
 
 # ============================================================
@@ -475,6 +592,15 @@ def then_violation_counter_unchanged(client, ctx):
     assert body is not None, "前置断言未留快照"
     assert _counter_delta(ctx, body, "乱序次数") == 0, \
         f"顺序校验关闭时乱序计数不该涨: {body.get('counters')}"
+
+
+@then(parsers.parse('事件步骤"{name}"计数增量应为 {n:d}'))
+def then_event_step_exact_delta(client, ctx, name, n):
+    """精确增量断言: 严格档吸收的错位假确认不得计步 (多 1 次都算泄漏)。"""
+    body = ctx.get("last_body")
+    assert body is not None, "前置断言未留快照"
+    assert _step_delta(ctx, body, name) == n, \
+        f"{name} 计数增量应为 {n}: {body.get('step_counts')}"
 
 
 # ============================================================

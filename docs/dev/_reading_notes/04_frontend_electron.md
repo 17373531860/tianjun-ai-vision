@@ -13,6 +13,12 @@
 > 多屏工位显示卡自 `Settings/DisplaySettingsTab.vue` 抽为 `views/Source/MultiMonitorPanel.vue`；
 > 容器装箱清点块自 `Project/LogicConfigTab.vue` 抽为 `Project/CustomMixBoxTab.vue`（「装箱清点」条件 tab）。
 
+> **v3.62 补账（2026-09-24，区域事件序列校验配置面 + 展示序列 + 监控页静默死流侦测）**：
+> - `views/Project/LogicConfigTab.vue`（+93 行）：region_events「流程顺序校验」块三扩展——严格模式开关（`strict`，提示"结算前监控页显示可能不全为绿"）、无序组编辑器（组名/成员 closable el-tags/每成员每周期次数/「组内按序」开关，成员按钮只列未进 order 的规则名）、「监控页展示序列」编辑行（closable el-tags + 全部规则名追加按钮，可重复添加，留空=回退规则表顺序）。
+> - `views/Project/index.vue`（+44 行）：`_sanitizeRegionEvents` 序列化 `strict`/`groups[].ordered`/`display_order`（display_order 过滤到现存规则名）；defaults/normalize 补 `display_order: []`、`groups[].ordered=false`——存量项目保存逐字节零差异。
+> - `views/Monitor/monitorModes.js`：`regionEventRuleSteps` 消费 `sequence_check.display_order`——enabled 且非空时按模板序出步骤视图（未知规则名过滤；允许重复名，id `re_disp_${i}` 保唯一），否则回退规则表顺序（引擎侧零消费，纯显示契约）。vitest `__tests__/monitorModes.test.js` +2 组共 49 例。
+> - `views/Monitor/index.vue`（+76 行）：**「静默死流侦测」**——16×9 canvas 像素哈希探针（每 2 个轮询 tick ≈0.3s 采一次，1.2s 哈希无变化且检测在跑判死流）自动 `swapStream()` 救援；连续救援指数退避（第 3 次起 4s×2^n 上限 64s，存活 >10s 复位）防双观看者同槽互踢死循环；`localStorage tj_disable_stall_rescue='1'` 逃生口；跨域流 canvas taint 时 try/catch 惰性失效。**根因注释已修正**：dev 环境 vite 代理不透传上游断流→90s 换流瞬时双连接被后端「同槽后来者上位」踢旧→浏览器持半开死 multipart 流（`<img>` 无 onload/onerror 可触发）；生产 Electron 直连/局域网同源无中间层不复现，救援作纵深防御保留。不变量 7（双缓冲+90s 换流）未动。
+>
 > **v3.60 补账（2026-09-19，六和二工位逐件批次配置面）**：
 > - `views/Project/LogicConfigTab.vue`：逐件通用参数卡新增「整板拖动重配准」开关（`board-rereg-switch`，写 `pipeline_config.per_item.board_rereg_enabled`）+ 独立模式角色卡「覆盖扩边救援」数字输入（`coverage-margin-input`，步骤级 `per_item.coverage_margin` 0~2 步 0.1）。
 > - `views/Project/StepsConfigTab.vue`：混合逐件配对卡新增扩边输入（`mix-coverage-margin-input`）+「虚拟步骤」开关与名称输入（`custom_mix_per_item_virtual_step`/`_label`）；`syncPerItemVirtualStepRow` + watcher 自动生成/移除 `per_item_virtual: true` 步骤行（该行表格里带 tooltip 标识，勿手工编辑）。

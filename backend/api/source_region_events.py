@@ -61,6 +61,10 @@
   - exact    : 序列与给定序列完全一致 (标准流程 → 合格)
   - missing  : 序列缺某事件 (没测硬度就下料 → 不良)
   - repeated : 某事件出现 ≥ min_count 次 (重复扫码 → 不良)
+  - complete : 序列按期望模板走完 (2026-09, 依附 sequence_check.order): 抽掉
+               无序组成员后的子序列与 order 完全一致, 且每个组成员恰好出现
+               count 次——一条规则同时收口 少拿(不足)/多拿(超额)/模板缺步乱序,
+               典型编排 [complete→合格, missing/repeated 诊断→NG, always→NG兜底]
   - always   : 无条件命中 (放列表末尾当兜底, 收编乱序等"不缺不重但非标准"序列)
 全部不命中时回退结算规则自身的 event_id (再缺省 = 合格事件)。
 
@@ -77,6 +81,50 @@
 没有它, 消失确认秒数会把"断开 < N 秒"的两段命中桥接成一次动作: TP 复检场景
 (测硬度→扫码→测硬度→扫码) 两次扫码中间夹着测硬度、断开仅 ~1 秒, 曾被并成
 一次导致序列少一步, 复检误落兜底 NG (2026-07 实测)。
+
+严格模式期望位置守门 (sequence_check.strict, 2026-09, 默认关):
+参考 sequential 模式严格前缀语义——非结算动作型规则确认时, 若其名字不等于
+期望序列 (sequence_check.order) 的下一位, 该确认被静默吸收: 不进序列、不计
+步骤、不触发事件、也**不打断其他 episode** (吸收的是噪声, 不能让噪声切碎
+真动作的进行中命中)。吸收后 episode 立即重置, 条件仍满足会重新累计——期望
+位置推进后同一动作可再次确认 (关键: 不吸收掉"悬停→放入"这类条件不断链场景
+里迟到的真确认)。立项动机 (2026-09 拿料装盘工位): "放入"类动作的条件在完成
+后残留恒真 (已放入的料一直在盘内), 每次互斥打断后残料重新累计又产出假确认,
+把序列搅乱——严格档吸收错位假确认, 同时让真缺步在结算时暴露 (期望序列走不完
+→ exact 不匹配)。边界语义:
+  - 结算规则永不吸收 (周期必须能收口, 乱序周期靠 settlement_rules 判 NG);
+  - 监控类规则不受守门 (本就不进序列);
+  - 未列入 order 的动作规则不受守门 (行为与非严格一致);
+  - 周期未开时 (序列为空) 非 order[0] 的确认也被吸收 → 顺带防幽灵开周期;
+  - region_exit 型动作被吸收时轨迹已消亡, 该次事件不可追回 (episode 型可以);
+  - strict 仅在 sequence_check.enabled 且 order 非空时生效, 否则静默忽略;
+  - 期望位置指针显式维护 (2026-09-24): 只被"命中骨架当前位的确认"推进,
+    组成员/组外规则确认进序列不推指针 (此前用序列长度当指针, 组外规则一确认
+    期望位就错移一格, 后续全被误吸收)。
+  - 守门/对账骨架 seq_walk_order (2026-09-24 下午): order 允许穿插按序组成员
+    当"完整人类可读序列"的显示锚点 (监控页 SOP/步骤表按 order 全展开建卡),
+    引擎抽掉组成员位得到骨架, 指针与 complete 对账只认骨架——组成员是并行
+    轨道, 数量/组内顺序由组逻辑收账。老配置 (order 不含成员) 骨架==order 零差异。
+
+无序组 (sequence_check.groups, 2026-09-24, 依附 sequence_check.enabled):
+"顺序自由但数量要严"的并行轨道动作 (立项场景: 四料盒拿料顺序不固定, 但每盒
+必须恰好拿一次; 双手流水作业时拿下一件料与上一件的检查/放入在时间上交错,
+固定位置放不进 order)。组成员语义:
+  - 不受严格守门 (永不吸收), 正常进序列/计步骤/触发事件 (首个确认可开周期);
+  - 不打断其他 episode、也不被其他确认打断 (并行轨道互不干扰——没有这条,
+    拿下一件料的确认会切碎上一件正在进行的检查命中, 反之亦然);
+  - 无序组成员不允许出现在 order 里 (按序组成员可以, 见上文骨架条目——写就
+    必须逐位等于成员表展开)、不允许是结算/监控规则、跨组不允许重名 (解析期拒载);
+  - 本周期超额确认 (第 count+1 次) 产出 group_repeat 可观测动作 (执行层记
+    日志), 结算侧由 complete 不中/repeated 命中收账判 NG——超额是真实缺陷,
+    必须进序列留痕, 不能静默吸收 (吸收会把"多放一件"洗成合格)。
+  - ordered=true (组内按序, 2026-09-24 下午): 成员保持并行轨道全部豁免
+    (确认时点仍可与 order 侧动作自由交错), 但 complete 结算额外要求"序列中
+    该组成员的子序列 == 成员表顺序 (每成员重复 count 次)"——立项场景升级:
+    四料盒拿料顺序被工艺定死 5→6→4→2, 但双手流水使拿料确认早于上一件的
+    查/放收口 (真实回放 17 周期中 2 个早到 1.4s/5.3s), 把拿料直接写进 order
+    会被守门吸收后追不回 (手已离开列区) 而误 NG; 组内按序把"顺序强制"从
+    实时守门挪到结算对账, 时序交错免疫、顺序违规照样 NG。
 
 设计原则 (对齐 weighing_engine / source_label_split 范式):
   - 本层不做任何主程序副作用 (开周期/记步骤/触发事件/落库), 只吃逐帧检测框、
@@ -238,7 +286,7 @@ class SettlementRule:
     __slots__ = ('match', 'sequence', 'target', 'min_count', 'event_id')
 
     def __init__(self, match, sequence, target, min_count, event_id):
-        self.match = match          # 'exact' | 'missing' | 'repeated' | 'always'
+        self.match = match          # 'exact' | 'missing' | 'repeated' | 'complete' | 'always'
         self.sequence = sequence    # exact: 期望事件名序列 (含结算事件)
         self.target = target        # missing/repeated: 目标事件名
         self.min_count = min_count  # repeated: 触发所需出现次数 (默认 2)
@@ -251,25 +299,53 @@ class SettlementRule:
             return self.target not in seq
         if self.match == 'repeated':
             return seq.count(self.target) >= self.min_count
+        if self.match == 'complete':
+            return False  # 需要期望模板+无序组上下文, 由引擎 _match_settlement 特判
         return True  # always: 兜底 (乱序等"不缺不重但非标准"的序列也能自定义结算)
+
+
+class SequenceGroup:
+    """一个无序组: 成员顺序自由、每周期各恰好 count 次 (语义见模块 docstring)。
+
+    ordered=True 升级为"组内按序": 成员仍是并行轨道 (确认不受守门/互斥),
+    但 complete 结算要求成员子序列按成员表顺序走 (顺序强制在结算对账)。
+    """
+
+    __slots__ = ('name', 'members', 'count', 'ordered')
+
+    def __init__(self, name, members, count, ordered=False):
+        self.name = name        # 显示名 (快照/日志用)
+        self.members = members  # 成员事件名列表 (跨组不重名; 按序组成员可穿插进
+        #                         order 当显示锚点, 无序组成员不允许)
+        self.count = count      # 每成员每周期的期望确认次数 (默认 1)
+        self.ordered = ordered  # 组内按序 (成员子序列须 == 成员表顺序)
 
 
 class RegionEventsConfig:
     """pipeline_config.region_events 的解析结果。"""
 
     __slots__ = ('class_conf', 'gap_tolerance', 'rules',
-                 'seq_enabled', 'seq_order', 'seq_event_id', 'settlement_rules',
-                 'dedup_consecutive')
+                 'seq_enabled', 'seq_order', 'seq_event_id', 'seq_strict',
+                 'seq_groups', 'seq_walk_order',
+                 'settlement_rules', 'dedup_consecutive')
 
     def __init__(self, class_conf, gap_tolerance, rules,
                  seq_enabled, seq_order, seq_event_id, settlement_rules,
-                 dedup_consecutive=True):
+                 dedup_consecutive=True, seq_strict=False, seq_groups=None):
         self.class_conf = class_conf        # {类别: 置信度下限}, 缺省类别不过滤
         self.gap_tolerance = gap_tolerance  # 连续计数容忍的漏检帧数 M
         self.rules = rules
         self.seq_enabled = seq_enabled      # 流程顺序校验开关 (乱序只记录不告警)
-        self.seq_order = seq_order          # 期望事件名顺序 (含结算事件本身)
+        self.seq_order = seq_order          # 期望事件名顺序 (含结算事件本身; 按序组
+        #                                     成员可穿插其中当显示锚点, 见 walk_order)
         self.seq_event_id = seq_event_id
+        self.seq_strict = seq_strict        # 严格模式: 期望位置守门+非期望吸收 (默认关)
+        self.seq_groups = seq_groups or []  # 无序组 (顺序自由但数量要严的并行轨道)
+        # 守门/对账骨架: order 抽掉组成员后的子序列。组成员位只是"完整人类可读
+        # 序列"的显示锚点 (SOP/步骤表按 order 全展开), 引擎的期望位置指针、
+        # complete 对账都只认骨架——成员是并行轨道, 数量/组内顺序由组逻辑收账。
+        member_names = {m for g in self.seq_groups for m in g.members}
+        self.seq_walk_order = [n for n in seq_order if n not in member_names]
         self.settlement_rules = settlement_rules  # 结算判定, 先匹配先赢; 空=全走默认
         self.dedup_consecutive = dedup_consecutive  # 连续同动作去重 (默认开)
 
@@ -458,8 +534,13 @@ def _parse_rule(i: int, raw: dict) -> RegionEventRule:
     )
 
 
-def _parse_settlement_rules(raw_list, rule_names: list) -> list:
-    """结算判定规则解析 (顺序即优先级)。配置非法抛 ValueError。"""
+def _parse_settlement_rules(raw_list, rule_names: list,
+                            has_seq_order: bool = False) -> list:
+    """结算判定规则解析 (顺序即优先级)。配置非法抛 ValueError。
+
+    complete 匹配依附期望模板 (sequence_check enabled + order 非空), 没有模板
+    的 complete 永远不可能命中, 属配置错误, 解析期硬拒比运行期静默不中更早暴露。
+    """
     if not isinstance(raw_list, list):
         raise ValueError("region_events.settlement_rules 不是数组")
     parsed = []
@@ -467,7 +548,7 @@ def _parse_settlement_rules(raw_list, rule_names: list) -> list:
         if not isinstance(raw, dict):
             raise ValueError(f"settlement_rules[{i}] 不是对象")
         match = raw.get('match')
-        if match not in ('exact', 'missing', 'repeated', 'always'):
+        if match not in ('exact', 'missing', 'repeated', 'complete', 'always'):
             raise ValueError(f"settlement_rules[{i}].match 非法: {match!r}")
         event_id = raw.get('event_id')
         if event_id is None:
@@ -484,7 +565,68 @@ def _parse_settlement_rules(raw_list, rule_names: list) -> list:
                 raise ValueError(f"settlement_rules[{i}] {match} 目标事件名非法: {target!r}")
             if match == 'repeated':
                 min_count = max(2, int(raw.get('min_count') or 2))
+        elif match == 'complete' and not has_seq_order:
+            raise ValueError(
+                f"settlement_rules[{i}] complete 匹配需要开启流程顺序校验并配置期望顺序")
         parsed.append(SettlementRule(match, sequence, target, min_count, event_id))
+    return parsed
+
+
+def _parse_sequence_groups(raw_list, rules: list, seq_order: list) -> list:
+    """无序组解析 (依附 sequence_check.enabled)。配置非法抛 ValueError。
+
+    校验从严 (与 settlement 同哲学, 半截组配置早暴露):
+    成员必须是已配的动作型非结算规则、不得进 order、跨组不重名。
+    """
+    if not isinstance(raw_list, list):
+        raise ValueError("sequence_check.groups 不是数组")
+    by_name = {r.name: r for r in rules}
+    seen_members = set()
+    parsed = []
+    for i, raw in enumerate(raw_list):
+        if not isinstance(raw, dict):
+            raise ValueError(f"sequence_check.groups[{i}] 不是对象")
+        members = [str(n) for n in (raw.get('members') or [])]
+        if not members:
+            raise ValueError(f"sequence_check.groups[{i}] 成员为空")
+        ordered = bool(raw.get('ordered', False))
+        try:
+            count = max(1, int(raw.get('count') or 1))
+        except (TypeError, ValueError):
+            raise ValueError(f"sequence_check.groups[{i}] count 非整数")
+        for m in members:
+            rule = by_name.get(m)
+            if rule is None:
+                raise ValueError(f"sequence_check.groups[{i}] 成员未知: {m!r}")
+            if rule.settle:
+                raise ValueError(
+                    f"sequence_check.groups[{i}] 成员 {m!r} 是结算规则, 不能入组")
+            if rule.rule_type in _MONITORING_TYPES:
+                raise ValueError(
+                    f"sequence_check.groups[{i}] 成员 {m!r} 是监控类规则, 不能入组")
+            if m in seq_order and not ordered:
+                raise ValueError(
+                    f"sequence_check.groups[{i}] 成员 {m!r} 已在期望顺序 order 里, "
+                    f"无序组成员是顺序自由轨道, 二者互斥 (按序组成员才允许进 order)")
+            if m in seen_members:
+                raise ValueError(f"sequence_check.groups 成员重复: {m!r}")
+            seen_members.add(m)
+        # 按序组成员允许写进 order 当"完整人类可读序列"的载体 (2026-09-24 下午,
+        # 监控页 SOP/步骤表按 order 全展开显示): 引擎守门/对账仍用抽掉组成员后的
+        # 骨架 (seq_walk_order), 成员位只是显示锚点。写就必须写全且逐位等于成员表
+        # 展开 (半截穿插一定是配错, 早暴露)。不写 (老骨架风格) 也合法。
+        member_set = set(members)
+        in_order = [n for n in seq_order if n in member_set]
+        if ordered and in_order:
+            expansion = [m for m in members for _ in range(count)]
+            if in_order != expansion:
+                raise ValueError(
+                    f"sequence_check.groups[{i}] 成员在期望顺序中的出现序列 "
+                    f"{in_order} 与成员表展开 {expansion} 不一致 "
+                    f"(按序组成员要么不进 order, 要么按成员表顺序每成员 {count} 次写全)")
+        parsed.append(SequenceGroup(
+            name=str(raw.get('name') or f'组{i + 1}').strip() or f'组{i + 1}',
+            members=members, count=count, ordered=ordered))
     return parsed
 
 
@@ -516,8 +658,18 @@ def parse_region_events(pipeline_config: dict) -> Optional[RegionEventsConfig]:
             - {name: 上料, type: region_enter, subject_label: 工件,
                region: [[..],..], min_frames: 3, settle: false,
                anchor: {enabled: true, label: 工件, ref: {x,y,w,h}, hold_seconds: 3}}
-          sequence_check: {enabled: false, order: [测硬度, 扫码, 下工件], event_id: null}
+          sequence_check: {enabled: false, order: [测硬度, 扫码, 下工件], event_id: null,
+                           strict: false,  # strict: 期望位置守门+非期望吸收
+                           #                 (依附 enabled+order, 语义见模块 docstring)
+                           groups: [       # 可选: 无序组 (顺序自由但数量要严的
+                           #                 并行轨道, 成员不得进 order; 语义见
+                           #                 模块 docstring)。ordered: 组内按序
+                           #                 (complete 结算要求成员按表序走,
+                           #                 确认时点仍可与 order 侧交错)
+                             {name: 拿料, members: [拿料2号, 拿料4号],
+                              count: 1, ordered: false}]}
           settlement_rules:            # 可选: 结算判定 (顺序即优先级, 先匹配先赢)
+            - {match: complete, event_id: 1}   # 模板走完+组成员各恰好 count 次
             - {match: exact, sequence: [测硬度, 扫码, 下工件], event_id: 1}
             - {match: missing, target: 测硬度, event_id: 2}
             - {match: repeated, target: 扫码, min_count: 2, event_id: 2}
@@ -553,9 +705,17 @@ def parse_region_events(pipeline_config: dict) -> Optional[RegionEventsConfig]:
         unknown = [n for n in seq_order if n not in names]
         if not seq_order or unknown:
             raise ValueError(f"region_events.sequence_check.order 非法 (未知事件名 {unknown})")
+    # 严格模式依附于顺序校验: 未开 enabled/无 order 时静默忽略 (宽松语义,
+    # 半截配置不拒载, 与锚点缺件降级同哲学)
+    seq_strict = bool(seq.get('strict', False)) and seq_enabled and bool(seq_order)
+    # 无序组同样依附顺序校验 (未开 enabled 时静默忽略; 开了则校验从严)
+    seq_groups = []
+    if seq_enabled and seq.get('groups'):
+        seq_groups = _parse_sequence_groups(seq['groups'], rules, seq_order)
 
     settlement_rules = _parse_settlement_rules(
-        raw.get('settlement_rules') or [], names)
+        raw.get('settlement_rules') or [], names,
+        has_seq_order=seq_enabled and bool(seq_order))
 
     return RegionEventsConfig(
         class_conf=class_conf,
@@ -566,6 +726,8 @@ def parse_region_events(pipeline_config: dict) -> Optional[RegionEventsConfig]:
         seq_event_id=seq.get('event_id'),
         settlement_rules=settlement_rules,
         dedup_consecutive=bool(raw.get('dedup_consecutive', True)),
+        seq_strict=seq_strict,
+        seq_groups=seq_groups,
     )
 
 
@@ -641,6 +803,13 @@ class RegionEventEngine:
         {action: 'sequence_violation', expected, actual, event_id}
             结算时事件顺序与配置不符 (可选开关, 乱序只记录不告警的语义由
             event_id 挂的事件动作决定)。
+        {action: 'absorbed', rule_id, rule_name, ts, expected}
+            严格模式 (seq_strict) 吸收的非期望位置确认——纯可观测性动作,
+            执行层只记日志, 不产生任何主程序副作用。
+        {action: 'group_repeat', rule_id, rule_name, ts, group, count, limit}
+            无序组成员本周期超额确认 (第 count 次 > limit)——伴随正常 confirmed
+            动作一起产出 (超额是真实动作, 照常进序列留痕), 执行层只记日志;
+            结算侧由 complete 不中/repeated 命中收账。
     """
 
     def __init__(self, cfg: RegionEventsConfig):
@@ -652,6 +821,15 @@ class RegionEventEngine:
                              for r in cfg.rules
                              if r.rule_type in ('region_exit', 'cross_count')}
         self._confirmed_seq = []  # 自上次结算以来确认的事件名序列 (顺序校验/结算判定用)
+        # 严格模式 (seq_strict): 期望位置守门用的序列名集合 + 吸收计数 (可观测性)
+        self._seq_name_set = set(cfg.seq_walk_order) if cfg.seq_strict else frozenset()
+        self._absorbed_total = 0
+        # 严格模式期望位置指针: 走 seq_walk_order 骨架 (order 抽掉组成员位),
+        # 只被"命中骨架当前位的确认"推进——组成员/组外规则进序列不推指针
+        # (不能用序列长度当指针, 见模块 docstring)
+        self._strict_pos = 0
+        # 无序组: {成员名: 所属组} 反查表 (守门豁免/互斥豁免/模板匹配抽取用)
+        self._group_of = {m: g for g in cfg.seq_groups for m in g.members}
         # 锚点缓存: {锚点类别: (bbox, ts)} —— 锚点短暂被遮挡时沿用最近位置
         self._anchor_labels = {r.anchor_label for r in cfg.rules if r.anchor_label}
         self._anchor_cache = {}
@@ -749,7 +927,19 @@ class RegionEventEngine:
                               'in_progress': False,
                               'active_tracks': len(st.tracks),
                               'entered_tracks': marked})
-        return {'rules': rules, 'pending_sequence': list(self._confirmed_seq)}
+        snap = {'rules': rules, 'pending_sequence': list(self._confirmed_seq)}
+        if self.cfg.seq_strict:
+            snap['strict'] = {
+                'expected_next': self._expected_next(),
+                'absorbed_total': self._absorbed_total,
+            }
+        if self._group_of:
+            # 无序组消费状态 (Monitor/调试: "本周期各料盒拿了几次"一眼可查)
+            snap['groups'] = [
+                {'name': g.name, 'count': g.count, 'ordered': g.ordered,
+                 'counts': {m: self._confirmed_seq.count(m) for m in g.members}}
+                for g in self.cfg.seq_groups]
+        return snap
 
     # ---------- overlap / region_enter 规则 (共用 episode 状态机) ----------
     def _overlap_condition(self, rule: RegionEventRule, by_label: dict,
@@ -975,6 +1165,13 @@ class RegionEventEngine:
                 self._track_motion(st, subject)
             if (not st.confirmed and self._held_long_enough(rule, st, ts)
                     and self._moved_enough(rule, st)):
+                if self._strict_absorb(rule):
+                    # 严格模式吸收: 不闩锁 confirmed, 整个 episode 重置——条件仍
+                    # 满足会重新累计, 期望位置推进后同一动作可再确认 (不重置的话
+                    # "悬停→放入"条件不断链场景里迟到的真确认会被吞掉, 误 NG)
+                    self._emit_absorbed(rule, ts, events)
+                    st.reset_episode()
+                    return
                 st.confirmed = True
                 if self._dedup_hit(rule):
                     st.suppressed = True  # 连续同动作: 静默吸收本 episode
@@ -1030,6 +1227,11 @@ class RegionEventEngine:
                 survivors.append(track)
                 continue
             if track.entered:
+                if self._strict_absorb(rule):
+                    # 严格模式吸收: 轨迹已消亡, 该次事件不可追回 (与 episode 型
+                    # 不同, 无法重置重来; 边界语义见模块 docstring)
+                    self._emit_absorbed(rule, ts, events)
+                    continue
                 if self._dedup_hit(rule):
                     continue  # 连续同动作去重: 静默吸收
                 st.total += 1
@@ -1099,6 +1301,58 @@ class RegionEventEngine:
                              subject=dict(track.bbox) if track.bbox else None)
 
     # ---------- 事件产出 ----------
+    def _strict_absorb(self, rule: RegionEventRule) -> bool:
+        """严格模式期望位置守门: 本次确认是否应被吸收 (语义见模块 docstring)。
+
+        吸收判定必须发生在互斥打断/进序列/触发事件之前——被吸收的确认是噪声,
+        噪声不允许产生任何副作用 (尤其不能打断其他规则进行中的真命中)。
+        """
+        if not self.cfg.seq_strict or rule.settle:
+            return False
+        if rule.rule_type in _MONITORING_TYPES:
+            return False  # 监控类本就不进序列, 不受守门
+        if rule.name in self._group_of:
+            return False  # 无序组成员: 顺序自由轨道, 永不吸收 (超额留痕给结算收账)
+        if rule.name not in self._seq_name_set:
+            return False  # 未列入期望序列的辅助动作: 行为与非严格一致
+        walk = self.cfg.seq_walk_order
+        pos = self._strict_pos
+        return pos >= len(walk) or walk[pos] != rule.name
+
+    def _expected_next(self):
+        """严格模式下"完整期望序列 (含组成员位) 的下一待完成条目" (纯可观测性)。
+
+        骨架位按守门指针消费; 组成员位按该成员已确认次数消费 (成员是并行
+        轨道, 实际可比显示位提前/滞后完成——这里只求给监控页一个符合人类
+        阅读顺序的"下一步"提示, 不参与任何判定)。
+        """
+        member_done = {}
+        for n in self._confirmed_seq:
+            if n in self._group_of:
+                member_done[n] = member_done.get(n, 0) + 1
+        walk_used = 0
+        occ = {}
+        for entry in self.cfg.seq_order:
+            if entry in self._group_of:
+                k = occ.get(entry, 0)
+                occ[entry] = k + 1
+                if member_done.get(entry, 0) <= k:
+                    return entry
+            else:
+                if walk_used >= self._strict_pos:
+                    return entry
+                walk_used += 1
+        return None
+
+    def _emit_absorbed(self, rule: RegionEventRule, ts: float, events: list):
+        """产出吸收动作 (仅供执行层记日志/可观测性, 无任何主程序副作用)。"""
+        self._absorbed_total += 1
+        events.append({
+            'action': 'absorbed', 'rule_id': rule.rule_id, 'rule_name': rule.name,
+            'ts': ts,
+            'expected': self._expected_next(),
+        })
+
     def _dedup_hit(self, rule: RegionEventRule) -> bool:
         """连续同动作去重: 上一个确认的就是同名动作 → 本次确认应被静默吸收。
 
@@ -1123,8 +1377,10 @@ class RegionEventEngine:
         for r in self.cfg.rules:
             if (r.rule_id not in self._overlap_states
                     or r.rule_id == confirming_rule.rule_id
-                    or r.rule_type in _MONITORING_TYPES):
-                continue  # 轨迹型规则无 episode; 监控类是独立观测, 不被打断
+                    or r.rule_type in _MONITORING_TYPES
+                    or r.name in self._group_of):
+                continue  # 轨迹型规则无 episode; 监控类是独立观测, 不被打断;
+                #           无序组成员是并行轨道, 进行中的命中不被模板动作切碎
             st = self._overlap_states[r.rule_id]
             if st.hit == 0:
                 continue
@@ -1165,9 +1421,26 @@ class RegionEventEngine:
             return
         if rule.settle:
             self._flush_open_episodes(events)
-        else:
+        elif rule.name not in self._group_of:
+            # 无序组成员不打断别人 (并行轨道: 拿下一件料时上一件的检查/放入
+            # 正在进行, 打断会切碎真命中; 反向豁免见 _interrupt_others)
             self._interrupt_others(rule, events)
         self._confirmed_seq.append(rule.name)
+        # 严格模式期望位置指针: 命中骨架当前位才推进 (组成员/组外规则不推)
+        walk = self.cfg.seq_walk_order
+        if (self.cfg.seq_strict and self._strict_pos < len(walk)
+                and rule.name == walk[self._strict_pos]):
+            self._strict_pos += 1
+        # 无序组超额确认: 实时留痕 (执行层记日志; 结算由 complete/repeated 收账)
+        grp = self._group_of.get(rule.name)
+        if grp is not None:
+            cnt = self._confirmed_seq.count(rule.name)
+            if cnt > grp.count:
+                events.append({
+                    'action': 'group_repeat', 'rule_id': rule.rule_id,
+                    'rule_name': rule.name, 'ts': ts,
+                    'group': grp.name, 'count': cnt, 'limit': grp.count,
+                })
         action = {
             'action': 'confirmed', 'rule_id': rule.rule_id, 'rule_name': rule.name,
             'start_ts': start_ts, 'ts': ts, 'settle': rule.settle,
@@ -1184,26 +1457,65 @@ class RegionEventEngine:
         if rule.settle:
             self._on_settle(events)
 
+    def _order_matches(self, seq: list) -> bool:
+        """序列是否按期望模板走完 (complete 匹配 / 顺序校验的组感知口径)。
+
+        无组: 与 order 完全一致 (老语义逐字节)。
+        有组: 抽掉组成员后的子序列须与骨架 seq_walk_order 完全一致
+        (order 里的组成员位只是显示锚点, 对账不认), 且逐组判定:
+          - 无序组: 每个成员恰好出现 count 次 (顺序自由);
+          - 按序组 (ordered): 该组成员的子序列 == 成员表顺序每成员重复
+            count 次 (子序列相等蕴含次数相等, 少/多/乱序一条全收)。
+        """
+        if not self._group_of:
+            return seq == self.cfg.seq_order
+        walk = []
+        sub = {g.name: [] for g in self.cfg.seq_groups}
+        for name in seq:
+            grp = self._group_of.get(name)
+            if grp is not None:
+                sub[grp.name].append(name)
+            else:
+                walk.append(name)
+        if walk != self.cfg.seq_walk_order:
+            return False
+        for g in self.cfg.seq_groups:
+            if g.ordered:
+                expect = [m for m in g.members for _ in range(g.count)]
+                if sub[g.name] != expect:
+                    return False
+            elif any(sub[g.name].count(m) != g.count for m in g.members):
+                return False
+        return True
+
     def _match_settlement(self, seq: list):
-        """结算判定: 按配置顺序先匹配先赢; 全不中返回 None (走默认结算事件)。"""
+        """结算判定: 按配置顺序先匹配先赢; 全不中返回 None (走默认结算事件)。
+
+        complete 需要期望模板+无序组上下文, 在这里特判 (SettlementRule.hit
+        是纯序列匹配, 拿不到引擎状态)。
+        """
         for sr in self.cfg.settlement_rules:
-            if sr.hit(seq):
+            if (self._order_matches(seq) if sr.match == 'complete'
+                    else sr.hit(seq)):
                 return sr
         return None
 
-    @staticmethod
-    def _settle_reason(sr: SettlementRule) -> str:
+    def _settle_reason(self, sr: SettlementRule) -> str:
         if sr.match == 'exact':
             return f"序列匹配 {'→'.join(sr.sequence)}"
         if sr.match == 'missing':
             return f"缺事件 {sr.target}"
         if sr.match == 'repeated':
             return f"事件 {sr.target} 重复≥{sr.min_count}次"
+        if sr.match == 'complete':
+            if self._group_of:
+                return "完整流程 (期望序列+组完备)"
+            return "完整流程 (期望序列走完)"
         return "兜底判定"
 
     def _on_settle(self, events):
-        """结算点: 校验事件顺序 (可选) 并重置本轮序列。"""
-        if self.cfg.seq_enabled and self._confirmed_seq != self.cfg.seq_order:
+        """结算点: 校验事件顺序 (可选, 组感知口径) 并重置本轮序列与期望位指针。"""
+        if self.cfg.seq_enabled and not self._order_matches(self._confirmed_seq):
             events.append({
                 'action': 'sequence_violation',
                 'expected': list(self.cfg.seq_order),
@@ -1211,3 +1523,4 @@ class RegionEventEngine:
                 'event_id': self.cfg.seq_event_id,
             })
         self._confirmed_seq = []
+        self._strict_pos = 0

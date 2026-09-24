@@ -1309,6 +1309,19 @@
   #tjPackCard .pk-remed{ margin-top:8px; padding:7px 10px; border:1px solid rgba(243,181,77,.45); background:rgba(243,181,77,.08); color:#f3b54d; border-radius:4px; display:flex; align-items:center; gap:8px; animation:tjRemedBreath 1.8s ease-in-out infinite; }
   #tjPackCard .pk-btns{ margin-top:8px; display:flex; gap:8px; justify-content:flex-end; }
   #tjPackCard .proto-btn{ padding:4px 10px; font-size:11px; }
+  #tjPackCard .pk-state{ margin-top:8px; padding:7px 10px; border:1px solid rgba(42,168,255,.45); background:rgba(42,168,255,.08); color:#45e6ff; border-radius:4px; display:none; align-items:center; gap:8px; }
+  #tjPackCard .pk-state.warn{ border-color:rgba(243,181,77,.5); background:rgba(243,181,77,.08); color:#f3b54d; }
+  /* v3.50 恢复扫码 (NG 灭灯等人工恢复) */
+  #tjScanResume{ position:fixed; left:14px; bottom:14px; z-index:885; display:none; align-items:center; gap:8px; padding:8px 14px; background:rgba(28,10,10,.96); border:1px solid rgba(255,82,99,.55); border-radius:6px; color:#ffb3bb; font-size:12px; box-shadow:0 6px 24px rgba(0,0,0,.5); animation:blink 1.6s infinite; }
+  #tjScanResume.show{ display:flex; }
+  /* v3.48 计数组合判型 chip */
+  #tjComboTag{ position:fixed; right:14px; bottom:56px; z-index:870; display:none; padding:6px 14px; background:rgba(6,16,28,.95); border:1px solid rgba(69,230,255,.5); border-radius:6px; color:#45e6ff; font-size:13px; font-weight:700; letter-spacing:1px; }
+  #tjComboTag.show{ display:block; }
+  /* v3.35.1 融合模式实时称重数值条 (SOP 面板占核心位时以横条补充) */
+  #tjWgLiveBar{ position:fixed; left:50%; transform:translateX(-50%); bottom:14px; z-index:868; display:none; align-items:baseline; gap:12px; padding:6px 18px; background:rgba(6,16,28,.95); border:1px solid rgba(42,168,255,.45); border-radius:6px; color:#e8f1ff; font-size:12px; }
+  #tjWgLiveBar.show{ display:flex; }
+  #tjWgLiveBar b{ font-size:22px; color:#45e6ff; font-variant-numeric:tabular-nums; }
+  #tjWgLiveBar .warn{ color:#ff5263; }
   /* 虚拟扫码枪（展会演示） */
   /* 虚拟扫码枪: 默认隐藏, 仅存在启用的包装结算配置且在监控页时由 JS 放出 (对齐主程序零差异原则) */
   #tjScanPill{ position:fixed; left:14px; bottom:14px; z-index:881; display:none; align-items:center; gap:8px; padding:7px 12px; background:rgba(6,16,28,.94); border:1px solid rgba(42,168,255,.4); border-radius:20px; color:var(--cyan-soft); font-size:12px; cursor:pointer; box-shadow:0 4px 18px rgba(0,0,0,.4); }
@@ -1405,6 +1418,7 @@
         <div class="ph" style="position:relative">今日生产统计<span class="more" id="todayMoreBtn" style="cursor:pointer" title="清零今日统计">更多 ›</span>
           <div id="todayMoreMenu" style="display:none;position:absolute;right:0;top:100%;margin-top:6px;z-index:60;background:#0d1b2a;border:1px solid #1d3a52;border-radius:8px;padding:6px;box-shadow:0 8px 24px rgba(0,0,0,.55)">
             <button class="proto-btn ng" id="todayResetBtn" style="white-space:nowrap;width:100%">清零今日统计</button>
+            <button class="proto-btn" id="todayResetCycleBtn" style="white-space:nowrap;width:100%;margin-top:6px">仅清本周期</button>
             <div class="tiny-note" style="margin-top:4px;max-width:160px">归零计数器/步骤统计/周期节拍，不影响历史记录</div>
           </div>
         </div>
@@ -1436,6 +1450,8 @@
             <div class="detbox" id="detbox"><i class="tl"></i><i class="tr"></i><i class="bl"></i><i class="br"></i><span class="dlabel">装电池 <span id="conf">94%</span></span></div>
             <div class="hud-sweep"></div>
             <div class="feed-note">示意画面 · 待接入现场摄像头</div>
+            <div id="tjScanCollectBar" style="display:none;position:absolute;left:12px;right:12px;bottom:48px;z-index:8;background:rgba(4,12,22,.88);border:1px solid rgba(42,168,255,.35);border-radius:8px;padding:8px 10px;font-size:12px;"></div>
+            <div id="tjGateBadge" style="display:none;position:absolute;left:12px;top:12px;z-index:8;padding:4px 10px;border-radius:6px;font-size:12px;background:rgba(243,201,105,.18);border:1px solid rgba(243,201,105,.45);color:#f3c969;"></div>
             <!-- v1.3.0 R5: 无输入源动态占位层 (默认即显示, 避免示例照片闪现; 接到真流后收起) -->
             <div id="tjNoSrc" class="show">
               <div class="rings"><i></i><i></i><i></i>
@@ -1522,6 +1538,10 @@
           <!-- v3.32 同标签拆分区域轮次 chips + v3.5 周期性强制动作进度（真值驱动，默认空） -->
           <div class="seq-chips" id="sopRoundChips" style="display:none"></div>
           <div class="pa-chips" id="sopPaChips" style="display:none"></div>
+          <div id="scGateBadges" style="display:none;padding:6px 10px;gap:8px;flex-wrap:wrap;"></div>
+          <div id="scScanCollect" style="display:none;padding:6px 10px;"></div>
+          <div id="scGateBadges" style="display:none;padding:6px 10px;gap:8px;flex-wrap:wrap;"></div>
+          <div id="scScanCollect" style="display:none;padding:6px 10px;"></div>
         </div>
 
         <!-- tracking 清点面板（项目下拉切到跟踪类项目时替换 SOP） -->
@@ -1602,12 +1622,14 @@
               <input class="proto-input" id="wgSnInput" placeholder="扫码或输入后回车" />
             </div>
             <div class="wg-live" id="wgLive">
-              <div class="wl-num"><span id="wgGross">0.0</span><span class="u" id="wgUnit">g</span></div>
-              <div class="wl-sub">实时毛重 · 净重 <b id="wgNet">0.0</b></div>
+              <div class="wl-num"><span id="wgGross">0.0</span><span class="u" id="wgUnit">kg</span></div>
+              <div class="wl-sub">实时读数 (去皮后即净重) · 皮重 <b id="wgNet">—</b></div>
             </div>
             <div class="wg-rail" id="wgRail">
               <div class="wg-mat"><div class="wm-name">等待配方</div><div class="wm-std">选择型号后显示物料序列</div><div class="wm-net"><b>—</b></div></div>
             </div>
+            <!-- v3.39 两阶段流水线待收尾队列 (drive_mode=pipeline 时显示) -->
+            <div class="wg-pipe" id="wgPipeBoard" style="display:none"></div>
           </div>
         </div>
 
@@ -1820,6 +1842,8 @@
                 <label class="mode-pill" data-logic-mode="per_item"><input type="radio" name="logicMode" /><div><b>逐件模式</b>每件都要被动作覆盖一次。</div></label>
                 <label class="mode-pill" data-logic-mode="weighing"><input type="radio" name="logicMode" /><div><b>称重投料</b>电子秤读数驱动，逐料对比标准量防错。</div></label>
                 <label class="mode-pill" data-logic-mode="region_events"><input type="radio" name="logicMode" /><div><b>区域事件</b>按目标进出区域的动作规则判步骤。</div></label>
+                <label class="mode-pill" data-logic-mode="ocr"><input type="radio" name="logicMode" /><div><b>OCR 读字</b>稳定读数 + 正则判定（v3.57）。</div></label>
+                <label class="mode-pill" data-logic-mode="anomaly"><input type="radio" name="logicMode" /><div><b>异常检测</b>合格品记忆库连续超阈告警（v3.57）。</div></label>
               </div>
             </div>
             <div class="project-side-panel" data-side-panel="events" data-lg="counters">
@@ -1860,10 +1884,14 @@
             <div class="proto-block">
               <h4>班次拆分</h4>
               <div class="rowline"><input class="proto-switch" type="checkbox" id="projShiftEnable" data-b="pe.data_config.shift_split_enabled" /><span>启用跨班次自动拆分会话</span></div>
+              <div class="rowline"><input class="proto-switch" type="checkbox" data-b="pe.data_config.record_boxes_data" /><span>录像旁写检测框 sidecar（.boxes.json，默认关）</span></div>
               <div class="proto-grid2">
                 <div class="proto-field"><label>白班开始时间</label><input class="proto-input" type="time" id="projShiftDay" data-b="pe.data_config.day_shift_start" value="08:00" /></div>
                 <div class="proto-field"><label>晚班开始时间</label><input class="proto-input" type="time" id="projShiftNight" data-b="pe.data_config.night_shift_start" value="20:00" /></div>
               </div>
+              <!-- v3.35.1 自定义班次列表: 每班只填名字+开始时刻 (持续到下一班开始, 跨天自动衔接); ≥2 条生效, 否则回退上面两班制 -->
+              <div class="tiny-note" style="margin-top:8px">自定义班次列表 (v3.35.1, ≥2 条生效; 配了则覆盖两班制, 数据页按班次名筛选)</div>
+              <div id="projShiftList"></div>
             </div>
           </div>
           <div class="project-work" data-project-panel="steps">
@@ -1881,7 +1909,7 @@
               </div>
               <div class="table-scroll" data-steps-table="tracking" style="display:none;">
                 <table class="step-table">
-                  <thead><tr><th class="head">原始标签</th><th class="head">启用</th><th class="head">置信度阈值</th><th class="head">显示名称</th><th class="head">隐藏标注框</th><th class="head">检测框颜色</th><th class="head">Box尺寸上限</th><th class="head">步骤ROI</th><th class="head">遮挡容忍(秒)</th><th class="head">位置注册</th><th class="head">计数模式</th><th class="head">需要次数</th><th class="head">消失确认帧</th><th class="head">堆叠模式</th><th class="head">重现间隔(秒)</th><th class="head">堆叠层数</th><th class="head">最大识别数</th></tr></thead>
+                  <thead><tr><th class="head">原始标签</th><th class="head">启用</th><th class="head">置信度阈值</th><th class="head">显示名称</th><th class="head">隐藏标注框</th><th class="head">检测框颜色</th><th class="head">Box尺寸上限</th><th class="head">步骤ROI</th><th class="head">遮挡容忍(秒)</th><th class="head">位置注册</th><th class="head">计数模式</th><th class="head">需要次数</th><th class="head">消失确认帧</th><th class="head">堆叠模式</th><th class="head">重现间隔(秒)</th><th class="head">堆叠层数</th><th class="head">最大识别数</th><th class="head">确认放入帧(v3.50)</th></tr></thead>
                   <tbody>
                     <tr><td>box</td><td><input class="proto-switch" type="checkbox" checked /></td><td><input type="range" value="90" /></td><td><input class="proto-input" value="料箱" /></td><td><input class="proto-switch" type="checkbox" /></td><td><input type="color" value="#22e3a0" /></td><td>W≤<input class="proto-input" type="number" value="0" /> H≤<input class="proto-input" type="number" value="0" /></td><td><button class="proto-btn" data-open-dialog="roiDialog">设置</button></td><td><input class="proto-input" type="number" placeholder="全局" /></td><td><input class="proto-switch" type="checkbox" checked /></td><td><select class="proto-select"><option>跟踪计数</option><option>动作计数</option></select></td><td><input class="proto-input" type="number" value="1" /></td><td><input class="proto-input" type="number" value="8" /></td><td><input class="proto-switch" type="checkbox" /></td><td><input class="proto-input" type="number" value="1.0" /></td><td><input class="proto-input" type="number" value="2" /></td><td><input class="proto-input" type="number" value="0" /></td></tr>
                     <tr><td>part</td><td><input class="proto-switch" type="checkbox" checked /></td><td><input type="range" value="88" /></td><td><input class="proto-input" value="工件" /></td><td><input class="proto-switch" type="checkbox" /></td><td><input type="color" value="#2aa8ff" /></td><td>W≤<input class="proto-input" type="number" value="0" /> H≤<input class="proto-input" type="number" value="0" /></td><td><button class="proto-btn" data-open-dialog="roiDialog">设置</button></td><td><input class="proto-input" type="number" placeholder="全局" /></td><td><input class="proto-switch" type="checkbox" /></td><td><select class="proto-select"><option>动作计数</option><option>跟踪计数</option></select></td><td><input class="proto-input" type="number" value="3" /></td><td><input class="proto-input" type="number" value="8" /></td><td><input class="proto-switch" type="checkbox" checked /></td><td><input class="proto-input" type="number" value="1.2" /></td><td><input class="proto-input" type="number" value="2" /></td><td><input class="proto-input" type="number" value="0" /></td></tr>
@@ -1891,7 +1919,7 @@
             </div>
           </div>
           <div class="project-work" data-project-panel="logic">
-            <div class="proto-block" data-logic-show="sequential custom" data-lg="settle"><h4>结算方式与超时</h4><div data-lg-body></div></div>
+            <div class="proto-block" data-logic-show="sequential custom detection" data-lg="settle"><h4>结算方式与超时</h4><div data-lg-body></div></div>
             <div class="proto-block" data-logic-show="sequential" data-lg="seq"><h4>顺序模式 - 步骤排序</h4><div data-lg-body></div></div>
             <div class="proto-block" data-logic-show="detection" data-lg="det"><h4>检测模式 - 需检测的步骤</h4><div data-lg-body></div></div>
             <div class="proto-block" data-logic-show="custom" data-lg="custom"><h4>自定义模式 - 条件配置</h4><div data-lg-body></div></div>
@@ -1901,9 +1929,14 @@
             <div class="proto-block" data-logic-show="per_item" data-lg="piSteps"><h4>逐件覆盖 — 每个步骤的角色</h4><div data-lg-body></div></div>
             <div class="proto-block" data-logic-show="sequential custom" data-lg="ng"><h4>NG 周期保护</h4><div data-lg-body></div></div>
             <div class="proto-block" data-logic-show="all" data-lg="dedup"><h4>防重复结算</h4><div data-lg-body></div></div>
+            <div class="proto-block wide" data-logic-show="sequential custom" data-lg="ngh"><h4>NG 判定与处置 (v3.44 统一模型)</h4><div data-lg-body></div></div>
+            <div class="proto-block wide" data-logic-show="detection" data-lg="combo"><h4>计数组合判定表 (v3.48)</h4><div data-lg-body></div></div>
+            <div class="proto-block wide" data-logic-show="custom" data-lg="mixbox"><h4>混合跟踪 · 装箱清点 / 开始判定 (v3.19~v3.60)</h4><div data-lg-body></div></div>
             <div class="proto-block" data-logic-show="sequential detection custom per_item" data-lg="sim"><h4>同时出现组</h4><div data-lg-body></div></div>
             <div class="proto-block" data-logic-show="weighing" data-lg="weighing"><h4>称重投料 — 配置 (v3.31 / v3.35 融合)</h4><div data-lg-body></div></div>
-            <div class="proto-block" data-logic-show="region_events" data-lg="regionEvents"><h4>区域事件 — 动作规则 (v3.32)</h4><div data-lg-body></div></div>
+            <div class="proto-block" data-logic-show="region_events" data-lg="regionEvents"><h4>区域事件 — 动作规则 (v3.32) / 监控型规则 (v3.57)</h4><div data-lg-body></div></div>
+            <div class="proto-block" data-logic-show="ocr" data-lg="ocr"><h4>OCR 读字 — 规则 (v3.57)</h4><div data-lg-body></div></div>
+            <div class="proto-block" data-logic-show="anomaly" data-lg="anomaly"><h4>异常检测 — 记忆库 (v3.57)</h4><div data-lg-body></div></div>
             <div class="proto-block" data-logic-show="sequential custom detection per_item" data-lg="labelSplit"><h4>同标签区域拆分 — 虚拟步骤 (v3.32/v3.34)</h4><div data-lg-body></div></div>
             <div class="proto-block" data-logic-show="all" data-lg="filter"><h4>误判过滤（高级）</h4><div data-lg-body></div></div>
           </div>
@@ -1914,14 +1947,18 @@
             </div>
           </div>
         </div>
-        <dialog id="createProjectDialog"><h3>新建项目</h3><div class="proto-field"><label>项目名称</label><input class="proto-input" id="newProjName" placeholder="例如: 手机壳外观检测" /></div><div class="proto-field"><label>任务类型</label><select class="proto-select" id="newProjTask"><option value="detection">目标检测 (Object Detection)</option><option value="segmentation">图像分割 (Instance Segmentation)</option></select></div><div class="proto-field"><label>逻辑模式</label><select class="proto-select" id="newProjMode"><option value="sequential">顺序模式</option><option value="detection">检测模式</option><option value="custom">自定义模式</option><option value="tracking">跟踪模式</option><option value="per_item">逐件模式</option></select></div><button class="proto-btn" data-close-dialog>取消</button><button class="proto-btn" id="newProjCreateBtn">创建</button></dialog>
+        <dialog id="createProjectDialog"><h3>新建项目</h3><div class="proto-field"><label>项目名称</label><input class="proto-input" id="newProjName" placeholder="例如: 手机壳外观检测" /></div><div class="proto-field"><label>任务类型</label><select class="proto-select" id="newProjTask"><option value="detection">目标检测 (Object Detection)</option><option value="segmentation">图像分割 (Instance Segmentation)</option></select></div><div class="proto-field"><label>逻辑模式</label><select class="proto-select" id="newProjMode"><option value="sequential">顺序模式</option><option value="detection">检测模式</option><option value="custom">自定义模式</option><option value="tracking">跟踪模式</option><option value="per_item">逐件模式</option><option value="weighing">称重投料</option><option value="region_events">区域事件</option><option value="ocr">OCR 读字</option><option value="anomaly">异常检测</option></select></div><button class="proto-btn" data-close-dialog>取消</button><button class="proto-btn" id="newProjCreateBtn">创建</button></dialog>
         <dialog id="modelDialog"><h3>选择模型</h3><div class="project-list" id="modelDialogList"><div class="tiny-note" style="padding:14px">加载模型列表中...</div></div><button class="proto-btn" data-close-dialog>关闭</button></dialog>
         <dialog id="formatDialog"><h3>切换格式</h3><div class="rowline"><span id="fmtGpuName">检测显卡中...</span><button class="proto-btn" data-open-dialog="diagnosisDialog">环境诊断</button></div><div id="fmtList"><div class="tiny-note">加载格式列表中...</div></div><div class="tiny-note">TensorRT 格式仅在当前显卡上有效，更换显卡后需重新转换。选定后点「应用」写入项目，非 FP32 格式自动发起转换。</div><div class="rowline"><span id="fmtStatus" class="tiny-note"></span></div><button class="proto-btn ok" id="fmtApplyBtn">应用并转换</button><button class="proto-btn" data-close-dialog>关闭</button></dialog>
         <dialog id="diagnosisDialog"><h3>GPU 环境诊断</h3><div class="route-list" id="diagList"><div class="tiny-note" style="padding:10px">诊断中...</div></div><button class="proto-btn" data-close-dialog>知道了</button></dialog>
         <dialog id="deleteProjectDialog"><h3>确认删除该项目吗？</h3><p class="tiny-note">此操作无法撤销。启用中的项目不能删除。</p><button class="proto-btn" data-close-dialog>取消</button><button class="proto-btn ng" id="projDeleteBtn">删除</button></dialog>
         <dialog id="roiDialog" style="width:780px;max-width:92vw;">
           <h3 id="roiDlgTitle">绘制 ROI 检测区域</h3>
-          <div class="rowline"><span class="tiny-note">单击画面添加顶点（自动归一化坐标），至少 3 个顶点构成多边形。</span><button class="proto-btn" id="roiUndoBtn">撤销上一点</button><button class="proto-btn ng" id="roiClearBtn">清除全部</button></div>
+          <div class="rowline"><span class="tiny-note">单击画面添加顶点。支持多块区域：画完一块点「完成本块」再画下一块；单块仍存旧格式，多块存嵌套数组（v3.57 零迁移）。</span>
+            <button class="proto-btn" id="roiUndoBtn">撤销上一点</button>
+            <button class="proto-btn" id="roiFinishBlockBtn">完成本块</button>
+            <button class="proto-btn ng" id="roiDelBlockBtn">删除上一块</button>
+            <button class="proto-btn ng" id="roiClearBtn">清除全部</button></div>
           <div id="roiCanvasWrap" style="position:relative;margin:12px 0;border:1px solid rgba(42,168,255,.25);background:linear-gradient(135deg,rgba(42,168,255,.08),rgba(2,8,20,.95));min-height:120px;">
             <img id="roiBgImg" alt="" style="display:block;width:100%;user-select:none;-webkit-user-drag:none;" />
             <svg id="roiSvg" viewBox="0 0 1 1" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;cursor:crosshair;"></svg>
@@ -2237,6 +2274,7 @@
                 <label class="proto-check"><input type="checkbox" data-rec="record_step_video" />录制步骤视频</label>
                 <label class="proto-check"><input type="checkbox" data-rec="record_cycle_video" />录制周期视频</label>
                 <label class="proto-check"><input type="checkbox" data-rec="record_session_video" />录制会话视频</label>
+                <label class="proto-check"><input type="checkbox" data-rec="record_boxes_data" />录像检测框 sidecar（项目 data_config.record_boxes_data；保存走项目页班次卡同键）</label>
                 <div style="display:flex;align-items:center;justify-content:space-between;"><span>视频质量</span><select class="proto-select" style="width:100px;" id="recVideoQ"><option value="low">低</option><option value="medium" selected>中</option><option value="high">高</option></select></div>
               </div>
               <button class="proto-btn primary" style="width:100%;margin-top:12px;" id="recSaveBtn">保存设置</button>
@@ -2333,6 +2371,7 @@
           <div class="mes-tab" data-mes-tab="cluster">集群汇总</div>
           <div class="mes-tab" data-mes-tab="inbound">生产管控入站</div>
           <div class="mes-tab" data-mes-tab="packaging">包装结算</div>
+          <div class="mes-tab" data-mes-tab="scancollect">多码采集</div>
         </div>
 
         <div class="mes-body">
@@ -2560,6 +2599,17 @@
               <div id="pkStateBox" style="margin-top:8px;"><div class="tj-empty"><span class="et">未选择结算流</span><span class="eh">点击上方配置行查看当前箱运行状态</span></div></div>
             </div>
           </div>
+          <!-- v1.5.1 周期多码采集 (v3.56 /scan-collect/*) -->
+          <div class="mes-panel" data-mes-panel="scancollect">
+            <div class="tiny-note" style="margin-bottom:8px;">一工件周期扫多码：槽位正则分类 / 组内与跨件去重 / 数量门 / 收尾结算。默认关零差异。配置挂当前选中项目。</div>
+            <div class="panel" style="padding:12px 14px;">
+              <div class="mes-toolbar"><span class="ph">多码采集配置</span><span class="grow"></span>
+                <button class="proto-btn sm" id="scCfgExampleBtn">填入焊接组装示例</button>
+                <button class="proto-btn sm primary" id="scCfgSaveBtn">保存</button>
+              </div>
+              <div id="scCfgBox" style="margin-top:8px;"><div class="tj-loading"><span class="ring"></span>加载中</div></div>
+            </div>
+          </div>
         </div>
 
         <dialog id="createOrderDialog"><h3>新建工单</h3><div class="filt" style="margin-top:10px;"><label>工单号</label><input class="proto-input" placeholder="自动生成或手填" /></div><div class="filt" style="margin-top:10px;"><label>关联项目</label><select class="proto-select"><option>金龙双工位</option><option>装配检测线A</option></select></div><div class="filt" style="margin-top:10px;"><label>绑定方式</label><div class="seg"><button class="active">按项目</button><button>按工位</button><button>按集群站点</button></div></div><div class="filt" style="margin-top:10px;"><label>计划数量</label><input class="proto-input" type="number" value="500" /></div><div class="filt" style="margin-top:10px;"><label>备注</label><input class="proto-input" /></div><div style="margin-top:14px;display:flex;gap:10px;justify-content:flex-end;"><button class="proto-btn" data-close-dialog>取消</button><button class="proto-btn ok" data-close-dialog>保存</button></div></dialog>
@@ -2677,54 +2727,56 @@
                 <div class="afield"><label>软件名称（导航栏显示）</label><input class="proto-input" id="dispApp" placeholder="视觉AI行为引导系统" /></div>
                 <div class="afield"><label>检验员名称</label><input class="proto-input" id="dispInspector" placeholder="张三" /></div>
                 <div class="afield"><label>设备编号（导航栏显示）</label><input class="proto-input" id="dispDevNo" placeholder="251011" /></div>
-                <div class="note-box">以上字段持久化到后端系统配置，自定义导出与 MES 推送同源使用。本页其余显隐开关由主程序「系统设置 → 显示设置」本地持久化管理。</div>
+                <div class="note-box">以上字段持久化到后端系统配置，自定义导出与 MES 推送同源使用。</div>
               </div>
-              <!-- 顶部导航栏显示 -->
+              <!-- 顶部导航栏显示 (v1.5.1 接真: 与主程序共用 display_settings.navbar, 改动即时保存) -->
               <div class="panel acard">
-                <div class="card-h"><span class="t">顶部导航栏显示</span></div>
-                <div class="swrow"><span>项目选择板块</span><input class="proto-switch" type="checkbox" checked /></div>
-                <div class="swrow"><span>当前模式</span><input class="proto-switch" type="checkbox" checked /></div>
-                <div class="swrow"><span>运行状态</span><input class="proto-switch" type="checkbox" checked /></div>
-                <div class="swrow"><span>运行时间</span><input class="proto-switch" type="checkbox" checked /></div>
-                <div class="swrow"><span>实时时间</span><input class="proto-switch" type="checkbox" checked /></div>
+                <div class="card-h"><span class="t">顶部导航栏显示</span><span class="badge-sm">改动即存</span></div>
+                <div class="swrow"><span>项目选择板块</span><input class="proto-switch" type="checkbox" data-disp="navbar.projectSelector" checked /></div>
+                <div class="swrow"><span>当前模式</span><input class="proto-switch" type="checkbox" data-disp="navbar.mode" checked /></div>
+                <div class="swrow"><span>运行状态</span><input class="proto-switch" type="checkbox" data-disp="navbar.status" checked /></div>
+                <div class="swrow"><span>运行时间</span><input class="proto-switch" type="checkbox" data-disp="navbar.runtime" checked /></div>
+                <div class="swrow"><span>实时时间</span><input class="proto-switch" type="checkbox" data-disp="navbar.realtime" checked /></div>
+                <div class="swrow"><span>当前班次<div class="sub">v3.35.1 项目启用班次拆分时生效</div></span><input class="proto-switch" type="checkbox" data-disp="navbar.shift" /></div>
               </div>
-              <!-- 检测中心显示 -->
+              <!-- 检测中心显示 (v1.5.1 接真: 与主程序共用 display_settings.monitor, 检测页面板即时生效) -->
               <div class="panel acard span2">
-                <div class="card-h"><span class="t">检测中心显示</span></div>
+                <div class="card-h"><span class="t">检测中心显示（自定义检测页面）</span><span class="badge-sm">改动即存 · 检测页即时生效</span></div>
                 <div class="sw-grid">
-                  <div class="swrow"><span>SOP 流程条</span><input class="proto-switch" type="checkbox" checked /></div>
-                  <div class="swrow"><span>右侧统计数据面板</span><input class="proto-switch" type="checkbox" checked /></div>
-                  <div class="swrow"><span>不良统计图表</span><input class="proto-switch" type="checkbox" checked /></div>
-                  <div class="swrow"><span>产能完成图表</span><input class="proto-switch" type="checkbox" checked /></div>
-                  <div class="swrow"><span>步骤统计表格</span><input class="proto-switch" type="checkbox" checked /></div>
+                  <div class="swrow"><span>SOP 流程条</span><input class="proto-switch" type="checkbox" data-disp="monitor.stepStrip" checked /></div>
+                  <div class="swrow"><span>右侧统计数据面板</span><input class="proto-switch" type="checkbox" data-disp="monitor.statsPanel" checked /></div>
+                  <div class="swrow"><span>不良统计图表</span><input class="proto-switch" type="checkbox" data-disp="monitor.defectChart" checked /></div>
+                  <div class="swrow"><span>产能完成图表</span><input class="proto-switch" type="checkbox" data-disp="monitor.capacityChart" checked /></div>
+                  <div class="swrow"><span>步骤统计表格</span><input class="proto-switch" type="checkbox" data-disp="monitor.stepTable" checked /></div>
+                  <div class="swrow"><span>物品校验面板<div class="sub">v3.56 装箱清点 / 混合逐件</div></span><input class="proto-switch" type="checkbox" data-disp="monitor.mixPanel" checked /></div>
                 </div>
                 <div class="set-sub">步骤统计表格列（默认全开）</div>
                 <div class="sw-grid">
-                  <div class="swrow"><span>序号</span><input class="proto-switch" type="checkbox" checked /></div>
-                  <div class="swrow"><span>步骤</span><input class="proto-switch" type="checkbox" checked /></div>
-                  <div class="swrow"><span>状态</span><input class="proto-switch" type="checkbox" checked /></div>
-                  <div class="swrow"><span>PT/s</span><input class="proto-switch" type="checkbox" checked /></div>
-                  <div class="swrow"><span>结果</span><input class="proto-switch" type="checkbox" checked /></div>
-                  <div class="swrow"><span>FPS</span><input class="proto-switch" type="checkbox" checked /></div>
-                  <div class="swrow"><span>延迟</span><input class="proto-switch" type="checkbox" checked /></div>
-                  <div class="swrow"><span>检测数</span><input class="proto-switch" type="checkbox" checked /></div>
-                  <div class="swrow"><span>CT 包含 NG 周期</span><input class="proto-switch" type="checkbox" /></div>
+                  <div class="swrow"><span>序号</span><input class="proto-switch" type="checkbox" data-disp="monitor.stepTableColumns.showNo" checked /></div>
+                  <div class="swrow"><span>步骤</span><input class="proto-switch" type="checkbox" data-disp="monitor.stepTableColumns.showStep" checked /></div>
+                  <div class="swrow"><span>状态</span><input class="proto-switch" type="checkbox" data-disp="monitor.stepTableColumns.showStatus" checked /></div>
+                  <div class="swrow"><span>PT/s</span><input class="proto-switch" type="checkbox" data-disp="monitor.stepTableColumns.showPt" checked /></div>
+                  <div class="swrow"><span>结果</span><input class="proto-switch" type="checkbox" data-disp="monitor.stepTableColumns.showResult" checked /></div>
+                  <div class="swrow"><span>FPS</span><input class="proto-switch" type="checkbox" data-disp="monitor.showFps" checked /></div>
+                  <div class="swrow"><span>延迟</span><input class="proto-switch" type="checkbox" data-disp="monitor.showLatency" checked /></div>
+                  <div class="swrow"><span>检测数</span><input class="proto-switch" type="checkbox" data-disp="monitor.showDetectionCount" checked /></div>
+                  <div class="swrow"><span>CT 包含 NG 周期</span><input class="proto-switch" type="checkbox" data-disp="monitor.ctIncludeNg" /></div>
                 </div>
                 <div class="set-sub">PT / CT 口径</div>
                 <div class="form-grid">
-                  <div class="filt"><label>PT 显示口径</label><select class="proto-select"><option>当前周期内</option><option>平均</option><option>最近一轮</option></select></div>
-                  <div class="filt"><label>PT 计算方式</label><select class="proto-select"><option>合并</option><option>最后一次</option></select></div>
-                  <div class="filt"><label>PT 多段合并策略</label><select class="proto-select"><option>总和（默认）</option><option>取最长</option><option>仅首段</option></select></div>
-                  <div class="filt"><label>PT 计算口径</label><select class="proto-select"><option>跨度（默认）</option><option>累计可见时长</option></select></div>
-                  <div class="filt"><label>CT 显示口径</label><select class="proto-select"><option>平均</option><option>最近一轮</option><option>当前周期内</option></select></div>
+                  <div class="filt"><label>PT 显示口径</label><select class="proto-select" data-disp="monitor.ptMode"><option value="current">当前周期内</option><option value="avg">平均</option><option value="last">最近一轮</option></select></div>
+                  <div class="filt"><label>PT 计算方式</label><select class="proto-select" data-disp="monitor.ptAggregate"><option value="sum">合并</option><option value="last">最后一次</option></select></div>
+                  <div class="filt"><label>PT 多段合并策略</label><select class="proto-select" data-disp="monitor.ptAccumulateStrategy"><option value="sum">总和（默认）</option><option value="max">取最长</option><option value="first_only">仅首段</option></select></div>
+                  <div class="filt"><label>PT 计算口径</label><select class="proto-select" data-disp="monitor.ptCalcMode"><option value="span">跨度（默认）</option><option value="visible">累计可见时长</option></select></div>
+                  <div class="filt"><label>CT 显示口径</label><select class="proto-select" data-disp="monitor.ctMode"><option value="avg">平均</option><option value="last">最近一轮</option><option value="current">当前周期内</option></select></div>
                 </div>
                 <div class="set-sub">结算保留 / NG TOP3</div>
-                <div class="swrow"><span>结算后强制保留显示</span><input class="proto-switch" type="checkbox" /></div>
+                <div class="swrow"><span>结算后强制保留显示</span><input class="proto-switch" type="checkbox" data-disp="monitor.resultHoldEnabled" /></div>
                 <div class="form-grid">
-                  <div class="filt"><label>结算后保留秒数</label><input class="proto-input" type="number" value="2.0" /></div>
-                  <div class="filt"><label>NG TOP3 显示模式</label><select class="proto-select"><option>百分比</option><option>次数</option></select></div>
+                  <div class="filt"><label>结算后保留秒数</label><input class="proto-input" type="number" step="0.5" min="0" data-disp="monitor.resultHoldSeconds" value="1.5" /></div>
+                  <div class="filt"><label>NG TOP3 显示模式</label><select class="proto-select" data-disp="monitor.ngTopDisplayMode"><option value="percentage">百分比</option><option value="count">次数</option></select></div>
                 </div>
-                <div class="swrow" style="margin-top:8px;"><span>NG 步骤 TOP3</span><input class="proto-switch" type="checkbox" checked /></div>
+                <div class="swrow" style="margin-top:8px;"><span>NG 步骤 TOP3</span><input class="proto-switch" type="checkbox" data-disp="monitor.ngTop3" checked /></div>
               </div>
               <!-- 窗口模式 -->
               <div class="panel acard">
@@ -2741,13 +2793,13 @@
                 <div class="swrow"><span>闲置自动跳过</span><input class="proto-switch" type="checkbox" checked /></div>
                 <div class="afield"><label>超时秒数（默认 600 = 10 分钟）</label><input class="proto-input" type="number" value="600" /></div>
               </div>
-              <!-- 默认计数器显示 -->
+              <!-- 默认计数器显示 (v1.5.1 接真: display_settings.monitor.defaultCounters, 检测页 KPI 即时生效) -->
               <div class="panel acard">
-                <div class="card-h"><span class="t">默认计数器显示</span><span class="badge-sm">系统内置</span></div>
-                <div class="swrow"><span>检测次数（总产量）</span><input class="proto-switch" type="checkbox" checked /></div>
-                <div class="swrow"><span>OK 次数（合格总数）</span><input class="proto-switch" type="checkbox" checked /></div>
-                <div class="swrow"><span>NG 次数（不良总数）</span><input class="proto-switch" type="checkbox" checked /></div>
-                <div class="swrow"><span>NG 步骤</span><input class="proto-switch" type="checkbox" checked /></div>
+                <div class="card-h"><span class="t">默认计数器显示</span><span class="badge-sm">改动即存</span></div>
+                <div class="swrow"><span>检测次数（总产量）</span><input class="proto-switch" type="checkbox" data-disp="monitor.defaultCounters.showTotal" checked /></div>
+                <div class="swrow"><span>OK 次数（合格总数）</span><input class="proto-switch" type="checkbox" data-disp="monitor.defaultCounters.showGood" checked /></div>
+                <div class="swrow"><span>NG 次数（不良总数）</span><input class="proto-switch" type="checkbox" data-disp="monitor.defaultCounters.showBad" checked /></div>
+                <div class="swrow"><span>NG 步骤</span><input class="proto-switch" type="checkbox" data-disp="monitor.defaultCounters.showNgSteps" checked /></div>
                 <div class="note-box">NG 步骤：统计每个步骤的不良次数，用于定位高频缺陷工序。</div>
               </div>
               <!-- 画面变换 (接真 /source/transform/config?channel=N) -->
@@ -3075,7 +3127,9 @@
           var fw=m.framework||'PyTorch';
           var size=m.file_size?((Math.round(m.file_size/1048576*10)/10)+' MB'):'—';
           var up=String(m.created_at||m.upload_time||'').slice(0,10)||'—';
-          return '<div class="model-card"><div class="top"><div class="ico">◈</div><span class="badge '+(u?'on':'off')+'">'+(u?'使用中':'闲置')+'</span></div>'+
+          var cap=m.capability?('<span class="badge-sm">'+_esc(m.capability)+'</span>'):'';
+          var builtin=m.builtin?' <span class="tiny-note">内置</span>':'';
+          return '<div class="model-card"><div class="top"><div class="ico">◈</div><span class="badge '+(u?'on':'off')+'">'+(u?'使用中':'闲置')+'</span>'+cap+builtin+'</div>'+
             '<div class="nm" title="'+(m.name||'')+'">'+(m.name||'')+'</div>'+
             '<div class="info"><span>ID: '+m.id+'</span><span>大小: '+size+'</span><span>框架: '+fw+'</span><span>类别: '+labels.length+' 个</span><span>上传: '+up+'</span></div>'+
             '<div class="acts"><button class="proto-btn" data-model-detail="'+m.id+'">详情</button><button class="proto-btn" data-model-bind="'+m.id+'" title="绑定为当前启用项目的检测模型">设为项目模型</button><button class="proto-btn ng" data-model-del="'+m.id+'"'+(u?' disabled title="使用中的模型不能删除"':'')+'>删除</button></div></div>';
@@ -3097,6 +3151,16 @@
         if(ts[2])ts[2].textContent=trtN; if(ts[3])ts[3].textContent=labelTotal; }
       var note=root.querySelector('.tiny-note');
       if(note) note.textContent='共 '+list.length+' 个模型 · '+usedN+' 个使用中';
+      try{
+        var caps=await tjApi.get('/models/capabilities');
+        if(caps && note){
+          var capList=Array.isArray(caps)?caps:(caps.capabilities||caps.items||[]);
+          if(capList.length){
+            var capTxt=capList.map(function(c){ return (c.label||c.name||c.capability||c.id); }).filter(Boolean).join(' / ');
+            if(capTxt) note.textContent += ' · 能力目录 '+capTxt;
+          }
+        }
+      }catch(eCap){}
       // 资产摘要 + 最近动态: 从真模型列表与激活项目推导
       try{ await _tjFillModelAsset(list, projs, labelTotal, trtN); }catch(e2){}
     }catch(e){ /* 失败保留演示 */ }
@@ -3637,8 +3701,14 @@
           var t=String(c.start_time||'').slice(11,19)||'—';
           var dur=c.duration!=null?(Number(c.duration).toFixed(2)+'s'):'—';
           var ev=c.event_name||c.result_reason||'合格事件';
-          return '<tr><td class="tcen">'+(c.cycle_number||c.id)+'</td><td>'+(c.serial_no||('WP-'+c.id))+'</td><td>'+t+'</td><td class="tcen">'+dur+'</td><td class="tcen">'+badge+'</td><td>'+ev+'</td><td class="tcen">'+(c.video_id?'📹':'—')+'</td></tr>';
+          return '<tr><td class="tcen">'+(c.cycle_number||c.id)+'</td><td>'+(c.serial_no||('WP-'+c.id))+'</td><td>'+t+'</td><td class="tcen">'+dur+'</td><td class="tcen">'+badge+'</td><td>'+ev+'</td><td class="tcen">'+(c.video_id?('<button class="proto-btn sm" data-vid="'+c.video_id+'">原片</button> <button class="proto-btn sm" data-vid-ann="'+c.video_id+'">带框</button>'):'—')+'</td></tr>';
         }).join('');
+        tb.querySelectorAll('[data-vid]').forEach(function(b){ b.addEventListener('click', async function(){
+          try{ await tjApi.download('/data/videos/'+b.dataset.vid); }catch(e){ showProtoToast('下载失败'); }
+        }); });
+        tb.querySelectorAll('[data-vid-ann]').forEach(function(b){ b.addEventListener('click', async function(){
+          try{ await tjApi.download('/data/videos/'+b.dataset.vidAnn+'/annotated'); }catch(e){ showProtoToast('带框版下载失败（可能未开启 sidecar/归档）'); }
+        }); });
       }
       // 真实分页器: 已知 total 用页码, 未知用上一页/下一页
       var pager=document.getElementById('cyclePager');
@@ -4335,8 +4405,55 @@
     // 检测框外观 + 提示框设置: 按激活项目 detection_config 统一加载 (tjLoadToastCfg 内含)
     try{ tjLoadToastCfg(); }catch(e){}
     try{ tjLoadXf(); }catch(e){}
+    try{ tjLoadDisplayToggles(); }catch(e){}
   }
   window.tjLoadSettings=tjLoadSettings;
+
+  // ==================== v1.5.1 显示设置·检测页面板/导航栏/计数器 接真 ====================
+  // 此前这三张卡全是摆设开关 ("主程序配好再套插件"的根源之一)。现在经桥写穿宿主
+  // localStorage 'display_settings' (host-display-get/set, 与主程序 useSystemStore 深合并
+  // 语义一致), 改动即存; 插件检测页 data-sc-toggle/data-sc-counter 面板即时生效,
+  // 卸下插件后主程序设置页看到的也是同一份配置 —— 双向互认。
+  function _dispGet(obj, path){
+    var cur=obj;
+    var seg=path.split('.');
+    for(var i=0;i<seg.length;i++){ if(cur==null) return undefined; cur=cur[seg[i]]; }
+    return cur;
+  }
+  function _dispPatch(path, v){
+    // 'monitor.defaultCounters.showTotal' → {monitor:{defaultCounters:{showTotal:v}}}
+    var seg=path.split('.'); var root={}; var cur=root;
+    for(var i=0;i<seg.length-1;i++){ cur[seg[i]]={}; cur=cur[seg[i]]; }
+    cur[seg[seg.length-1]]=v;
+    return root;
+  }
+  async function tjLoadDisplayToggles(){
+    var els=document.querySelectorAll('[data-disp]');
+    if(!els.length) return;
+    var settings=null;
+    try{ var r=await _tjAction('host-display-get',{}); settings=(r&&r.settings)||{}; }catch(e){ settings={}; }
+    els.forEach(function(el){
+      var path=el.getAttribute('data-disp');
+      var cur=_dispGet(settings, path);
+      if(el.type==='checkbox'){ if(cur!==undefined) el.checked=(cur!==false); }
+      else if(el.tagName==='SELECT'){ if(cur!==undefined&&cur!==null) el.value=String(cur); }
+      else { if(cur!==undefined&&cur!==null) el.value=cur; }
+      if(el.__tjB) return; el.__tjB=true;
+      el.addEventListener('change', async function(){
+        var v;
+        if(el.type==='checkbox') v=el.checked;
+        else if(el.type==='number') v=parseFloat(el.value)||0;
+        else v=el.value;
+        try{
+          var res=await _tjAction('host-display-set',{settings:_dispPatch(path, v)});
+          showProtoToast('显示设置已保存');
+          // 插件检测页即时生效 (不等数据泵下一拍)
+          try{ if(res&&res.settings&&res.settings.monitor) tjApplyToggles(res.settings.monitor); }catch(_){}
+        }catch(e){ showProtoToast('保存失败: '+((e&&e.message)||e)); }
+      });
+    });
+  }
+  window.tjLoadDisplayToggles=tjLoadDisplayToggles;
 
   // ==================== 设置页·提示框设置接真 ====================
   // 数据源 = 激活项目 detection_config (toasts.{ok,ng,scan,warn_no_barcode} + customToasts);
@@ -4800,13 +4917,13 @@
         var dis=document.getElementById('disableAuthBtn');
         if(dis) dis.addEventListener('click', async function(){
           if(!confirm('确认关闭账号鉴权？关闭后所有人变回最高管理员（账号数据保留）')) return;
-          try{ await tjApi.post('/auth/disable-auth',{}); window.__tjToken=null; showProtoToast('账号鉴权已关闭'); tjLoadAuthPanel(); }
+          try{ await tjApi.post('/auth/disable-auth',{}); await tjAuthClearToken(); showProtoToast('账号鉴权已关闭'); tjLoadAuthPanel(); tjLoadAuth(); }
           catch(e){ showProtoToast('关闭失败: '+_plugErr(e)); }
         });
         var lo=document.getElementById('logoutBtn');
         if(lo) lo.addEventListener('click', async function(){
           try{ await tjApi.post('/auth/logout',{}); }catch(e){}
-          window.__tjToken=null; showProtoToast('已登出'); tjLoadAuthPanel();
+          await tjAuthClearToken(); showProtoToast('已登出'); tjLoadAuthPanel(); tjLoadAuth();
         });
       }
     }catch(e){ line.innerHTML='当前状态：<b>加载失败</b>'; }
@@ -4904,9 +5021,14 @@
       if(u.length<3||p.length<6){ showProtoToast('用户名≥3位、密码≥6位'); return; }
       try{
         await tjApi.post('/auth/enable-auth',{admin_username:u, admin_password:p, admin_display_name:((document.getElementById('enaDisp')||{}).value||'').trim()||undefined});
-        showProtoToast('账号鉴权已启用，管理员已创建');
+        // v1.5.1: 启用后立即用刚创建的管理员自动登录并写穿宿主, 防止"启用瞬间全员变访客"卡死后续配置
+        try{
+          var lr=await tjApi.post('/auth/login',{username:u, password:p});
+          await tjAuthPushToken((lr&&lr.token)||null, !(lr&&lr.session_persist===false));
+          showProtoToast('账号鉴权已启用，已以管理员 '+_esc(u)+' 登录');
+        }catch(_e){ showProtoToast('账号鉴权已启用，管理员已创建，请登录'); }
         var dlg=document.getElementById('enableAuthDialog'); if(dlg&&dlg.open) dlg.close();
-        tjLoadAuthPanel();
+        tjLoadAuthPanel(); tjLoadAuth();
       }catch(e){ showProtoToast('启用失败: '+_plugErr(e)); }
     });
     // 登录
@@ -4916,7 +5038,8 @@
       if(!u||!p){ showProtoToast('请输入用户名和密码'); return; }
       try{
         var r=await tjApi.post('/auth/login',{username:u, password:p});
-        window.__tjToken=(r&&r.token)||null;
+        // v1.5.1: token 写穿宿主存储 —— host.api / 数据泵 / 后续桥请求全部换新身份 (插件即主程序)
+        await tjAuthPushToken((r&&r.token)||null, !(r&&r.session_persist===false));
         showProtoToast('登录成功: '+_esc((r&&r.user&&(r.user.display_name||r.user.username))||u));
         var dlg=document.getElementById('loginDialog'); if(dlg&&dlg.open) dlg.close();
         tjLoadAuthPanel(); if(window.tjLoadAuth) tjLoadAuth();
@@ -4928,10 +5051,11 @@
       if(np.length<6){ showProtoToast('新密码至少 6 位'); return; }
       try{
         await tjApi.post('/auth/change-password',{old_password:op, new_password:np});
-        window.__tjToken=null;
+        await tjAuthClearToken();
         showProtoToast('密码已修改，请重新登录');
         var dlg=document.getElementById('changePwdDialog'); if(dlg&&dlg.open) dlg.close();
-        tjLoadAuthPanel();
+        tjLoadAuthPanel(); tjLoadAuth();
+        var ldg=document.getElementById('loginDialog'); if(ldg&&ldg.showModal&&!ldg.open) ldg.showModal();
       }catch(e){ showProtoToast('修改失败: '+_plugErr(e)); }
     });
     // 创建账号
@@ -5349,7 +5473,7 @@
     applyLogicVisibility(mode);
     // 逻辑模式变化会改变"哪一步是结算步", 同步刷新结算步禁用态 (pe 存在时才动)
     try{ if(window.__tjPE) _tjSyncSettleSteps(); }catch(e){}
-    showProtoToast(`已切换为${({sequential:'顺序模式',detection:'检测模式',custom:'自定义模式',tracking:'跟踪模式',per_item:'逐件模式',weighing:'称重投料模式',region_events:'区域事件模式'}[mode] || '逻辑模式')}`);
+    showProtoToast(`已切换为${({sequential:'顺序模式',detection:'检测模式',custom:'自定义模式',tracking:'跟踪模式',per_item:'逐件模式',weighing:'称重投料模式',region_events:'区域事件模式',ocr:'OCR 读字',anomaly:'异常检测'}[mode] || '逻辑模式')}`);
   }
 
   function applyLogicVisibility(mode){
@@ -5358,10 +5482,12 @@
     // v3.35 融合模式: 顺序类项目配了外设门控 (drive_mode=step_gate) 时, 称重块也要露出来
     const pc = (window.__tjPE && window.__tjPE.pipeline_config) || {};
     const fusion = !!(pc.weighing && pc.weighing.drive_mode === 'step_gate');
+    const mixPi = pc.custom_mixed_with === 'per_item';
     panel.querySelectorAll('[data-logic-show]').forEach(block => {
       const modes = block.dataset.logicShow.split(/\s+/).filter(Boolean);
       let show = modes.includes('all') || modes.includes(mode);
       if (!show && fusion && block.dataset.lg === 'weighing') show = true;
+      if (!show && mixPi && (block.dataset.lg === 'pi' || block.dataset.lg === 'piSteps')) show = true;
       block.style.display = show ? '' : 'none';
     });
   }
@@ -5396,7 +5522,7 @@
   window.__tjProjects = [];
   window.__tjActivePid = null;
   window.__tjSelectedPid = null;
-  function _modeLabel(m){ return ({sequential:'顺序',detection:'检测',custom:'自定义',tracking:'跟踪',per_item:'逐件',weighing:'称重',region_events:'区域事件'}[m]||m||'顺序'); }
+  function _modeLabel(m){ return ({sequential:'顺序',detection:'检测',custom:'自定义',tracking:'跟踪',per_item:'逐件',weighing:'称重',region_events:'区域事件',ocr:'OCR',anomaly:'异常'}[m]||m||'顺序'); }
   function _projCardsBox(){
     var c = document.querySelector('[data-project-card]');
     if (c) return c.closest('.project-list');
@@ -5426,6 +5552,7 @@
       });
       try{ tjApplyProjFilter(); }catch(e){}
       if (window.__tjSelectedPid != null) tjSelectProject(window.__tjSelectedPid, true);
+      try{ var banks=await window.tjApi.get('/anomaly/banks'); window.__tjAnomalyBanks=(banks&&banks.items)||banks||[]; }catch(_){ window.__tjAnomalyBanks=[]; }
     } catch(e){ showProtoToast('加载项目失败: '+e.message); }
   }
   function tjSelectProject(pid, silent){
@@ -5458,6 +5585,18 @@
     var se=document.getElementById('projShiftEnable'); if(se) se.checked=!!pe.data_config.shift_split_enabled;
     var sd=document.getElementById('projShiftDay'); if(sd) sd.value=pe.data_config.day_shift_start||'08:00';
     var sn=document.getElementById('projShiftNight'); if(sn) sn.value=pe.data_config.night_shift_start||'20:00';
+    tjRenderShiftList();
+  }
+  // v3.35.1 自定义班次列表渲染 (data_config.shifts=[{name,start}], 无 end — 持续到下一班)
+  function tjRenderShiftList(){
+    var box=document.getElementById('projShiftList'); if(!box||!window.__tjPE) return;
+    var arr=window.__tjPE.data_config.shifts;
+    box.innerHTML=(arr||[]).map(function(s,i){
+      return '<div class="rowline"><b>'+(i+1)+'.</b>'
+        +'<label>班次名<input class="proto-input" data-b="pe.data_config.shifts.'+i+'.name" value="'+_esc(s.name||'')+'" placeholder="如 早班" style="width:110px" /></label>'
+        +'<label>开始时刻<input class="proto-input" type="time" data-b="pe.data_config.shifts.'+i+'.start" value="'+_esc(s.start||'08:00')+'" style="width:110px" /></label>'
+        +'<button class="proto-btn ng" data-lga="shiftDel" data-i="'+i+'">×</button></div>'; }).join('')
+      +'<div class="rowline"><button class="proto-btn" data-lga="shiftAdd">+ 添加班次</button></div>';
   }
   function tjApplyProjFilter(){
     var psi=document.getElementById('projSearchInput'); if(!psi) return;
@@ -5740,7 +5879,7 @@
       }).join('');
     }
     if(tbt){
-      if(!steps.length){ tbt.innerHTML='<tr><td colspan="17">'+_tjEmptyHTML('暂无物品步骤','绑定模型后按标签自动生成')+'</td></tr>'; }
+      if(!steps.length){ tbt.innerHTML='<tr><td colspan="18">'+_tjEmptyHTML('暂无物品步骤','绑定模型后按标签自动生成')+'</td></tr>'; }
       else tbt.innerHTML=steps.map(function(s,i){
         var th=s.threshold==null?50:(s.threshold<=1?Math.round(s.threshold*100):s.threshold);
         return '<tr data-si="'+i+'">'
@@ -5761,6 +5900,7 @@
           +'<td>'+num('stack_reappear_seconds', s.stack_reappear_seconds, '1.2')+'</td>'
           +'<td>'+num('stack_required_count', s.stack_required_count, '2')+'</td>'
           +'<td>'+num('max_recognized', s.max_recognized, '无上限')+'</td>'
+          +'<td>'+num('settle_confirm_frames', s.settle_confirm_frames, '1')+'</td>'
           +'</tr>';
       }).join('');
     }
@@ -5798,6 +5938,8 @@
       if(s.tracking_max_lost_seconds==null) s.tracking_max_lost_seconds=5.0;
       if(s.event_required_count==null) s.event_required_count=1;
       if(s.event_gone_frames==null) s.event_gone_frames=8;
+      // v3.50 齐件即结算确认放入帧: 配了就 ≥1 取整, 空 = 后端默认 1
+      if(s.settle_confirm_frames!=null) s.settle_confirm_frames=Math.max(1,Math.floor(Number(s.settle_confirm_frames)||1));
       // v3.35 外设门控: 表格临时键 __gate_* → steps_config[].device_gate
       if('__gate_kind' in s){
         var gk=s.__gate_kind;
@@ -5851,6 +5993,11 @@
     pc.settlement_mode = pc.settlement_mode||'first_step';
     pc.idle_timeout_seconds = Number(pc.idle_timeout_seconds)||0;
     pc.cycle_max_duration = Number(pc.cycle_max_duration)||0;
+    pc.idle_timeout_event_id = (pc.idle_timeout_event_id==null||pc.idle_timeout_event_id==='')?null:pc.idle_timeout_event_id;
+    pc.custom_cycle_owner = pc.custom_cycle_owner||'steps';
+    pc.container_gate_label = pc.container_gate_label||'';
+    pc.container_gate_appear_seconds = (pc.container_gate_appear_seconds!=null)?Number(pc.container_gate_appear_seconds):1;
+    pc.container_gate_gone_seconds = (pc.container_gate_gone_seconds!=null)?Number(pc.container_gate_gone_seconds):3;
     pc.sequence_order = Array.isArray(pc.sequence_order)?pc.sequence_order:[];
     pc.detection_steps = Array.isArray(pc.detection_steps)?pc.detection_steps:[];
     pc.custom_based_on = pc.custom_based_on||null;
@@ -5909,7 +6056,14 @@
       lock_count_on_start:true, finish_label:'', finish_sustain_frames:3, finish_requires_no_items:false,
       stability_count_tolerance:0, stability_count_ratio:0.85, settle_after_all_done_sec:0,
       lock_lookahead_seconds:0, require_exact_count:false, disable_auto_settle:false,
-      cycle_max_duration_sec:0, idle_timeout_sec:0 }, (pc.per_item&&typeof pc.per_item==='object')?pc.per_item:{});
+      cycle_max_duration_sec:0, idle_timeout_sec:0,
+      absorb_new_items_sec:0, item_count_counter_name:'', remediation_event_notify:false,
+      start_by_stability:false, start_labels:[], start_sustain_frames:3, start_conf:0.5,
+      board_rereg_enabled:false }, (pc.per_item&&typeof pc.per_item==='object')?pc.per_item:{});
+    if(!Array.isArray(pc.per_item.start_labels)) pc.per_item.start_labels=pc.per_item.start_labels?[String(pc.per_item.start_labels)]:[];
+    pc.ocr = Object.assign({interval_s:2.0, min_score:0.5, stable_reads:2, rules:[]}, (pc.ocr&&typeof pc.ocr==='object')?pc.ocr:{});
+    if(!Array.isArray(pc.ocr.rules)) pc.ocr.rules=[];
+    pc.anomaly = Object.assign({bank_id:'', threshold:null, interval_s:2.0, consecutive:3, roi:null, ng_event_id:2, ok_event_id:1, ng_cooldown_s:30, recover_ok_event:false}, (pc.anomaly&&typeof pc.anomaly==='object')?pc.anomaly:{});
     pe.steps_config.forEach(function(s){ if(!s.per_item||typeof s.per_item!=='object') s.per_item={}; });
     // 副模型反序列化 (镜像主程序 Step 8: pipeline_config.models[] 中 name!=='main' 的 slot)
     var rawModels = Array.isArray(pc.models)?pc.models:[];
@@ -5938,6 +6092,45 @@
     pe.data_config.shift_split_enabled = !!pe.data_config.shift_split_enabled;
     pe.data_config.day_shift_start = pe.data_config.day_shift_start||'08:00';
     pe.data_config.night_shift_start = pe.data_config.night_shift_start||'20:00';
+    // v3.35.1 自定义班次列表 (未配过 → 从两班字段生成初始两条, 对齐主程序初始化)
+    if(!Array.isArray(pe.data_config.shifts)||pe.data_config.shifts.length<2){
+      pe.data_config.shifts=[
+        {name:'白班', start:pe.data_config.day_shift_start},
+        {name:'晚班', start:pe.data_config.night_shift_start}];
+    } else {
+      pe.data_config.shifts=pe.data_config.shifts.map(function(s){ return {name:String((s&&s.name)||''), start:(s&&s.start)||'08:00'}; });
+    }
+    // v3.44 NG 判定与处置统一模型: 新块优先, 老项目从 legacy 键合成 (对齐主程序读兼容;
+    // legacy 键读后不再回写, 保存只落 ng_handling)
+    if(!pc.ng_handling||typeof pc.ng_handling!=='object'||!Object.keys(pc.ng_handling).length){
+      var _rem=pc.ng_remediation||{}, _cg=pc.closing_guard||{}, _remOn=_rem.enabled===true;
+      pc.ng_handling={
+        violation:pc.instant_ng_on_violation?'instant_ng':(pc.strict_order_violation_event_id?'hint':'none'),
+        violation_event_id:pc.strict_order_violation_event_id||null,
+        missing_step:_cg.hold_enabled?'hold':(_remOn&&_rem.allow_step!==false?'ack':'ng'),
+        hold_timeout_s:isFinite(Number(_cg.hold_timeout_s))?Number(_cg.hold_timeout_s):120,
+        hold_event_id:_cg.event_id||null,
+        short_count:(_remOn&&_rem.allow_count!==false)?'ack':'ng',
+        gate_enabled:_cg.gate_enabled===true,
+        gate_steps:Array.isArray(_cg.gate_steps)?_cg.gate_steps.slice():[],
+        gate_event_id:_cg.event_id||null,
+        gate_escalate_steps:[]
+      };
+    }
+    var _ngh=pc.ng_handling;
+    if(['none','hint','instant_ng'].indexOf(_ngh.violation)<0) _ngh.violation='none';
+    if(['ng','ack','hold'].indexOf(_ngh.missing_step)<0) _ngh.missing_step='ng';
+    if(['ng','ack','hold'].indexOf(_ngh.short_count)<0) _ngh.short_count='ng';
+    if(!Array.isArray(_ngh.gate_steps)) _ngh.gate_steps=[];
+    if(!Array.isArray(_ngh.gate_escalate_steps)) _ngh.gate_escalate_steps=[];
+    if(!isFinite(Number(_ngh.hold_timeout_s))) _ngh.hold_timeout_s=120;
+    _ngh.missing_step_early = _ngh.missing_step_early===true;
+    // v3.48 计数组合判定表兜底 (默认关空表 = 零差异)
+    if(!pc.combo_table||typeof pc.combo_table!=='object') pc.combo_table={enabled:false,labels:[],rows:[]};
+    if(typeof pc.combo_table.enabled!=='boolean') pc.combo_table.enabled=false;
+    if(!Array.isArray(pc.combo_table.labels)) pc.combo_table.labels=[];
+    if(!Array.isArray(pc.combo_table.rows)) pc.combo_table.rows=[];
+    if(pc.combo_table.count_mode!=='positional') pc.combo_table.count_mode='steps';
     return pe;
   }
   // 路径写入: 'pc.xxx' → pipeline_config, 'steps.N' → steps_config, 'exp.N' → 期望物品, 'pe.xxx' → 项目根
@@ -6014,15 +6207,33 @@
   var LG={};
   LG.settle=function(pe,pc){
     function ro(v,txt){ return '<label class="proto-check"><input type="radio" name="lgSettleMode" data-b="pc.settlement_mode" value="'+v+'"'+(pc.settlement_mode===v?' checked':'')+' />'+txt+'</label>'; }
-    return '<div class="rowline">'+ro('first_step','第一步结算（默认）')+ro('last_step','最后一步结算')+ro('no_anchor','无锚点（超时结算）')+ro('last_first','末步结算 + 首步开周期')+'</div>'
-      +'<div class="proto-grid3">'+_lgNum('空闲超时(秒) 0=不限','pc.idle_timeout_seconds',pc.idle_timeout_seconds)+_lgNum('周期超时(秒) 0=不限','pc.cycle_max_duration',pc.cycle_max_duration)+'</div>';
+    var isDet=pe.logic_mode==='detection';
+    var radios=isDet
+      ? (ro('first_step','第一步结算（默认：下一件首步重现才结算上一件）')+ro('last_step','最后一步结算（本件完成即出结果）'))
+      : (ro('first_step','第一步结算（默认）')+ro('last_step','最后一步结算')+ro('no_anchor','无锚点（超时结算）')+ro('last_first','末步结算 + 首步开周期'));
+    var note=isDet?'<div class="tiny-note">检测模式仅露出 first_step / last_step 两档（v3.60.1）。last_step=末步完成即结算本件，不必等下一件首步重现。</div>':'';
+    return note+'<div class="rowline">'+radios+'</div>'
+      +'<div class="tiny-note" style="margin-top:8px">超时结算（空闲超时结算当前周期；周期硬上限超时判 NG。0=不启用）</div>'
+      +'<div class="proto-grid3">'+_lgNum('空闲超时(秒) 0=不限','pc.idle_timeout_seconds',pc.idle_timeout_seconds)+_lgNum('周期超时(秒) 0=不限','pc.cycle_max_duration',pc.cycle_max_duration)
+      +_lgSelRaw('空闲超时中断事件 (v3.58, 空=回退事件2)', 'pc.idle_timeout_event_id', _optEvent(pc.idle_timeout_event_id,true), 'intOrNull')
+      +'</div>';
   };
   LG.seq=function(pe,pc){ return _lgSeqHTML(pc.sequence_order,'sequence_order'); };
   LG.det=function(pe,pc){ return _lgDetHTML(pc.detection_steps,'detection_steps'); };
   LG.custom=function(pe,pc){
     var h='<div class="proto-grid2">'
       +_lgSel('基于模式（可选）','pc.custom_based_on',[['','不基于'],['sequential','基于顺序模式'],['detection','基于检测模式']],pc.custom_based_on||'','strOrNull','custom')
-      +_lgCk('累积重复序列','pc.accumulate_repeats',pc.accumulate_repeats)+'</div>';
+      +_lgCk('累积重复序列','pc.accumulate_repeats',pc.accumulate_repeats)
+      +_lgSel('周期定界主权 (v3.59)','pc.custom_cycle_owner',[['steps','步骤侧（默认）'],['container','容器定界']],pc.custom_cycle_owner||'steps','','custom')
+      +'</div>';
+    if((pc.custom_cycle_owner||'steps')==='container'){
+      h+='<div class="tiny-note">容器标签到位开周期、离场即结算；容器标签由门独占消费不入步骤侧。缺席时动作不入账不误开周期。</div>'
+        +'<div class="proto-grid3">'
+        +_lgSelRaw('容器门标签','pc.container_gate_label',_optLabel(pc.container_gate_label||'',true,'选择标签'))
+        +_lgNum('到位确认(秒)','pc.container_gate_appear_seconds',pc.container_gate_appear_seconds!=null?pc.container_gate_appear_seconds:1)
+        +_lgNum('离场确认(秒)','pc.container_gate_gone_seconds',pc.container_gate_gone_seconds!=null?pc.container_gate_gone_seconds:3)
+        +'</div>';
+    }
     if(pc.custom_based_on==='sequential') h+='<div class="tiny-note">基于顺序 — 步骤排序</div>'+_lgSeqHTML(pc.custom_sequence_order,'custom_sequence_order');
     if(pc.custom_based_on==='detection') h+='<div class="tiny-note">基于检测 — 需检测步骤</div>'+_lgDetHTML(pc.custom_detection_steps,'custom_detection_steps');
     h+='<div class="tiny-note" style="margin-top:8px">条件列表（优先级小者先匹配）</div>';
@@ -6077,7 +6288,15 @@
       +_lgCkInline('ID锁定','pc.tracking_id_lock',pc.tracking_id_lock,'tracking')
       +(pc.tracking_id_lock?('<label>锁定帧数<input class="proto-input" type="number" style="width:64px" data-b="pc.tracking_id_lock_frames" data-t="int" value="'+pc.tracking_id_lock_frames+'" /></label>'):'')
       +_lgCkInline('顺序检查','pc.tracking_check_order',pc.tracking_check_order)
-      +'</div><div class="tiny-note" style="margin-top:6px">'+(pc.tracking_cycle_strategy==='container'?'每箱期望物品':'期望物品清单')+'</div>';
+      +'</div>';
+    // v3.50 齐件即结算: 仅 ROI离开/容器策略下有意义 — 凑齐期望件数并稳定 N 帧立即出结果, 不等离开
+    if(pc.tracking_cycle_strategy==='roi_exit'||pc.tracking_cycle_strategy==='container'){
+      h+='<div class="rowline">'+_lgCkInline('齐件即结算 (v3.50)','pc.tracking_settle_on_complete',pc.tracking_settle_on_complete===true,'tracking')+'</div>';
+      if(pc.tracking_settle_on_complete===true){
+        h+='<div class="tiny-note">凑齐期望物品并稳定后立即结算 (不等物品离开); 每步骤"确认放入帧数"在步骤表配 settle_confirm_frames (默认 1)。与扫码器 scan_pair 码-件配对互斥, 后端会拒绝同开。</div>';
+      }
+    }
+    h+='<div class="tiny-note" style="margin-top:6px">'+(pc.tracking_cycle_strategy==='container'?'每箱期望物品':'期望物品清单')+'</div>';
     h+=(pe.__expected||[]).map(function(it,i){
       return '<div class="rowline"><select class="proto-select" data-b="exp.'+i+'.label">'+_optLabel(it.label,true)+'</select>'
         +'<label>数量<input class="proto-input" type="number" style="width:64px" data-b="exp.'+i+'.count" data-t="int" value="'+(it.count||1)+'" /></label>'
@@ -6099,6 +6318,7 @@
       +_lgSelRaw('收尾动作/信号标签',p+'finish_label',_optLabel(s.finish_label,true,'留空'))
       +_lgNum('收尾动作连续帧',p+'finish_sustain_frames',s.finish_sustain_frames,'int')
       +_lgCk('工件离场才算结算',p+'finish_requires_no_items',s.finish_requires_no_items)
+      +_lgCk('离场快照判定 (v3.28)',p+'judge_on_workpiece_leave',s.judge_on_workpiece_leave===true)
       +_lgCk('严格等量才开周期',p+'require_exact_count',s.require_exact_count)
       +_lgNum('允许漏检几件',p+'stability_count_tolerance',s.stability_count_tolerance,'int')
       +_lgNum('最低检出比例',p+'stability_count_ratio',s.stability_count_ratio)
@@ -6110,6 +6330,26 @@
       // v3.33 换板兜底: 周期进行中所有 item 标签连续消失 N 帧 → 按真实覆盖状态自动结算并复位
       +_lgNum('换板兜底: 工件整体消失几帧'+((s.disable_auto_settle===true)?' (手动结算下不生效)':''),p+'workpiece_absent_settle_frames',s.workpiece_absent_settle_frames!=null?s.workpiece_absent_settle_frames:15,'int')
       +'</div>';
+    // v3.56 五件套 (默认关零差异)
+    h+='<div class="tiny-note" style="margin-top:8px">逐件五件套 (v3.56, 默认关)</div><div class="proto-grid3">'
+      +_lgNum('吸收新位置窗口(秒, 0=关)','pc.per_item.absorb_new_items_sec',s.absorb_new_items_sec||0)
+      +'<div class="proto-field"><label>OK 按件累加计数器名</label><input class="proto-input" data-b="pc.per_item.item_count_counter_name" value="'+_esc(s.item_count_counter_name||'')+'" placeholder="留空=不按件计数" /></div>'
+      +_lgCk('待补态走完整事件通知','pc.per_item.remediation_event_notify',s.remediation_event_notify===true)
+      +'</div>';
+    // v3.60 开始判定 + 整板重配准
+    h+='<div class="tiny-note" style="margin-top:8px">开始判定 / 整板重配准 (v3.60, 默认关; 通过前不锁账)</div><div class="rowline">'
+      +_lgCkInline('稳定窗口才开账','pc.per_item.start_by_stability',s.start_by_stability===true,'pi')
+      +_lgCkInline('整板拖动重配准','pc.per_item.board_rereg_enabled',s.board_rereg_enabled===true)
+      +'</div>';
+    if(s.start_by_stability===true || (s.start_labels&&s.start_labels.length)){
+      h+='<div class="proto-grid3">'
+        +'<div class="proto-field"><label>开始标签 (逗号, 各自确认到位即闩锁)</label><input class="proto-input" data-b="pc.per_item.start_labels" data-t="strlist" data-rr="pi" value="'+_esc((s.start_labels||[]).join(', '))+'" placeholder="如 就位-左上,就位-右上" /></div>'
+        +_lgNum('开始标签连续帧','pc.per_item.start_sustain_frames',s.start_sustain_frames!=null?s.start_sustain_frames:3,'int')
+        +_lgNum('开始标签置信度','pc.per_item.start_conf',s.start_conf!=null?s.start_conf:0.5)
+        +'</div>';
+    } else {
+      h+='<div class="proto-grid3"><div class="proto-field"><label>开始标签 (逗号)</label><input class="proto-input" data-b="pc.per_item.start_labels" data-t="strlist" data-rr="pi" value="" placeholder="留空=不用开始标签" /></div></div>';
+    }
     // v3.33 重复打同一颗螺丝防护 (黄条提示 + 报警灯, 不落账不结周期)
     h+='<div class="rowline" style="margin-top:8px">'+_lgCkInline('防止重复打同一颗螺丝','pc.per_item.duplicate_screw_alarm',s.duplicate_screw_alarm===true,'pi')+'</div>';
     if(s.duplicate_screw_alarm===true){
@@ -6137,11 +6377,141 @@
         +'<label>连续帧<input class="proto-input" type="number" data-b="'+p+'sustain_frames" data-t="intOrNull" value="'+(pi.sustain_frames==null?'':pi.sustain_frames)+'" placeholder="3" style="width:56px" /></label>'
         +'<label>最少件数<input class="proto-input" type="number" data-b="'+p+'min_item_count" data-t="intOrNull" value="'+(pi.min_item_count==null?'':pi.min_item_count)+'" placeholder="1" style="width:56px" /></label>'
         +'<label class="proto-check"><input type="checkbox" data-b="'+p+'coverage_use_center"'+(pi.coverage_use_center?' checked':'')+' />中心点判定</label>'
+        +'<label>动作框扩边(0~2倍)<input class="proto-input" type="number" data-b="'+p+'coverage_margin" data-t="numOrNull" value="'+(pi.coverage_margin==null?'':pi.coverage_margin)+'" placeholder="0" style="width:56px" /></label>'
+        +'<label>未覆盖警告秒<input class="proto-input" type="number" data-b="'+p+'warn_uncovered_after_sec" data-t="numOrNull" value="'+(pi.warn_uncovered_after_sec==null?'':pi.warn_uncovered_after_sec)+'" placeholder="0=关" style="width:64px" /></label>'
+        +'<label>警告事件<select class="proto-select" data-b="'+p+'warn_event_id" data-t="intOrNull">'+_optEvent(pi.warn_event_id,true)+'</select></label>'
         +'</div>';
     }).join('');
   };
   LG.ng=function(pe,pc){ return '<div class="rowline"><span>保护间隔 (秒)</span><input class="proto-input" type="number" data-b="pc.ng_cycle_protect_seconds" data-t="num" value="'+pc.ng_cycle_protect_seconds+'" style="width:90px" /><span class="tiny-note">NG 结算后 N 秒内不再开新周期，防误触发</span></div>'; };
   LG.dedup=function(pe,pc){ return '<div class="rowline"><span>启用防重复结算</span><input class="proto-switch" type="checkbox" data-b="pc.settle_dedup"'+(pc.settle_dedup?' checked':'')+' /><span>冷却时长 (秒)</span><input class="proto-input" type="number" data-b="pc.settle_dedup_window_seconds" data-t="num" value="'+pc.settle_dedup_window_seconds+'" style="width:90px" /></div>'; };
+  // v3.44 NG 判定与处置统一模型 (pipeline_config.ng_handling, 对齐后端 resolve_ng_handling 四行语义;
+  // legacy 键 ng_remediation/closing_guard/instant_ng_on_violation 读时已在 _peNormalize 合成, 保存只落本块)
+  LG.ngh=function(pe,pc){
+    var n=pc.ng_handling||{}, p='pc.ng_handling.';
+    var lastFirst=pc.settlement_mode==='last_first';
+    var h='<div class="tiny-note">违规 / 缺步骤 / 少数量 / 数量门 四行语义 (v3.44 收敛五代散装开关); 老项目首次保存自动收编 legacy 键。</div>';
+    h+='<div class="proto-grid3">'
+      +_lgSel('① 违规当场反应'+(lastFirst?' (末步+首步模式下强制关)':''),p+'violation',[['none','不当场反应 (结算时判)'],['hint','仅提示事件 (v3.32)'],['instant_ng','实时 NG 即时结算 (v3.43)']],n.violation||'none','','ngh')
+      +((n.violation==='hint'||n.violation==='instant_ng')?_lgSelRaw('违规提示事件',p+'violation_event_id',_optEvent(n.violation_event_id,true),'intOrNull'):'')
+      +'</div><div class="proto-grid3">'
+      +_lgSel('② 结算缺步骤处置',p+'missing_step',[['ng','直接判 NG (默认)'],['ack','人工确认弹窗 (可补步骤, v3.23)'],['hold','挂起等补做 (v3.44 断点续做)']],n.missing_step||'ng','','ngh')
+      +(n.missing_step==='hold'?_lgNum('挂起超时(秒, 到点自动落 NG)',p+'hold_timeout_s',n.hold_timeout_s!=null?n.hold_timeout_s:120):'')
+      +(n.missing_step==='hold'?_lgSelRaw('挂起提示事件',p+'hold_event_id',_optEvent(n.hold_event_id,true),'intOrNull'):'')
+      +(n.missing_step==='hold'?_lgCk('缺步提前发现 (v3.56: 后继步入账即查前置缺失, 补齐即销结)',p+'missing_step_early',n.missing_step_early===true):'')
+      +'</div><div class="proto-grid3">'
+      +_lgSel('③ 结算少数量处置',p+'short_count',[['ng','直接判 NG (默认)'],['ack','人工确认弹窗 (可补数量)'],['hold','挂起等补数量 (v3.44.1)']],n.short_count||'ng')
+      +'</div>';
+    h+='<div class="rowline">'+_lgCkInline('④ 收尾数量门 (v3.44 事前拦截: 数量没凑齐时收尾动作不生效)',p+'gate_enabled',n.gate_enabled===true,'ngh')+'</div>';
+    if(n.gate_enabled===true){
+      h+='<div class="proto-grid3">'
+        +'<div class="proto-field"><label>门管的收尾步骤 (标签, 多选)</label><select class="proto-select" multiple data-b="'+p+'gate_steps" data-t="multi">'+_optLabelMulti(n.gate_steps)+'</select></div>'
+        +_lgSelRaw('被拦提示事件',p+'gate_event_id',_optEvent(n.gate_event_id,true),'intOrNull')
+        +'<div class="proto-field"><label>短拦长放步骤 (v3.44.4)</label><select class="proto-select" multiple data-b="'+p+'gate_escalate_steps" data-t="multi">'+_optLabelMulti(n.gate_escalate_steps)+'</select></div>'
+        +'</div><div class="tiny-note">短拦长放: 列表内的收尾步骤被门拦时不再静默吞掉——报警放行进周期, 结算走挂起补做链。只对被门管步骤有意义 (保存时自动取交集); min_frames 低的噪声步骤别放进来。</div>';
+    }
+    return h;
+  };
+  // v3.48 计数组合判定表 (pipeline_config.combo_table, 对齐后端 _parse_combo_table 校验口径)
+  LG.combo=function(pe,pc){
+    var ct=pc.combo_table||{};
+    var h='<div class="rowline">'+_lgCkInline('启用 (检测模式纯视觉判型: 结算时按各标签计数查表出 OK/NG + 机型 tag)','pc.combo_table.enabled',ct.enabled===true,'combo')+'</div>';
+    if(ct.enabled!==true) return h+'<div class="tiny-note">按标签计数组合查表判型 (如缸体判型): 未命中任何行一律 NG。</div>';
+    var labels=ct.labels||[];
+    h+='<div class="proto-field"><label>参与判定的标签 (逗号分隔, 决定表列)</label><input class="proto-input" data-b="pc.combo_table.labels" data-t="strlist" data-rr="combo" value="'+_esc(labels.join(', '))+'" placeholder="大孔, 小孔, 螺纹孔" /></div>';
+    if(labels.length){
+      h+='<div class="table-scroll"><table><thead><tr>'+labels.map(function(l){return '<th>'+_esc(l)+'</th>';}).join('')+'<th>判定</th><th>机型 tag</th><th></th></tr></thead><tbody>';
+      (ct.rows||[]).forEach(function(r,i){
+        var counts=Array.isArray(r.counts)?r.counts:[];
+        h+='<tr>'+labels.map(function(_,j){ return '<td><input class="proto-input" type="number" style="width:58px" data-b="pc.combo_table.rows.'+i+'.counts.'+j+'" data-t="int" value="'+(counts[j]!=null?counts[j]:0)+'" /></td>'; }).join('')
+          +'<td><select class="proto-select" data-b="pc.combo_table.rows.'+i+'.verdict"><option value="OK"'+(String(r.verdict||'OK').toUpperCase()!=='NG'?' selected':'')+'>OK</option><option value="NG"'+(String(r.verdict||'').toUpperCase()==='NG'?' selected':'')+'>NG</option></select></td>'
+          +'<td><input class="proto-input" style="width:88px" data-b="pc.combo_table.rows.'+i+'.tag" value="'+_esc(r.tag||'')+'" placeholder="机型A" /></td>'
+          +'<td><button class="proto-btn ng" data-lga="comboRowDel" data-i="'+i+'">×</button></td></tr>';
+      });
+      h+='</tbody></table></div><div class="rowline"><button class="proto-btn" data-lga="comboRowAdd">+ 添加组合行</button></div>';
+    } else h+='<div class="tiny-note">先填标签列, 再添加组合行</div>';
+    h+='<div class="proto-grid3">'+_lgSel('计数口径','pc.combo_table.count_mode',[['steps','步骤计数 (默认)'],['positional','位置去重 (v3.48.x, 同位置返工不重计)']],ct.count_mode||'steps')+'</div>'
+      +'<div class="tiny-note">未命中任何行一律 NG; 命中行 tag 透出到监控与数据记录。v3.49 二期 (切步数量门/PLC 联动/大字实时卡/按标签追踪覆盖) 请在主程序界面配置——本插件保存不丢这些键。</div>';
+    return h;
+  };
+  // v3.19~v3.48 自定义混合跟踪 · 装箱清点 (pipeline_config.custom_mixed_with + custom_mix_container_* 平铺键,
+  // 对齐后端 build_custom_mix; 物品行 = 步骤表 detect_role='item' 的步骤)
+  LG.mixbox=function(pe,pc){
+    var h='<div class="proto-grid3">'
+      +_lgSel('混合子状态机','pc.custom_mixed_with',[['','不混合 (纯自定义)'],['tracking','混合跟踪 (装箱清点)'],['per_item','混合逐件覆盖']],pc.custom_mixed_with||'','strOrNull','mixbox')
+      +'</div>';
+    if(pc.custom_mixed_with!=='tracking'&&pc.custom_mixed_with!=='per_item') return h+'<div class="tiny-note">选「混合跟踪」后步骤可标记为物品行, 由容器记账链独占消费 (物品进容器进箱); 「混合逐件」沿用逐件覆盖字段 (steps[].per_item)。</div>';
+    // 物品行标记 (steps_config[].detect_role='item' + expected_count)
+    var steps=pe.steps_config||[];
+    h+='<div class="tiny-note" style="margin-top:6px">物品行标记 (勾中的步骤交给混合子状态机)</div><div class="rowline" style="flex-wrap:wrap">';
+    steps.forEach(function(s,i){
+      if(s.enabled===false) return;
+      var isItem=s.detect_role==='item';
+      h+='<label class="proto-check"><input type="checkbox" data-mix-item="'+i+'"'+(isItem?' checked':'')+' />'+_esc(s.displayLabel||s.label||('步骤'+(i+1)))+'</label>'
+        +(isItem&&pc.custom_mixed_with==='tracking'?('<label>期望<input class="proto-input" type="number" style="width:56px" data-b="steps.'+i+'.expected_count" data-t="intOrNull" value="'+(s.expected_count==null?'':s.expected_count)+'" placeholder="0" /></label>'):'');
+    });
+    h+='</div>';
+    if(pc.custom_mixed_with!=='tracking'){
+      var pi=pc.per_item||{};
+      var extra='<div class="tiny-note">逐件混合: 物品行的 目标/动作 标签在「逐件覆盖 — 每个步骤的角色」配 (custom 模式下列出所有步骤; 保存不丢)。下面是混合逐件专用闸门/虚拟步骤。</div>'
+        +'<div class="tiny-note" style="margin-top:6px">开始判定 (v3.60.2, 默认关; 通过前不锁账)</div><div class="rowline">'
+        +_lgCkInline('稳定窗口才开账','pc.per_item.start_by_stability',pi.start_by_stability===true,'mixbox')
+        +'</div><div class="proto-grid3">'
+        +'<div class="proto-field"><label>开始标签 (逗号)</label><input class="proto-input" data-b="pc.per_item.start_labels" data-t="strlist" data-rr="mixbox" value="'+_esc((pi.start_labels||[]).join(', '))+'" /></div>'
+        +_lgNum('开始标签连续帧','pc.per_item.start_sustain_frames',pi.start_sustain_frames!=null?pi.start_sustain_frames:3,'int')
+        +_lgNum('开始标签置信度','pc.per_item.start_conf',pi.start_conf!=null?pi.start_conf:0.5)
+        +'</div>'
+        +'<div class="tiny-note" style="margin-top:6px">混合逐件虚拟步骤 (v3.60: 全部逐件行完成瞬间注入顺序流, 支持扫码→逐件→扫码)</div><div class="rowline">'
+        +_lgCkInline('启用虚拟步骤','pc.custom_mix_per_item_virtual_step',pc.custom_mix_per_item_virtual_step===true,'mixbox')
+        +(pc.custom_mix_per_item_virtual_step===true?('<label>虚拟步骤名<input class="proto-input" data-b="pc.custom_mix_per_item_virtual_step_label" value="'+_esc(pc.custom_mix_per_item_virtual_step_label||'')+'" placeholder="如 锁付完成" style="min-width:120px" /></label>'):'')
+        +'</div>';
+      return h+extra;
+    }
+    h+='<div class="tiny-note" style="margin-top:6px">容器记账</div><div class="proto-grid3">'
+      +_lgSelRaw('容器标签','pc.custom_mix_container_label',_optLabel(pc.custom_mix_container_label||'',true,'留空=无容器'))
+      +_lgSel('计数单位','pc.custom_mix_container_count_mode',[['trays','按容器 (托)'],['items','按件 (物品)']],pc.custom_mix_container_count_mode||'trays')
+      +_lgNum('消失确认帧数','pc.custom_mix_container_gone_frames',pc.custom_mix_container_gone_frames!=null?pc.custom_mix_container_gone_frames:30,'int')
+      +_lgNum('匹配 IoU','pc.custom_mix_container_iou_match',pc.custom_mix_container_iou_match!=null?pc.custom_mix_container_iou_match:0.3)
+      +_lgNum('整箱容器数 (0=不限)','pc.custom_mix_container_box_count',pc.custom_mix_container_box_count!=null?pc.custom_mix_container_box_count:0,'int')
+      +_lgNum('每箱目标件数 (0=不限)','pc.custom_mix_container_item_target',pc.custom_mix_container_item_target!=null?pc.custom_mix_container_item_target:0,'int')
+      +'</div>';
+    h+='<div class="tiny-note" style="margin-top:6px">进箱确认方式 (v3.30)</div><div class="proto-grid3">'
+      +_lgCk('按消失帧确认','pc.custom_mix_container_confirm_by_frames',pc.custom_mix_container_confirm_by_frames!==false)
+      +_lgCk('按放托动作确认','pc.custom_mix_container_confirm_by_action',pc.custom_mix_container_confirm_by_action===true)
+      +_lgSel('两者组合','pc.custom_mix_container_confirm_combine',[['or','任一满足 (OR)'],['and','都要满足 (AND)']],pc.custom_mix_container_confirm_combine||'or')
+      +_lgSelRaw('放托动作标签','pc.custom_mix_container_action_label',_optLabel(pc.custom_mix_container_action_label||'',true,'留空'))
+      +_lgNum('动作确认帧 (空=随步骤)','pc.custom_mix_container_action_min_frames',pc.custom_mix_container_action_min_frames!=null?pc.custom_mix_container_action_min_frames:null,'intOrNull')
+      +_lgNum('动作消失帧 (空=随步骤)','pc.custom_mix_container_action_gone_frames',pc.custom_mix_container_action_gone_frames!=null?pc.custom_mix_container_action_gone_frames:null,'intOrNull')
+      +_lgNum('动作不应期(秒, 空=2)','pc.custom_mix_container_action_cooldown_s',pc.custom_mix_container_action_cooldown_s!=null?pc.custom_mix_container_action_cooldown_s:null,'numOrNull')
+      +'</div>';
+    h+='<div class="tiny-note" style="margin-top:6px">记账精度与去重 (v3.44~v3.46 上银包装线整改)</div><div class="proto-grid3">'
+      +_lgNum('在位峰值封顶 (0=关)','pc.custom_mix_container_peak_cap',pc.custom_mix_container_peak_cap!=null?pc.custom_mix_container_peak_cap:0,'int')
+      +_lgNum('动作前稳定计数帧 (0=关)','pc.custom_mix_container_stable_min_frames',pc.custom_mix_container_stable_min_frames!=null?pc.custom_mix_container_stable_min_frames:0,'int')
+      +_lgNum('物品去重 IoU (默认 0.45)','pc.custom_mix_container_item_dedup_iou',pc.custom_mix_container_item_dedup_iou!=null?pc.custom_mix_container_item_dedup_iou:0.45)
+      +_lgNum('容器去重 IoU (0=关)','pc.custom_mix_container_tray_dedup_iou',pc.custom_mix_container_tray_dedup_iou!=null?pc.custom_mix_container_tray_dedup_iou:0)
+      +'</div><div class="rowline" style="flex-wrap:wrap">'
+      +_lgCkInline('物品重复框去重','pc.custom_mix_container_dedup_items',pc.custom_mix_container_dedup_items!==false)
+      +_lgCkInline('容器重复框去重','pc.custom_mix_container_dedup_trays',pc.custom_mix_container_dedup_trays===true)
+      +_lgCkInline('清空主容器账','pc.custom_mix_container_purge_empty_primary',pc.custom_mix_container_purge_empty_primary===true)
+      +_lgCkInline('主容器让位','pc.custom_mix_container_yield_primary',pc.custom_mix_container_yield_primary===true)
+      +_lgCkInline('统一账本源','pc.custom_mix_container_unified_book_source',pc.custom_mix_container_unified_book_source===true)
+      +_lgCkInline('每盘数量校验 (v3.44.1)','pc.custom_mix_container_per_tray_guard',pc.custom_mix_container_per_tray_guard===true)
+      +'</div>';
+    h+='<div class="tiny-note" style="margin-top:6px">槽位完整性门 (v3.46: 货数+空槽数=槽位总数 的帧才抬峰值, 治遮挡残数)</div><div class="proto-grid3">'
+      +_lgSelRaw('空槽标签','pc.custom_mix_container_slot_check_label',_optLabel(pc.custom_mix_container_slot_check_label||'',true,'留空=关'))
+      +_lgNum('槽位总数 (0=关)','pc.custom_mix_container_slot_total',pc.custom_mix_container_slot_total!=null?pc.custom_mix_container_slot_total:0,'int')
+      +'</div>';
+    h+='<div class="tiny-note" style="margin-top:6px">稳定值取值 (v3.56: 动作前 N 秒锚点 + 看全才允许下修)</div><div class="proto-grid3">'
+      +_lgNum('取值锚点(秒, 0=关)','pc.custom_mix_container_stable_anchor_s',pc.custom_mix_container_stable_anchor_s||0)
+      +_lgSel('锚点取值','pc.custom_mix_container_stable_pick',[['max','峰值 (默认)'],['latest','最近值']],pc.custom_mix_container_stable_pick||'max')
+      +_lgCk('看全帧才允许下修','pc.custom_mix_container_slot_verified_drop',pc.custom_mix_container_slot_verified_drop===true)
+      +'</div>';
+    h+='<div class="tiny-note" style="margin-top:6px">容器虚拟步骤 (v3.56: 整箱达标注入顺序流)</div><div class="rowline">'
+      +_lgCkInline('启用装箱虚拟步骤','pc.custom_mix_container_virtual_step',pc.custom_mix_container_virtual_step===true,'mixbox')
+      +(pc.custom_mix_container_virtual_step===true?('<label>虚拟步骤名<input class="proto-input" data-b="pc.custom_mix_container_virtual_step_label" value="'+_esc(pc.custom_mix_container_virtual_step_label||'')+'" placeholder="如 放滑块" style="min-width:120px" /></label>'):'')
+      +'</div>';
+    return h;
+  };
   LG.sim=function(pe,pc){
     var h=pc.simultaneous_groups.map(function(g,i){
       var p='pc.simultaneous_groups.'+i+'.';
@@ -6180,8 +6550,18 @@
     var mats=Array.isArray(w.materials)?w.materials.join(', '):'';
     var models=w.models?JSON.stringify(w.models,null,2):'{\n  "型号A": {\n    "钢帽水泥": {"standard": 0.5, "low_tol": 0.02, "high_tol": 0.05}\n  }\n}';
     var fusion=(w.drive_mode==='step_gate');
-    var h=(fusion?'<div class="tiny-note" style="color:#f3c969">融合模式 (v3.35): 视觉 SOP 主导周期, 秤只做步骤门控——在「步骤设置」表给步骤配「外设门控」(去皮/称重判定)。以下秤参数仍生效。</div>':'')
+    var isPipe=(w.drive_mode==='pipeline');
+    // v3.39 驱动模式三选一 (scale 默认 / step_gate 融合 / pipeline 两阶段流水线)
+    var h='<div class="proto-grid2">'
+      +_lgSel('驱动模式','pc.weighing.drive_mode',[['scale','经典: 秤读数驱动相位 (v3.31 默认)'],['step_gate','融合: 视觉 SOP 主导, 秤做步骤门控 (v3.35)'],['pipeline','两阶段流水线: 离秤冻结结算 + 待收尾队列 (v3.39)']],w.drive_mode||'scale','','weighing')
+      +'</div>'
+      +(fusion?'<div class="tiny-note" style="color:#f3c969">融合模式: 在「步骤设置」表给步骤配「外设门控」(去皮/称重判定)。以下秤参数仍生效。</div>':'')
+      +(isPipe?'<div class="tiny-note" style="color:#f3c969">流水线模式: 上秤→去皮→装料→离秤瞬间冻结重量出 OK/NG, 冻结件进待收尾队列 FIFO 结案后才推 MES/落库; 秤指令严格重量驱动, 视觉只加速/佐证。</div>':'')
       +'<div class="tiny-note">电子秤读数驱动的投料防错: 选型号→扫码→放件去皮→逐料投料对比标准量→缺料/超量报警→逐件记录落库。单位统一 kg。</div>'
+      +'<div class="rowline">'
+      +(fusion?_lgCkInline('检测中心显示实时称重数值条 (v3.35.1)','pc.weighing.show_monitor_weights',w.show_monitor_weights!==false):'')
+      +_lgCkInline('人员改用户系统名单下拉 (v3.45)','pc.weighing.operator_from_users',w.operator_from_users===true)
+      +'</div>'
       +'<div class="proto-grid2" style="margin-top:8px">'
       +_lgSel('去皮方式','pc.weighing.tare_mode',[['auto_stable','放件后自动去皮'],['manual','界面按钮手动']],w.tare_mode||'auto_stable')
       +_lgNum('去皮触发重量 (kg)','pc.weighing.tare_trigger_weight',w.tare_trigger_weight!=null?w.tare_trigger_weight:0.05)
@@ -6232,6 +6612,32 @@
       h+='<div class="rowline"><button class="proto-btn" data-lga="vgAdd">+ 新增料源规则</button></div>';
     }
     h+='</div>';
+    // v3.39 两阶段流水线参数 (weighing.pipeline + weighing.timing, 仅 drive_mode='pipeline' 消费)
+    if(isPipe){
+      var pl=w.pipeline||{}, tm=w.timing||{};
+      h+='<div class="proto-block" style="margin-top:8px"><div class="rowline"><b>流水线参数 (v3.39)</b></div>'
+        +'<div class="proto-grid3">'
+        +'<div class="proto-field"><label>判定料别 (models[型号][此料别])</label><input class="proto-input" data-b="pc.weighing.pipeline.material" value="'+_esc(pl.material||'钢帽水泥')+'" /></div>'
+        +_lgSelRaw('标签① 工件上秤','pc.weighing.pipeline.label_onscale',_optLabel(pl.label_onscale||'',true,'工件上秤'))
+        +_lgSelRaw('标签② 装料动作','pc.weighing.pipeline.label_fill',_optLabel(pl.label_fill||'',true,'加水泥'))
+        +_lgSelRaw('标签③ 收尾动作','pc.weighing.pipeline.label_finalize',_optLabel(pl.label_finalize||'',true,'加钢脚水泥'))
+        +_lgNum('皮重下限 (kg)','pc.weighing.pipeline.tare_min_kg',pl.tare_min_kg!=null?pl.tare_min_kg:0.2)
+        +_lgNum('皮重上限 (kg)','pc.weighing.pipeline.tare_max_kg',pl.tare_max_kg!=null?pl.tare_max_kg:10.0)
+        +_lgNum('待收尾队列深度','pc.weighing.pipeline.queue_depth',pl.queue_depth!=null?pl.queue_depth:2,'int')
+        +'</div>'
+        +'<div class="rowline"><b>秤指令时序 (现场可调)</b></div>'
+        +'<div class="proto-grid3">'
+        +_lgSel('去皮触发源','pc.weighing.timing.tare_trigger_source',[['weight_first','重量为主 (推荐)'],['dual_confirm','严格双确认 (标签①+重量)'],['weight_only','忽略视觉']],tm.tare_trigger_source||'weight_first')
+        +_lgNum('皮重稳定窗口 (ms)','pc.weighing.timing.tare_stable_ms',tm.tare_stable_ms!=null?tm.tare_stable_ms:1000,'int')
+        +_lgNum('净重稳定窗口 (ms)','pc.weighing.timing.net_stable_ms',tm.net_stable_ms!=null?tm.net_stable_ms:1500,'int')
+        +_lgNum('缺料报警持续 (秒)','pc.weighing.timing.shortage_alarm_sec',tm.shortage_alarm_sec!=null?tm.shortage_alarm_sec:3.0)
+        +_lgNum('确认离秤稳定 (ms)','pc.weighing.timing.depart_confirm_ms',tm.depart_confirm_ms!=null?tm.depart_confirm_ms:500,'int')
+        +_lgNum('装料超时 (秒)','pc.weighing.timing.fill_timeout_sec',tm.fill_timeout_sec!=null?tm.fill_timeout_sec:300,'int')
+        +_lgNum('待收尾超时 (秒)','pc.weighing.timing.finalize_timeout_sec',tm.finalize_timeout_sec!=null?tm.finalize_timeout_sec:120,'int')
+        +_lgNum('收尾冷却 (秒)','pc.weighing.timing.label3_cooldown_sec',tm.label3_cooldown_sec!=null?tm.label3_cooldown_sec:2.0)
+        +'</div><div class="tiny-note">更多时序细参 (zero_delay/zero_verify/标签帧数/新鲜期等) 后端有默认值, 需要时在主程序界面调——本插件保存不丢。</div>'
+        +'</div>';
+    }
     return h;
   };
   // v1.3.0 区域事件规则 (pipeline_config.region_events, 对齐 source_region_events 解析器)
@@ -6253,7 +6659,7 @@
         +'<button class="proto-btn ng" data-lga="reDel" data-i="'+i+'" style="margin-left:auto">删除</button></div>'
         +'<div class="proto-grid2">'
         +'<div class="proto-field"><label>动作名</label><input class="proto-input" data-b="'+p+'name" value="'+_esc(r.name||'')+'" /></div>'
-        +_lgSel('类型',p+'type',[['overlap','工具作用 overlap'],['region_enter','进区/驻留 region_enter'],['region_exit','出区消失 region_exit']],t,'','regionEvents')
+        +_lgSel('类型',p+'type',[['overlap','工具作用 overlap'],['region_enter','进区/驻留 region_enter'],['region_exit','出区消失 region_exit'],['region_count','区域内数量 region_count'],['region_empty','区域内清空 region_empty'],['proximity','两类靠近 proximity'],['cross_count','穿越计数 cross_count']],t,'','regionEvents')
         +_lgSelRaw(isExit?'跟踪对象类别':'主体类别',p+'subject_label',_optLabel(r.subject_label,true,'选择标签'))
         +(isOverlap?_lgSelRaw('目标类别 (被作用)',p+'object_label',_optLabel(r.object_label,true,'无')):'')
         +(!isExit?_lgSelRaw('辅助约束类别 (主体须与其相交, 可空)',p+'require_label',_optLabel(r.require_label,true,'无'),'strOrNull'):'')
@@ -6269,6 +6675,10 @@
         +(isExit?_lgNum('帧间关联 IoU 下限',p+'match_iou',r.match_iou!=null?r.match_iou:0.3):'')
         +_lgSelRaw('附加触发事件 (可空)',p+'event_id',_optEvent(r.event_id,true),'intOrNull')
         +_lgCk('触发即结算 settle',p+'settle',!!r.settle)
+        +_lgCk('只认操作员 (蓝工装 HSV)',p+'require_operator',!!r.require_operator)
+        +(t==='region_count'?_lgNum('区域内最少数量',p+'min_count',r.min_count!=null?r.min_count:1,'int'):'')
+        +(t==='proximity'?(_lgSelRaw('目标类别',p+'object_label',_optLabel(r.object_label,true,'选择标签'))+_lgNum('中心距离上限 (归一化)',p+'max_distance',r.max_distance!=null?r.max_distance:0.15)):'')
+        +(t==='cross_count'?_lgNum('穿越计数门槛',p+'min_count',r.min_count!=null?r.min_count:1,'int'):'')
         +'</div>'
         +'<div class="proto-field"><label>判定区域多边形 JSON (归一化 [[x,y],...]; overlap 可留空=全画面)</label>'
         +'<textarea class="proto-input" data-b="'+p+'region" data-t="json" rows="2" style="font-family:monospace;font-size:11px" placeholder="[[0.1,0.1],[0.9,0.1],[0.9,0.9],[0.1,0.9]]">'+_esc(regionJson)+'</textarea></div>'
@@ -6312,6 +6722,52 @@
     }).join('');
     h+='<div class="rowline"><button class="proto-btn" data-lga="reSRAdd">+ 新增判定</button></div>';
     return h;
+  };
+  // v1.5.1 OCR 读字 (pipeline_config.ocr, 对齐主程序 parse_ocr_config)
+  LG.ocr=function(pe,pc){
+    var o=pc.ocr||{}; if(!Array.isArray(o.rules)) o.rules=[];
+    var h='<div class="tiny-note">独立采样线程读字：稳定读数 + 正则判定 + 变化去重。无规则时开始检测不会产生任何判定。</div>'
+      +'<div class="proto-grid3">'
+      +_lgNum('采样间隔(秒)','pc.ocr.interval_s',o.interval_s!=null?o.interval_s:2)
+      +_lgNum('最低置信度','pc.ocr.min_score',o.min_score!=null?o.min_score:0.5)
+      +_lgNum('稳定读数次数','pc.ocr.stable_reads',o.stable_reads!=null?o.stable_reads:2,'int')
+      +'</div>';
+    h+=(o.rules||[]).map(function(r,i){
+      var p='pc.ocr.rules.'+i+'.';
+      return '<div class="proto-block" style="margin-top:8px"><div class="rowline"><b>规则 '+(i+1)+'</b>'
+        +'<button class="proto-btn ng" data-lga="ocrDel" data-i="'+i+'" style="margin-left:auto">删除</button></div>'
+        +'<div class="proto-grid2">'
+        +'<div class="proto-field"><label>正则 pattern</label><input class="proto-input" data-b="'+p+'pattern" value="'+_esc(r.pattern||'')+'" placeholder="如 ^\\d{4}$" /></div>'
+        +_lgSelRaw('OK 事件',p+'ok_event_id',_optEvent(r.ok_event_id,true),'intOrNull')
+        +_lgSelRaw('NG 事件',p+'ng_event_id',_optEvent(r.ng_event_id,true),'intOrNull')
+        +_lgCk('仅变化时触发','pc.ocr.rules.'+i+'.on_change_only',r.on_change_only!==false)
+        +_lgCk('触发即结算','pc.ocr.rules.'+i+'.settle',r.settle!==false)
+        +'</div>'
+        +'<div class="proto-field"><label>读字 ROI JSON (多边形或矩形; 空=整幅)</label><textarea class="proto-input" data-b="'+p+'roi" data-t="json" rows="2" style="font-family:monospace;font-size:11px">'+_esc(r.roi?JSON.stringify(r.roi):'')+'</textarea></div>'
+        +'</div>';
+    }).join('');
+    h+='<div class="rowline" style="margin-top:8px"><button class="proto-btn" data-lga="ocrAdd">+ 新增读字规则</button></div>';
+    return h;
+  };
+  // v1.5.1 异常检测 (pipeline_config.anomaly)
+  LG.anomaly=function(pe,pc){
+    var a=pc.anomaly||{};
+    var banks=window.__tjAnomalyBanks||[];
+    var bankOpts='<option value="">选择记忆库</option>'+banks.map(function(b){
+      return '<option value="'+_esc(b.id)+'"'+(String(a.bank_id)===String(b.id)?' selected':'')+'>'+_esc((b.name||b.id)+'（阈值 '+(b.threshold!=null?b.threshold:'—')+'，'+(b.num_images||0)+' 张）')+'</option>';
+    }).join('');
+    return '<div class="tiny-note">合格品记忆库连续超阈告警。记忆库在模型仓库「异常检测 · 试一试」创建后此处选择。</div>'
+      +'<div class="proto-grid3">'
+      +'<div class="proto-field"><label>记忆库</label><select class="proto-select" data-b="pc.anomaly.bank_id">'+bankOpts+'</select></div>'
+      +_lgNum('阈值覆盖 (空=用库默认)','pc.anomaly.threshold',a.threshold,'numOrNull')
+      +_lgNum('采样间隔(秒)','pc.anomaly.interval_s',a.interval_s!=null?a.interval_s:2)
+      +_lgNum('连续超阈次数','pc.anomaly.consecutive',a.consecutive!=null?a.consecutive:3,'int')
+      +_lgSelRaw('NG 事件','pc.anomaly.ng_event_id',_optEvent(a.ng_event_id,true),'intOrNull')
+      +_lgNum('NG 冷却(秒)','pc.anomaly.ng_cooldown_s',a.ng_cooldown_s!=null?a.ng_cooldown_s:30)
+      +_lgCk('恢复时触发 OK 事件','pc.anomaly.recover_ok_event',a.recover_ok_event===true)
+      +(a.recover_ok_event?_lgSelRaw('OK 事件','pc.anomaly.ok_event_id',_optEvent(a.ok_event_id,true),'intOrNull'):'')
+      +'</div>'
+      +'<div class="proto-field"><label>监测 ROI JSON (空=整幅)</label><textarea class="proto-input" data-b="pc.anomaly.roi" data-t="json" rows="2" style="font-family:monospace;font-size:11px">'+_esc(a.roi?JSON.stringify(a.roi):'')+'</textarea></div>';
   };
   // v1.4.0 同标签区域拆分 (pipeline_config.label_splits, 对齐主程序 labelSplit.js):
   // 一个物理标签按落点区域拆成多个虚拟步骤; 多轮次含 v3.34 两防护 (持续秒数 + 专用置信度)
@@ -6536,6 +6992,13 @@
       if(lab) g2.period_roles[lab]=el.value||undefined;
       return;
     }
+    // v3.19+ 混合模式物品行标记 (steps_config[].detect_role='item')
+    if(el.dataset.mixItem!=null){
+      var ms=pe.steps_config[parseInt(el.dataset.mixItem,10)];
+      if(ms){ if(el.checked) ms.detect_role='item'; else delete ms.detect_role; }
+      LGRender('mixbox');
+      return;
+    }
     if(!el.dataset.b) return;
     var t=el.dataset.t||''; var v;
     if(el.type==='checkbox') v=el.checked;
@@ -6555,6 +7018,10 @@
     }
     _peSet(el.dataset.b, v);
     if(el.dataset.rr) LGRender(el.dataset.rr);
+    // 混合子状态机 / 称重驱动模式影响整卡显隐 (pi/piSteps/weighing 借展) → 即时重算卡可见性
+    if(el.dataset.b==='pc.custom_mixed_with'||el.dataset.b==='pc.weighing.drive_mode'){
+      try{ applyLogicVisibility((window.__tjPE||{}).logic_mode||'sequential'); }catch(e){}
+    }
     // 结算模式变更 → 同步关闭结算步的严格顺序/单次接受并重渲步骤表 (对齐主程序 watch)
     if(el.dataset.b==='pc.settlement_mode'){
       var n=_tjSyncSettleSteps();
@@ -6582,6 +7049,11 @@
         pc.region_events.rules.push({id:'re_'+Date.now(),name:'动作 '+(pc.region_events.rules.length+1),type:'overlap',subject_label:'',object_label:'',require_label:null,region_mode:'and',min_frames:10,min_seconds:0,min_move:0,min_iou:0,min_overlap_ratio:0,object_margin:0,gone_seconds:null,event_id:null,settle:false,region:null});
         LGRender('regionEvents'); break; }
       case 'reDel': { if(pc.region_events&&Array.isArray(pc.region_events.rules)){ pc.region_events.rules.splice(i,1); LGRender('regionEvents'); } break; }
+      case 'ocrAdd': { if(!pc.ocr||typeof pc.ocr!=='object') pc.ocr={interval_s:2,min_score:0.5,stable_reads:2,rules:[]};
+        if(!Array.isArray(pc.ocr.rules)) pc.ocr.rules=[];
+        pc.ocr.rules.push({pattern:'',roi:null,ok_event_id:1,ng_event_id:2,on_change_only:true,settle:true});
+        LGRender('ocr'); break; }
+      case 'ocrDel': { if(pc.ocr&&Array.isArray(pc.ocr.rules)){ pc.ocr.rules.splice(i,1); LGRender('ocr'); } break; }
       case 'reSRAdd': { if(!pc.region_events||typeof pc.region_events!=='object') pc.region_events={enabled:true,rules:[]};
         if(!Array.isArray(pc.region_events.settlement_rules)) pc.region_events.settlement_rules=[];
         pc.region_events.settlement_rules.push({match:'exact',sequence:[],target:'',min_count:2,event_id:(pe.events_config[0]||{}).id||null});
@@ -6602,6 +7074,10 @@
       case 'lsDel': { if(Array.isArray(pc.label_splits)){ pc.label_splits.splice(i,1); try{ _tjSyncSplitSteps(pe); tjRenderSteps(pe); }catch(e){} LGRender('labelSplit'); } break; }
       case 'expAdd': pe.__expected.push({label:'',count:1}); LGRender('tracking'); break;
       case 'expDel': pe.__expected.splice(i,1); LGRender('tracking'); break;
+      case 'shiftAdd': { var sha=pe.data_config.shifts=pe.data_config.shifts||[]; sha.push({name:'班次'+(sha.length+1),start:'08:00'}); tjRenderShiftList(); break; }
+      case 'shiftDel': { if(Array.isArray(pe.data_config.shifts)){ pe.data_config.shifts.splice(i,1); tjRenderShiftList(); } break; }
+      case 'comboRowAdd': { var ct=pc.combo_table; ct.rows.push({counts:ct.labels.map(function(){return 0;}),verdict:'OK',tag:''}); LGRender('combo'); break; }
+      case 'comboRowDel': { pc.combo_table.rows.splice(i,1); LGRender('combo'); break; }
       case 'trkRoiDraw': if(window.tjOpenRoiEditor){ window.tjOpenRoiEditor({get:function(){return (pc.tracking_roi||{}).polygon||null;},set:function(poly){ pc.tracking_roi={enabled:(poly||[]).length>=3,polygon:poly||[]}; LGRender('tracking'); }}); } else showProtoToast('ROI 编辑器加载中'); break;
       case 'trkRoiClear': pc.tracking_roi={enabled:false,polygon:[]}; LGRender('tracking'); showProtoToast('清点 ROI 已清除（保存后生效）'); break;
       case 'simGAdd': pc.simultaneous_groups.push({enabled:true,cross_cycle:false,labels:[],time_window:2.0,priority_order:[],period_roles:{}}); LGRender('sim'); break;
@@ -6762,6 +7238,8 @@
       tracking_appearance_match:!!pc.tracking_appearance_match,
       tracking_id_lock:!!pc.tracking_id_lock,
       tracking_id_lock_frames:pc.tracking_id_lock_frames||15,
+      // v3.50 齐件即结算: 仅 roi_exit/container 策略下落 true (后端同规则守门)
+      tracking_settle_on_complete:(pc.tracking_cycle_strategy==='roi_exit'||pc.tracking_cycle_strategy==='container')&&pc.tracking_settle_on_complete===true,
       tracking_match_thresh:(function(){var v=Number(pc.tracking_match_thresh);return (isFinite(v)&&v>0)?Math.max(0.1,Math.min(0.99,v)):0.8;})(),
       tracking_expected_order:pc.tracking_check_order?(pe.__expected||[]).reduce(function(acc,it){ if(it.label){ for(var k=0;k<(it.count||1);k++) acc.push(it.label); } return acc; },[]):[],
       counting_expected_items:expectedItems,
@@ -6776,6 +7254,45 @@
       cycle_max_duration:Number(pc.cycle_max_duration)||0,
       rod_companion_filter:{enabled:!!cf.enabled&&!!cfRod&&cfl.length>0, iou_threshold:cfIou, rod_label:cfRod, companion_labels:cfl},
       rod_session_gate:{enabled:!!gt.enabled&&!!gtRod&&gtl.length>0, rod_label:gtRod, gate_labels:gtl},
+      // v3.44 NG 判定与处置统一模型 (对齐主程序保存净化: last_first 强制关违规当场;
+      // 短拦长放与 gate_steps 取交集; 保存只落新块, legacy 键随后 delete)
+      ng_handling:(function(){
+        var src=pc.ng_handling||{};
+        var lastFirst=(pc.settlement_mode||'first_step')==='last_first';
+        var vio=['none','hint','instant_ng'].indexOf(src.violation)>=0?src.violation:'none';
+        var t=Number(src.hold_timeout_s);
+        var gs=(Array.isArray(src.gate_steps)?src.gate_steps:[]).map(function(s){return String(s||'').trim();}).filter(Boolean);
+        return {
+          violation:lastFirst?'none':vio,
+          violation_event_id:lastFirst?null:(src.violation_event_id||null),
+          missing_step:['ng','ack','hold'].indexOf(src.missing_step)>=0?src.missing_step:'ng',
+          hold_timeout_s:(isFinite(t)&&t>=0)?t:120,
+          hold_event_id:src.hold_event_id||null,
+          short_count:['ng','ack','hold'].indexOf(src.short_count)>=0?src.short_count:'ng',
+          gate_enabled:src.gate_enabled===true,
+          gate_steps:gs,
+          gate_event_id:src.gate_event_id||null,
+          gate_escalate_steps:(Array.isArray(src.gate_escalate_steps)?src.gate_escalate_steps:[]).map(function(s){return String(s||'').trim();}).filter(function(s){return s&&gs.indexOf(s)>=0;}),
+          missing_step_early:src.missing_step==='hold'&&src.missing_step_early===true
+        };
+      })(),
+      // v3.48 计数组合判定表 (序列化净化: 行 counts 与 labels 等长非负整数; 其余键原样保留)
+      combo_table:(function(){
+        var src=pc.combo_table;
+        if(!src||typeof src!=='object') return {enabled:false,labels:[],rows:[]};
+        var labels=(Array.isArray(src.labels)?src.labels:[]).map(function(l){return String(l||'').trim();}).filter(Boolean);
+        labels=labels.filter(function(l,i){return labels.indexOf(l)===i;});
+        var rows=(Array.isArray(src.rows)?src.rows:[]).map(function(r){
+          r=r||{};
+          return Object.assign({}, r, {
+            counts:labels.map(function(_,i){ var v=Number((Array.isArray(r.counts)?r.counts:[])[i]); return (isFinite(v)&&v>=0)?Math.floor(v):0; }),
+            verdict:String(r.verdict||'OK').toUpperCase()==='NG'?'NG':'OK',
+            tag:String(r.tag||'').trim()
+          });
+        });
+        return Object.assign({}, src, {enabled:src.enabled===true, labels:labels, rows:rows,
+          count_mode:src.count_mode==='positional'?'positional':'steps'});
+      })(),
       models:(function(){
         var out=[{ name:'main', model_id:(pe.default_model_id!=null?pe.default_model_id:null),
           model_name:pe.model_name||'', display_color:pe.main_display_color||'#10b981', priority:100 }];
@@ -6798,7 +7315,8 @@
       })(),
       hide_boxes_outside_step_roi:!!pc.hide_boxes_outside_step_roi,
       per_item:pe.logic_mode==='per_item'?(function(){ var s=pc.per_item||{};
-        return {
+        // v1.5.0: 展开式保存 — 先原样保留全部已有键 (主程序新增键不丢), 再覆盖清洗后的已知键
+        return Object.assign({}, s, {
           stability_window_frames:Math.max(1,Math.floor(Number(s.stability_window_frames)||10)),
           stability_iou_threshold:Math.max(0.1,Math.min(0.99,Number(s.stability_iou_threshold)||0.6)),
           item_timeout_seconds:Math.max(0,Number(s.item_timeout_seconds)||0),
@@ -6820,8 +7338,10 @@
           duplicate_release_frames:Math.max(1,Math.floor(Number(s.duplicate_release_frames)||8)),
           duplicate_sustain_frames:Math.max(1,Math.floor(Number(s.duplicate_sustain_frames)||2)),
           duplicate_alarm_interval_sec:(s.duplicate_alarm_interval_sec==null)?2.0:Math.max(0,Number(s.duplicate_alarm_interval_sec)||0),
-          duplicate_warning_display_sec:(s.duplicate_warning_display_sec==null)?3.0:Math.max(0,Number(s.duplicate_warning_display_sec)||0)
-        };})():{},
+          duplicate_warning_display_sec:(s.duplicate_warning_display_sec==null)?3.0:Math.max(0,Number(s.duplicate_warning_display_sec)||0),
+          // v3.28 离场快照判定 (工件离开画面瞬间按覆盖快照判 OK/NG, 漏打转待补)
+          judge_on_workpiece_leave:s.judge_on_workpiece_leave===true
+        });})():(pc.per_item||{}),
       region_events:pc.region_events?_tjSanitizeRegionEvents(pc.region_events):undefined,
       periodic_actions:(pc.periodic_actions||[]).map(function(r){ return {
         id:r.id, name:r.name||'', enabled:r.enabled!==false,
@@ -6834,34 +7354,70 @@
         overdue_repeat:r.overdue_repeat||'every_cycle',
         channel_filter:r.channel_filter||null, run_on_start:r.run_on_start===true }; })
     });
+    // v3.44: 保存只落 ng_handling, legacy 散装键收编不再回写 (对齐主程序)
+    delete pipelineOut.instant_ng_on_violation;
+    delete pipelineOut.strict_order_violation_event_id;
+    delete pipelineOut.ng_remediation;
+    delete pipelineOut.closing_guard;
+    // v3.35.1 自定义班次: 过滤无名/无时刻行 (后端 <2 条自动回退两班制)
+    var dataOut=Object.assign({}, pe.data_config||{});
+    dataOut.shifts=(Array.isArray(dataOut.shifts)?dataOut.shifts:[])
+      .filter(function(s){ return s&&String(s.name||'').trim()&&s.start; })
+      .map(function(s){ return {name:String(s.name).trim(), start:s.start}; });
     return {
       name:nm||pe.name, task_type:pe.task_type, logic_mode:pe.logic_mode,
       steps_config:steps, events_config:pe.events_config, counters_config:pe.counters_config,
       default_model_id:pe.default_model_id, model_format:pe.model_format||'pytorch_fp32',
-      pipeline_config:pipelineOut, data_config:Object.assign({}, pe.data_config||{})
+      pipeline_config:pipelineOut, data_config:dataOut
     };
   }
-  // ==================== ROI 画布编辑器（真帧背景 + 归一化多边形） ====================
+  // ==================== ROI 画布编辑器（真帧背景 + 多块多边形, v3.57 双格式） ====================
+  // 单块存旧格式 [[x,y],...] ；多块存嵌套 [[[x,y],...], ...] 。消费点"任一块命中"。
   window.__tjRoiCtx=null;
   window.__tjRoiPts=[];
+  window.__tjRoiBlocks=[];
+  function _roiIsNested(v){
+    return Array.isArray(v) && v.length && Array.isArray(v[0]) && Array.isArray(v[0][0]);
+  }
+  function _roiLoadBlocks(v){
+    if(!v) return [];
+    if(_roiIsNested(v)) return v.map(function(poly){ return (poly||[]).filter(function(p){return Array.isArray(p)&&p.length>=2;}).map(function(p){return [Number(p[0])||0,Number(p[1])||0];}); }).filter(function(p){return p.length>=3;});
+    if(Array.isArray(v) && v.length>=3 && Array.isArray(v[0]) && typeof v[0][0]==='number')
+      return [v.filter(function(p){return Array.isArray(p)&&p.length>=2;}).map(function(p){return [Number(p[0])||0,Number(p[1])||0];})];
+    return [];
+  }
+  function _roiSaveBlocks(blocks, current){
+    var all=(blocks||[]).concat((current&&current.length>=3)?[current]:[]);
+    var valid=all.filter(function(b){return b&&b.length>=3;}).map(function(b){return b.map(function(p){return p.slice();});});
+    if(!valid.length) return null;
+    return valid.length===1 ? valid[0] : valid;
+  }
   function _roiRedraw(){
     var svg=document.getElementById('roiSvg'); if(!svg) return;
-    var pts=window.__tjRoiPts;
+    var pts=window.__tjRoiPts||[];
+    var blocks=window.__tjRoiBlocks||[];
     var html='';
+    var colors=['#2aa8ff','#22e3a0','#f3c969','#a78bfa','#fb7185','#38bdf8'];
+    blocks.forEach(function(poly,bi){
+      if(!poly||poly.length<2) return;
+      var col=colors[bi%colors.length];
+      html+='<polygon points="'+poly.map(function(p){return p[0]+','+p[1];}).join(' ')+'" fill="rgba(42,168,255,.12)" stroke="'+col+'" stroke-width="0.006" stroke-linejoin="round" vector-effect="non-scaling-stroke" />';
+    });
     if(pts.length>=2){
-      html+='<polygon points="'+pts.map(function(p){return p[0]+','+p[1];}).join(' ')+'" fill="rgba(42,168,255,.18)" stroke="#2aa8ff" stroke-width="0.006" stroke-linejoin="round" vector-effect="non-scaling-stroke" />';
+      html+='<polygon points="'+pts.map(function(p){return p[0]+','+p[1];}).join(' ')+'" fill="rgba(243,201,105,.18)" stroke="#f3c969" stroke-width="0.006" stroke-linejoin="round" stroke-dasharray="0.02 0.012" vector-effect="non-scaling-stroke" />';
     }
     pts.forEach(function(p,i){
       html+='<circle cx="'+p[0]+'" cy="'+p[1]+'" r="0.012" fill="'+(i===0?'#f3c969':'#45e6ff')+'" />';
     });
     svg.innerHTML=html;
     var st=document.getElementById('roiStatus');
-    if(st) st.innerHTML='顶点数: '+pts.length+(pts.length>=3?' <span class="ok">多边形有效</span>':' <span class="tiny-note">至少需要 3 个顶点</span>');
+    if(st) st.innerHTML='已完成 '+blocks.length+' 块 · 当前块顶点数: '+pts.length+(pts.length>=3?' <span class="ok">可完成本块</span>':' <span class="tiny-note">至少 3 点完成本块；单块存旧格式 / 多块存嵌套</span>');
   }
   function tjOpenRoiEditor(ctx){
     window.__tjRoiCtx=ctx||{};
-    var init=[]; try{ init=(ctx&&ctx.get&&ctx.get())||[]; }catch(e){}
-    window.__tjRoiPts=(Array.isArray(init)?init:[]).filter(function(p){return Array.isArray(p)&&p.length>=2;}).map(function(p){return [Number(p[0])||0,Number(p[1])||0];});
+    var init=null; try{ init=(ctx&&ctx.get&&ctx.get())||null; }catch(e){}
+    window.__tjRoiBlocks=_roiLoadBlocks(init);
+    window.__tjRoiPts=[];
     var ttl=document.getElementById('roiDlgTitle'); if(ttl) ttl.textContent=(ctx&&ctx.title)||'绘制 ROI 检测区域';
     var img=document.getElementById('roiBgImg');
     var wrap=document.getElementById('roiCanvasWrap');
@@ -6888,16 +7444,30 @@
     });
     var undo=document.getElementById('roiUndoBtn');
     if(undo) undo.addEventListener('click', function(){ window.__tjRoiPts.pop(); _roiRedraw(); });
+    var fin=document.getElementById('roiFinishBlockBtn');
+    if(fin) fin.addEventListener('click', function(){
+      if((window.__tjRoiPts||[]).length<3){ showProtoToast('当前块至少 3 个顶点'); return; }
+      window.__tjRoiBlocks.push(window.__tjRoiPts.map(function(p){return p.slice();}));
+      window.__tjRoiPts=[];
+      _roiRedraw();
+    });
+    var delb=document.getElementById('roiDelBlockBtn');
+    if(delb) delb.addEventListener('click', function(){
+      if((window.__tjRoiPts||[]).length){ window.__tjRoiPts=[]; _roiRedraw(); return; }
+      window.__tjRoiBlocks.pop(); _roiRedraw();
+    });
     var clr=document.getElementById('roiClearBtn');
-    if(clr) clr.addEventListener('click', function(){ window.__tjRoiPts=[]; _roiRedraw(); });
+    if(clr) clr.addEventListener('click', function(){ window.__tjRoiPts=[]; window.__tjRoiBlocks=[]; _roiRedraw(); });
     var save=document.getElementById('roiSaveBtn');
     if(save) save.addEventListener('click', function(){
-      var pts=window.__tjRoiPts;
-      if(pts.length>0&&pts.length<3){ showProtoToast('至少需要 3 个顶点（或清除全部后保存表示删除 ROI）'); return; }
+      var pts=window.__tjRoiPts||[];
+      if(pts.length>0&&pts.length<3){ showProtoToast('当前块至少 3 个顶点（或撤销后保存）'); return; }
+      var saved=_roiSaveBlocks(window.__tjRoiBlocks, pts.length>=3?pts:null);
       var ctx=window.__tjRoiCtx;
-      try{ if(ctx&&ctx.set) ctx.set(pts.length>=3?pts.map(function(p){return p.slice();}):null); }catch(e){}
+      try{ if(ctx&&ctx.set) ctx.set(saved); }catch(e){}
       var dlg=document.getElementById('roiDialog'); if(dlg&&dlg.open) dlg.close();
-      showProtoToast(pts.length>=3?('ROI 已更新（'+pts.length+' 顶点，保存配置后生效）'):'ROI 已清除（保存配置后生效）');
+      var n=saved?(_roiIsNested(saved)?saved.length:1):0;
+      showProtoToast(n?('ROI 已更新（'+n+' 块，保存配置后生效）'):'ROI 已清除（保存配置后生效）');
     });
   })();
   // 步骤表 ROI 列（normal + tracking 两张表共用）
@@ -7116,6 +7686,7 @@
     document.querySelectorAll('[data-mes-panel]').forEach(p => p.classList.toggle('active', p.dataset.mesPanel === name));
     if(name==='inbound'){ try{ tjLoadInbound(); }catch(e){} }
     if(name==='packaging'){ try{ tjLoadPackaging(); }catch(e){} }
+    if(name==='scancollect'){ try{ tjLoadScanCollect(); }catch(e){} }
   };
   // ==================== v1.3.0 生产管控入站 (只读监视: /mes/inbound/config + active-alarms) ====================
   async function tjLoadInbound(){
@@ -7161,6 +7732,112 @@
       }
     }catch(e){}
   }
+  // ==================== v1.5.1 周期多码采集 (/scan-collect/config 按项目) ====================
+  window.__tjScForm=null;
+  function _scEmpty(){
+    return {enabled:false,slots:[],sequence_fallback:true,dedup_in_group:'ng_alarm',dedup_cross_group:'off',
+      settle_on:'closing',on_overflow:'reject',on_unmatched:'reject',timeout_sec:0,event_ok_id:1,event_ng_id:2,
+      ng_pending:false,vision_gate:false,vision_window_sec:300,vision_missing:'ignore',idle_remind_sec:0,
+      standby_silent:false,count_on_settle:true,settle_on_vision_cycle:false};
+  }
+  function _scSel(path, pairs, val){
+    return '<select class="proto-select" data-sc-f="'+path+'">'+pairs.map(function(p){return '<option value="'+p[0]+'"'+(String(val)===String(p[0])?' selected':'')+'>'+p[1]+'</option>';}).join('')+'</select>';
+  }
+  function tjRenderScanCollect(){
+    var box=document.getElementById('scCfgBox'); if(!box) return;
+    var f=window.__tjScForm||_scEmpty();
+    var h='<div class="rowline"><label class="proto-check"><input type="checkbox" data-sc-f="enabled"'+(f.enabled?' checked':'')+' />启用多码采集</label></div>';
+    h+='<div class="tiny-note">码类别</div><div class="table-scroll"><table class="data-table"><thead><tr><th>名称</th><th>key</th><th>应扫</th><th>正则</th><th>历史重复</th><th>多扫</th><th>收尾</th><th></th></tr></thead><tbody>';
+    (f.slots||[]).forEach(function(s,i){
+      h+='<tr><td><input class="proto-input" data-sc-slot="'+i+'" data-sk="label" value="'+_esc(s.label||'')+'" /></td>'
+        +'<td><input class="proto-input" data-sc-slot="'+i+'" data-sk="key" value="'+_esc(s.key||'')+'" /></td>'
+        +'<td><input class="proto-input" type="number" data-sc-slot="'+i+'" data-sk="count" value="'+(s.count||1)+'" style="width:64px" /></td>'
+        +'<td><input class="proto-input" data-sc-slot="'+i+'" data-sk="regex" value="'+_esc(s.regex||'')+'" style="font-family:monospace" /></td>'
+        +'<td>'+_scSel('slot.'+i+'.dedup_cross_group',[['inherit','跟随全局'],['off','豁免'],['reject','拒收'],['ng_alarm','判NG']],s.dedup_cross_group||'inherit')+'</td>'
+        +'<td>'+_scSel('slot.'+i+'.on_overflow',[['inherit','跟随全局'],['reject','拒收'],['ng_alarm','判NG']],s.on_overflow||'inherit')+'</td>'
+        +'<td class="tcen"><input type="radio" name="scClosing" data-sc-close="'+i+'"'+(s.role==='closing'?' checked':'')+' /></td>'
+        +'<td><button class="proto-btn ng sm" data-sc-del="'+i+'">×</button></td></tr>';
+    });
+    h+='</tbody></table></div><div class="rowline"><button class="proto-btn sm" id="scAddSlotBtn">+ 加一类</button></div>';
+    h+='<div class="tiny-note" style="margin-top:8px">判定策略</div><div class="proto-grid2">'
+      +'<div class="proto-field"><label>正则不中按顺序归类</label><input class="proto-switch" type="checkbox" data-sc-f="sequence_fallback"'+(f.sequence_fallback!==false?' checked':'')+' /></div>'
+      +'<div class="proto-field"><label>结算时机</label>'+_scSel('settle_on',[['closing','扫收尾码'],['all_filled','数量凑齐']],f.settle_on||'closing')+'</div>'
+      +'<div class="proto-field"><label>组内重复</label>'+_scSel('dedup_in_group',[['ng_alarm','判NG'],['reject','拒收']],f.dedup_in_group||'ng_alarm')+'</div>'
+      +'<div class="proto-field"><label>历史重复</label>'+_scSel('dedup_cross_group',[['off','不拦'],['reject','拒收'],['ng_alarm','判NG']],f.dedup_cross_group||'off')+'</div>'
+      +'<div class="proto-field"><label>多扫</label>'+_scSel('on_overflow',[['reject','拒收'],['ng_alarm','判NG']],f.on_overflow||'reject')+'</div>'
+      +'<div class="proto-field"><label>未匹配</label>'+_scSel('on_unmatched',[['reject','拒收'],['ng_alarm','判NG']],f.on_unmatched||'reject')+'</div>'
+      +'<div class="proto-field"><label>采集超时(秒 0=不限)</label><input class="proto-input" type="number" data-sc-f="timeout_sec" value="'+(f.timeout_sec||0)+'" /></div>'
+      +'<div class="proto-field"><label>催扫提醒(秒 0=关)</label><input class="proto-input" type="number" data-sc-f="idle_remind_sec" value="'+(f.idle_remind_sec||0)+'" /></div>'
+      +'<div class="proto-field"><label>少扫 NG 挂起补扫</label><input class="proto-switch" type="checkbox" data-sc-f="ng_pending"'+(f.ng_pending?' checked':'')+' /></div>'
+      +'<div class="proto-field"><label>随视觉周期结算</label><input class="proto-switch" type="checkbox" data-sc-f="settle_on_vision_cycle"'+(f.settle_on_vision_cycle?' checked':'')+' /></div>'
+      +'<div class="proto-field"><label>待机扫码</label>'+_scSel('standby_silent',[['false','照常计数落盘'],['true','静默']],f.standby_silent===true?'true':'false')+'</div>'
+      +'<div class="proto-field"><label>扫码结算计数</label>'+_scSel('count_on_settle',[['true','计数'],['false','不计数(视觉已计)']],f.count_on_settle!==false?'true':'false')+'</div>'
+      +'<div class="proto-field"><label>视觉+扫码双重验证</label><input class="proto-switch" type="checkbox" data-sc-f="vision_gate"'+(f.vision_gate?' checked':'')+' /></div>'
+      +'</div>';
+    box.innerHTML=h;
+    box.querySelectorAll('[data-sc-f]').forEach(function(el){
+      el.addEventListener('change', function(){
+        var k=el.getAttribute('data-sc-f'); var v;
+        if(el.type==='checkbox') v=el.checked;
+        else if(el.type==='number') v=parseFloat(el.value)||0;
+        else if(k==='standby_silent'||k==='count_on_settle') v=el.value==='true';
+        else v=el.value;
+        if(k.indexOf('slot.')===0){
+          var parts=k.split('.'); var si=+parts[1]; var sk=parts[2];
+          if(f.slots[si]) f.slots[si][sk]=v;
+        } else f[k]=v;
+      });
+    });
+    box.querySelectorAll('[data-sc-slot]').forEach(function(el){
+      el.addEventListener('change', function(){
+        var i=+el.getAttribute('data-sc-slot'); var k=el.getAttribute('data-sk');
+        if(!f.slots[i]) return;
+        f.slots[i][k]=el.type==='number'?parseInt(el.value,10)||1:el.value;
+      });
+    });
+    box.querySelectorAll('[data-sc-close]').forEach(function(el){
+      el.addEventListener('change', function(){
+        var i=+el.getAttribute('data-sc-close');
+        f.slots.forEach(function(s,j){ s.role = j===i ? 'closing' : ''; });
+      });
+    });
+    box.querySelectorAll('[data-sc-del]').forEach(function(el){
+      el.addEventListener('click', function(){ f.slots.splice(+el.getAttribute('data-sc-del'),1); tjRenderScanCollect(); });
+    });
+    var add=document.getElementById('scAddSlotBtn');
+    if(add) add.addEventListener('click', function(){ f.slots.push({key:'slot'+(f.slots.length+1),label:'',count:1,regex:'',role:'',dedup_cross_group:'inherit',on_overflow:'inherit'}); tjRenderScanCollect(); });
+  }
+  async function tjLoadScanCollect(){
+    if(!window.tjApi) return;
+    var pid=await _tjScopePid();
+    var box=document.getElementById('scCfgBox'); if(!box) return;
+    if(!pid){ box.innerHTML='<div class="tiny-note">请先启用一个项目</div>'; return; }
+    try{
+      var r=await tjApi.get('/scan-collect/config',{project_id:pid});
+      window.__tjScForm=Object.assign(_scEmpty(), r&&r.config?r.config:(r||{}));
+      if(!Array.isArray(window.__tjScForm.slots)) window.__tjScForm.slots=[];
+      tjRenderScanCollect();
+    }catch(e){ box.innerHTML='<div class="tiny-note">加载失败: '+_esc((e&&e.message)||e)+'</div>'; }
+  }
+  (function tjWireScanCollect(){
+    var sv=document.getElementById('scCfgSaveBtn');
+    if(sv&&!sv.__tjB){ sv.__tjB=true; sv.addEventListener('click', async function(){
+      var pid=await _tjScopePid(); if(!pid){ showProtoToast('请先启用项目'); return; }
+      try{ await tjApi.put('/scan-collect/config', window.__tjScForm||_scEmpty(), {project_id:pid}); showProtoToast('多码采集配置已保存'); }
+      catch(e){ showProtoToast('保存失败: '+((e&&e.data&&e.data.detail)||e.message||e)); }
+    }); }
+    var ex=document.getElementById('scCfgExampleBtn');
+    if(ex&&!ex.__tjB){ ex.__tjB=true; ex.addEventListener('click', function(){
+      var f=window.__tjScForm||_scEmpty();
+      f.slots=[
+        {key:'busbar',label:'母排码',count:1,regex:'^M.{29,32}$',role:'',dedup_cross_group:'inherit',on_overflow:'inherit'},
+        {key:'chip',label:'芯子码',count:6,regex:'^\\d{13}$',role:'',dedup_cross_group:'inherit',on_overflow:'ng_alarm'},
+        {key:'fixture',label:'工装码',count:1,regex:'^H-C',role:'closing',dedup_cross_group:'off',on_overflow:'inherit'}
+      ];
+      f.enabled=true; f.settle_on='closing'; f.ng_pending=true; f.settle_on_vision_cycle=true; f.count_on_settle=false;
+      window.__tjScForm=f; tjRenderScanCollect(); showProtoToast('已填入焊接组装示例，请点保存');
+    }); }
+  })();
   // ==================== v1.3.0 包装结算 (/packaging-flows 配置 + 运行状态) ====================
   window.__tjPkSel=null;
   async function tjLoadPackaging(){
@@ -7914,8 +8591,12 @@
       if(w<=0||h<=0) return;
       var px=x*dw+dx, py=y*dh+dy, pw=w*dw, ph=h*dh;
       var ng=b.is_ng===true||/ng|fail|不良|缺陷|错|不合格/i.test(lb);
+      var disabledStep=steps.some(function(st){ return st&&st.label===lb&&st.enabled===false; });
       var col=stepColor[lb]||(b.model_name&&b.model_name!=='main'&&b.display_color)||(ng?NG:OK);
-      ctx.strokeStyle=col; ctx.lineWidth=lw; ctx.strokeRect(px,py,pw,ph);
+      ctx.strokeStyle=col; ctx.lineWidth=lw;
+      if(disabledStep) ctx.setLineDash([6,4]);
+      ctx.strokeRect(px,py,pw,ph);
+      if(disabledStep) ctx.setLineDash([]);
       // 赛博朋克角标
       var L=Math.max(6,Math.min(16,pw/3,ph/3));
       ctx.lineWidth=lw+1; ctx.beginPath();
@@ -8069,8 +8750,52 @@
     if(ts<=(window.__tjscScanToastTs||0)) return;
     if(window.__tjscScanToastTs==null){ window.__tjscScanToastTs=ts; return; } // 首帧不弹历史
     window.__tjscScanToastTs=ts;
-    if(se.scan_pair_dup_warning){ showProtoToast('重复扫码: '+(se.serial_no||'')+' — 等待新码'); return; }
+    // v3.50 拒绝路径统一警告通道 (强制去重/OK冷却/重复拒绝 → scan_warning+warn_reason; 老字段 scan_pair_dup_warning 兼容)
+    if(se.scan_warning||se.scan_pair_dup_warning){ showProtoToast('⚠ '+(se.serial_no||'')+': '+(se.warn_reason||'重复扫码，等待新码')); return; }
     tjPopToast('scan', '扫码成功', '', se.serial_no||'');
+  }
+
+  function tjscScanCollect(det){
+    var bar=document.getElementById('tjScanCollectBar'); if(!bar) return;
+    var sc=det&&det.scan_collect; if(!sc||!sc.enabled){ bar.style.display='none'; return; }
+    var slots=sc.slots||[];
+    var pending=sc.pending_ng;
+    var html='<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">'
+      +'<b>多码采集</b> '+(sc.total_got||0)+'/'+(sc.total_expected||0)
+      +slots.map(function(s){
+        var ok=(s.got||0)>=(s.expected||0);
+        return '<span class="badge-sm '+(ok?'ok':'')+'">'+_esc(s.label||s.key)+' '+(s.got||0)+'/'+(s.expected||0)+'</span>';
+      }).join('')
+      +(pending?'<span class="badge-sm ng">NG挂起</span>':'')
+      +'<span class="grow"></span>'
+      +'<button class="proto-btn sm" id="scSettleNowBtn">本件扫完</button>'
+      +(pending?'<button class="proto-btn sm ng" id="scResolveNgBtn">按NG放行</button>':'')
+      +'</div>';
+    bar.innerHTML=html; bar.style.display='';
+    var sn=document.getElementById('scSettleNowBtn');
+    if(sn) sn.onclick=async function(){
+      try{ await tjApi.post('/scan-collect/settle-now',{channel_id:0}); showProtoToast('已请求本件扫完'); }
+      catch(e){ showProtoToast('失败: '+((e&&e.message)||e)); }
+    };
+    var rg=document.getElementById('scResolveNgBtn');
+    if(rg) rg.onclick=async function(){
+      try{ await tjApi.post('/scan-collect/resolve-ng',{channel_id:0}); showProtoToast('已按 NG 放行'); }
+      catch(e){ showProtoToast('失败: '+((e&&e.message)||e)); }
+    };
+  }
+  function tjscGates(det){
+    var el=document.getElementById('tjGateBadge'); if(!el) return;
+    var mix=det.custom_mix_state||det.customMixState||{};
+    var sg=mix.start_gate || (det.per_item_state&&det.per_item_state.start_gate);
+    var cg=det.container_gate;
+    var bits=[];
+    if(sg && sg.enabled!==false && sg.started===false){
+      bits.push('等待开始'+(sg.missing&&sg.missing.length?('（缺 '+sg.missing.join('、')+'）'):''));
+    } else if(sg && sg.started){ bits.push('已开始'); }
+    if(cg && cg.active===false && cg.label) bits.push('容器门未开');
+    else if(cg && cg.active) bits.push('容器在位');
+    if(!bits.length){ el.style.display='none'; return; }
+    el.textContent=bits.join(' · '); el.style.display='';
   }
 
   // 动作识别结果浮层: 按项目真实步骤 + 完成态 + 当前帧置信度
@@ -8556,6 +9281,7 @@
     var btn=document.getElementById('todayMoreBtn');
     var menu=document.getElementById('todayMoreMenu');
     var rst=document.getElementById('todayResetBtn');
+    var rstC=document.getElementById('todayResetCycleBtn');
     if(!btn||!menu||!rst) return;
     var armed=false, armTimer=null;
     function disarm(){ armed=false; clearTimeout(armTimer); rst.textContent='清零今日统计'; }
@@ -8579,6 +9305,16 @@
         menu.style.display='none';
       }catch(err){ showProtoToast('清零失败: '+((err&&err.data&&err.data.detail)||err.message||err)); }
       finally{ rst.disabled=false; rst.textContent='清零今日统计'; }
+    });
+    if(rstC) rstC.addEventListener('click', async function(e){
+      e.stopPropagation();
+      rstC.disabled=true;
+      try{
+        await tjApi.post('/source/detection/reset-stats?channel=0&scope=cycle', {});
+        showProtoToast('已清本周期（计数保留）');
+        menu.style.display='none';
+      }catch(err){ showProtoToast('清本周期失败: '+((err&&err.data&&err.data.detail)||err.message||err)); }
+      finally{ rstC.disabled=false; }
     });
   })();
 
@@ -8612,16 +9348,44 @@
   function _tjHeaders(){
     return window.__tjToken ? { Authorization: 'Bearer '+window.__tjToken } : undefined;
   }
+  // v1.5.0 操作失败回传后端日志 (排障通道): 现场无 F12, API 报错统一打到
+  // POST /plugins/client-log → 后端 [ClientLog] 行 + 插件日志文件, 现场黑盒变可查。
+  // 计数上限防刷屏; 不记自身, 防递归。
+  function _tjReportErr(method, url, msg, status){
+    try{
+      if(!url || String(url).indexOf('/plugins/client-log')>=0) return;
+      window.__tjErrLogN = (window.__tjErrLogN||0)+1;
+      if(window.__tjErrLogN>40) return;
+      _tjSend('post','/plugins/client-log',{data:{
+        level:'error', source:'showcase-iframe',
+        stage:'API失败 '+String(method||'').toUpperCase()+' '+url+(status?(' HTTP '+status):''),
+        detail:String(msg||'').slice(0,1000) }});
+    }catch(e){}
+  }
   function _tjSend(method, url, payload){
     return new Promise(function(resolve, reject){
       var id = ++window.__tjReqId;
-      window.__tjPending[id] = { resolve: resolve, reject: reject };
+      window.__tjPending[id] = { resolve: resolve, reject: reject, m: method, u: url };
       var msg = { __tjscAction:true, id:id, action:'api',
         payload:{ method:method, url:url, params:payload&&payload.params, data:payload&&payload.data, headers:_tjHeaders() } };
       try { parent.postMessage(msg, '*'); }
       catch(e){ delete window.__tjPending[id]; reject(e); }
       // 8s 超时兜底, 防止 Promise 永久挂起
-      setTimeout(function(){ if(window.__tjPending[id]){ delete window.__tjPending[id]; reject(new Error('桥请求超时: '+method+' '+url)); } }, 8000);
+      setTimeout(function(){ if(window.__tjPending[id]){ delete window.__tjPending[id];
+        _tjReportErr(method, url, '桥请求超时 (8s 无响应, 父层桥或后端未就绪)');
+        reject(new Error('桥请求超时: '+method+' '+url)); } }, 8000);
+    });
+  }
+  // v1.5.1 通用桥动作 (非 REST): 鉴权写穿 / 显示设置写穿等, 复用同一 pending 表
+  function _tjAction(action, payload){
+    return new Promise(function(resolve, reject){
+      var id = ++window.__tjReqId;
+      window.__tjPending[id] = { resolve: resolve, reject: reject, m: action, u: '(bridge)' };
+      var msg = { __tjscAction:true, id:id, action:action, payload:payload||{} };
+      try { parent.postMessage(msg, '*'); }
+      catch(e){ delete window.__tjPending[id]; reject(e); }
+      setTimeout(function(){ if(window.__tjPending[id]){ delete window.__tjPending[id];
+        reject(new Error('桥动作超时: '+action)); } }, 8000);
     });
   }
   // 二进制下载: 走父层 download 动作 (blob 可结构化克隆), 拿回后本地触发保存
@@ -8647,14 +9411,27 @@
   }
   // 文件上传: 走独立 upload 动作 (桥端包 FormData), 超时放大到 5 分钟。
   function _tjUpload(url, file, fields, params){
-    return new Promise(function(resolve, reject){
-      var id = ++window.__tjReqId;
-      window.__tjPending[id] = { resolve: resolve, reject: reject };
-      var msg = { __tjscAction:true, id:id, action:'upload',
-        payload:{ url:url, file:file, filename:(file&&file.name)||'upload.bin', fields:fields||{}, params:params } };
-      try { parent.postMessage(msg, '*'); }
-      catch(e){ delete window.__tjPending[id]; reject(e); }
-      setTimeout(function(){ if(window.__tjPending[id]){ delete window.__tjPending[id]; reject(new Error('上传超时: '+url)); } }, 300000);
+    // v1.5.1: 同源直连上传 —— iframe 由后端托管, 与 /api/v1 同源, 直接 fetch multipart。
+    // 此前经桥把 File postMessage 给宿主再转发: Chromium 站点隔离下宿主进程无权读取
+    // iframe 进程持有的本地文件句柄 → net::ERR_ACCESS_DENIED (2026-09-23 真宿主 UAT 实测)。
+    var qs='';
+    if(params){ var sp=new URLSearchParams();
+      Object.keys(params).forEach(function(k){ if(params[k]!=null&&params[k]!=='') sp.append(k, params[k]); });
+      var s=sp.toString(); if(s) qs='?'+s; }
+    var fd=new FormData();
+    fd.append('file', file, (file&&file.name)||'upload.bin');
+    var fl=fields||{};
+    Object.keys(fl).forEach(function(k){ if(fl[k]!=null&&fl[k]!=='') fd.append(k, fl[k]); });
+    var headers={};
+    if(window.__tjToken) headers['Authorization']='Bearer '+window.__tjToken;
+    return fetch('/api/v1'+url+qs, {method:'POST', body:fd, headers:headers}).then(async function(r){
+      var data=null; try{ data=await r.json(); }catch(e){}
+      if(!r.ok){
+        var err=new Error((data&&data.detail)||('上传失败 HTTP '+r.status)); err.status=r.status; err.data=data;
+        try{ _tjReportErr('upload', url, err.message, r.status); }catch(_){ }
+        throw err;
+      }
+      return data;
     });
   }
   window.tjApi = {
@@ -8722,22 +9499,128 @@
   setTimeout(tjLoadWeather, 600);
   setInterval(tjLoadWeather, 30*60*1000);
 
-  // 身份: 对接账户鉴权, 实时显示当前登录身份(管理员/操作员/工程师/自定义)
+  // ==================== v1.5.1 鉴权身份层 ====================
+  // 现场事故复盘 (2026-09-22 客户现场): 鉴权启用 + 匿名兜底开 → 宿主进访客态,
+  // 插件内登录后 token 只存 iframe 内存, 宿主 host.api 仍以访客发请求 → 配置全 403,
+  // 连"禁用插件"都做不到。本层三件事:
+  //   1. 登录/登出/关鉴权/改密 全部经桥写穿宿主 token 存储 (auth-set-token / auth-clear-token)
+  //   2. 顶栏身份 chip 变成可点击菜单 —— 任何页面随处可登录/切换账号, 不再深埋设置页
+  //   3. 401/403 统一提示并引导登录 (见桥响应分发处)
+  window.__tjMe = null;   // /auth/me 缓存 {auth_enabled, user}
+  async function tjAuthPushToken(token, persist){
+    window.__tjToken = token || null;                       // iframe 侧兜底 (写穿失败时桥头透传仍可用)
+    try{ await _tjAction('auth-set-token', {token:token, persist:persist!==false}); }catch(e){}
+  }
+  async function tjAuthClearToken(){
+    window.__tjToken = null;
+    try{ await _tjAction('auth-clear-token', {}); }catch(e){}
+  }
+  // 启动引导: 宿主已有 token (主程序里已登录) → 直接继承身份, 插件即主程序无缝续用
+  async function tjAuthBootstrap(){
+    try{
+      var st = await _tjAction('auth-token-state', {});
+      if(st && st.token) window.__tjToken = st.token;
+    }catch(e){}
+    tjLoadAuth();
+  }
+  // 鉴权对话框提层: 这些 dialog 原生长在设置页容器里, 其他路由下祖先 display:none,
+  // showModal() 进了 top-layer 也不渲染 (dialog.open=true 但整体不可见) → "点登录没反应"。
+  // 一次性迁到 body 下, 任何页面都能弹出 (2026-09-23 真宿主 UAT 抓到的现场级 bug)。
+  (function tjLiftAuthDialogs(){
+    ['loginDialog','changePwdDialog','enableAuthDialog'].forEach(function(id){
+      var d=document.getElementById(id);
+      if(d && d.parentElement!==document.body) document.body.appendChild(d);
+    });
+  })();
+  // 身份: 对接账户鉴权, 实时显示当前登录身份(管理员/操作员/工程师/自定义/访客)
+  function _tjRoleLabel(u){
+    var roleMap={admin:'管理员',engineer:'工程师',operator:'操作员',superadmin:'超级管理员'};
+    if(!u) return '';
+    if(u.is_anonymous) return '访客';
+    if(u.is_superuser && u.id==null) return '管理员';
+    if(u.roles&&u.roles.length) return roleMap[u.roles[0]]||u.roles[0];
+    return '操作员';
+  }
   async function tjLoadAuth(){
     if(!window.tjApi) return;
     try{
       var r=await tjApi.get('/auth/me'); var u=r&&r.user; if(!u) return;
-      var roleMap={admin:'管理员',engineer:'工程师',operator:'操作员',superadmin:'超级管理员'};
-      var role='';
-      if(u.is_superuser) role='管理员';
-      else if(u.roles&&u.roles.length){ role=roleMap[u.roles[0]]||u.roles[0]; }
-      else role='操作员';
-      var name=u.display_name||u.username||role;
-      var ue=document.getElementById('scUser'); if(ue) ue.textContent=name;
-      var ud=document.getElementById('scUserDot'); if(ud){ ud.textContent=(String(name||'管').trim().charAt(0))||'管'; }
+      window.__tjMe = r;
+      var enabled = !!r.auth_enabled;
+      var anon = enabled && !!u.is_anonymous;
+      var role=_tjRoleLabel(u);
+      var name = anon ? '访客 · 点击登录' : (u.display_name||u.username||role);
+      var ue=document.getElementById('scUser');
+      if(ue){ ue.textContent=name; ue.style.color = anon ? 'var(--ng, #ff5d6c)' : ''; }
+      var ud=document.getElementById('scUserDot');
+      if(ud){
+        ud.textContent = anon ? '访' : ((String(name||'管').trim().charAt(0))||'管');
+        ud.style.background = anon ? 'rgba(255,93,108,.25)' : '';
+      }
+      // 访客首次提示 (一次性, 不刷屏): 告知登录入口
+      if(anon && !window.__tjAnonHinted){
+        window.__tjAnonHinted = true;
+        showProtoToast('当前为访客身份，配置操作受限 — 点击右上角身份可登录', 6000);
+      }
     }catch(e){ /* 鉴权关闭或无接口 → 保留默认 */ }
   }
-  setTimeout(tjLoadAuth, 500);
+  // 顶栏身份菜单: 登录/切换账号/修改密码/登出/账号管理, 任何页面可达
+  (function tjWireIdentityMenu(){
+    var chip=document.querySelector('.header .user') || document.getElementById('scUser');
+    if(!chip || chip.__tjB) return; chip.__tjB=true;
+    chip.style.cursor='pointer';
+    var menu=document.createElement('div');
+    menu.id='tjIdMenu';
+    menu.style.cssText='position:fixed;top:52px;right:18px;z-index:9500;display:none;min-width:210px;'
+      +'background:rgba(8,14,26,.97);border:1px solid rgba(90,170,255,.35);border-radius:10px;'
+      +'box-shadow:0 12px 40px rgba(0,0,0,.55);padding:10px;backdrop-filter:blur(8px);font-size:13px;';
+    document.body.appendChild(menu);
+    function hide(){ menu.style.display='none'; }
+    document.addEventListener('click', function(ev){ if(menu.style.display!=='none' && !menu.contains(ev.target) && !chip.contains(ev.target)) hide(); });
+    function item(label, fn, danger){
+      var b=document.createElement('div');
+      b.textContent=label;
+      b.style.cssText='padding:8px 10px;border-radius:7px;cursor:pointer;color:'+(danger?'#ff8d99':'#cfe4ff')+';';
+      b.addEventListener('mouseenter', function(){ b.style.background='rgba(90,170,255,.14)'; });
+      b.addEventListener('mouseleave', function(){ b.style.background=''; });
+      b.addEventListener('click', function(){ hide(); fn(); });
+      menu.appendChild(b);
+    }
+    function openDialog(id){ var dlg=document.getElementById(id); if(dlg&&dlg.showModal&&!dlg.open) dlg.showModal(); }
+    function gotoAuthTab(){
+      var nav=document.querySelector('.nav .item[data-route="/settings"]');
+      if(nav){ nav.click(); }
+      setTimeout(function(){ if(window.setSettingsTab) setSettingsTab('auth'); }, 60);
+    }
+    chip.addEventListener('click', function(){
+      var me=window.__tjMe||{}; var u=me.user||{};
+      var enabled=!!me.auth_enabled;
+      var logged=!!(u && !u.is_anonymous && u.id!=null);
+      menu.innerHTML='';
+      var head=document.createElement('div');
+      head.style.cssText='padding:6px 10px 10px;border-bottom:1px solid rgba(90,170,255,.18);margin-bottom:6px;color:#8fb4e8;';
+      head.innerHTML = enabled
+        ? ('当前身份：<b style="color:#e8f2ff">'+_esc(logged?(u.display_name||u.username):'访客（未登录）')+'</b>'
+           +(logged&&u.roles&&u.roles.length?('<br><span style="opacity:.7">'+_esc(u.roles.join(' / '))+'</span>'):''))
+        : '账号鉴权未启用<br><span style="opacity:.7">所有人 = 最高管理员</span>';
+      menu.appendChild(head);
+      if(enabled){
+        item(logged?'切换账号':'登录', function(){ openDialog('loginDialog'); });
+        if(logged){
+          item('修改密码', function(){ openDialog('changePwdDialog'); });
+          item('登出', async function(){
+            try{ await tjApi.post('/auth/logout',{}); }catch(e){}
+            await tjAuthClearToken();
+            showProtoToast('已登出');
+            tjLoadAuth(); if(window.tjLoadAuthPanel) tjLoadAuthPanel();
+          }, true);
+        }
+      }
+      item('账号与权限管理', gotoAuthTab);
+      menu.style.display = (menu.style.display==='none'||!menu.style.display) ? 'block' : 'none';
+    });
+  })();
+  setTimeout(tjAuthBootstrap, 400);
   setInterval(tjLoadAuth, 60*1000);
 
   // 面板显隐: 跟主程序"显示设置"的监测面板开关走 (宿主从 display_settings 注入)
@@ -8769,6 +9652,8 @@
       try{ tjscBoxes(det); }catch(e){}
       try{ tjscVerdict(det); }catch(e){}
       try{ tjscScanToast(det); }catch(e){}
+      try{ tjscScanCollect(det); }catch(e){}
+      try{ tjscGates(det); }catch(e){}
       try{ tjscActions(det); }catch(e){}
       try{ tjscTrack(det); }catch(e){}
       try{ tjscPerItem(det); }catch(e){}
@@ -8795,7 +9680,31 @@
       var pend = window.__tjPending[d.id];
       if(pend){ delete window.__tjPending[d.id];
         if(d.ok){ pend.resolve(d.data); }
-        else { var e=new Error(d.error||'请求失败'); e.status=d.status; e.data=d.data; pend.reject(e); } }
+        else {
+          var e=new Error(d.error||'请求失败'); e.status=d.status; e.data=d.data;
+          // v1.5.0 失败回传后端日志: detail 优先带后端 detail 字段 (业务原因), 否则错误消息
+          try{ _tjReportErr(pend.m, pend.u, (d.data&&d.data.detail)||d.error||'请求失败', d.status); }catch(_){ }
+          // v1.5.1 鉴权引导: 401=token 失效清身份重登; 403=无权限指路身份菜单 (节流 8s 防轮询刷屏)
+          try{
+            var now=Date.now();
+            if(d.status===401 && String(pend.u||'').indexOf('/auth/login')<0){
+              window.__tjToken=null;
+              if(!window.__tjAuthHintT || now-window.__tjAuthHintT>8000){
+                window.__tjAuthHintT=now;
+                showProtoToast('登录已失效，请重新登录（点击右上角身份）', 6000);
+                try{ _tjAction('auth-clear-token', {}); }catch(_){}
+                tjLoadAuth();
+              }
+            } else if(d.status===403){
+              if(!window.__tjAuthHintT || now-window.__tjAuthHintT>8000){
+                window.__tjAuthHintT=now;
+                var who=(window.__tjMe&&window.__tjMe.user)?_tjRoleLabel(window.__tjMe.user):'';
+                showProtoToast('无权限执行该操作'+(who?('（当前身份：'+who+'）'):'')+' — 点击右上角身份可登录/切换账号', 6000);
+              }
+            }
+          }catch(_){ }
+          pend.reject(e);
+        } }
       return;
     }
     // 真值数据帧
@@ -8832,11 +9741,19 @@
   <div class="pk-prog"><b id="pkNum">0</b><span id="pkTotal">/ 0 件</span><span class="pk-tail" id="pkTail" style="display:none">尾箱</span></div>
   <div class="pk-chips" id="pkChips"></div>
   <div class="pk-remed" id="pkRemed" style="display:none"></div>
+  <!-- v3.45 箱标签扫码授权 / v3.43 等放工单收尾 状态横幅 -->
+  <div class="pk-state" id="pkState"></div>
   <div class="pk-btns">
     <button class="proto-btn" id="pkConfirmBtn" style="display:none">确认进箱</button>
     <button class="proto-btn ng" id="pkForceBtn" style="display:none">强制结箱</button>
   </div>
 </div>
+<!-- v3.50 码-合格-码闭环: NG 灭灯等人工恢复扫码 (det.mes.scanner_resume_blocked) -->
+<div id="tjScanResume"><span>⛔ NG 后扫码器已灭灯</span><button class="proto-btn ok" id="tjScanResumeBtn">恢复扫码</button></div>
+<!-- v3.48 计数组合判定表: 最近命中机型 -->
+<div id="tjComboTag"></div>
+<!-- v3.35.1 融合模式实时称重数值条 (视觉 SOP + 秤步骤门控) -->
+<div id="tjWgLiveBar"><span>实时称重</span><b id="tjWgLiveNum">—</b><span>kg</span><span id="tjWgLiveTare" class="tiny-note"></span></div>
 <!-- 虚拟扫码枪（展会演示：无 USB 枪时手输条码，走真实 /scanner/scan_pair 链路） -->
 <div id="tjScanPill"><span>▍</span><span>虚拟扫码枪</span></div>
 <div id="tjScanBox">
@@ -8898,14 +9815,37 @@
     if(!st) return;
     if(st.stations) st=st.stations[0]||null; // 全通道形态取首工位
     if(!st) return;
-    var phaseMap={ idle:['待扫码','idle'], await_tare:['待放件/去皮','tare'], filling:['投料中','filling'], done:['本件完成','done'] };
+    var phaseMap={ idle:['待扫码','idle'], empty:['空秤待上件','idle'], await_tare:['待放件/去皮','tare'], filling:['投料中','filling'], departing:['离秤结算中','filling'], done:['本件完成','done'] };
     var pm=phaseMap[String(st.phase||'idle')]||[String(st.phase),'filling'];
     var pEl=$('wgPhase'); if(pEl){ pEl.textContent=pm[0]; pEl.className='wg-phase '+pm[1]; }
     $('wgSn').textContent=st.product_sn||'—';
     $('wgRecipe').textContent=st.model_name||'—';
     var lw=st.live_weight;
     $('wgGross').textContent=lw!=null?fmtW(lw):'—';
-    $('wgNet').textContent=lw!=null?fmtW(lw):'—';
+    // v3.35.1 看板数值: 去皮后秤已归零, live_weight 即净重; tare_weight = 去皮那一刻的自重
+    $('wgNet').textContent=st.tare_weight!=null?(fmtW(st.tare_weight)+'kg'):'—';
+    // v3.39 两阶段流水线看板: 相位 + 有效重量 + 待收尾 FIFO 队列
+    var pipeEl=$('wgPipeBoard');
+    if(pipeEl){
+      if(st.drive_mode==='pipeline'){
+        pipeEl.style.display='';
+        var pq=st.pending||[];
+        var pipePhaseMap={empty:'空秤', await_tare:'待去皮', filling:'装料中', departing:'离秤结算', done:'完成'};
+        pipeEl.innerHTML='<span class="tiny-note">流水线 · '+esc(pipePhaseMap[st.pipeline_phase]||st.pipeline_phase||'—')
+          +(st.offscale?' · <span style="color:#f3b54d">已拿下装料中</span>':'')
+          +(st.effective_weight!=null?(' · 有效 '+fmtW(st.effective_weight)+'kg'):'')
+          +' · 已结 '+num(st.settled_count,0)+' 件</span>'
+          +'<div class="rowline" style="flex-wrap:wrap">'
+          +(pq.length?pq.map(function(p2){
+            var vc=(p2.verdict==='ok')?'#22e3a0':((p2.verdict==='shortage'||p2.verdict==='over')?'#ff5263':'#f3b54d');
+            return '<span class="badge-sm" style="border-color:'+vc+';color:'+vc+'">'+esc(p2.sn||'?')+' '+(p2.net!=null?fmtW(p2.net)+'kg':'')+' 待收尾</span>'; }).join('')
+            :'<span class="tiny-note">待收尾队列空</span>')
+          +'</div>';
+      } else pipeEl.style.display='none';
+    }
+    // v3.45 人员名单下拉提示 (operator_from_users 时监控页应从用户系统选人)
+    var wgSnI=$('wgSnInput');
+    if(wgSnI&&st.operator_from_users!=null) wgSnI.placeholder=st.operator_from_users?'扫码或输入后回车 (人员走名单下拉)':'扫码或输入后回车';
     // 结果表: 按料别名回填判定
     var byMat={}; (st.results||[]).forEach(function(r){ byMat[r.material]=r; });
     var anyBad=(st.results||[]).some(function(r){ return r.verdict==='shortage'||r.verdict==='over'; });
@@ -8993,12 +9933,48 @@
     op('wgResetBtn','/weighing/reset','已复位当前件');
   }
   bindWeighCtl();
-  // 称重轮询: 仅 weighing 模式下自轮询 (1s), 不依赖父层数据泵扩展
+  // 称重轮询 (1s): weighing 模式喂主看板; 融合模式 (step_gate+show_monitor_weights) 喂数值条
   setInterval(function(){
+    if(!window.tjApi) return;
     var main=document.querySelector('.main');
-    if(!main||!main.classList.contains('weighing')||!window.tjApi) return;
-    tjApi.get('/weighing/state', {channel:0}).then(renderWeighing).catch(function(){});
+    if(main&&main.classList.contains('weighing')){ tjApi.get('/weighing/state', {channel:0}).then(renderWeighing).catch(function(){}); return; }
+    if(window.__tjWgFusion){ tjApi.get('/weighing/state', {channel:0}).then(renderWgLiveBar).catch(function(){}); }
   }, 1000);
+
+  // ---------- v3.50 恢复扫码 (码-合格-码闭环: NG 灭灯等人工恢复) ----------
+  function renderScanResume(det){
+    var box=$('tjScanResume'); if(!box) return;
+    box.classList.toggle('show', !!(det.mes&&det.mes.scanner_resume_blocked));
+  }
+  var srBtn=$('tjScanResumeBtn');
+  if(srBtn) srBtn.addEventListener('click', function(){
+    tjApi.post('/scanner/resume?channel_id=0', {})
+      .then(function(r){ var n=(r&&r.resumed&&r.resumed.length)||0; showProtoToast(n?('已恢复 '+n+' 台扫码器亮灯'):'当前没有灭灯的扫码器'); $('tjScanResume').classList.remove('show'); })
+      .catch(function(e){ showProtoToast('恢复失败: '+((e.data&&e.data.detail)||e.message)); });
+  });
+  // ---------- v3.48 计数组合判定表: 最近命中机型 chip (+positional 实时计数) ----------
+  function renderComboTag(det){
+    var el=$('tjComboTag'); if(!el) return;
+    var cv=det.combo_verdict;
+    if(!cv||!cv.enabled){ el.classList.remove('show'); return; }
+    el.classList.add('show');
+    var pos=cv.positional_counts;
+    el.textContent='判型 '+(cv.last_tag||'—')+(pos?(' · '+Object.keys(pos).map(function(k){return k+'×'+pos[k];}).join(' ')):'');
+  }
+  // ---------- v3.35.1 融合模式实时称重数值条 (weighing.drive_mode=step_gate + show_monitor_weights) ----------
+  function renderWgFusion(det){
+    var wcfg=(((det.project_config||{}).pipeline_config)||{}).weighing;
+    window.__tjWgFusion=!!(wcfg&&wcfg.drive_mode==='step_gate'&&wcfg.show_monitor_weights!==false);
+    if(!window.__tjWgFusion){ var b=$('tjWgLiveBar'); if(b) b.classList.remove('show'); }
+  }
+  function renderWgLiveBar(st){
+    if(st&&st.stations) st=st.stations[0]||null;
+    var b=$('tjWgLiveBar'); if(!b) return;
+    if(!st){ b.classList.remove('show'); return; }
+    b.classList.add('show');
+    $('tjWgLiveNum').textContent=st.live_weight!=null?fmtW(st.live_weight):'—';
+    $('tjWgLiveTare').textContent=st.tare_weight!=null?('皮重 '+fmtW(st.tare_weight)+'kg'):'';
+  }
 
   // ---------- 区域事件模式：SOP 时间轴换数据源 ----------
   // 规则身份来自 project_config.pipeline_config.region_events.rules [{id,name}] (与主程序 Monitor 同源);
@@ -9122,16 +10098,21 @@
     if(!pa || !pa.active){ layer.classList.remove('show'); layer.__mode=null; return; }
     layer.classList.add('show');
     var rem=det.pending_remediation;
-    $('ackTitle').textContent = rem ? '缺步骤 NG · 挂起待补' : ('需要人工确认 · '+(pa.event_name||''));
-    var reason = rem ? (rem.reason||'') : (pa.event_name||'');
+    var pkg=pa.pkg_hold||null;  // v3.44 包装层 NG 箱账挂起等处置
+    $('ackTitle').textContent = rem ? '缺步骤 NG · 挂起待补' : (pkg ? 'NG 箱账挂起 · 等处置' : ('需要人工确认 · '+(pa.event_name||'')));
+    // v3.43.1 原因固化进阻塞态 (pa.reason 不随 30s 事件窗丢失), 老后端兜底 event_name
+    var reason = (pa.reason||'') || (rem ? (rem.reason||'') : (pa.event_name||''));
     var missing = (rem&&rem.missing)||[];
-    $('ackReason').innerHTML = esc(reason)+(missing.length?('<br/>缺失步骤: '+missing.map(esc).join('、')):'');
+    var pkgLine = pkg ? ('<br/>第 '+(pkg.box!=null?pkg.box:'?')+' 箱 '+(pkg.sliders!=null?pkg.sliders:'?')+'/'+(pkg.target!=null?pkg.target:'?')+(pkg.is_tail?' (尾箱)':'')+' — 重做不记 NG 箱') : '';
+    // v3.43.1 处置方式明示 (事件级 ack_keep_cycle)
+    var keepLine = (!rem&&!pkg) ? ('<br/><span class="tiny-note">'+(pa.keeps_cycle?'确认后保留周期，从断点继续补做':'确认后清运行时，整件重做')+'</span>') : '';
+    $('ackReason').innerHTML = esc(reason)+(missing.length?('<br/>缺失步骤: '+missing.map(esc).join('、')):'')+pkgLine+keepLine;
     var cd=$('ackCd');
     var waited = pa.started_at ? Math.max(0, Math.round(Date.now()/1000-num(pa.started_at,0))) : 0;
     if(num(pa.timeout_sec,0)>0){ cd.textContent='已等待 '+waited+'s · '+Math.max(0,num(pa.timeout_sec,0)-waited)+'s 后自动确认'; }
     else cd.textContent='已等待 '+waited+'s';
-    // 按钮组按是否缺步骤挂起切换
-    var mode = rem ? 'remed' : 'plain';
+    // 按钮组: 缺步骤挂起=补做三键 / 包装箱账挂起=认NG落账·重做双键 (v3.44) / 普通=单键
+    var mode = rem ? 'remed' : (pkg ? 'pkg' : (pa.keeps_cycle ? 'keep' : 'plain'));
     var btns=$('ackBtns');
     if(layer.__mode!==mode){
       layer.__mode=mode;
@@ -9139,7 +10120,10 @@
         ? [ {t:'✓ 已补做，判 OK', act:'supplement_step', cls:'proto-btn ok'},
             {t:'认 NG 落账', act:'confirm_ng', cls:'proto-btn ng'},
             {t:'丢弃重做', act:'redo', cls:'proto-btn'} ]
-        : [ {t:'✓ 确认重做', act:'', cls:'proto-btn ok'} ];
+        : pkg
+        ? [ {t:'认 NG 落账 (进下一箱)', act:'confirm_ng', cls:'proto-btn ng'},
+            {t:'✓ 确认重做 (本箱不记 NG)', act:'', cls:'proto-btn ok'} ]
+        : [ {t:pa.keeps_cycle?'✓ 确认 (保留周期续做)':'✓ 确认重做', act:'', cls:'proto-btn ok'} ];
       btns.innerHTML=acts.map(function(a){ return '<button class="'+a.cls+'" data-ack="'+a.act+'">'+a.t+'</button>'; }).join('');
     }
   }
@@ -9256,6 +10240,13 @@
         rEl.textContent='⚠ 第 '+run.current_box_index+' 箱少装 ('+(pb.sliders!=null?pb.sliders:cnt)+'/'+(pb.target!=null?pb.target:target)+')，等补做或人工确认';
         $('pkConfirmBtn').style.display='';
       } else { rEl.style.display='none'; $('pkConfirmBtn').style.display='none'; }
+      // v3.45 箱标签扫码授权 / v3.43 放工单=工单收尾 状态横幅
+      var stEl=$('pkState');
+      if(stEl){
+        if(run.status==='waiting_label'){ stEl.style.display='flex'; stEl.className='pk-state'; stEl.textContent='⛔ 等扫箱标签授权开箱 (虚拟扫码枪输入箱标签即可)'; }
+        else if(run.status==='awaiting_paper'){ stEl.style.display='flex'; stEl.className='pk-state warn'; stEl.textContent='⚠ 各箱已落账 · 等「放工单」动作收尾工单'; }
+        else { stEl.style.display='none'; }
+      }
       $('pkForceBtn').style.display=(run.status!=='order_loaded'||run.box_done>0)?'':'none';
     }).catch(function(){});
   }
@@ -9397,6 +10388,9 @@
       try{ renderRecFail(det); }catch(e){}
       try{ renderRebind(det); }catch(e){}
       try{ renderPlacement(det); }catch(e){}
+      try{ renderScanResume(det); }catch(e){}
+      try{ renderComboTag(det); }catch(e){}
+      try{ renderWgFusion(det); }catch(e){}
     }
     if(d.__tjsc===true && d.weighing){ try{ renderWeighing(d.weighing); }catch(e){} }
   });

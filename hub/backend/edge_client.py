@@ -113,6 +113,10 @@ class EdgeClient:
             params.append(f"result={result}")
         return await self._get(f"/api/v1/hub/events?{'&'.join(params)}")
 
+    async def live(self, channel: int = 0) -> Dict[str, Any]:
+        """工位实时投影 (M7.5 值班读面): 计数/步骤/周期/近期事件的白名单裁剪。"""
+        return await self._get(f"/api/v1/hub/live?channel={channel}")
+
     # -------- 边缘复用端点 (RFC 15 §9.2, 零改动消费) --------
 
     async def snapshot(self, channel: int) -> bytes:

@@ -2,7 +2,7 @@
   <div class="data-page">
     <header class="hub-topbar">
       <button class="hub-back" data-test="back-wall" @click="router.push({ name: 'wall' })">
-        ← 监控墙
+        ← 检测集群
       </button>
       <h1>数据中心</h1>
       <span v-if="summary?.catching_up" class="hub-badge warn" data-test="catching-up">

@@ -2,7 +2,7 @@
   <div class="users-page">
     <header class="hub-topbar">
       <button class="hub-back" data-test="back-wall" @click="router.push({ name: 'wall' })">
-        ← 监控墙
+        ← 检测集群
       </button>
       <h1>用户管理</h1>
       <button class="hub-btn sm create" data-test="user-create-open" @click="openCreate">

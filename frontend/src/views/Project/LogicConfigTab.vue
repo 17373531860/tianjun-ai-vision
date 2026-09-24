@@ -2040,7 +2040,8 @@
                   <el-tag v-for="(n, ni) in (regionEventsCfg.sequence_check.order || [])" :key="`${n}-${ni}`" size="small" closable type="info"
                     @close="regionEventsCfg.sequence_check.order.splice(ni, 1)">{{ ni + 1 }}.{{ n }}</el-tag>
                   <span v-if="!(regionEventsCfg.sequence_check.order || []).length" class="text-gray-500">点右侧动作名依次追加 →</span>
-                  <el-button v-for="r in regionEventsCfg.rules.filter(x => x.name)" :key="r.name" size="small" plain
+                  <!-- 已入无序组的动作不能再进期望顺序（后端解析二者互斥） -->
+                  <el-button v-for="r in regionEventsCfg.rules.filter(x => x.name && !seqGroupMemberSet.has(x.name))" :key="r.name" size="small" plain
                     @click="appendSeqName(regionEventsCfg.sequence_check, 'order', r.name)">+{{ r.name }}</el-button>
                 </div>
               </div>
@@ -2051,6 +2052,61 @@
                   <el-option v-for="ev in (project.events_config || [])" :key="ev.id" :label="ev.name" :value="ev.id" />
                 </el-select>
                 <span class="text-gray-500">建议配"警告/自定义"类事件；是否报警由该事件的动作决定</span>
+              </div>
+              <div class="flex items-center gap-3">
+                <span class="text-gray-400 whitespace-nowrap">严格模式（期望位置守门）</span>
+                <el-switch v-model="regionEventsCfg.sequence_check.strict" size="small" />
+                <span class="text-gray-500 flex-1">
+                  开启后：不在期望顺序下一位的动作确认被静默吸收（不进序列、不计步骤、不触发事件），期望推进后同一动作可再确认；
+                  结算动作与监控类规则不受守门。适合"动作完成后画面条件残留"的工位（如放料入盘后料一直在盘内），防残留假确认搅乱序列
+                </span>
+              </div>
+              <!-- 无序组（2026-09 四料盒拿料立项）: 顺序自由但数量要严的并行轨道 -->
+              <div class="space-y-2">
+                <div class="flex items-center gap-3">
+                  <span class="text-gray-400 whitespace-nowrap">无序组（顺序自由、数量要严）</span>
+                  <el-button type="primary" size="small" link @click="addSeqGroup">+ 新增组</el-button>
+                  <span class="text-gray-500 flex-1">
+                    组成员不进期望顺序，确认顺序自由、与其他动作互不打断；每周期每成员须恰好确认 N 次，
+                    多做/少做由「完整流程」判定收账（结算/监控类动作不能入组）
+                  </span>
+                </div>
+                <div v-for="(g, gIdx) in (regionEventsCfg.sequence_check.groups || [])" :key="gIdx"
+                  class="flex items-center gap-2 flex-wrap bg-slate-800 rounded px-2 py-1.5">
+                  <el-input v-model="g.name" size="small" class="!w-24" placeholder="组名" />
+                  <span class="text-gray-400 whitespace-nowrap">每成员</span>
+                  <el-input-number v-model="g.count" size="small" :min="1" :max="20" class="!w-20" />
+                  <span class="text-gray-400">次</span>
+                  <!-- 组内按序（2026-09）: 成员须按成员表顺序发生（结算对账强制,
+                       确认时点仍可与期望顺序侧动作交错——治双手流水早到被守门吸收） -->
+                  <el-tooltip content="开启后成员必须按左侧成员排列顺序发生（顺序错了判不合格）；确认时间仍可与期望顺序里的动作交错" placement="top">
+                    <div class="flex items-center gap-1">
+                      <el-switch v-model="g.ordered" size="small" />
+                      <span class="text-gray-400 whitespace-nowrap">组内按序</span>
+                    </div>
+                  </el-tooltip>
+                  <div class="flex items-center gap-1 flex-wrap flex-1">
+                    <el-tag v-for="(m, mi) in (g.members || [])" :key="`${m}-${mi}`" size="small" closable type="warning"
+                      @close="g.members.splice(mi, 1)">{{ m }}</el-tag>
+                    <span v-if="!(g.members || []).length" class="text-gray-500">点右侧动作名加入组 →</span>
+                    <el-button v-for="r in groupMemberCandidates(g)" :key="r.name" size="small" plain
+                      @click="g.members.push(r.name)">+{{ r.name }}</el-button>
+                  </div>
+                  <el-button type="danger" size="small" link
+                    @click="regionEventsCfg.sequence_check.groups.splice(gIdx, 1)">删除</el-button>
+                </div>
+              </div>
+              <!-- 展示序列（2026-09）: 纯监控页展示模板, SOP 卡/步骤表按此逐位建卡;
+                   可重复、可含组成员, 引擎判定不消费。留空 = 按规则表顺序（老行为） -->
+              <div class="flex items-center gap-3">
+                <span class="text-gray-400 whitespace-nowrap">监控页展示序列（可重复、可含组成员）</span>
+                <div class="flex items-center gap-1 flex-wrap flex-1">
+                  <el-tag v-for="(n, ni) in (regionEventsCfg.sequence_check.display_order || [])" :key="`disp-${n}-${ni}`" size="small" closable
+                    @close="regionEventsCfg.sequence_check.display_order.splice(ni, 1)">{{ ni + 1 }}.{{ n }}</el-tag>
+                  <span v-if="!(regionEventsCfg.sequence_check.display_order || []).length" class="text-gray-500">留空=按规则表顺序；点右侧动作名按作业流依次追加 →</span>
+                  <el-button v-for="r in regionEventsCfg.rules.filter(x => x.name)" :key="`disp-btn-${r.name}`" size="small" plain
+                    @click="appendSeqName(regionEventsCfg.sequence_check, 'display_order', r.name)">+{{ r.name }}</el-button>
+                </div>
               </div>
             </div>
           </div>
@@ -2068,6 +2124,8 @@
               class="flex items-center gap-2 flex-wrap bg-slate-800 rounded px-2 py-1.5 text-xs">
               <span class="text-cyan-400 font-bold whitespace-nowrap">判定 {{ sIdx + 1 }}</span>
               <el-select v-model="sr.match" size="small" class="!w-36" @change="onSettlementMatchChange(sr)">
+                <el-option label="完整流程（按期望模板）" value="complete"
+                  :disabled="!(regionEventsCfg.sequence_check?.enabled && (regionEventsCfg.sequence_check?.order || []).length)" />
                 <el-option label="序列完全匹配" value="exact" />
                 <el-option label="缺某动作" value="missing" />
                 <el-option label="某动作重复" value="repeated" />
@@ -2093,6 +2151,9 @@
                   <span class="text-gray-400">次</span>
                 </template>
               </template>
+              <span v-else-if="sr.match === 'complete'" class="text-gray-500">
+                期望顺序走完且无序组成员各恰好 N 次（少做/多做/缺步都不命中）→ 通常配「合格」放最上
+              </span>
               <span v-else class="text-gray-500">上面全不命中时走这条（放最后）</span>
               <span class="text-gray-400 whitespace-nowrap">→ 结算为</span>
               <el-select :model-value="sr.event_id ?? null" size="small" class="!w-36" placeholder="选择事件"
@@ -2872,6 +2933,36 @@ const onSettlementMatchChange = (sr) => {
 const appendSeqName = (obj, key, name) => {
   if (!Array.isArray(obj[key])) obj[key] = [];
   obj[key].push(name);
+};
+
+// ---------- 无序组（2026-09）: 顺序自由但数量要严的并行轨道 ----------
+const REGION_MONITORING_TYPES = ['region_count', 'region_empty', 'proximity', 'cross_count', 'facing_dwell'];
+
+// 全部组成员名集合（期望顺序按钮剔除已入组动作: 后端解析二者互斥）
+const seqGroupMemberSet = computed(() => {
+  const s = new Set();
+  (regionEventsCfg.value?.sequence_check?.groups || [])
+    .forEach(g => (g.members || []).forEach(m => s.add(m)));
+  return s;
+});
+
+const addSeqGroup = () => {
+  const seq = regionEventsCfg.value?.sequence_check;
+  if (!seq) return;
+  if (!Array.isArray(seq.groups)) seq.groups = [];
+  seq.groups.push({ name: `组${seq.groups.length + 1}`, members: [], count: 1, ordered: false });
+};
+
+// 可加入组的动作规则: 非监控、非结算、未进期望顺序、未在任何组里
+const groupMemberCandidates = () => {
+  const cfg = regionEventsCfg.value;
+  if (!cfg) return [];
+  const order = new Set(cfg.sequence_check?.order || []);
+  return (cfg.rules || []).filter(r => (r.name || '').trim()
+    && !REGION_MONITORING_TYPES.includes(r.type)
+    && !r.settle
+    && !order.has(r.name)
+    && !seqGroupMemberSet.value.has(r.name));
 };
 
 const moveSettlementRule = (idx, delta) => {

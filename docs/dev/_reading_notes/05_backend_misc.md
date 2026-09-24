@@ -7,6 +7,10 @@
 >
 > **短信补账（2026-08-03）**：新增短信服务族（见下方「短信通知」节）；路由 API 条目在 `01_backend_core.md` 的 `sms.py`。
 >
+> **v3.62 补账（2026-09-24，Hub 边缘接入面增量 + hub_access 补录）**：
+> - `api/hub_access.py`（v3.61 落地时漏收，本版补录；~630 行）：RFC 15 边缘接入面 `/api/v1/hub/*`——`GET/PUT /config`（`hub_access.enabled` KV 开关，PUT 挂 settings.edit）、`GET /handshake`（node_uid/版本/能力档案 hash，API Key scope=hub 鉴权族入口）、`GET /profile`（能力档案 property/action/event 三元组）、`GET /health-summary`（工位状态摘要，poller 常规链路）、`POST /ops`（远程操作唯一写网关：锁互斥/能力白名单/审计逐条落账）、`GET /events`（游标增量事件通道）、`GET /projects`（最小项目名单供跨机按名切换）。`_ensure_enabled` 总开关守门（默认关 404 零差异）。
+> - `api/hub_access.py` v3.62 增量（+66 行）：新增 **`GET /hub/live`**（RFC 15 M7.5 工位实时投影）——复用 `get_detection_results` 聚合逻辑做**白名单裁剪**（计数器/步骤进度含 in-flight 秒/周期节拍 当前·平均·上周期/最近 5 事件/tracking 清点摘要；截图、检测框、配置 JSON 等大载荷全剥），**按需调用不进 poller**（枢纽仅下钻页开着时 2s 轮询转发，无人看零开销）；`HubLiveResponse` response_model（端点四件套齐全过 doc 门禁）。枢纽侧消费 `hub/backend/poller.py` 转发端点 + `StationView` 生产实况面板（hub 独立应用不在本笔记域）。
+>
 > **v3.58 补账（2026-09-17，检测框 sidecar 服务对 + 头姿全角度开关）**：
 > - **新 `services/detection_boxes_sidecar.py`**：检测框 sidecar writer/loader——路径纯命名约定 `<视频路径>.boxes.json`（`sidecar_path_for`，不加 DB 列，与录像同目录同生命周期）；**帧号对齐**设计（录制线程写帧成功那一刻的 `_frame_count`，天然免疫录制队列丢帧的墙钟漂移，视频第 N 帧恒等于 N/fps）；run-length 只记检测变化帧（`{"f":帧号,"d":[归一化框]}`，框消失记空列表），`MAX_ENTRIES=20000` 护栏；`observe()` 仅录制线程调（单线程无锁），`flush()` 由录像延迟释放线程在 release 后调。回归 `tests/test_boxes_sidecar_annotated.py`。
 > - **新 `services/annotated_video.py`**：带框版渲染——原片 + sidecar 烧框出 MP4（cv2 逐帧 + ffmpeg 合成），`get_or_render_annotated_cached` 落转码缓存目录复用；归档 worker 与 `/data/videos/{id}/annotated` 两个消费方。

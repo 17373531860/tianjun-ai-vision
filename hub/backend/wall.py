@@ -241,6 +241,29 @@ def update_station(node_id: int, channel_id: int, payload: StationUpdate,
     return station_detail(node_id, channel_id, request, db)
 
 
+@router.get("/nodes/{node_id}/stations/{channel_id}/live",
+            summary="工位实时投影 (转发边缘 /hub/live, M7.5 值班读面)",
+            dependencies=[Depends(require_perm("wall.view"))])
+async def station_live(node_id: int, channel_id: int,
+                       db: Session = Depends(get_db)):
+    """按需转发: 只有下钻页开着才会打到这里 (~2s 轮询), 不进 poller。"""
+    node = db.query(HubNode).filter(HubNode.id == node_id).first()
+    if not node:
+        raise HTTPException(404, "节点不存在")
+    if not db.query(HubStation).filter(
+            HubStation.node_id == node_id,
+            HubStation.channel_id == channel_id).first():
+        raise HTTPException(404, "工位不存在")
+
+    api_key = (decrypt_api_key(node.api_key_enc, get_data_dir())
+               if node.api_key_enc else None)
+    async with EdgeClient(node.base_url, api_key=api_key) as client:
+        try:
+            return await client.live(channel_id)
+        except EdgeError as e:
+            raise HTTPException(503, f"边缘实况不可用: {e.detail}")
+
+
 @router.get("/nodes/{node_id}/stations/{channel_id}/snapshot",
             summary="工位画面快照 (转发边缘)", response_class=Response,
             dependencies=[Depends(require_perm("wall.view"))])
