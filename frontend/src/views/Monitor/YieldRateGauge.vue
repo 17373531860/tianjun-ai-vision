@@ -10,6 +10,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import * as echarts from 'echarts';
+import { useMonitorModuleFonts } from '@/composables/useMonitorModuleFonts';
 
 const props = defineProps({
   goodCount: { type: Number, default: 0 },
@@ -18,6 +19,7 @@ const props = defineProps({
 });
 
 const chartRef = ref(null);
+const { moduleFontScale } = useMonitorModuleFonts();
 const rate = computed(() => {
   const total = Math.max(0, Number(props.totalCount) || 0);
   const good = Math.max(0, Number(props.goodCount) || 0);
@@ -50,7 +52,7 @@ const updateChart = () => {
       detail: {
         valueAnimation: true,
         offsetCenter: [0, '20%'],
-        fontSize: 24,
+        fontSize: 24 * moduleFontScale('charts'),
         fontWeight: 'bold',
         color: '#fff',
         formatter: '{value}%',
@@ -76,7 +78,7 @@ onMounted(async () => {
   window.addEventListener('resize', resizeChart);
 });
 
-watch(() => [props.goodCount, props.totalCount], updateChart);
+watch(() => [props.goodCount, props.totalCount, moduleFontScale('charts')], updateChart);
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', resizeChart);

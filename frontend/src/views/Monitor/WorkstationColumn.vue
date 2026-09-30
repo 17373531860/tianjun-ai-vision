@@ -18,7 +18,8 @@
   />
   <!-- v3.1.3: per-channel MES 信息条 (工件号 / 未绑码警告 / 等待扫码 / 清除按钮) -->
   <div v-if="shouldShowMesBarFor(ch) || layoutEditActive" data-layout-slot="mes-bar" :data-testid="`dual-mes-${ch}`"
-       class="bg-slate-900 border border-cyan-800/50 rounded-lg px-2 py-1 flex items-center gap-3 text-xs flex-shrink-0">
+       class="tj-monitor-module bg-slate-900 border border-cyan-800/50 rounded-lg px-2 py-1 flex items-center gap-3 text-xs flex-shrink-0"
+       data-font-module="mesBar" :style="moduleFontStyle('mesBar')">
     <div v-if="!isScanDisabledFor(ch) && getDisplayWorkpieceFor(ch)" class="flex items-center gap-1.5 min-w-0">
       <span class="text-cyan-400 font-bold">工件:</span>
       <span class="font-mono text-white truncate" :title="getDisplayWorkpieceFor(ch).serial_no">{{ getDisplayWorkpieceFor(ch).serial_no }}</span>
@@ -93,7 +94,7 @@
     :state="scanCollectFor(ch)" :channel-id="ch" />
   <!-- Row 1: Counters (scrollable) + Yield Rate -->
   <div data-layout-slot="counters" :data-testid="`dual-counters-${ch}`" class="flex gap-2 flex-shrink-0">
-    <div class="flex-1 flex gap-2 overflow-x-auto min-w-0">
+    <div class="tj-monitor-module flex-1 flex gap-2 overflow-x-auto min-w-0" data-font-module="stats" :style="moduleFontStyle('stats')">
       <div class="flex-shrink-0 bg-slate-900 border border-slate-700 rounded px-4 py-2 text-center min-w-[5.625rem]">
         <div class="text-xs text-gray-400">总产量</div>
         <div class="text-2xl font-bold font-mono text-white">{{ multiChannelData[ch]?.total ?? 0 }}</div>
@@ -107,7 +108,7 @@
         <div class="text-2xl font-bold font-mono text-red-400">{{ multiChannelData[ch]?.ng ?? 0 }}</div>
       </div>
     </div>
-    <div class="flex-shrink-0 w-32 bg-slate-900 border border-slate-700 rounded px-3 py-2 flex flex-col items-center justify-center">
+    <div class="tj-monitor-module flex-shrink-0 w-32 bg-slate-900 border border-slate-700 rounded px-3 py-2 flex flex-col items-center justify-center" data-font-module="charts" :style="moduleFontStyle('charts')">
       <div class="text-xs text-gray-400">合格率</div>
       <div class="text-2xl font-bold font-mono" :class="(multiChannelData[ch]?.yieldRate ?? 0) >= 90 ? 'text-green-400' : (multiChannelData[ch]?.yieldRate ?? 0) >= 70 ? 'text-yellow-400' : 'text-red-400'">
         {{ multiChannelData[ch]?.yieldRate ?? 0 }}%
@@ -122,10 +123,10 @@
     <WorkstationModePanel v-if="modePanelKind" class="flex-1 min-w-0 min-h-0"
       :mode="modePanelKind" :ch="ch" :ch-data="multiChannelData[ch]" />
     <template v-else>
-    <div class="w-[60%] bg-slate-900 border border-slate-700 rounded overflow-hidden flex flex-col min-w-0">
+    <div class="tj-monitor-module w-[60%] bg-slate-900 border border-slate-700 rounded overflow-hidden flex flex-col min-w-0" data-font-module="sop" :style="moduleFontStyle('sop')">
       <div class="bg-slate-800 px-3 py-1 text-cyan-400 text-sm font-bold border-b border-slate-700 flex items-center justify-between flex-shrink-0">
         <span>SOP</span>
-        <span class="text-xs text-gray-400">CT: {{ getDisplayCT(multiChannelData[ch]) }}</span>
+        <span class="tj-monitor-module text-xs text-gray-400" data-font-module="stepTable" :style="moduleFontStyle('stepTable')">CT: {{ getDisplayCT(multiChannelData[ch]) }}</span>
       </div>
       <div class="flex-1 flex items-stretch gap-2 px-2 py-1 overflow-x-auto min-h-0">
         <div v-for="(step, idx) in (multiChannelData[ch]?.steps || [])" :key="idx"
@@ -144,7 +145,7 @@
         <div v-if="!multiChannelData[ch]?.steps?.length" class="text-gray-600 text-sm w-full text-center self-center">等待检测</div>
       </div>
     </div>
-    <div class="w-[40%] bg-slate-900 border border-slate-700 rounded overflow-auto min-w-0">
+    <div class="tj-monitor-module w-[40%] bg-slate-900 border border-slate-700 rounded overflow-auto min-w-0" data-font-module="stepTable" :style="moduleFontStyle('stepTable')">
       <table class="w-full text-xs">
         <thead class="bg-slate-800 text-gray-400 sticky top-0"><tr><th class="px-1.5 py-1 text-left">步骤</th><th class="px-1.5 py-1 text-left">状态</th></tr></thead>
         <tbody class="text-gray-300 divide-y divide-slate-800">
@@ -172,7 +173,7 @@
     :state="mixTrackingStateFor(ch)"
     :tracking-checklist="multiChannelData[ch]?.tracking?.item_checklist || {}" />
   <!-- Controls -->
-  <div data-layout-slot="controls" class="flex gap-1.5 flex-shrink-0" data-testid="channel-controls" :data-channel="ch">
+  <div data-layout-slot="controls" class="tj-monitor-module flex gap-1.5 flex-shrink-0" data-font-module="controls" :style="moduleFontStyle('controls')" data-testid="channel-controls" :data-channel="ch">
     <button @click="startDetectionForChannel(ch)" :disabled="(!multiChannelData[ch]?.project && !currentProject) || multiChannelData[ch]?.isDetecting"
       class="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-1 rounded text-xs font-bold">开始</button>
     <button @click="stopDetectionForChannel(ch)" :disabled="!multiChannelData[ch]?.isRunning"
@@ -231,7 +232,7 @@
     @zoom="zoomChannel(ch)"
   />
   <!-- 计数行: 总产量/合格/不良/CT 四等分横排 (跟随显示设置 defaultCounters) -->
-  <div data-layout-slot="counters" class="flex gap-1.5 flex-shrink-0">
+  <div data-layout-slot="counters" class="tj-monitor-module flex gap-1.5 flex-shrink-0" data-font-module="stats" :style="moduleFontStyle('stats')">
     <div v-if="systemStore.display.monitor.defaultCounters?.showTotal !== false" class="flex-1 bg-slate-900 border border-slate-700 rounded px-1 py-1 text-center min-w-0">
       <div class="text-[0.625rem] text-gray-400">总产量</div>
       <div class="text-xl font-bold font-mono text-white">{{ multiChannelData[ch]?.total ?? 0 }}</div>
@@ -244,7 +245,7 @@
       <div class="text-[0.625rem] text-gray-400">不良</div>
       <div class="text-xl font-bold font-mono text-red-400">{{ multiChannelData[ch]?.ng ?? 0 }}</div>
     </div>
-    <div class="flex-1 bg-slate-900 border border-slate-700 rounded px-1 py-1 text-center min-w-0">
+    <div class="tj-monitor-module flex-1 bg-slate-900 border border-slate-700 rounded px-1 py-1 text-center min-w-0" data-font-module="stepTable" :style="moduleFontStyle('stepTable')">
       <div class="text-[0.625rem] text-gray-400">CT</div>
       <div class="text-xl font-bold font-mono text-cyan-400">{{ getDisplayCT(multiChannelData[ch]) }}</div>
     </div>
@@ -253,7 +254,7 @@
        分别跟随 capacityChart / ngTop3 / defectChart 显示开关). 占固定高度, 相应压缩下方 SOP / 步骤表区. -->
   <div v-if="systemStore.display.monitor.capacityChart !== false || systemStore.display.monitor.ngTop3 !== false || systemStore.display.monitor.defectChart !== false || layoutEditActive"
     :data-testid="`triple-quality-${ch}`" data-layout-slot="quality"
-    class="flex gap-1.5 flex-shrink-0 h-24">
+    class="tj-monitor-module flex gap-1.5 flex-shrink-0 h-24" data-font-module="charts" :style="moduleFontStyle('charts')">
     <!-- 合格率圆环 -->
     <div v-if="systemStore.display.monitor.capacityChart !== false"
       :data-testid="`triple-yield-${ch}`"
@@ -320,7 +321,8 @@
   </div>
   <!-- MES 信息条 (与双工位同构) -->
   <div v-if="shouldShowMesBarFor(ch) || layoutEditActive" data-layout-slot="mes-bar"
-       class="bg-slate-900 border border-cyan-800/50 rounded-lg px-2 py-1 flex items-center gap-2 text-xs flex-shrink-0 overflow-hidden">
+       class="tj-monitor-module bg-slate-900 border border-cyan-800/50 rounded-lg px-2 py-1 flex items-center gap-2 text-xs flex-shrink-0 overflow-hidden"
+       data-font-module="mesBar" :style="moduleFontStyle('mesBar')">
     <div v-if="!isScanDisabledFor(ch) && getDisplayWorkpieceFor(ch)" class="flex items-center gap-1.5 min-w-0">
       <span class="text-cyan-400 font-bold">工件:</span>
       <span class="font-mono text-white truncate" :title="getDisplayWorkpieceFor(ch).serial_no">{{ getDisplayWorkpieceFor(ch).serial_no }}</span>
@@ -376,7 +378,7 @@
     :mode="modePanelKind" :ch="ch" :ch-data="multiChannelData[ch]" />
   <div v-else-if="systemStore.display.monitor.stepStrip !== false || layoutEditActive"
     :data-testid="`triple-sop-${ch}`" data-layout-slot="sop"
-    class="bg-slate-900 border border-slate-700 rounded overflow-hidden flex flex-col flex-shrink-0">
+    class="tj-monitor-module bg-slate-900 border border-slate-700 rounded overflow-hidden flex flex-col flex-shrink-0" data-font-module="sop" :style="moduleFontStyle('sop')">
     <div class="bg-slate-800 px-2 py-0.5 text-cyan-400 text-xs font-bold border-b border-slate-700 flex items-center justify-between flex-shrink-0">
       <span>SOP</span>
       <span class="text-[0.625rem] text-gray-400">
@@ -406,7 +408,7 @@
        (编辑态强制显示, 避免布局编辑器丢块)。槽位 id 契约 step-table 不动. -->
   <div v-if="!modePanelKind || layoutEditActive"
     :data-testid="`triple-steptable-${ch}`" data-layout-slot="step-table"
-    class="bg-slate-900 border border-slate-700 rounded overflow-auto min-w-0 flex-1 min-h-0">
+    class="tj-monitor-module bg-slate-900 border border-slate-700 rounded overflow-auto min-w-0 flex-1 min-h-0" data-font-module="stepTable" :style="moduleFontStyle('stepTable')">
     <table v-if="(multiChannelData[ch]?.tableData || []).length" class="w-full text-[0.625rem]">
       <thead class="bg-slate-800 text-gray-400 sticky top-0"><tr>
         <th v-if="systemStore.display.monitor.stepTableColumns?.showNo !== false" class="px-1.5 py-0.5 text-left">No</th>
@@ -438,7 +440,7 @@
     :state="mixTrackingStateFor(ch)"
     :tracking-checklist="multiChannelData[ch]?.tracking?.item_checklist || {}" />
   <!-- 控制按钮: 开始/停止/待机/清零 四等宽, 贴底 -->
-  <div data-layout-slot="controls" class="flex gap-1.5 flex-shrink-0" data-testid="channel-controls" :data-channel="ch">
+  <div data-layout-slot="controls" class="tj-monitor-module flex gap-1.5 flex-shrink-0" data-font-module="controls" :style="moduleFontStyle('controls')" data-testid="channel-controls" :data-channel="ch">
     <button @click="startDetectionForChannel(ch)" :disabled="(!multiChannelData[ch]?.project && !currentProject) || multiChannelData[ch]?.isDetecting"
       class="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-1 rounded text-xs font-bold">开始</button>
     <button @click="stopDetectionForChannel(ch)" :disabled="!multiChannelData[ch]?.isRunning"
@@ -487,6 +489,7 @@
  * refs 在模板中自动解包，与原 index.vue 内联渲染语义一致。
  */
 import { computed } from 'vue';
+import { useMonitorModuleFonts } from '@/composables/useMonitorModuleFonts';
 import { Picture } from '@element-plus/icons-vue';
 import ChannelVideoCard from './ChannelVideoCard.vue';
 import TjSlot from '@/components/TjSlot.vue';
@@ -495,6 +498,8 @@ import CustomMixItemPanel from './CustomMixItemPanel.vue';
 import PerItemPanel from './PerItemPanel.vue';
 import ScanSlotsPanel from './ScanSlotsPanel.vue';
 import { resolveModePanelKind } from './monitorModes';
+
+const { moduleFontStyle } = useMonitorModuleFonts();
 
 const props = defineProps({
   variant: { type: String, required: true }, // 'dual' | 'triple'

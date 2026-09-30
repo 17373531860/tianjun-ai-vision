@@ -11,6 +11,7 @@
 <script setup>
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import * as echarts from 'echarts';
+import { useMonitorModuleFonts } from '@/composables/useMonitorModuleFonts';
 
 const props = defineProps({
   goodCount: { type: Number, default: 0 },
@@ -19,6 +20,7 @@ const props = defineProps({
 });
 
 const chartRef = ref(null);
+const { moduleFontScale } = useMonitorModuleFonts();
 let chart = null;
 let resizeObserver = null;
 
@@ -30,11 +32,13 @@ const updateChart = () => {
   const bad = normalizedCount(props.badCount);
   chart.setOption({
     color: ['#10b981', '#ef4444'],
+    // 图内文字沿用 ECharts 默认字号；标签显隐保持原样。
+    textStyle: { fontSize: 12 * moduleFontScale('charts') },
     series: [{
       type: 'pie',
       radius: ['40%', '70%'],
       center: ['50%', '55%'],
-      label: { show: false },
+      label: { show: false, fontSize: 12 * moduleFontScale('charts') },
       data: [
         { value: good || 1, name: '良品' },
         { value: bad, name: '不良' },
@@ -59,7 +63,7 @@ onMounted(async () => {
   window.addEventListener('resize', resizeChart);
 });
 
-watch(() => [props.goodCount, props.badCount], updateChart);
+watch(() => [props.goodCount, props.badCount, moduleFontScale('charts')], updateChart);
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', resizeChart);

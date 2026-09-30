@@ -2,6 +2,32 @@
 @tailwind components;
 @tailwind utilities;
 
+/* 分区仅缩放字号，保留 rem 基准和槽位几何；嵌套分区不会重复相乘。
+   Tailwind 字号直接按原 rem × 本分区倍率覆盖，100% 与原字号完全一致。 */
+.tj-monitor-module { font-size: calc(1rem * var(--tj-module-scale, 1)); }
+.tj-monitor-module.text-xs, .tj-monitor-module .text-xs { font-size: calc(0.75rem * var(--tj-module-scale, 1)); }
+.tj-monitor-module.text-sm, .tj-monitor-module .text-sm { font-size: calc(0.875rem * var(--tj-module-scale, 1)); }
+.tj-monitor-module.text-base, .tj-monitor-module .text-base { font-size: calc(1rem * var(--tj-module-scale, 1)); }
+.tj-monitor-module.text-lg, .tj-monitor-module .text-lg { font-size: calc(1.125rem * var(--tj-module-scale, 1)); }
+.tj-monitor-module.text-xl, .tj-monitor-module .text-xl { font-size: calc(1.25rem * var(--tj-module-scale, 1)); }
+.tj-monitor-module.text-2xl, .tj-monitor-module .text-2xl { font-size: calc(1.5rem * var(--tj-module-scale, 1)); }
+.tj-monitor-module.text-3xl, .tj-monitor-module .text-3xl { font-size: calc(1.875rem * var(--tj-module-scale, 1)); }
+.tj-monitor-module.text-4xl, .tj-monitor-module .text-4xl { font-size: calc(2.25rem * var(--tj-module-scale, 1)); }
+.tj-monitor-module.text-5xl, .tj-monitor-module .text-5xl { font-size: calc(3rem * var(--tj-module-scale, 1)); }
+.tj-monitor-module.text-6xl, .tj-monitor-module .text-6xl { font-size: calc(3.75rem * var(--tj-module-scale, 1)); }
+.tj-monitor-module[class~="text-[0.5625rem]"], .tj-monitor-module [class~="text-[0.5625rem]"] { font-size: calc(0.5625rem * var(--tj-module-scale, 1)); }
+.tj-monitor-module[class~="text-[0.5rem]"], .tj-monitor-module [class~="text-[0.5rem]"] { font-size: calc(0.5rem * var(--tj-module-scale, 1)); }
+.tj-monitor-module[class~="text-[0.625rem]"], .tj-monitor-module [class~="text-[0.625rem]"] { font-size: calc(0.625rem * var(--tj-module-scale, 1)); }
+.tj-monitor-module[class~="text-[0.6875rem]"], .tj-monitor-module [class~="text-[0.6875rem]"] { font-size: calc(0.6875rem * var(--tj-module-scale, 1)); }
+
+/* Element Plus 自身使用主题字号变量，保留原大小档位再乘分区比例。 */
+.tj-monitor-module .el-input { font-size: calc(var(--el-font-size-base) * var(--tj-module-scale, 1)); }
+.tj-monitor-module .el-input--small { font-size: calc(var(--el-font-size-extra-small) * var(--tj-module-scale, 1)); }
+.tj-monitor-module .el-button { font-size: calc(var(--el-font-size-base) * var(--tj-module-scale, 1)); }
+.tj-monitor-module .el-button--small { font-size: calc(var(--el-font-size-extra-small) * var(--tj-module-scale, 1)); }
+.tj-monitor-module .el-tag { --el-tag-font-size: calc(var(--el-font-size-extra-small) * var(--tj-module-scale, 1)); }
+.tj-monitor-module[data-font-module="controls"] .control-button { font-size: calc(1.125rem * var(--tj-module-scale, 1)); }
+
 body {
   margin: 0;
   display: flex;

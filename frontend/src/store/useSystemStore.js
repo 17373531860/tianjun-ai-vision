@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia';
 import { updateProject } from '@/api/project';
+import { DEFAULT_MODULE_FONT_SCALE } from '@/utils/monitorModuleFonts';
 
 // 默认检测框设置
 const defaultDetection = {
@@ -104,6 +105,8 @@ export const useSystemStore = defineStore('system', {
         shift: false
       },
       monitor: {
+        // 各分区字号独立调整；默认 100% 保持原有检测主页字号。
+        moduleFontScale: { ...DEFAULT_MODULE_FONT_SCALE },
         stepStrip: true,
         // v3.55.x: 混合模式物品校验面板 (装箱清点三分框/混合逐件)。
         // 项目未配 custom_mix 时本开关无感 (面板本就不渲染); 配了也可在此整体隐藏。
@@ -247,6 +250,11 @@ export const useSystemStore = defineStore('system', {
                 showPt: true,
                 showResult: true,
                 ...(saved.monitor?.stepTableColumns || {})
+              },
+              // 旧设置或只保存部分分区时，缺失项均回到原字号。
+              moduleFontScale: {
+                ...DEFAULT_MODULE_FONT_SCALE,
+                ...(saved.monitor?.moduleFontScale || {})
               }
             }
           };

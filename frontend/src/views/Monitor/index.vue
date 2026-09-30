@@ -127,7 +127,8 @@
       <!-- kiosk 不装载写入口；主屏放大态恢复原 4+ 详情的 MES 完整信息条。 -->
       <div
         v-if="!kioskMode && shouldShowMesBarFor(activeSingleChannel)"
-        class="flex flex-shrink-0 flex-wrap items-center gap-3 rounded-lg border border-cyan-800/50 bg-slate-900 px-3 py-1 text-xs"
+        class="tj-monitor-module flex flex-shrink-0 flex-wrap items-center gap-3 rounded-lg border border-cyan-800/50 bg-slate-900 px-3 py-1 text-xs"
+        data-font-module="mesBar" :style="moduleFontStyle('mesBar')"
         data-testid="single-channel-context-bar"
       >
         <div v-if="!isScanDisabledFor(activeSingleChannel) && getDisplayWorkpieceFor(activeSingleChannel)" class="flex min-w-0 items-center gap-1.5">
@@ -262,7 +263,7 @@
           @zoom="zoomChannel(ch)">
           <!-- MES 迷你条: 工件号 / 未绑码 / 等待扫码 -->
           <div v-if="shouldShowMesBarFor(ch)"
-               class="absolute top-7 left-1 right-1 bg-slate-900/85 border border-cyan-800/50 rounded px-1.5 py-0.5 flex items-center gap-1.5 text-[0.625rem] z-10">
+               class="tj-monitor-module absolute top-7 left-1 right-1 bg-slate-900/85 border border-cyan-800/50 rounded px-1.5 py-0.5 flex items-center gap-1.5 text-[0.625rem] z-10" data-font-module="mesBar" :style="moduleFontStyle('mesBar')">
             <!-- v3.56: 多码采集进度徽标 (网格卡空间小, 只给总进度) -->
             <span v-if="scanCollectFor(ch)" class="flex-shrink-0 px-1 rounded font-mono font-bold border"
                   :class="scanCollectFor(ch).total_got >= scanCollectFor(ch).total_expected
@@ -356,13 +357,13 @@
         ></canvas>
         
         <!-- 运行状态指示 -->
-        <div v-if="isDetecting" class="absolute top-4 right-4 bg-green-600/90 text-white px-6 py-2 rounded shadow-lg text-lg font-bold animate-pulse">
+        <div v-if="isDetecting" class="tj-monitor-module absolute top-4 right-4 bg-green-600/90 text-white px-6 py-2 rounded shadow-lg text-lg font-bold animate-pulse" data-font-module="videoHud" :style="moduleFontStyle('videoHud')">
           检测中
         </div>
-        <div v-else-if="isRunning && !isDetecting" class="absolute top-4 right-4 bg-yellow-600/90 text-white px-6 py-2 rounded shadow-lg text-lg font-bold">
+        <div v-else-if="isRunning && !isDetecting" class="tj-monitor-module absolute top-4 right-4 bg-yellow-600/90 text-white px-6 py-2 rounded shadow-lg text-lg font-bold" data-font-module="videoHud" :style="moduleFontStyle('videoHud')">
           待机中
         </div>
-        <div v-else class="absolute top-4 right-4 bg-gray-600/90 text-white px-6 py-2 rounded shadow-lg text-lg font-bold">
+        <div v-else class="tj-monitor-module absolute top-4 right-4 bg-gray-600/90 text-white px-6 py-2 rounded shadow-lg text-lg font-bold" data-font-module="videoHud" :style="moduleFontStyle('videoHud')">
           已停止
         </div>
 
@@ -387,7 +388,7 @@
         </div>
 
         <!-- Current Project Info -->
-        <div v-if="currentProject" class="absolute top-4 left-4 bg-slate-900/80 text-white px-4 py-2 rounded shadow-lg">
+        <div v-if="currentProject" class="tj-monitor-module absolute top-4 left-4 bg-slate-900/80 text-white px-4 py-2 rounded shadow-lg" data-font-module="videoHud" :style="moduleFontStyle('videoHud')">
           <div class="text-xs text-gray-400">当前项目</div>
           <div class="font-bold">{{ currentProject.name }}</div>
           <div class="text-xs text-cyan-400">{{ logicModeText }}</div>
@@ -445,7 +446,7 @@
             </div>
           </div>
           <!-- 状态信息 -->
-          <div class="p-2 flex gap-6 text-xs text-gray-300 flex-wrap">
+          <div class="tj-monitor-module p-2 flex gap-6 text-xs text-gray-300 flex-wrap" data-font-module="videoHud" :style="moduleFontStyle('videoHud')">
             <span class="flex items-center gap-2">
               <span class="w-2 h-2 rounded-full" :class="isStreaming ? 'bg-green-500' : 'bg-gray-500'"></span> 
               {{ sourceStatusText }}
@@ -657,7 +658,7 @@
     <div class="col-span-5 flex flex-col gap-3 min-h-0">
 
       <!-- Top Row: Stats Counters (Dynamic) -->
-      <div v-if="systemStore.display.monitor.statsPanel || layoutEditActive" data-layout-slot="stats" class="bg-slate-900 border border-slate-700 rounded-lg p-3 flex flex-col">
+      <div v-if="systemStore.display.monitor.statsPanel || layoutEditActive" data-layout-slot="stats" class="tj-monitor-module bg-slate-900 border border-slate-700 rounded-lg p-3 flex flex-col" data-font-module="stats" :style="moduleFontStyle('stats')">
         <template v-if="currentProject && counters.length > 0">
           <!-- 三个系统内置计数器并排 -->
           <div class="grid grid-cols-3 gap-2 mb-2">
@@ -692,7 +693,7 @@
       <!-- MES 信息条 -->
       <!-- v3.50: scanner_resume_blocked 必须算进显示条件, 否则 NG 后无工件/工单时
            整条信息条不渲染, "恢复扫码"人工出口按钮出不来 -->
-      <div v-if="displayWorkpiece || mesData?.order || mesData?.warn_no_barcode || mesData?.scanner_resume_blocked || workpieceOverride === null || isScanDisabledFor(selectedChannel) || systemStore.display.monitor.showBypassSn || layoutEditActive" data-layout-slot="mes-bar" class="bg-slate-900 border border-cyan-800/50 rounded-lg px-3 py-2 flex items-center gap-6 text-sm">
+      <div v-if="displayWorkpiece || mesData?.order || mesData?.warn_no_barcode || mesData?.scanner_resume_blocked || workpieceOverride === null || isScanDisabledFor(selectedChannel) || systemStore.display.monitor.showBypassSn || layoutEditActive" data-layout-slot="mes-bar" class="tj-monitor-module bg-slate-900 border border-cyan-800/50 rounded-lg px-3 py-2 flex items-center gap-6 text-sm" data-font-module="mesBar" :style="moduleFontStyle('mesBar')">
         <!-- 扫码器旁路当前 SN (系统设置 showBypassSn 打开后才显示; 无 SN 时 placeholder 等待扫码) -->
         <div v-if="systemStore.display.monitor.showBypassSn" class="flex items-center gap-2">
           <span class="text-cyan-400 font-bold">旁路SN:</span>
@@ -830,7 +831,7 @@
       />
 
       <!-- Middle: Charts + NG Ranking -->
-      <div data-layout-slot="charts" class="h-52 grid grid-cols-3 gap-2">
+      <div data-layout-slot="charts" class="tj-monitor-module h-52 grid grid-cols-3 gap-2" data-font-module="charts" :style="moduleFontStyle('charts')">
          <!-- Pie Chart -->
          <div v-if="systemStore.display.monitor.defectChart" class="bg-slate-900 border border-slate-700 rounded-lg p-2 relative">
             <h3 class="text-cyan-400 text-base font-bold absolute top-1.5 left-2">良品/不良统计</h3>
@@ -932,11 +933,11 @@
 
       <!-- Bottom: Detail Table & Controls -->
       <div v-if="systemStore.display.monitor.stepTable || layoutEditActive" data-layout-slot="step-table" class="flex-1 bg-slate-900 border border-slate-700 rounded-lg overflow-hidden flex flex-col">
-         <div class="bg-slate-800 px-3 py-2 flex justify-between items-center border-b border-slate-700">
+         <div class="tj-monitor-module bg-slate-800 px-3 py-2 flex justify-between items-center border-b border-slate-700" data-font-module="stepTable" :style="moduleFontStyle('stepTable')">
             <span class="text-cyan-400 text-lg font-bold">步骤统计</span>
             <span class="text-sm bg-slate-700 px-2 py-0.5 rounded text-gray-300">CT: {{ displayCT }}s</span>
          </div>
-         <div class="flex-1 overflow-auto">
+         <div class="tj-monitor-module flex-1 overflow-auto" data-font-module="stepTable" :style="moduleFontStyle('stepTable')">
             <table class="w-full text-left text-sm">
                <thead class="bg-slate-800 text-gray-400 top-0 sticky">
                   <tr>
@@ -1013,7 +1014,7 @@
          </div>
          
          <!-- 会话 ID 输入框（v3.6.2 新增, 客户用作业务标识写到 DB + 模板 {{ session.name }}） -->
-         <div class="px-2 pt-2 pb-1 bg-slate-950 border-t border-slate-800">
+         <div class="tj-monitor-module px-2 pt-2 pb-1 bg-slate-950 border-t border-slate-800" data-font-module="sessionBar" :style="moduleFontStyle('sessionBar')">
             <el-input
               v-model="sessionName"
               size="small"
@@ -1028,7 +1029,8 @@
 
          <!-- Control Buttons -->
          <div
-           class="p-2 bg-slate-950 flex gap-2"
+           class="tj-monitor-module p-2 bg-slate-950 flex gap-2"
+           data-font-module="controls" :style="moduleFontStyle('controls')"
            data-testid="channel-controls"
            :data-channel="selectedChannel"
          >
@@ -1233,6 +1235,7 @@ import WorkstationModePanel from './WorkstationModePanel.vue';
 import GoodBadPieChart from './GoodBadPieChart.vue';
 import SingleChannelMonitor from './SingleChannelMonitor.vue';
 import YieldRateGauge from './YieldRateGauge.vue';
+import { useMonitorModuleFonts } from '@/composables/useMonitorModuleFonts';
 import { createFramePump } from './framePump';
 import { resolveLogicMode, resolveModePanelKind, resolveStepsToShow } from './monitorModes';
 import { useMultiStreams } from './composables/useMultiStreams';
@@ -1254,6 +1257,7 @@ import {
 
 const projectStore = useProjectStore();
 const systemStore = useSystemStore();
+const { moduleFontStyle } = useMonitorModuleFonts();
 const sourceStore = useSourceStore();
 const scannerDisableStore = useScannerDisableStore();
 const pluginThemeStore = usePluginThemeStore();

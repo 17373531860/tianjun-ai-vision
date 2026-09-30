@@ -1,6 +1,6 @@
 <template>
   <aside class="col-span-5 flex min-h-0 min-w-0 flex-col gap-3 overflow-hidden">
-    <div v-if="showStatsPanel || layoutEditActive" data-layout-slot="stats" class="flex flex-shrink-0 flex-col rounded-lg border border-slate-700 bg-slate-900 p-3" data-testid="single-channel-stats-panel">
+    <div v-if="showStatsPanel || layoutEditActive" data-layout-slot="stats" class="tj-monitor-module flex flex-shrink-0 flex-col rounded-lg border border-slate-700 bg-slate-900 p-3" data-font-module="stats" :style="moduleFontStyle('stats')" data-testid="single-channel-stats-panel">
       <template v-if="hasProject">
         <div class="grid grid-cols-3 gap-2">
           <div v-for="stat in builtinStats" :key="stat.label" class="flex flex-col items-center justify-center rounded-lg bg-slate-800/50 p-2">
@@ -9,12 +9,12 @@
           </div>
         </div>
         <div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-slate-800 pt-2 text-xs text-gray-400">
-          <span>合格率: <span class="font-mono text-green-400">{{ yieldRate }}%</span></span>
-          <span v-if="showFps">FPS: <span class="font-mono text-cyan-400">{{ channelData?.fps ?? 0 }}</span></span>
-          <span v-if="showLatency">延迟: <span class="font-mono text-cyan-400">{{ channelData?.latency ?? 0 }} ms</span></span>
-          <span>CT: <span class="font-mono text-cyan-400">{{ displayCt }}</span></span>
+          <span class="tj-monitor-module text-xs" data-font-module="charts" :style="moduleFontStyle('charts')">合格率: <span class="font-mono text-green-400">{{ yieldRate }}%</span></span>
+          <span v-if="showFps" class="tj-monitor-module text-xs" data-font-module="videoHud" :style="moduleFontStyle('videoHud')">FPS: <span class="font-mono text-cyan-400">{{ channelData?.fps ?? 0 }}</span></span>
+          <span v-if="showLatency" class="tj-monitor-module text-xs" data-font-module="videoHud" :style="moduleFontStyle('videoHud')">延迟: <span class="font-mono text-cyan-400">{{ channelData?.latency ?? 0 }} ms</span></span>
+          <span class="tj-monitor-module text-xs" data-font-module="stepTable" :style="moduleFontStyle('stepTable')">CT: <span class="font-mono text-cyan-400">{{ displayCt }}</span></span>
         </div>
-        <div class="mt-2 grid grid-cols-3 gap-2" data-testid="single-channel-ct-metrics">
+        <div class="tj-monitor-module mt-2 grid grid-cols-3 gap-2" data-font-module="stepTable" :style="moduleFontStyle('stepTable')" data-testid="single-channel-ct-metrics">
           <div v-for="metric in ctMetrics" :key="metric.label" class="rounded bg-slate-800/30 px-2 py-1 text-center">
             <div class="text-[0.625rem] text-gray-500">{{ metric.label }}</div>
             <div class="font-mono text-sm font-bold" :class="metric.color">{{ metric.value }}</div>
@@ -27,8 +27,9 @@
     <div
       v-if="showDefectChart || showCapacityChart || showNgTop3 || layoutEditActive"
       data-layout-slot="summary-row"
-      class="grid h-40 flex-shrink-0 gap-3"
-      :style="{ gridTemplateColumns: `repeat(${summaryPanelCount}, minmax(0, 1fr))` }"
+      class="tj-monitor-module grid h-40 flex-shrink-0 gap-3"
+      data-font-module="charts"
+      :style="[moduleFontStyle('charts'), { gridTemplateColumns: `repeat(${summaryPanelCount}, minmax(0, 1fr))` }]"
       data-testid="single-channel-summary-row"
     >
       <div
@@ -80,7 +81,7 @@
       </div>
     </div>
 
-    <div v-if="(showStepTable || layoutEditActive) && (!modePanelKind || layoutEditActive)" data-layout-slot="step-table" class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-700 bg-slate-900" data-testid="single-channel-step-table">
+    <div v-if="(showStepTable || layoutEditActive) && (!modePanelKind || layoutEditActive)" data-layout-slot="step-table" class="tj-monitor-module flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-700 bg-slate-900" data-font-module="stepTable" :style="moduleFontStyle('stepTable')" data-testid="single-channel-step-table">
       <div class="flex flex-shrink-0 items-center justify-between border-b border-slate-700 bg-slate-800 px-3 py-2">
         <span class="text-lg font-bold text-cyan-400">步骤统计</span>
         <span class="rounded bg-slate-700 px-2 py-0.5 text-sm text-gray-300">CT: {{ displayCt }}</span>
@@ -120,7 +121,9 @@
 
     <div
       data-layout-slot="controls"
-      class="flex flex-shrink-0 gap-2 rounded-lg border border-slate-800 bg-slate-950 p-2"
+      class="tj-monitor-module flex flex-shrink-0 gap-2 rounded-lg border border-slate-800 bg-slate-950 p-2"
+      data-font-module="controls"
+      :style="moduleFontStyle('controls')"
       data-testid="single-channel-controls"
       :data-readonly="readonly ? 'true' : 'false'"
       :title="readonly ? '只读监看：请在多屏工位显示设置中切换为可操作' : ''"
@@ -142,8 +145,11 @@
  * 不能无差异共用本组件，避免破坏 v3.54 布局落库。
  */
 import { computed } from 'vue';
+import { useMonitorModuleFonts } from '@/composables/useMonitorModuleFonts';
 import GoodBadPieChart from './GoodBadPieChart.vue';
 import YieldRateGauge from './YieldRateGauge.vue';
+
+const { moduleFontStyle } = useMonitorModuleFonts();
 
 const props = defineProps({
   channelData: { type: Object, default: null },

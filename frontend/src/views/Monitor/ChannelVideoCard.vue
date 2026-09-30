@@ -17,13 +17,13 @@
     @click="$emit('select')">
     <canvas :ref="onVideoCanvas" class="absolute inset-0 w-full h-full"></canvas>
     <canvas :ref="onOverlayCanvas" class="absolute inset-0 w-full h-full pointer-events-none"></canvas>
-    <div class="absolute bg-slate-900/80 text-white px-2 py-0.5 rounded font-bold"
+    <div class="tj-monitor-module absolute bg-slate-900/80 text-white px-2 py-0.5 rounded font-bold" data-font-module="videoHud" :style="moduleFontStyle('videoHud')"
       :class="compact ? 'top-1 left-1 text-[0.625rem]' : 'top-1.5 left-1.5 text-xs'">
       <template v-if="compact">工位{{ ch + 1 }}</template>
       <template v-else>工位 {{ ch + 1 }}</template>
       <span v-if="chData?.projectName" class="text-cyan-400" :class="compact ? 'ml-0.5' : 'ml-1'">{{ chData.projectName }}</span>
     </div>
-    <div class="absolute rounded text-[0.625rem] font-bold"
+    <div class="tj-monitor-module absolute rounded text-[0.625rem] font-bold" data-font-module="videoHud" :style="moduleFontStyle('videoHud')"
       :class="[
         compact ? 'top-1 right-1 px-1.5 py-0.5' : 'top-1.5 right-1.5 px-2 py-0.5',
         chData?.isDetecting ? 'bg-green-600/90 text-white animate-pulse' : chData?.isRunning ? 'bg-yellow-600/90 text-white' : 'bg-gray-600/90 text-white',
@@ -42,7 +42,7 @@
       放大
     </button>
     <!-- 底部统计条: 双工位带 backdrop-blur + 模型名, 四工位紧凑仅色块+fps -->
-    <div v-if="!compact" class="absolute bottom-0 left-0 right-0 bg-black/70 backdrop-blur-sm px-2 py-1 flex gap-3 text-xs items-center">
+    <div v-if="!compact" class="tj-monitor-module absolute bottom-0 left-0 right-0 bg-black/70 backdrop-blur-sm px-2 py-1 flex gap-3 text-xs items-center" data-font-module="videoHud" :style="moduleFontStyle('videoHud')">
       <span class="text-white font-mono">总: <span class="text-cyan-400 font-bold">{{ chData?.total ?? 0 }}</span></span>
       <span class="text-white font-mono">OK: <span class="text-green-400 font-bold">{{ chData?.ok ?? 0 }}</span></span>
       <span class="text-white font-mono">NG: <span class="text-red-400 font-bold">{{ chData?.ng ?? 0 }}</span></span>
@@ -58,7 +58,7 @@
       </template>
       <span class="ml-auto text-gray-400">FPS: {{ chData?.fps ?? 0 }}</span>
     </div>
-    <div v-else class="absolute bottom-0 left-0 right-0 bg-black/70 px-2 py-1 flex gap-3 text-[0.625rem] items-center">
+    <div v-else class="tj-monitor-module absolute bottom-0 left-0 right-0 bg-black/70 px-2 py-1 flex gap-3 text-[0.625rem] items-center" data-font-module="videoHud" :style="moduleFontStyle('videoHud')">
       <span class="text-white font-mono">总:<span class="text-cyan-400 font-bold">{{ chData?.total ?? 0 }}</span></span>
       <span class="text-white font-mono">OK:<span class="text-green-400 font-bold">{{ chData?.ok ?? 0 }}</span></span>
       <span class="text-white font-mono">NG:<span class="text-red-400 font-bold">{{ chData?.ng ?? 0 }}</span></span>
@@ -79,6 +79,10 @@
 </template>
 
 <script setup>
+import { useMonitorModuleFonts } from '@/composables/useMonitorModuleFonts';
+
+const { moduleFontStyle } = useMonitorModuleFonts();
+
 const props = defineProps({
   // 0-based 通道号（仅角标文案用, 流按通道路由在父级完成）
   ch: { type: Number, required: true },

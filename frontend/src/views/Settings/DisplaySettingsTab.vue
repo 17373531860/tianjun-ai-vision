@@ -308,6 +308,30 @@
                 </el-select>
               </div>
             </div>
+            <div class="mt-6 p-4 bg-slate-900 rounded border border-slate-800" data-testid="monitor-module-font-settings">
+              <div class="flex items-center justify-between gap-3 mb-2">
+                <span class="font-bold text-white">检测主页分区字号</span>
+                <el-button size="small" data-testid="monitor-module-font-reset" @click="resetModuleFontScales">全部恢复 100%</el-button>
+              </div>
+              <p class="text-xs text-gray-500 mb-4">仅调整检测主页对应分区的文字，100% 为原字号。修改后立即生效。</p>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
+                <div v-for="module in MODULE_FONT_OPTIONS" :key="module.key" class="min-w-0">
+                  <div class="flex items-center justify-between gap-2 mb-1">
+                    <span class="text-sm text-gray-300">{{ module.label }}</span>
+                    <span class="text-sm font-mono text-tech-blue shrink-0" :data-testid="`module-font-value-${module.key}`">{{ store.display.monitor.moduleFontScale[module.key] }}%</span>
+                  </div>
+                  <el-slider
+                    v-model="store.display.monitor.moduleFontScale[module.key]"
+                    :min="80"
+                    :max="200"
+                    :step="10"
+                    :aria-label="`${module.label}字号`"
+                    :data-testid="`module-font-slider-${module.key}`"
+                    @change="saveDisplaySettings"
+                  />
+                </div>
+              </div>
+            </div>
           </el-card>
 
           <!-- v3.22.x: 开机自动恢复检测开关 -->
@@ -738,6 +762,7 @@ import api from '@/api/index';
 import { getMonitorLayouts, deleteMonitorLayout, deleteAllMonitorLayouts } from '@/api/monitorLayout';
 import { formLabelOf } from '@/views/Monitor/layout/monitorLayout';
 import { dbg, dbgErr } from '@/utils/debug';
+import { DEFAULT_MODULE_FONT_SCALE, MODULE_FONT_OPTIONS } from '@/utils/monitorModuleFonts';
 
 const store = useSystemStore();
 const router = useRouter();
@@ -799,6 +824,12 @@ onMounted(loadCustomLayoutForms);
 const saveDisplaySettings = () => {
   dbg('settings.ops', '保存显示设置', `brand=${store.display?.brandName ?? ''}`);
   localStorage.setItem('display_settings', JSON.stringify(store.display));
+};
+
+// 保留响应式对象，让已经挂载的各检测主页形态立即恢复原字号。
+const resetModuleFontScales = () => {
+  Object.assign(store.display.monitor.moduleFontScale, DEFAULT_MODULE_FONT_SCALE);
+  saveDisplaySettings();
 };
 
 // 导航栏 Logo 上传: 前端居中裁方 + 压到 256×256 存 data URL (与 display 其余字段

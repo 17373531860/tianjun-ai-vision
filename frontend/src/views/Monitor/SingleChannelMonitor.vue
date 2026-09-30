@@ -18,9 +18,11 @@
         ‹ 返回总览
       </button>
       <span class="text-base font-bold text-cyan-400" data-testid="single-channel-title">工位 {{ channelId + 1 }}</span>
-      <span v-if="channelData?.projectName" class="max-w-48 truncate text-xs text-gray-400">{{ channelData.projectName }}</span>
+      <span v-if="channelData?.projectName" class="tj-monitor-module max-w-48 truncate text-xs text-gray-400" data-font-module="videoHud" :style="moduleFontStyle('videoHud')">{{ channelData.projectName }}</span>
       <span
-        class="rounded px-2 py-0.5 text-[0.625rem] font-bold"
+        class="tj-monitor-module rounded px-2 py-0.5 text-[0.625rem] font-bold"
+        data-font-module="videoHud"
+        :style="moduleFontStyle('videoHud')"
         :class="channelData?.isDetecting ? 'bg-green-600/90' : channelData?.isRunning ? 'bg-yellow-600/90' : 'bg-gray-600/90'"
       >
         {{ channelData?.isDetecting ? '检测中' : channelData?.isRunning ? '待机' : '停止' }}
@@ -33,7 +35,7 @@
       </div>
     </header>
 
-    <div v-if="$slots['context-bar'] || layoutEditActive" data-layout-slot="context-bar">
+    <div v-if="$slots['context-bar'] || layoutEditActive" data-layout-slot="context-bar" class="tj-monitor-module" data-font-module="mesBar" :style="moduleFontStyle('mesBar')">
       <slot name="context-bar" />
     </div>
 
@@ -133,6 +135,7 @@
 
 <script setup>
 import { computed } from 'vue';
+import { useMonitorModuleFonts } from '@/composables/useMonitorModuleFonts';
 import ChannelVideoCard from './ChannelVideoCard.vue';
 import SopStepPanel from './SopStepPanel.vue';
 import WorkstationModePanel from './WorkstationModePanel.vue';
@@ -142,6 +145,8 @@ import ScanSlotsPanel from './ScanSlotsPanel.vue';
 import ChannelDashboard from './ChannelDashboard.vue';
 import { layoutRuntimeState } from './layout/monitorLayout';
 import { resolveModePanelKind } from './monitorModes';
+
+const { moduleFontStyle } = useMonitorModuleFonts();
 
 const props = defineProps({
   channelId: { type: Number, required: true },
